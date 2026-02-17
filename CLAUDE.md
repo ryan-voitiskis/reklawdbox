@@ -15,6 +15,20 @@ Integration tests require a Rekordbox DB backup tarball. Set `REKORDBOX_TEST_BAC
 
 Register with Claude Code: `claude mcp add crate-dig ./target/release/crate-dig`
 
+## Commit Messages
+
+Use Conventional Commits for all commits:
+
+```text
+type(scope): short summary
+```
+
+Recommended types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`.
+
+Examples:
+- `docs(rekordbox): orchestrate phase b verification`
+- `fix(xml): preserve rekordbox URI encoding`
+
 ## Architecture
 
 Single-crate Rust MCP server targeting Rekordbox 7.x, using rmcp 0.15. No CLI flags — stdio transport only, operated through Claude Code.
