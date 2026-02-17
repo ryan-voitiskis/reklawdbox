@@ -1,0 +1,5 @@
+# Raw source PDFs — too large for git
+*.pdf
+
+# Keep the download script and FAQ text sources
+!.gitignore
