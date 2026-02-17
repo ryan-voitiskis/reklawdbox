@@ -41,6 +41,12 @@ To override, set the `REKORDBOX_DB_PATH` environment variable.
 | `lookup_discogs` | Look up a track on Discogs for genre/style enrichment |
 | `lookup_beatport` | Look up a track on Beatport for genre/BPM/key enrichment |
 
+## Response Contract Notes
+
+- `write_xml` returns a JSON payload on both write and no-change paths.
+- The no-change path includes `"message": "No changes to write."` with `track_count`, `changes_applied`, and provenance fields.
+- Legacy consumers that previously parsed plain text should read the `message` field from the JSON payload.
+
 ## Genre Taxonomy
 
 Starter set for consistency (not a closed list — arbitrary genres are accepted):

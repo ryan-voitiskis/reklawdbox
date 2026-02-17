@@ -40,6 +40,7 @@ Corpus-backed workflow responses include additive provenance fields:
 - `consulted_documents`: ordered, de-duplicated corpus document paths consulted for the workflow.
 - `manifest_status`: corpus retrieval status. Current values are `ok`, `empty`, or `unavailable`.
 - `corpus_warning` (optional): present when manifest-first retrieval falls back to default references (for example, manifest load failure or no ranked matches).
+- `write_xml` no-change contract: when no staged changes exist, the response remains a JSON payload with `"message": "No changes to write."` plus `track_count`, `changes_applied`, and provenance fields.
 
 XML workflow note: XML operations use manifest-first retrieval for XML/reference docs and fall back to stable XML anchors (`reference/xml-import-export.md`, `guides/xml-format-spec.md`, and this developer integration reference) when needed.
 

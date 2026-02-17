@@ -726,6 +726,8 @@ impl ServerHandler for CrateDigServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::ServiceExt;
+    use rmcp::model::CallToolRequestParams;
 
     fn extract_json(result: &CallToolResult) -> serde_json::Value {
         let text = result
@@ -761,6 +763,40 @@ mod tests {
         );
     }
 
+    async fn call_tool_via_router(
+        tool_name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> CallToolResult {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (server_result, client_result) = tokio::join!(
+            CrateDigServer::new(None).serve(server_io),
+            ().serve(client_io)
+        );
+        let mut server = server_result.expect("server should start over in-memory transport");
+        let mut client = client_result.expect("client should connect over in-memory transport");
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: tool_name.to_owned().into(),
+                arguments,
+                task: None,
+            })
+            .await
+            .expect("tool call through router should succeed");
+
+        client
+            .close()
+            .await
+            .expect("client should close cleanly after tool call");
+        server
+            .close()
+            .await
+            .expect("server should close cleanly after tool call");
+
+        result
+    }
+
     #[tokio::test]
     async fn write_xml_no_change_path_includes_provenance() {
         let server = CrateDigServer::new(None);
@@ -771,6 +807,21 @@ mod tests {
             .expect("write_xml should succeed when no changes are staged");
 
         let payload = extract_json(&result);
+        assert_eq!(
+            payload
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .expect("message should be present"),
+            "No changes to write."
+        );
+        assert_has_provenance(&payload);
+    }
+
+    #[tokio::test]
+    async fn write_xml_no_change_path_via_router_includes_provenance() {
+        let result = call_tool_via_router("write_xml", None).await;
+        let payload = extract_json(&result);
+
         assert_eq!(
             payload
                 .get("message")
@@ -816,6 +867,56 @@ mod tests {
                 .and_then(serde_json::Value::as_u64)
                 .expect("total_pending should be present"),
             1
+        );
+        assert_has_provenance(&payload);
+    }
+
+    #[tokio::test]
+    async fn update_tracks_via_router_includes_provenance() {
+        let result = call_tool_via_router(
+            "update_tracks",
+            serde_json::json!({
+                "changes": [{
+                    "track_id": "router-test-track-1",
+                    "genre": "NotInTaxonomy"
+                }]
+            })
+            .as_object()
+            .cloned(),
+        )
+        .await;
+
+        let payload = extract_json(&result);
+        assert_eq!(
+            payload
+                .get("staged")
+                .and_then(serde_json::Value::as_u64)
+                .expect("staged should be present"),
+            1
+        );
+        let warnings = payload
+            .get("warnings")
+            .and_then(serde_json::Value::as_array)
+            .expect("warnings should be present for non-taxonomy genre");
+        assert!(
+            !warnings.is_empty(),
+            "warnings should include at least one non-taxonomy genre warning"
+        );
+        assert_has_provenance(&payload);
+    }
+
+    #[tokio::test]
+    async fn get_genre_taxonomy_via_router_includes_provenance() {
+        let result = call_tool_via_router("get_genre_taxonomy", None).await;
+        let payload = extract_json(&result);
+
+        let genres = payload
+            .get("genres")
+            .and_then(serde_json::Value::as_array)
+            .expect("genres should be present");
+        assert!(
+            !genres.is_empty(),
+            "genres should include configured taxonomy entries"
         );
         assert_has_provenance(&payload);
     }
