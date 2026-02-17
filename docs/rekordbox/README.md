@@ -15,6 +15,14 @@ Use a manifest-first discovery flow:
 3. Prefer `reference/` docs first for synthesis tasks, then drop to source transcriptions (`manual/`, `guides/`, `faq/`).
 4. For XML workflows, validate assumptions against both `guides/xml-format-spec.md` and `reference/developer-integration.md`.
 
+## Retrieval Robustness (Wave 2)
+
+- Manifest index initialization: initialize on first retrieval by loading/parsing `docs/rekordbox/manifest.yaml` into an in-memory index keyed by `topics`, `modes`, and `type`.
+- Cache behavior: reuse the initialized index for all later retrievals in the same process to avoid repeated disk I/O/YAML parsing; never cache partial/failed initialization state.
+- Determinism: retrieval operates against the cached index and should return stable ordering for identical inputs.
+- Fallback on unavailable/malformed manifest: if `manifest.yaml` is missing, unreadable, or malformed, continue with best-effort guidance using the `Priority Consultation Order` below and XML reference anchors instead of hard failing.
+- Error signaling: expose manifest health in response metadata/provenance (for example `manifest_status: unavailable` or `manifest_status: malformed`) so callers can distinguish fallback responses.
+
 ## Priority Consultation Order
 
 - I need to understand the rekordbox UI

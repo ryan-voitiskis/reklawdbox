@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -10,6 +11,7 @@ use serde::Deserialize;
 
 use crate::beatport;
 use crate::changes::ChangeManager;
+use crate::corpus;
 use crate::db;
 use crate::discogs;
 use crate::genre;
@@ -39,7 +41,7 @@ impl CrateDigServer {
                 None => {
                     return Err(
                         "Rekordbox database not found. Set REKORDBOX_DB_PATH env var.".into(),
-                    )
+                    );
                 }
             };
             match db::open(&path) {
@@ -58,6 +60,181 @@ impl CrateDigServer {
 
 fn err(msg: String) -> McpError {
     McpError::internal_error(msg, None)
+}
+
+struct CorpusConsultation {
+    consulted_documents: Vec<String>,
+    manifest_status: String,
+    warning: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct CorpusQuerySpec {
+    topic: Option<&'static str>,
+    mode: Option<&'static str>,
+    doc_type: Option<&'static str>,
+    search_text: Option<&'static str>,
+    limit: usize,
+}
+
+fn unique_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for path in paths {
+        if seen.insert(path.clone()) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn fallback_corpus_consultation(
+    fallback_paths: &[&str],
+    manifest_status: &str,
+    warning: Option<String>,
+) -> CorpusConsultation {
+    CorpusConsultation {
+        consulted_documents: unique_paths(fallback_paths.iter().map(|p| (*p).to_string())),
+        manifest_status: manifest_status.to_string(),
+        warning,
+    }
+}
+
+fn consult_manifest_first_docs(
+    query_specs: &[CorpusQuerySpec],
+    fallback_paths: &[&str],
+) -> CorpusConsultation {
+    match corpus::rekordbox_index() {
+        Ok(index) => {
+            let mut paths = Vec::new();
+            for query_spec in query_specs {
+                let query = corpus::CorpusQuery {
+                    topic: query_spec.topic,
+                    mode: query_spec.mode,
+                    doc_type: query_spec.doc_type,
+                    search_text: query_spec.search_text,
+                    limit: Some(query_spec.limit),
+                };
+                paths.extend(index.consulted_paths(query));
+            }
+
+            let paths = unique_paths(paths);
+            if paths.is_empty() {
+                return fallback_corpus_consultation(
+                    fallback_paths,
+                    "empty",
+                    Some(
+                        "Corpus retrieval returned no matching documents; used fallback references."
+                            .to_string(),
+                    ),
+                );
+            }
+
+            CorpusConsultation {
+                consulted_documents: paths,
+                manifest_status: "ok".to_string(),
+                warning: None,
+            }
+        }
+        Err(e) => fallback_corpus_consultation(
+            fallback_paths,
+            "unavailable",
+            Some(format!(
+                "Corpus retrieval failed; used fallback references: {e}"
+            )),
+        ),
+    }
+}
+
+fn consult_xml_workflow_docs() -> CorpusConsultation {
+    consult_manifest_first_docs(
+        &[
+            CorpusQuerySpec {
+                topic: Some("xml"),
+                mode: Some("export"),
+                doc_type: Some("reference"),
+                search_text: Some("xml import export"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("xml"),
+                mode: Some("common"),
+                doc_type: Some("guide"),
+                search_text: Some("xml format"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("xml"),
+                mode: Some("common"),
+                doc_type: Some("reference"),
+                search_text: Some("developer integration"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("library"),
+                mode: Some("common"),
+                doc_type: Some("faq"),
+                search_text: Some("xml"),
+                limit: 2,
+            },
+        ],
+        &[
+            "docs/rekordbox/reference/xml-import-export.md",
+            "docs/rekordbox/guides/xml-format-spec.md",
+            "docs/rekordbox/reference/developer-integration.md",
+            "docs/rekordbox/manual/31-preferences.md",
+            "docs/rekordbox/faq/library-and-collection.md",
+        ],
+    )
+}
+
+fn consult_genre_workflow_docs() -> CorpusConsultation {
+    consult_manifest_first_docs(
+        &[
+            CorpusQuerySpec {
+                topic: Some("genre"),
+                mode: Some("common"),
+                doc_type: Some("manual"),
+                search_text: Some("genre"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("metadata"),
+                mode: Some("common"),
+                doc_type: Some("reference"),
+                search_text: Some("genre metadata"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("library"),
+                mode: Some("common"),
+                doc_type: Some("faq"),
+                search_text: Some("genre"),
+                limit: 3,
+            },
+            CorpusQuerySpec {
+                topic: Some("collection"),
+                mode: Some("common"),
+                doc_type: Some("manual"),
+                search_text: Some("search genre"),
+                limit: 3,
+            },
+        ],
+        &[
+            "docs/rekordbox/manual/06-searching.md",
+            "docs/rekordbox/faq/library-and-collection.md",
+            "docs/rekordbox/reference/glossary.md",
+            "docs/rekordbox/reference/developer-integration.md",
+        ],
+    )
+}
+
+fn attach_corpus_provenance(result: &mut serde_json::Value, consultation: CorpusConsultation) {
+    result["consulted_documents"] = serde_json::json!(consultation.consulted_documents);
+    result["manifest_status"] = serde_json::json!(consultation.manifest_status);
+    if let Some(warning) = consultation.warning {
+        result["corpus_warning"] = serde_json::json!(warning);
+    }
 }
 
 // --- Tool parameter types ---
@@ -124,7 +301,9 @@ pub struct TrackChangeInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteXmlParams {
-    #[schemars(description = "Output file path (default: ./rekordbox-exports/crate-dig-{timestamp}.xml)")]
+    #[schemars(
+        description = "Output file path (default: ./rekordbox-exports/crate-dig-{timestamp}.xml)"
+    )]
     pub output_path: Option<String>,
 }
 
@@ -179,7 +358,10 @@ impl CrateDigServer {
     }
 
     #[tool(description = "Search and filter tracks in the Rekordbox library")]
-    async fn search_tracks(&self, params: Parameters<SearchTracksParams>) -> Result<CallToolResult, McpError> {
+    async fn search_tracks(
+        &self,
+        params: Parameters<SearchTracksParams>,
+    ) -> Result<CallToolResult, McpError> {
         let conn = self.conn()?;
         let search = db::SearchParams {
             query: params.0.query,
@@ -194,13 +376,17 @@ impl CrateDigServer {
             exclude_samples: !params.0.include_samples.unwrap_or(false),
             limit: params.0.limit,
         };
-        let tracks = db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?;
+        let tracks =
+            db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?;
         let json = serde_json::to_string_pretty(&tracks).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     #[tool(description = "Get full details for a specific track by ID")]
-    async fn get_track(&self, params: Parameters<GetTrackParams>) -> Result<CallToolResult, McpError> {
+    async fn get_track(
+        &self,
+        params: Parameters<GetTrackParams>,
+    ) -> Result<CallToolResult, McpError> {
         let conn = self.conn()?;
         let track =
             db::get_track(&conn, &params.0.track_id).map_err(|e| err(format!("DB error: {e}")))?;
@@ -247,17 +433,21 @@ impl CrateDigServer {
     #[tool(description = "Get the configured genre taxonomy")]
     async fn get_genre_taxonomy(&self) -> Result<CallToolResult, McpError> {
         let genres = genre::get_taxonomy();
-        let aliases: std::collections::HashMap<String, String> = genre::get_alias_map().into_iter().collect();
-        let result = serde_json::json!({
+        let aliases: std::collections::HashMap<String, String> =
+            genre::get_alias_map().into_iter().collect();
+        let mut result = serde_json::json!({
             "genres": genres,
             "aliases": aliases,
             "description": "Flat genre taxonomy. Not a closed list — arbitrary genres are accepted. This list provides consistency suggestions. Aliases map non-canonical genre names to their canonical forms."
         });
+        attach_corpus_provenance(&mut result, consult_genre_workflow_docs());
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Stage changes to track metadata (genre, comments, rating, color). Changes are held in memory until write_xml is called.")]
+    #[tool(
+        description = "Stage changes to track metadata (genre, comments, rating, color). Changes are held in memory until write_xml is called."
+    )]
     async fn update_tracks(
         &self,
         params: Parameters<UpdateTracksParams>,
@@ -305,11 +495,14 @@ impl CrateDigServer {
         if !warnings.is_empty() {
             result["warnings"] = serde_json::json!(warnings);
         }
+        attach_corpus_provenance(&mut result, consult_genre_workflow_docs());
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Analyze all genres in the library and suggest normalizations. Returns alias (known mapping), unknown (needs manual decision), and canonical (already correct) sections.")]
+    #[tool(
+        description = "Analyze all genres in the library and suggest normalizations. Returns alias (known mapping), unknown (needs manual decision), and canonical (already correct) sections."
+    )]
     async fn suggest_normalizations(
         &self,
         params: Parameters<SuggestNormalizationsParams>,
@@ -367,7 +560,7 @@ impl CrateDigServer {
             }
         }
 
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "alias": alias_suggestions,
             "unknown": unknown_items,
             "canonical": canonical_items,
@@ -377,6 +570,7 @@ impl CrateDigServer {
                 "canonical_genres": canonical_items.len(),
             }
         });
+        attach_corpus_provenance(&mut result, consult_genre_workflow_docs());
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -405,13 +599,23 @@ impl CrateDigServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Write staged changes to a Rekordbox-compatible XML file. Runs backup first.")]
-    async fn write_xml(&self, params: Parameters<WriteXmlParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Write staged changes to a Rekordbox-compatible XML file. Runs backup first."
+    )]
+    async fn write_xml(
+        &self,
+        params: Parameters<WriteXmlParams>,
+    ) -> Result<CallToolResult, McpError> {
         let ids = self.state.changes.pending_ids();
         if ids.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No changes to write.",
-            )]));
+            let mut result = serde_json::json!({
+                "message": "No changes to write.",
+                "track_count": 0,
+                "changes_applied": 0,
+            });
+            attach_corpus_provenance(&mut result, consult_xml_workflow_docs());
+            let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
 
         // Run backup before writing
@@ -440,13 +644,9 @@ impl CrateDigServer {
 
         // Determine output path
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let output_path = params
-            .0
-            .output_path
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(format!("rekordbox-exports/crate-dig-{timestamp}.xml"))
-            });
+        let output_path = params.0.output_path.map(PathBuf::from).unwrap_or_else(|| {
+            PathBuf::from(format!("rekordbox-exports/crate-dig-{timestamp}.xml"))
+        });
 
         xml::write_xml(&modified_tracks, &output_path)
             .map_err(|e| err(format!("Write error: {e}")))?;
@@ -455,11 +655,12 @@ impl CrateDigServer {
         // Clear staged changes after successful write
         self.state.changes.clear(None);
 
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "path": output_path.to_string_lossy(),
             "track_count": track_count,
             "changes_applied": track_count,
         });
+        attach_corpus_provenance(&mut result, consult_xml_workflow_docs());
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -478,7 +679,9 @@ impl CrateDigServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Look up a track on Discogs for genre/style enrichment. Returns release info with genres and styles, or null if not found.")]
+    #[tool(
+        description = "Look up a track on Discogs for genre/style enrichment. Returns release info with genres and styles, or null if not found."
+    )]
     async fn lookup_discogs(
         &self,
         params: Parameters<LookupDiscogsParams>,
@@ -490,7 +693,9 @@ impl CrateDigServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Look up a track on Beatport for genre/BPM/key enrichment. Returns track info or null if not found.")]
+    #[tool(
+        description = "Look up a track on Beatport for genre/BPM/key enrichment. Returns track info or null if not found."
+    )]
     async fn lookup_beatport(
         &self,
         params: Parameters<LookupBeatportParams>,
@@ -515,5 +720,103 @@ impl ServerHandler for CrateDigServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_json(result: &CallToolResult) -> serde_json::Value {
+        let text = result
+            .content
+            .first()
+            .and_then(|content| content.as_text())
+            .map(|text| text.text.as_str())
+            .expect("tool result should include text content");
+
+        serde_json::from_str(text).expect("tool text content should be valid JSON")
+    }
+
+    fn assert_has_provenance(payload: &serde_json::Value) {
+        let docs = payload
+            .get("consulted_documents")
+            .and_then(serde_json::Value::as_array)
+            .expect("consulted_documents should be an array");
+        assert!(
+            !docs.is_empty(),
+            "consulted_documents should include at least one document"
+        );
+        assert!(
+            docs.iter().all(serde_json::Value::is_string),
+            "consulted_documents should contain document paths"
+        );
+        let manifest_status = payload
+            .get("manifest_status")
+            .and_then(serde_json::Value::as_str)
+            .expect("manifest_status should be a string");
+        assert!(
+            !manifest_status.is_empty(),
+            "manifest_status should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_xml_no_change_path_includes_provenance() {
+        let server = CrateDigServer::new(None);
+
+        let result = server
+            .write_xml(Parameters(WriteXmlParams { output_path: None }))
+            .await
+            .expect("write_xml should succeed when no changes are staged");
+
+        let payload = extract_json(&result);
+        assert_eq!(
+            payload
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .expect("message should be present"),
+            "No changes to write."
+        );
+        assert_has_provenance(&payload);
+    }
+
+    #[tokio::test]
+    async fn update_tracks_includes_provenance() {
+        let server = CrateDigServer::new(None);
+        let known_genre = genre::get_taxonomy()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "House".to_string());
+
+        let result = server
+            .update_tracks(Parameters(UpdateTracksParams {
+                changes: vec![TrackChangeInput {
+                    track_id: "test-track-1".to_string(),
+                    genre: Some(known_genre),
+                    comments: Some("staged by test".to_string()),
+                    rating: Some(4),
+                    color: None,
+                }],
+            }))
+            .await
+            .expect("update_tracks should succeed");
+
+        let payload = extract_json(&result);
+        assert_eq!(
+            payload
+                .get("staged")
+                .and_then(serde_json::Value::as_u64)
+                .expect("staged should be present"),
+            1
+        );
+        assert_eq!(
+            payload
+                .get("total_pending")
+                .and_then(serde_json::Value::as_u64)
+                .expect("total_pending should be present"),
+            1
+        );
+        assert_has_provenance(&payload);
     }
 }

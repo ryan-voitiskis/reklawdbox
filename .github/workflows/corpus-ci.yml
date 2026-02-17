@@ -1,0 +1,108 @@
+name: Corpus CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-test:
+    name: Cargo Test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest]
+        toolchain: [stable]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo test
+        run: cargo test
+
+  corpus-validate:
+    name: Corpus Validate
+    runs-on: ubuntu-latest
+    needs: cargo-test
+    defaults:
+      run:
+        shell: bash --noprofile --norc -Eeuo pipefail {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run corpus validation
+        run: |
+          mkdir -p .github/artifacts
+          log_file=".github/artifacts/corpus-validate.log"
+          : > "$log_file"
+
+          echo "::group::Corpus validation"
+          bash docs/rekordbox/validate-corpus.sh 2>&1 | tee -a "$log_file"
+          status=${PIPESTATUS[0]}
+          echo "::endgroup::"
+
+          exit "$status"
+
+      - name: Upload corpus validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-validate-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .github/artifacts/corpus-validate.log
+          if-no-files-found: error
+
+  corpus-verify:
+    name: Corpus Verify
+    runs-on: ubuntu-latest
+    needs: cargo-test
+    defaults:
+      run:
+        shell: bash --noprofile --norc -Eeuo pipefail {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml
+
+      - name: Run corpus verification
+        run: |
+          mkdir -p .github/artifacts
+          log_file=".github/artifacts/corpus-verify.log"
+          : > "$log_file"
+
+          echo "::group::Corpus verification"
+          python3 docs/rekordbox/verify-phase-b.py 2>&1 | tee -a "$log_file"
+          status=${PIPESTATUS[0]}
+          echo "::endgroup::"
+
+          exit "$status"
+
+      - name: Upload corpus verification log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-verify-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .github/artifacts/corpus-verify.log
+          if-no-files-found: error

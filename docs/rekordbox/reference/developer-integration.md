@@ -33,6 +33,20 @@ You can now display your rekordbox playlists in the [Bridge] pane by importing p
 
 Multiple playlists or playlist folders with the same name can't exist in the same level of a directory.
 
+## Workflow Response Provenance
+
+Corpus-backed workflow responses include additive provenance fields:
+
+- `consulted_documents`: ordered, de-duplicated corpus document paths consulted for the workflow.
+- `manifest_status`: corpus retrieval status. Current values are `ok`, `empty`, or `unavailable`.
+- `corpus_warning` (optional): present when manifest-first retrieval falls back to default references (for example, manifest load failure or no ranked matches).
+
+XML workflow note: XML operations use manifest-first retrieval for XML/reference docs and fall back to stable XML anchors (`reference/xml-import-export.md`, `guides/xml-format-spec.md`, and this developer integration reference) when needed.
+
+Genre workflow note: genre normalization operations use manifest-first retrieval across genre/metadata/library docs and fall back to stable genre/library references when retrieval is unavailable or empty.
+
+Fallback behavior: workflows still return normal operation results; provenance indicates fallback via non-`ok` `manifest_status` and optional `corpus_warning`.
+
 ## Support
 
 ### Ask the forum
