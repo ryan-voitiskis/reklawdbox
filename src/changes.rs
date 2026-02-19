@@ -3,7 +3,6 @@ use std::sync::Mutex;
 
 use crate::types::{ChangeDiff, Track, TrackChange};
 
-/// Manages in-memory staged changes to tracks.
 pub struct ChangeManager {
     changes: Mutex<HashMap<String, TrackChange>>,
 }
@@ -40,18 +39,15 @@ impl ChangeManager {
         (staged, map.len())
     }
 
-    /// Get the IDs of all tracks with pending changes.
     pub fn pending_ids(&self) -> Vec<String> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         map.keys().cloned().collect()
     }
 
-    /// Get the number of pending changes.
     pub fn pending_count(&self) -> usize {
         self.changes.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
-    /// Get staged changes for a single track.
     pub fn get(&self, track_id: &str) -> Option<TrackChange> {
         self.changes
             .lock()
@@ -60,7 +56,6 @@ impl ChangeManager {
             .cloned()
     }
 
-    /// Compute a diff between current track state and staged changes.
     pub fn preview(&self, current_tracks: &[Track]) -> Vec<ChangeDiff> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         let track_map: HashMap<&str, &Track> =
@@ -131,7 +126,6 @@ impl ChangeManager {
         diffs
     }
 
-    /// Apply staged changes to tracks, returning modified copies.
     pub fn apply_changes(&self, tracks: &[Track]) -> Vec<Track> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         tracks
@@ -159,7 +153,6 @@ impl ChangeManager {
             .collect()
     }
 
-    /// Clear changes for specific tracks, or all if None.
     pub fn clear(&self, track_ids: Option<Vec<String>>) -> (usize, usize) {
         let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         let cleared = match track_ids {

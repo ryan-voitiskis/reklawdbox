@@ -11,7 +11,6 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
 
-/// Result of stratum-dsp audio analysis, suitable for caching and display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StratumResult {
     pub bpm: f64,
@@ -78,7 +77,6 @@ features["analyzer_version"] = essentia.__version__
 json.dump(features, sys.stdout)
 "#;
 
-/// Parse Essentia subprocess stdout into JSON.
 fn parse_essentia_stdout(stdout: &[u8]) -> Result<serde_json::Value, String> {
     let text = std::str::from_utf8(stdout)
         .map_err(|e| format!("Essentia stdout was not valid UTF-8: {e}"))?;
@@ -89,7 +87,6 @@ fn parse_essentia_stdout(stdout: &[u8]) -> Result<serde_json::Value, String> {
     serde_json::from_str(trimmed).map_err(|e| format!("Failed to parse Essentia JSON output: {e}"))
 }
 
-/// Run Essentia feature extraction through a Python subprocess.
 pub async fn run_essentia(
     python_path: &str,
     audio_path: &str,
@@ -124,7 +121,6 @@ pub async fn run_essentia(
     parse_essentia_stdout(&output.stdout)
 }
 
-/// Decode an audio file to mono f32 samples using symphonia.
 pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), String> {
     let file = std::fs::File::open(path)
         .map_err(|e| format!("Failed to open audio file '{path}': {e}"))?;
@@ -202,7 +198,6 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), String> {
     Ok((all_samples, sample_rate))
 }
 
-/// Convert an AudioBufferRef to mono f32 samples by averaging channels.
 fn decode_buffer_to_mono(buf: &AudioBufferRef) -> Vec<f32> {
     match buf {
         AudioBufferRef::F32(b) => mix_to_mono(b.planes().planes(), |&v| v),
@@ -226,7 +221,6 @@ fn decode_buffer_to_mono(buf: &AudioBufferRef) -> Vec<f32> {
     }
 }
 
-/// Mix multiple channels to mono by averaging, using a conversion function.
 fn mix_to_mono<T, F>(planes: &[&[T]], convert: F) -> Vec<f32>
 where
     F: Fn(&T) -> f32,
@@ -250,7 +244,6 @@ where
         .collect()
 }
 
-/// Run stratum-dsp analysis on decoded audio samples.
 pub fn analyze(samples: &[f32], sample_rate: u32) -> Result<StratumResult, String> {
     let config = stratum_dsp::AnalysisConfig::default();
 

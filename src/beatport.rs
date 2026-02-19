@@ -13,7 +13,6 @@ pub struct BeatportResult {
     pub artists: Vec<String>,
 }
 
-/// Look up a track on Beatport. Returns None if no match found.
 pub async fn lookup(
     client: &Client,
     artist: &str,
@@ -60,7 +59,6 @@ fn parse_beatport_html(
     artist: &str,
     title: &str,
 ) -> Result<Option<BeatportResult>, String> {
-    // Find __NEXT_DATA__ script tag
     let marker = "__NEXT_DATA__\" type=\"application/json\">";
     let start = match html.find(marker) {
         Some(pos) => pos + marker.len(),
@@ -89,7 +87,6 @@ fn parse_beatport_html(
     let norm_title = title.to_lowercase();
 
     for track in tracks {
-        // Check artist match
         let empty = Vec::new();
         let artists = track
             .get("artists")
@@ -141,7 +138,6 @@ fn parse_beatport_html(
     Ok(None)
 }
 
-/// Percent-encode a string for URL query parameters.
 fn urlencoding(s: &str) -> String {
     use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
     const SET: &AsciiSet = &NON_ALPHANUMERIC

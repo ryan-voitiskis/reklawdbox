@@ -1,7 +1,6 @@
 use rusqlite::{Connection, OpenFlags, params};
 use std::path::PathBuf;
 
-/// Default path for the internal SQLite store.
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -9,7 +8,6 @@ pub fn default_path() -> PathBuf {
         .join("internal.sqlite3")
 }
 
-/// Open (or create) the internal store at the given path.
 pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
     let p = std::path::Path::new(path);
     if let Some(parent) = p.parent() {
@@ -58,7 +56,6 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
-/// Cached enrichment result.
 pub struct CachedEnrichment {
     pub provider: String,
     pub query_artist: String,
@@ -68,7 +65,6 @@ pub struct CachedEnrichment {
     pub created_at: String,
 }
 
-/// Read an enrichment cache entry.
 pub fn get_enrichment(
     conn: &Connection,
     provider: &str,
@@ -97,7 +93,6 @@ pub fn get_enrichment(
     }
 }
 
-/// Write an enrichment cache entry (upsert).
 pub fn set_enrichment(
     conn: &Connection,
     provider: &str,
@@ -116,7 +111,6 @@ pub fn set_enrichment(
     Ok(())
 }
 
-/// Cached audio analysis result.
 pub struct CachedAudioAnalysis {
     pub file_path: String,
     pub analyzer: String,
@@ -127,7 +121,6 @@ pub struct CachedAudioAnalysis {
     pub created_at: String,
 }
 
-/// Read an audio analysis cache entry.
 pub fn get_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -156,7 +149,6 @@ pub fn get_audio_analysis(
     }
 }
 
-/// Write an audio analysis cache entry (upsert).
 pub fn set_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -195,7 +187,6 @@ mod tests {
             .unwrap();
         assert_eq!(version, 1);
 
-        // Verify tables exist
         let tables: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             .unwrap()

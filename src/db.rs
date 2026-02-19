@@ -5,17 +5,14 @@ use crate::types::{GenreCount, KeyCount, LibraryStats, Playlist, Track, rating_t
 /// The universal Rekordbox 6/7 SQLCipher key (publicly known, same for all installations).
 const DB_KEY: &str = "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
 
-/// Open a read-only connection to the Rekordbox master.db.
 pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     // Key is passed as a passphrase — SQLCipher derives the encryption key via PBKDF2.
     conn.execute_batch(&format!("PRAGMA key = '{DB_KEY}'"))?;
-    // Verify the key works by running a simple query
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
     Ok(conn)
 }
 
-/// Open an unencrypted in-memory DB (for tests).
 #[cfg(test)]
 pub fn open_test() -> Connection {
     Connection::open_in_memory().unwrap()
@@ -93,10 +90,8 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
     })
 }
 
-/// Rekordbox factory samples live under this path prefix.
 pub const SAMPLER_PATH_PREFIX: &str = "/Users/vz/Music/rekordbox/Sampler/";
 
-/// Search parameters for filtering tracks.
 pub struct SearchParams {
     pub query: Option<String>,
     pub artist: Option<String>,
@@ -111,14 +106,12 @@ pub struct SearchParams {
     pub limit: Option<u32>,
 }
 
-/// Escape LIKE wildcards in user input.
 fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
 }
 
-/// Search tracks with dynamic filtering.
 pub fn search_tracks(
     conn: &Connection,
     params: &SearchParams,
@@ -204,7 +197,6 @@ pub fn search_tracks(
     rows.collect()
 }
 
-/// Get a single track by ID.
 pub fn get_track(conn: &Connection, track_id: &str) -> Result<Option<Track>, rusqlite::Error> {
     let sql = format!("{TRACK_SELECT} WHERE c.ID = ?1 AND c.rb_local_deleted = 0");
     let mut stmt = conn.prepare(&sql)?;
@@ -216,7 +208,6 @@ pub fn get_track(conn: &Connection, track_id: &str) -> Result<Option<Track>, rus
     }
 }
 
-/// Get all playlists.
 pub fn get_playlists(conn: &Connection) -> Result<Vec<Playlist>, rusqlite::Error> {
     let sql = "
         SELECT
@@ -244,7 +235,6 @@ pub fn get_playlists(conn: &Connection) -> Result<Vec<Playlist>, rusqlite::Error
     rows.collect()
 }
 
-/// Get tracks in a playlist.
 pub fn get_playlist_tracks(
     conn: &Connection,
     playlist_id: &str,
@@ -263,12 +253,10 @@ pub fn get_playlist_tracks(
     rows.collect()
 }
 
-/// Get library statistics (excludes sampler tracks by default).
 pub fn get_library_stats(conn: &Connection) -> Result<LibraryStats, rusqlite::Error> {
     get_library_stats_filtered(conn, true)
 }
 
-/// Get library statistics with optional sample exclusion.
 pub fn get_library_stats_filtered(
     conn: &Connection,
     exclude_samples: bool,
@@ -310,7 +298,6 @@ pub fn get_library_stats_filtered(
         |row| row.get(0),
     )?;
 
-    // Genre distribution
     let mut stmt = conn.prepare(&format!(
         "SELECT COALESCE(g.Name, '(none)') AS GenreName, COUNT(*) AS cnt
          FROM djmdContent c
@@ -328,7 +315,6 @@ pub fn get_library_stats_filtered(
         })?
         .collect::<Result<_, _>>()?;
 
-    // Key distribution
     let mut stmt = conn.prepare(&format!(
         "SELECT COALESCE(k.ScaleName, '(none)') AS KeyName, COUNT(*) AS cnt
          FROM djmdContent c
@@ -357,7 +343,6 @@ pub fn get_library_stats_filtered(
     })
 }
 
-/// Get all tracks with an exact genre name match.
 pub fn get_tracks_by_exact_genre(
     conn: &Connection,
     genre_name: &str,
@@ -376,7 +361,6 @@ pub fn get_tracks_by_exact_genre(
     rows.collect()
 }
 
-/// Get multiple tracks by their IDs.
 pub fn get_tracks_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Track>, rusqlite::Error> {
     if ids.is_empty() {
         return Ok(vec![]);
@@ -395,7 +379,6 @@ pub fn get_tracks_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Track>
     rows.collect()
 }
 
-/// Detect the default Rekordbox DB path.
 pub fn default_db_path() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let path = format!("{home}/Library/Pioneer/rekordbox/master.db");
@@ -406,7 +389,6 @@ pub fn default_db_path() -> Option<String> {
     }
 }
 
-/// Resolve the DB path from env var or auto-detect.
 pub fn resolve_db_path() -> Option<String> {
     if let Ok(path) = std::env::var("REKORDBOX_DB_PATH") {
         if std::path::Path::new(&path).exists() {
@@ -478,7 +460,6 @@ pub(crate) fn open_real_db() -> Option<Connection> {
 mod tests {
     use super::*;
 
-    /// Create a test DB with the Rekordbox schema (unencrypted).
     pub fn create_test_db() -> Connection {
         let conn = open_test();
         conn.execute_batch(

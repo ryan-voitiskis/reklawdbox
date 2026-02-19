@@ -65,14 +65,12 @@ pub fn normalize(s: &str) -> String {
         .to_string()
 }
 
-/// Generate a random hex nonce.
 fn nonce() -> String {
     let mut rng = rand::rng();
     let bytes: [u8; 16] = rng.random();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Look up a track on Discogs. Returns None if no match found.
 pub async fn lookup(
     client: &Client,
     artist: &str,
@@ -172,7 +170,6 @@ fn to_result(r: &SearchResult, fuzzy: bool) -> DiscogsResult {
     }
 }
 
-/// Percent-encode a string for URL query parameters.
 fn urlencoding(s: &str) -> String {
     use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
     const SET: &AsciiSet = &NON_ALPHANUMERIC

@@ -1,7 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A track from the Rekordbox library.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Track {
     pub id: String,
@@ -27,7 +26,6 @@ pub struct Track {
     pub date_added: String,
 }
 
-/// A playlist from the Rekordbox library.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Playlist {
     pub id: String,
@@ -38,7 +36,6 @@ pub struct Playlist {
     pub is_smart: bool,
 }
 
-/// Staged changes for a single track.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TrackChange {
     pub track_id: String,
@@ -48,7 +45,6 @@ pub struct TrackChange {
     pub color: Option<String>,
 }
 
-/// A single field diff for preview.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChangeDiff {
     pub track_id: String,
@@ -59,7 +55,6 @@ pub struct ChangeDiff {
     pub new_value: String,
 }
 
-/// Library statistics summary.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LibraryStats {
     pub total_tracks: i32,
@@ -83,7 +78,6 @@ pub struct KeyCount {
     pub count: i32,
 }
 
-/// A genre normalization suggestion for a single track.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NormalizationSuggestion {
     pub track_id: String,

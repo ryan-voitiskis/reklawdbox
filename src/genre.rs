@@ -105,7 +105,6 @@ pub fn normalize_genre(genre: &str) -> Option<&'static str> {
     alias_map().get(&genre.to_lowercase()).copied()
 }
 
-/// Returns the full alias map as (alias, canonical) pairs for display.
 pub fn get_alias_map() -> Vec<(String, String)> {
     let map = alias_map();
     let mut pairs: Vec<(String, String)> = map

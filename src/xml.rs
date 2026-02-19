@@ -4,7 +4,6 @@ use std::path::Path;
 
 use crate::types::Track;
 
-/// Escape special characters for XML attribute values.
 pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -37,7 +36,6 @@ pub fn path_to_location(file_path: &str) -> String {
     format!("file://localhost{encoded}")
 }
 
-/// Map file_type integer to Kind string for XML.
 fn file_type_to_kind(file_type: i32) -> &'static str {
     match file_type {
         1 => "MP3 File",
@@ -49,7 +47,6 @@ fn file_type_to_kind(file_type: i32) -> &'static str {
     }
 }
 
-/// Generate a single TRACK XML element.
 fn write_track(out: &mut String, track: &Track, track_id: usize) {
     let rating = crate::types::stars_to_rating(track.rating);
     let location = path_to_location(&track.file_path);
@@ -108,7 +105,6 @@ fn write_track(out: &mut String, track: &Track, track_id: usize) {
     out.push_str("/>\n");
 }
 
-/// Generate a complete Rekordbox-compatible XML file.
 pub fn generate_xml(tracks: &[Track]) -> String {
     let mut out = String::with_capacity(tracks.len() * 512);
 
@@ -132,7 +128,6 @@ pub fn generate_xml(tracks: &[Track]) -> String {
     out
 }
 
-/// Write XML to a file at the given path, creating parent directories if needed.
 pub fn write_xml(tracks: &[Track], path: &Path) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -237,7 +232,6 @@ mod tests {
         let tracks = vec![make_test_track(), make_test_track()];
         let xml = generate_xml(&tracks);
         assert!(xml.contains("<COLLECTION Entries=\"2\">"));
-        // Count actual TRACK elements
         let track_count = xml.matches("<TRACK ").count();
         assert_eq!(track_count, 2);
     }

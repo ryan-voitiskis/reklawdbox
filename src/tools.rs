@@ -33,7 +33,6 @@ struct ServerState {
     http: reqwest::Client,
 }
 
-/// MCP server for Rekordbox library management.
 #[derive(Clone)]
 pub struct CrateDigServer {
     state: Arc<ServerState>,
@@ -376,8 +375,6 @@ fn attach_corpus_provenance(result: &mut serde_json::Value, consultation: Corpus
     }
 }
 
-// --- Tool parameter types ---
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchTracksParams {
     #[schemars(description = "Search query matching title or artist")]
@@ -578,8 +575,6 @@ pub struct ResolveTracksDataParams {
     pub max_tracks: Option<u32>,
 }
 
-// --- Tool implementations ---
-
 use rmcp::handler::server::wrapper::Parameters;
 
 #[tool_router]
@@ -697,7 +692,6 @@ impl CrateDigServer {
         &self,
         params: Parameters<UpdateTracksParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate ratings before staging
         for c in &params.0.changes {
             if let Some(r) = c.rating {
                 if r == 0 || r > 5 {
@@ -709,7 +703,6 @@ impl CrateDigServer {
             }
         }
 
-        // Collect genre warnings for non-taxonomy genres
         let mut warnings: Vec<String> = Vec::new();
         for c in &params.0.changes {
             if let Some(ref g) = c.genre {
@@ -770,7 +763,6 @@ impl CrateDigServer {
             }
 
             if let Some(canonical) = genre::normalize_genre(&gc.name) {
-                // Known alias — fetch tracks for this genre
                 let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
                     .map_err(|e| err(format!("DB error: {e}")))?;
                 for t in tracks {
@@ -789,7 +781,6 @@ impl CrateDigServer {
                     "count": gc.count,
                 }));
             } else {
-                // Unknown genre — not in taxonomy or alias map
                 let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
                     .map_err(|e| err(format!("DB error: {e}")))?;
                 for t in tracks {
@@ -863,7 +854,6 @@ impl CrateDigServer {
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
 
-        // Run backup before writing
         let backup_script = std::path::Path::new("backup.sh");
         if backup_script.exists() {
             eprintln!("[crate-dig] Running pre-op backup...");
@@ -881,13 +871,11 @@ impl CrateDigServer {
             }
         }
 
-        // Fetch current tracks and apply changes
         let conn = self.conn()?;
         let current_tracks =
             db::get_tracks_by_ids(&conn, &ids).map_err(|e| err(format!("DB error: {e}")))?;
         let modified_tracks = self.state.changes.apply_changes(&current_tracks);
 
-        // Determine output path
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let output_path = params.0.output_path.map(PathBuf::from).unwrap_or_else(|| {
             PathBuf::from(format!("rekordbox-exports/crate-dig-{timestamp}.xml"))
@@ -897,7 +885,6 @@ impl CrateDigServer {
             .map_err(|e| err(format!("Write error: {e}")))?;
 
         let track_count = modified_tracks.len();
-        // Clear staged changes after successful write
         self.state.changes.clear(None);
 
         let mut result = serde_json::json!({
@@ -935,7 +922,6 @@ impl CrateDigServer {
         let norm_artist = discogs::normalize(&params.0.artist);
         let norm_title = discogs::normalize(&params.0.title);
 
-        // Check cache
         if !force_refresh {
             let store = self.internal_conn()?;
             if let Some(cached) =
@@ -966,12 +952,10 @@ impl CrateDigServer {
             }
         }
 
-        // Cache miss — fetch from Discogs
         let result = discogs::lookup(&self.state.http, &params.0.artist, &params.0.title)
             .await
             .map_err(|e| err(format!("Discogs error: {e}")))?;
 
-        // Store in cache
         let (match_quality, response_json) = match &result {
             Some(r) => {
                 let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
@@ -1012,7 +996,6 @@ impl CrateDigServer {
         let norm_artist = discogs::normalize(&params.0.artist);
         let norm_title = discogs::normalize(&params.0.title);
 
-        // Check cache
         if !force_refresh {
             let store = self.internal_conn()?;
             if let Some(cached) =
@@ -1043,12 +1026,10 @@ impl CrateDigServer {
             }
         }
 
-        // Cache miss — fetch from Beatport
         let result = beatport::lookup(&self.state.http, &params.0.artist, &params.0.title)
             .await
             .map_err(|e| err(format!("Beatport error: {e}")))?;
 
-        // Store in cache
         let (match_quality, response_json) = match &result {
             Some(r) => {
                 let json = serde_json::to_string(r).map_err(|e| err(format!("{e}")))?;
@@ -1090,7 +1071,6 @@ impl CrateDigServer {
         let force_refresh = p.force_refresh.unwrap_or(false);
         let providers: Vec<String> = p.providers.unwrap_or_else(|| vec!["discogs".to_string()]);
 
-        // Validate providers
         for prov in &providers {
             if prov != "discogs" && prov != "beatport" {
                 return Err(McpError::invalid_params(
@@ -1139,7 +1119,6 @@ impl CrateDigServer {
             let norm_title = discogs::normalize(&track.title);
 
             for provider in &providers {
-                // Check cache first
                 if skip_cached && !force_refresh {
                     let store = self.internal_conn()?;
                     if store::get_enrichment(&store, provider, &norm_artist, &norm_title)
@@ -1151,7 +1130,6 @@ impl CrateDigServer {
                     }
                 }
 
-                // Perform lookup and cache result per provider
                 match provider.as_str() {
                     "discogs" => {
                         match discogs::lookup(&self.state.http, &track.artist, &track.title).await {
@@ -1911,7 +1889,6 @@ pub(crate) fn resolve_single_track(
     essentia_installed: bool,
     staged: Option<&crate::types::TrackChange>,
 ) -> serde_json::Value {
-    // --- Rekordbox section ---
     let rekordbox = serde_json::json!({
         "title": track.title,
         "artist": track.artist,
@@ -1930,7 +1907,6 @@ pub(crate) fn resolve_single_track(
         "date_added": track.date_added,
     });
 
-    // --- Audio analysis section ---
     let stratum_json = stratum_cache
         .and_then(|sc| serde_json::from_str::<serde_json::Value>(&sc.features_json).ok());
     let essentia_json = essentia_cache
@@ -1959,11 +1935,9 @@ pub(crate) fn resolve_single_track(
         serde_json::Value::Null
     };
 
-    // --- Enrichment sections ---
     let discogs_val = parse_enrichment_cache(discogs_cache);
     let beatport_val = parse_enrichment_cache(beatport_cache);
 
-    // --- Staged changes ---
     let staged_val = staged.map(|s| {
         serde_json::json!({
             "genre": s.genre,
@@ -1973,7 +1947,6 @@ pub(crate) fn resolve_single_track(
         })
     });
 
-    // --- Data completeness ---
     let data_completeness = serde_json::json!({
         "rekordbox": true,
         "stratum_dsp": stratum_cache.is_some(),
@@ -1983,7 +1956,6 @@ pub(crate) fn resolve_single_track(
         "beatport": beatport_cache.is_some(),
     });
 
-    // --- Genre taxonomy mappings ---
     let current_genre_canonical = if track.genre.is_empty() {
         serde_json::Value::Null
     } else if genre::is_known_genre(&track.genre) {
@@ -1999,7 +1971,6 @@ pub(crate) fn resolve_single_track(
         serde_json::Value::Null
     };
 
-    // Map Discogs styles through taxonomy
     let discogs_style_mappings: Vec<serde_json::Value> = discogs_val
         .as_ref()
         .and_then(|v| v.get("styles"))
@@ -2020,7 +1991,6 @@ pub(crate) fn resolve_single_track(
         })
         .unwrap_or_default();
 
-    // Map Beatport genre through taxonomy
     let beatport_genre_mapping = beatport_val
         .as_ref()
         .and_then(|v| v.get("genre"))
@@ -2073,12 +2043,10 @@ fn parse_enrichment_cache(cache: Option<&store::CachedEnrichment>) -> Option<ser
 /// Resolve a Rekordbox file path to an actual filesystem path.
 /// Tries the raw path first; if that fails, tries percent-decoding.
 fn resolve_file_path(raw_path: &str) -> Result<String, McpError> {
-    // Try raw path first
     if std::fs::metadata(raw_path).is_ok() {
         return Ok(raw_path.to_string());
     }
 
-    // Try percent-decoded
     let decoded = percent_encoding::percent_decode_str(raw_path)
         .decode_utf8()
         .map_err(|e| err(format!("Invalid UTF-8 in file path: {e}")))?
