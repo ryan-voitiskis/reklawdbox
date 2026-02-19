@@ -53,16 +53,18 @@ impl ChangeManager {
 
     /// Get staged changes for a single track.
     pub fn get(&self, track_id: &str) -> Option<TrackChange> {
-        self.changes.lock().unwrap_or_else(|e| e.into_inner()).get(track_id).cloned()
+        self.changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(track_id)
+            .cloned()
     }
 
     /// Compute a diff between current track state and staged changes.
     pub fn preview(&self, current_tracks: &[Track]) -> Vec<ChangeDiff> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
-        let track_map: HashMap<&str, &Track> = current_tracks
-            .iter()
-            .map(|t| (t.id.as_str(), t))
-            .collect();
+        let track_map: HashMap<&str, &Track> =
+            current_tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
         let mut diffs = Vec::new();
 
@@ -257,9 +259,21 @@ mod tests {
         // Verify merge: genre updated, comments added, rating preserved
         let tracks = vec![make_track("t1", "Techno", 2)];
         let diffs = cm.preview(&tracks);
-        assert!(diffs.iter().any(|d| d.field == "genre" && d.new_value == "Deep House"));
-        assert!(diffs.iter().any(|d| d.field == "comments" && d.new_value == "great track"));
-        assert!(diffs.iter().any(|d| d.field == "rating" && d.new_value == "4"));
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "genre" && d.new_value == "Deep House")
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "comments" && d.new_value == "great track")
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "rating" && d.new_value == "4")
+        );
     }
 
     #[test]
@@ -276,9 +290,21 @@ mod tests {
 
         let diffs = cm.preview(&tracks);
         assert_eq!(diffs.len(), 3); // genre, comments, rating changed
-        assert!(diffs.iter().any(|d| d.field == "genre" && d.new_value == "Deep House"));
-        assert!(diffs.iter().any(|d| d.field == "comments" && d.new_value == "great bassline"));
-        assert!(diffs.iter().any(|d| d.field == "rating" && d.new_value == "5"));
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "genre" && d.new_value == "Deep House")
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "comments" && d.new_value == "great bassline")
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "rating" && d.new_value == "5")
+        );
     }
 
     #[test]
@@ -374,9 +400,17 @@ mod tests {
 
         // 1. Search for some tracks
         let params = crate::db::SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: Some(120.0), bpm_max: Some(130.0), key: None,
-            playlist: None, has_genre: None, exclude_samples: false, limit: Some(5),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: Some(120.0),
+            bpm_max: Some(130.0),
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(5),
         };
         let tracks = crate::db::search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "need tracks for pipeline test");
@@ -398,8 +432,16 @@ mod tests {
         // 3. Preview changes
         let diffs = cm.preview(&tracks);
         assert!(!diffs.is_empty(), "expected diffs for staged changes");
-        assert!(diffs.iter().any(|d| d.field == "genre" && d.new_value == "Deep House"));
-        assert!(diffs.iter().any(|d| d.field == "comments" && d.new_value == "integration test"));
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "genre" && d.new_value == "Deep House")
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.field == "comments" && d.new_value == "integration test")
+        );
 
         // 4. Apply changes
         let modified = cm.apply_changes(&tracks);

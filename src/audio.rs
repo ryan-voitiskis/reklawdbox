@@ -33,12 +33,20 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), String> {
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
     let probed = get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| format!("Failed to probe audio format: {e}"))?;
 
     let mut format_reader = probed.format;
@@ -46,11 +54,7 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), String> {
     let track = format_reader
         .tracks()
         .iter()
-        .find(|t| {
-            t.codec_params
-                .codec
-                != symphonia::core::codecs::CODEC_TYPE_NULL
-        })
+        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
         .ok_or_else(|| "No audio track found in file".to_string())?;
 
     let track_id = track.id;
@@ -111,22 +115,16 @@ fn decode_buffer_to_mono(buf: &AudioBufferRef) -> Vec<f32> {
             mix_to_mono(b.planes().planes(), |v| v.inner() as f32 / 8388608.0)
         }
         AudioBufferRef::S32(b) => mix_to_mono(b.planes().planes(), |&v| v as f32 / 2147483648.0),
-        AudioBufferRef::U8(b) => {
-            mix_to_mono(b.planes().planes(), |&v| (v as f32 - 128.0) / 128.0)
-        }
+        AudioBufferRef::U8(b) => mix_to_mono(b.planes().planes(), |&v| (v as f32 - 128.0) / 128.0),
         AudioBufferRef::U16(b) => {
             mix_to_mono(b.planes().planes(), |&v| (v as f32 - 32768.0) / 32768.0)
         }
-        AudioBufferRef::U24(b) => {
-            mix_to_mono(b.planes().planes(), |v| {
-                (v.inner() as f32 - 8388608.0) / 8388608.0
-            })
-        }
-        AudioBufferRef::U32(b) => {
-            mix_to_mono(b.planes().planes(), |&v| {
-                (v as f64 - 2147483648.0) as f32 / 2147483648.0
-            })
-        }
+        AudioBufferRef::U24(b) => mix_to_mono(b.planes().planes(), |v| {
+            (v.inner() as f32 - 8388608.0) / 8388608.0
+        }),
+        AudioBufferRef::U32(b) => mix_to_mono(b.planes().planes(), |&v| {
+            (v as f64 - 2147483648.0) as f32 / 2147483648.0
+        }),
     }
 }
 
@@ -210,8 +208,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).expect("serialize should succeed");
-        let back: StratumResult =
-            serde_json::from_str(&json).expect("deserialize should succeed");
+        let back: StratumResult = serde_json::from_str(&json).expect("deserialize should succeed");
 
         assert!((back.bpm - 128.0).abs() < f64::EPSILON);
         assert!((back.bpm_confidence - 0.95).abs() < f64::EPSILON);
@@ -279,19 +276,15 @@ mod tests {
             track.artist, track.title, file_path
         );
 
-        let (samples, sample_rate) = decode_to_samples(&file_path)
-            .unwrap_or_else(|e| panic!("decode failed: {e}"));
+        let (samples, sample_rate) =
+            decode_to_samples(&file_path).unwrap_or_else(|e| panic!("decode failed: {e}"));
 
         assert!(
             !samples.is_empty(),
             "decoded zero samples from {}",
             file_path
         );
-        assert!(
-            sample_rate > 0,
-            "invalid sample rate from {}",
-            file_path
-        );
+        assert!(sample_rate > 0, "invalid sample rate from {}", file_path);
         eprintln!(
             "[integration] Decoded: {} samples at {} Hz ({:.1}s)",
             samples.len(),
@@ -299,16 +292,33 @@ mod tests {
             samples.len() as f64 / sample_rate as f64
         );
 
-        let result = analyze(&samples, sample_rate)
-            .unwrap_or_else(|e| panic!("analysis failed: {e}"));
+        let result =
+            analyze(&samples, sample_rate).unwrap_or_else(|e| panic!("analysis failed: {e}"));
 
-        assert!(result.bpm > 0.0, "BPM should be positive, got {}", result.bpm);
-        assert!(result.bpm < 300.0, "BPM should be < 300, got {}", result.bpm);
+        assert!(
+            result.bpm > 0.0,
+            "BPM should be positive, got {}",
+            result.bpm
+        );
+        assert!(
+            result.bpm < 300.0,
+            "BPM should be < 300, got {}",
+            result.bpm
+        );
         assert!(!result.key.is_empty(), "key should be non-empty");
-        assert!(!result.key_camelot.is_empty(), "camelot key should be non-empty");
+        assert!(
+            !result.key_camelot.is_empty(),
+            "camelot key should be non-empty"
+        );
         assert!(result.duration_seconds > 0.0, "duration should be positive");
-        assert!(result.processing_time_ms > 0.0, "processing time should be positive");
-        assert!(!result.analyzer_version.is_empty(), "analyzer version should be non-empty");
+        assert!(
+            result.processing_time_ms > 0.0,
+            "processing time should be positive"
+        );
+        assert!(
+            !result.analyzer_version.is_empty(),
+            "analyzer version should be non-empty"
+        );
 
         eprintln!(
             "[integration] Result: BPM={:.2} (conf={:.2}), Key={} / {} (conf={:.2}, clarity={:.2}), grid={:.2}, {:.1}s in {:.0}ms",
@@ -404,8 +414,7 @@ mod tests {
         assert_eq!(cached.file_size, file_size);
         assert_eq!(cached.file_mtime, file_mtime);
 
-        let cached_result: StratumResult =
-            serde_json::from_str(&cached.features_json).unwrap();
+        let cached_result: StratumResult = serde_json::from_str(&cached.features_json).unwrap();
         assert!((cached_result.bpm - result.bpm).abs() < f64::EPSILON);
         assert_eq!(cached_result.key, result.key);
         assert_eq!(cached_result.key_camelot, result.key_camelot);

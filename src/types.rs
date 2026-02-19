@@ -18,8 +18,8 @@ pub struct Track {
     pub label: String,
     pub remixer: String,
     pub year: i32,
-    pub length: i32,         // seconds
-    pub file_path: String,   // DB FolderPath
+    pub length: i32,       // seconds
+    pub file_path: String, // DB FolderPath
     pub play_count: i32,
     pub bit_rate: i32,
     pub sample_rate: i32,
@@ -129,7 +129,10 @@ mod tests {
         for stars in 0..=5u8 {
             let encoded = stars_to_rating(stars);
             let decoded = rating_to_stars(encoded);
-            assert_eq!(stars, decoded, "roundtrip failed for {stars} stars (encoded: {encoded})");
+            assert_eq!(
+                stars, decoded,
+                "roundtrip failed for {stars} stars (encoded: {encoded})"
+            );
         }
     }
 

@@ -115,7 +115,12 @@ pub fn generate_xml(tracks: &[Track]) -> String {
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<DJ_PLAYLISTS Version=\"1.0.0\">\n");
     out.push_str("  <PRODUCT Name=\"rekordbox\" Version=\"7.2.10\" Company=\"AlphaTheta\"/>\n");
-    write!(out, "  <COLLECTION Entries=\"{count}\">\n", count = tracks.len()).unwrap();
+    write!(
+        out,
+        "  <COLLECTION Entries=\"{count}\">\n",
+        count = tracks.len()
+    )
+    .unwrap();
 
     for (i, track) in tracks.iter().enumerate() {
         write_track(&mut out, track, i + 1);
@@ -222,7 +227,9 @@ mod tests {
         assert!(xml.contains("Tonality=\"Am\""));
         assert!(xml.contains("Label=\"Hyperdub\""));
         assert!(xml.contains("Kind=\"FLAC File\""));
-        assert!(xml.contains("Location=\"file://localhost/Users/vz/Music/Burial/Untrue/01%20Archangel.flac\""));
+        assert!(xml.contains(
+            "Location=\"file://localhost/Users/vz/Music/Burial/Untrue/01%20Archangel.flac\""
+        ));
     }
 
     #[test]
@@ -261,9 +268,17 @@ mod tests {
     fn load_real_tracks(limit: usize) -> Option<Vec<crate::types::Track>> {
         let conn = crate::db::open_real_db()?;
         let params = crate::db::SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: None, exclude_samples: false, limit: Some(limit as u32),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(limit as u32),
         };
         Some(crate::db::search_tracks(&conn, &params).unwrap())
     }
@@ -278,7 +293,10 @@ mod tests {
         assert!(xml.starts_with("<?xml"));
         assert!(xml.contains("<COLLECTION Entries=\"100\">"));
         let track_count = xml.matches("<TRACK ").count();
-        assert_eq!(track_count, 100, "expected 100 TRACK elements, got {track_count}");
+        assert_eq!(
+            track_count, 100,
+            "expected 100 TRACK elements, got {track_count}"
+        );
 
         // No NUL or control characters (except newline/tab)
         for (i, c) in xml.chars().enumerate() {
@@ -310,13 +328,18 @@ mod tests {
                     in_attr = !in_attr;
                 } else if in_attr && chars[i] == '&' {
                     // Must be followed by amp; lt; gt; quot; apos; or #
-                    let rest: String = chars[i+1..].iter().take(6).collect();
+                    let rest: String = chars[i + 1..].iter().take(6).collect();
                     assert!(
-                        rest.starts_with("amp;") || rest.starts_with("lt;") ||
-                        rest.starts_with("gt;") || rest.starts_with("quot;") ||
-                        rest.starts_with("apos;") || rest.starts_with('#'),
+                        rest.starts_with("amp;")
+                            || rest.starts_with("lt;")
+                            || rest.starts_with("gt;")
+                            || rest.starts_with("quot;")
+                            || rest.starts_with("apos;")
+                            || rest.starts_with('#'),
                         "unescaped & in TRACK line at pos {i}: ...{}...",
-                        chars[i.saturating_sub(10)..chars.len().min(i + 20)].iter().collect::<String>()
+                        chars[i.saturating_sub(10)..chars.len().min(i + 20)]
+                            .iter()
+                            .collect::<String>()
                     );
                 } else if in_attr && chars[i] == '<' {
                     panic!("unescaped < in attribute value at pos {i}");
@@ -335,21 +358,32 @@ mod tests {
         for track in &tracks {
             let rating_xml = crate::types::stars_to_rating(track.rating);
             let expected_rating = format!("Rating=\"{rating_xml}\"");
-            assert!(xml.contains(&expected_rating),
-                "missing {} for track '{}'", expected_rating, track.title);
+            assert!(
+                xml.contains(&expected_rating),
+                "missing {} for track '{}'",
+                expected_rating,
+                track.title
+            );
 
             // BPM format: X.XX
             let expected_bpm = format!("AverageBpm=\"{:.2}\"", track.bpm);
-            assert!(xml.contains(&expected_bpm),
-                "missing {} for track '{}'", expected_bpm, track.title);
+            assert!(
+                xml.contains(&expected_bpm),
+                "missing {} for track '{}'",
+                expected_bpm,
+                track.title
+            );
         }
 
         // All Location values should start with file://localhost/
         for line in xml.lines() {
             if let Some(loc_start) = line.find("Location=\"") {
                 let after = &line[loc_start + 10..];
-                assert!(after.starts_with("file://localhost/"),
-                    "Location doesn't start with file://localhost/: {}", &after[..after.len().min(60)]);
+                assert!(
+                    after.starts_with("file://localhost/"),
+                    "Location doesn't start with file://localhost/: {}",
+                    &after[..after.len().min(60)]
+                );
             }
         }
     }
@@ -386,12 +420,16 @@ mod tests {
         loop {
             let sql = format!(
                 "{}WHERE c.rb_local_deleted = 0 ORDER BY c.ID LIMIT {} OFFSET {}",
-                crate::db::TRACK_SELECT, page_size, offset
+                crate::db::TRACK_SELECT,
+                page_size,
+                offset
             );
             let mut stmt = conn.prepare(&sql).unwrap();
-            let batch: Vec<crate::types::Track> = stmt.query_map([], |row| {
-                crate::db::row_to_track(row)
-            }).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            let batch: Vec<crate::types::Track> = stmt
+                .query_map([], |row| crate::db::row_to_track(row))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
             let count = batch.len();
             all.extend(batch);
             if (count as u32) < page_size {
@@ -410,11 +448,24 @@ mod tests {
 
         // TRACK element count matches
         let track_count = xml.matches("<TRACK ").count();
-        assert_eq!(track_count, all.len(), "TRACK element count mismatch: {track_count} vs {}", all.len());
+        assert_eq!(
+            track_count,
+            all.len(),
+            "TRACK element count mismatch: {track_count} vs {}",
+            all.len()
+        );
 
         // Reasonable file size: ~500-3000 bytes per track
         let size = xml.len();
-        assert!(size > all.len() * 200, "XML too small: {size} bytes for {} tracks", all.len());
-        assert!(size < all.len() * 5000, "XML too large: {size} bytes for {} tracks", all.len());
+        assert!(
+            size > all.len() * 200,
+            "XML too small: {size} bytes for {} tracks",
+            all.len()
+        );
+        assert!(
+            size < all.len() * 5000,
+            "XML too large: {size} bytes for {} tracks",
+            all.len()
+        );
     }
 }

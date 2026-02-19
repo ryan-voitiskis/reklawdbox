@@ -156,7 +156,10 @@ mod tests {
         assert_eq!(normalize_genre("Bass"), Some("UK Bass"));
         assert_eq!(normalize_genre("Drone Techno"), Some("Deep Techno"));
         assert_eq!(normalize_genre("Gospel House"), Some("House"));
-        assert_eq!(normalize_genre("140 / Deep Dubstep / Grime"), Some("Dubstep"));
+        assert_eq!(
+            normalize_genre("140 / Deep Dubstep / Grime"),
+            Some("Dubstep")
+        );
     }
 
     #[test]
@@ -186,14 +189,23 @@ mod tests {
     #[test]
     fn alias_map_not_empty() {
         let aliases = get_alias_map();
-        assert!(aliases.len() >= 37, "expected at least 37 aliases, got {}", aliases.len());
+        assert!(
+            aliases.len() >= 37,
+            "expected at least 37 aliases, got {}",
+            aliases.len()
+        );
     }
 
     #[test]
     fn alias_map_sorted() {
         let aliases = get_alias_map();
         for w in aliases.windows(2) {
-            assert!(w[0].0 <= w[1].0, "alias map not sorted: {:?} > {:?}", w[0].0, w[1].0);
+            assert!(
+                w[0].0 <= w[1].0,
+                "alias map not sorted: {:?} > {:?}",
+                w[0].0,
+                w[1].0
+            );
         }
     }
 
@@ -204,7 +216,8 @@ mod tests {
             assert!(
                 is_known_genre(canonical),
                 "alias '{}' maps to '{}' which is not in taxonomy",
-                alias, canonical
+                alias,
+                canonical
             );
         }
     }

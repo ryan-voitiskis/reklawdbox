@@ -261,10 +261,24 @@ mod tests {
     fn test_enrichment_cache_upsert() {
         let (_dir, conn) = open_temp_store();
 
-        set_enrichment(&conn, "discogs", "burial", "archangel", Some("fuzzy"), Some("old"))
-            .unwrap();
-        set_enrichment(&conn, "discogs", "burial", "archangel", Some("exact"), Some("new"))
-            .unwrap();
+        set_enrichment(
+            &conn,
+            "discogs",
+            "burial",
+            "archangel",
+            Some("fuzzy"),
+            Some("old"),
+        )
+        .unwrap();
+        set_enrichment(
+            &conn,
+            "discogs",
+            "burial",
+            "archangel",
+            Some("exact"),
+            Some("new"),
+        )
+        .unwrap();
 
         let entry = get_enrichment(&conn, "discogs", "burial", "archangel")
             .unwrap()
@@ -324,10 +338,26 @@ mod tests {
     fn test_audio_analysis_cache_upsert() {
         let (_dir, conn) = open_temp_store();
 
-        set_audio_analysis(&conn, "/music/track.flac", "stratum-dsp", 100, 200, "1.0.0", "old")
-            .unwrap();
-        set_audio_analysis(&conn, "/music/track.flac", "stratum-dsp", 100, 300, "1.1.0", "new")
-            .unwrap();
+        set_audio_analysis(
+            &conn,
+            "/music/track.flac",
+            "stratum-dsp",
+            100,
+            200,
+            "1.0.0",
+            "old",
+        )
+        .unwrap();
+        set_audio_analysis(
+            &conn,
+            "/music/track.flac",
+            "stratum-dsp",
+            100,
+            300,
+            "1.1.0",
+            "new",
+        )
+        .unwrap();
 
         let entry = get_audio_analysis(&conn, "/music/track.flac", "stratum-dsp")
             .unwrap()

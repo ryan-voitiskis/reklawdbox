@@ -78,8 +78,7 @@ fn parse_beatport_html(
     };
 
     // Navigate: props.pageProps.dehydratedState.queries[0].state.data.data
-    let tracks = next_data
-        .pointer("/props/pageProps/dehydratedState/queries/0/state/data/data");
+    let tracks = next_data.pointer("/props/pageProps/dehydratedState/queries/0/state/data/data");
 
     let tracks = match tracks.and_then(|v| v.as_array()) {
         Some(arr) => arr,
@@ -100,9 +99,7 @@ fn parse_beatport_html(
             .filter_map(|a| a.get("artist_name").and_then(|n| n.as_str()))
             .collect::<Vec<_>>();
 
-        let artist_match = artists
-            .iter()
-            .any(|a| a.to_lowercase() == norm_artist);
+        let artist_match = artists.iter().any(|a| a.to_lowercase() == norm_artist);
 
         // Check title match (bidirectional substring)
         let track_name = track
@@ -123,10 +120,7 @@ fn parse_beatport_html(
                 .unwrap_or("")
                 .to_string();
 
-            let bpm = track
-                .get("bpm")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
+            let bpm = track.get("bpm").and_then(|v| v.as_i64()).map(|v| v as i32);
 
             let key = track
                 .get("key_name")

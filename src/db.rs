@@ -61,7 +61,8 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
     // DJPlayCount is stored as integer in real DB but as text in some versions.
     let play_count: i32 = match row.get::<_, i32>("DJPlayCount") {
         Ok(n) => n,
-        Err(_) => row.get::<_, String>("DJPlayCount")
+        Err(_) => row
+            .get::<_, String>("DJPlayCount")
             .unwrap_or_default()
             .parse()
             .unwrap_or(0),
@@ -118,13 +119,18 @@ fn escape_like(s: &str) -> String {
 }
 
 /// Search tracks with dynamic filtering.
-pub fn search_tracks(conn: &Connection, params: &SearchParams) -> Result<Vec<Track>, rusqlite::Error> {
+pub fn search_tracks(
+    conn: &Connection,
+    params: &SearchParams,
+) -> Result<Vec<Track>, rusqlite::Error> {
     let mut sql = format!("{TRACK_SELECT} WHERE c.rb_local_deleted = 0");
     let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
     if let Some(ref q) = params.query {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND (c.Title LIKE ?{idx} ESCAPE '\\' OR a.Name LIKE ?{idx} ESCAPE '\\')"));
+        sql.push_str(&format!(
+            " AND (c.Title LIKE ?{idx} ESCAPE '\\' OR a.Name LIKE ?{idx} ESCAPE '\\')"
+        ));
         bind_values.push(Box::new(format!("%{}%", escape_like(q))));
     }
 
@@ -263,7 +269,10 @@ pub fn get_library_stats(conn: &Connection) -> Result<LibraryStats, rusqlite::Er
 }
 
 /// Get library statistics with optional sample exclusion.
-pub fn get_library_stats_filtered(conn: &Connection, exclude_samples: bool) -> Result<LibraryStats, rusqlite::Error> {
+pub fn get_library_stats_filtered(
+    conn: &Connection,
+    exclude_samples: bool,
+) -> Result<LibraryStats, rusqlite::Error> {
     let sample_filter = if exclude_samples {
         format!(" AND FolderPath NOT LIKE '{}%'", SAMPLER_PATH_PREFIX)
     } else {
@@ -302,14 +311,14 @@ pub fn get_library_stats_filtered(conn: &Connection, exclude_samples: bool) -> R
     )?;
 
     // Genre distribution
-    let mut stmt = conn.prepare(
-        &format!("SELECT COALESCE(g.Name, '(none)') AS GenreName, COUNT(*) AS cnt
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COALESCE(g.Name, '(none)') AS GenreName, COUNT(*) AS cnt
          FROM djmdContent c
          LEFT JOIN djmdGenre g ON c.GenreID = g.ID
          WHERE c.rb_local_deleted = 0{sample_filter_c}
          GROUP BY g.Name
-         ORDER BY cnt DESC"),
-    )?;
+         ORDER BY cnt DESC"
+    ))?;
     let genres: Vec<GenreCount> = stmt
         .query_map([], |row| {
             Ok(GenreCount {
@@ -320,14 +329,14 @@ pub fn get_library_stats_filtered(conn: &Connection, exclude_samples: bool) -> R
         .collect::<Result<_, _>>()?;
 
     // Key distribution
-    let mut stmt = conn.prepare(
-        &format!("SELECT COALESCE(k.ScaleName, '(none)') AS KeyName, COUNT(*) AS cnt
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COALESCE(k.ScaleName, '(none)') AS KeyName, COUNT(*) AS cnt
          FROM djmdContent c
          LEFT JOIN djmdKey k ON c.KeyID = k.ID
          WHERE c.rb_local_deleted = 0{sample_filter_c}
          GROUP BY k.ScaleName
-         ORDER BY cnt DESC"),
-    )?;
+         ORDER BY cnt DESC"
+    ))?;
     let key_distribution: Vec<KeyCount> = stmt
         .query_map([], |row| {
             Ok(KeyCount {
@@ -349,10 +358,17 @@ pub fn get_library_stats_filtered(conn: &Connection, exclude_samples: bool) -> R
 }
 
 /// Get all tracks with an exact genre name match.
-pub fn get_tracks_by_exact_genre(conn: &Connection, genre_name: &str, exclude_samples: bool) -> Result<Vec<Track>, rusqlite::Error> {
+pub fn get_tracks_by_exact_genre(
+    conn: &Connection,
+    genre_name: &str,
+    exclude_samples: bool,
+) -> Result<Vec<Track>, rusqlite::Error> {
     let mut sql = format!("{TRACK_SELECT} WHERE c.rb_local_deleted = 0 AND g.Name = ?1");
     if exclude_samples {
-        sql.push_str(&format!(" AND c.FolderPath NOT LIKE '{}%'", SAMPLER_PATH_PREFIX));
+        sql.push_str(&format!(
+            " AND c.FolderPath NOT LIKE '{}%'",
+            SAMPLER_PATH_PREFIX
+        ));
     }
     sql.push_str(" ORDER BY c.Title");
     let mut stmt = conn.prepare(&sql)?;
@@ -371,7 +387,10 @@ pub fn get_tracks_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Track>
         placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;
-    let refs: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let refs: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(refs.as_slice(), row_to_track)?;
     rows.collect()
 }
@@ -426,7 +445,15 @@ pub(crate) fn open_real_db() -> Option<Connection> {
         }
         std::fs::create_dir_all(dest).ok();
         let status = Command::new("tar")
-            .args(["xzf", &tarball, "-C", dest, "master.db", "master.db-shm", "master.db-wal"])
+            .args([
+                "xzf",
+                &tarball,
+                "-C",
+                dest,
+                "master.db",
+                "master.db-shm",
+                "master.db-wal",
+            ])
             .status();
         match status {
             Ok(s) => s.success(),
@@ -438,8 +465,8 @@ pub(crate) fn open_real_db() -> Option<Connection> {
         return None;
     }
 
-    let conn = Connection::open(&db_path)
-        .unwrap_or_else(|e| panic!("failed to open {db_path}: {e}"));
+    let conn =
+        Connection::open(&db_path).unwrap_or_else(|e| panic!("failed to open {db_path}: {e}"));
     conn.execute_batch(&format!("PRAGMA key = '{DB_KEY}'"))
         .unwrap_or_else(|e| panic!("failed to set key: {e}"));
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
@@ -579,7 +606,8 @@ mod tests {
             bpm_max: None,
             key: None,
             playlist: None,
-            has_genre: None, exclude_samples: false,
+            has_genre: None,
+            exclude_samples: false,
             limit: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
@@ -598,7 +626,8 @@ mod tests {
             bpm_max: None,
             key: None,
             playlist: None,
-            has_genre: None, exclude_samples: true,
+            has_genre: None,
+            exclude_samples: true,
             limit: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
@@ -660,7 +689,8 @@ mod tests {
             bpm_max: None,
             key: None,
             playlist: None,
-            has_genre: Some(false), exclude_samples: false,
+            has_genre: Some(false),
+            exclude_samples: false,
             limit: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
@@ -821,8 +851,11 @@ mod tests {
                 "{TRACK_SELECT} WHERE c.rb_local_deleted = 0 ORDER BY c.ID LIMIT {page_size} OFFSET {offset}"
             );
             let mut stmt = conn.prepare(&sql).unwrap();
-            let batch: Vec<Track> = stmt.query_map([], row_to_track).unwrap()
-                .collect::<Result<Vec<_>, _>>().unwrap();
+            let batch: Vec<Track> = stmt
+                .query_map([], row_to_track)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
             let count = batch.len();
             all.extend(batch);
             if count < page_size {
@@ -846,15 +879,20 @@ mod tests {
         assert!(count > 0, "DB opened but djmdContent is empty");
     }
 
-
-
     #[test]
     #[ignore]
     fn test_real_db_schema_tables() {
         let conn = open_real_db().expect("backup tarball not found");
         let required = [
-            "djmdContent", "djmdArtist", "djmdAlbum", "djmdGenre",
-            "djmdKey", "djmdLabel", "djmdColor", "djmdPlaylist", "djmdSongPlaylist",
+            "djmdContent",
+            "djmdArtist",
+            "djmdAlbum",
+            "djmdGenre",
+            "djmdKey",
+            "djmdLabel",
+            "djmdColor",
+            "djmdPlaylist",
+            "djmdSongPlaylist",
         ];
         for table in required {
             let exists: bool = conn
@@ -874,14 +912,20 @@ mod tests {
         let conn = open_real_db().expect("backup tarball not found");
         // Verify critical columns exist by running a minimal query on each
         let checks = [
-            ("djmdContent", "ID, Title, BPM, Commnt, Rating, FolderPath, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID, ReleaseYear, Length, DJPlayCount, BitRate, SampleRate, FileType, created_at, rb_local_deleted"),
+            (
+                "djmdContent",
+                "ID, Title, BPM, Commnt, Rating, FolderPath, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID, ReleaseYear, Length, DJPlayCount, BitRate, SampleRate, FileType, created_at, rb_local_deleted",
+            ),
             ("djmdArtist", "ID, Name"),
             ("djmdAlbum", "ID, Name"),
             ("djmdGenre", "ID, Name"),
             ("djmdKey", "ID, ScaleName"),
             ("djmdLabel", "ID, Name"),
             ("djmdColor", "ID, ColorCode, Commnt"),
-            ("djmdPlaylist", "ID, Name, Attribute, ParentID, Seq, rb_local_deleted"),
+            (
+                "djmdPlaylist",
+                "ID, Name, Attribute, ParentID, Seq, rb_local_deleted",
+            ),
             ("djmdSongPlaylist", "ID, PlaylistID, ContentID, TrackNo"),
         ];
         for (table, cols) in checks {
@@ -896,9 +940,16 @@ mod tests {
     fn test_real_db_track_count() {
         let conn = open_real_db().expect("backup tarball not found");
         let stats = get_library_stats(&conn).unwrap();
-        assert!(stats.total_tracks > 2000, "expected >2000 tracks, got {}", stats.total_tracks);
+        assert!(
+            stats.total_tracks > 2000,
+            "expected >2000 tracks, got {}",
+            stats.total_tracks
+        );
         assert!(stats.avg_bpm > 0.0, "avg_bpm should be positive");
-        assert!(stats.playlist_count > 0, "should have at least one playlist");
+        assert!(
+            stats.playlist_count > 0,
+            "should have at least one playlist"
+        );
     }
 
     #[test]
@@ -908,23 +959,44 @@ mod tests {
 
         // Unfiltered search
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: None, exclude_samples: false, limit: Some(10),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(10),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "unfiltered search returned no results");
 
         // BPM range search
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: Some(120.0), bpm_max: Some(130.0), key: None,
-            playlist: None, has_genre: None, exclude_samples: false, limit: Some(50),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: Some(120.0),
+            bpm_max: Some(130.0),
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(50),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "BPM 120-130 range returned no results");
         for t in &tracks {
-            assert!(t.bpm >= 120.0 && t.bpm <= 130.0, "track {} BPM {} outside range", t.title, t.bpm);
+            assert!(
+                t.bpm >= 120.0 && t.bpm <= 130.0,
+                "track {} BPM {} outside range",
+                t.title,
+                t.bpm
+            );
         }
     }
 
@@ -933,22 +1005,48 @@ mod tests {
     fn test_real_db_field_encoding() {
         let conn = open_real_db().expect("backup tarball not found");
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: None, exclude_samples: false, limit: Some(200),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(200),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
 
         for t in &tracks {
             // BPM: 0 (unanalyzed) or 30-300 reasonable range
-            assert!(t.bpm == 0.0 || (t.bpm >= 30.0 && t.bpm <= 300.0),
-                "track '{}' has unreasonable BPM: {}", t.title, t.bpm);
+            assert!(
+                t.bpm == 0.0 || (t.bpm >= 30.0 && t.bpm <= 300.0),
+                "track '{}' has unreasonable BPM: {}",
+                t.title,
+                t.bpm
+            );
             // Rating: 0-5
-            assert!(t.rating <= 5, "track '{}' has invalid rating: {}", t.title, t.rating);
+            assert!(
+                t.rating <= 5,
+                "track '{}' has invalid rating: {}",
+                t.title,
+                t.rating
+            );
             // Length: should be positive for real tracks
-            assert!(t.length > 0, "track '{}' has non-positive length: {}", t.title, t.length);
+            assert!(
+                t.length > 0,
+                "track '{}' has non-positive length: {}",
+                t.title,
+                t.length
+            );
             // file_path should be non-empty
-            assert!(!t.file_path.is_empty(), "track '{}' has empty file_path", t.title);
+            assert!(
+                !t.file_path.is_empty(),
+                "track '{}' has empty file_path",
+                t.title
+            );
         }
     }
 
@@ -959,24 +1057,49 @@ mod tests {
 
         // has_genre=false should work without panic
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: Some(false), exclude_samples: false, limit: Some(50),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: Some(false),
+            exclude_samples: false,
+            limit: Some(50),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
-            assert!(t.genre.is_empty(), "track '{}' has genre '{}' but expected none", t.title, t.genre);
+            assert!(
+                t.genre.is_empty(),
+                "track '{}' has genre '{}' but expected none",
+                t.title,
+                t.genre
+            );
         }
 
         // has_genre=true
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: Some(true), exclude_samples: false, limit: Some(50),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: Some(true),
+            exclude_samples: false,
+            limit: Some(50),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
-            assert!(!t.genre.is_empty(), "track '{}' has empty genre but expected one", t.title);
+            assert!(
+                !t.genre.is_empty(),
+                "track '{}' has empty genre but expected one",
+                t.title
+            );
         }
     }
 
@@ -987,10 +1110,12 @@ mod tests {
         let all = load_all_tracks(&conn);
 
         // Find any tracks with non-ASCII characters
-        let unicode_tracks: Vec<_> = all.iter().filter(|t| {
-            t.title.chars().any(|c| !c.is_ascii()) ||
-            t.artist.chars().any(|c| !c.is_ascii())
-        }).collect();
+        let unicode_tracks: Vec<_> = all
+            .iter()
+            .filter(|t| {
+                t.title.chars().any(|c| !c.is_ascii()) || t.artist.chars().any(|c| !c.is_ascii())
+            })
+            .collect();
 
         // Verify they survive serde round-trip
         for t in &unicode_tracks {
@@ -1013,12 +1138,24 @@ mod tests {
         let has_folder = playlists.iter().any(|p| p.is_folder);
         let has_regular = playlists.iter().any(|p| !p.is_folder && !p.is_smart);
         // At least one type should exist
-        assert!(has_folder || has_regular, "no folders or regular playlists found");
+        assert!(
+            has_folder || has_regular,
+            "no folders or regular playlists found"
+        );
 
         // For regular playlists with tracks, verify track loading
-        for p in playlists.iter().filter(|p| !p.is_folder && p.track_count > 0).take(3) {
+        for p in playlists
+            .iter()
+            .filter(|p| !p.is_folder && p.track_count > 0)
+            .take(3)
+        {
             let tracks = get_playlist_tracks(&conn, &p.id, Some(10)).unwrap();
-            assert!(!tracks.is_empty(), "playlist '{}' claims {} tracks but returned none", p.name, p.track_count);
+            assert!(
+                !tracks.is_empty(),
+                "playlist '{}' claims {} tracks but returned none",
+                p.name,
+                p.track_count
+            );
         }
     }
 
@@ -1029,14 +1166,24 @@ mod tests {
 
         // Get a track via search, then fetch by ID
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: None, exclude_samples: false, limit: Some(1),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: false,
+            limit: Some(1),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty());
 
-        let by_id = get_track(&conn, &tracks[0].id).unwrap().expect("track not found by ID");
+        let by_id = get_track(&conn, &tracks[0].id)
+            .unwrap()
+            .expect("track not found by ID");
         assert_eq!(tracks[0].id, by_id.id);
         assert_eq!(tracks[0].title, by_id.title);
         assert_eq!(tracks[0].artist, by_id.artist);
@@ -1050,20 +1197,29 @@ mod tests {
 
         // rated + unrated = total
         assert_eq!(
-            stats.rated_count + stats.unrated_count, stats.total_tracks,
+            stats.rated_count + stats.unrated_count,
+            stats.total_tracks,
             "rated ({}) + unrated ({}) != total ({})",
-            stats.rated_count, stats.unrated_count, stats.total_tracks
+            stats.rated_count,
+            stats.unrated_count,
+            stats.total_tracks
         );
 
         // genre counts sum to total
         let genre_sum: i32 = stats.genres.iter().map(|g| g.count).sum();
-        assert_eq!(genre_sum, stats.total_tracks,
-            "genre count sum ({genre_sum}) != total ({})", stats.total_tracks);
+        assert_eq!(
+            genre_sum, stats.total_tracks,
+            "genre count sum ({genre_sum}) != total ({})",
+            stats.total_tracks
+        );
 
         // key counts sum to total
         let key_sum: i32 = stats.key_distribution.iter().map(|k| k.count).sum();
-        assert_eq!(key_sum, stats.total_tracks,
-            "key count sum ({key_sum}) != total ({})", stats.total_tracks);
+        assert_eq!(
+            key_sum, stats.total_tracks,
+            "key count sum ({key_sum}) != total ({})",
+            stats.total_tracks
+        );
     }
 
     #[test]
@@ -1097,9 +1253,16 @@ mod tests {
         for input in nasty_inputs {
             let params = SearchParams {
                 query: Some(input.to_string()),
-                artist: None, genre: None, rating_min: None,
-                bpm_min: None, bpm_max: None, key: None, playlist: None,
-                has_genre: None, exclude_samples: false, limit: Some(5),
+                artist: None,
+                genre: None,
+                rating_min: None,
+                bpm_min: None,
+                bpm_max: None,
+                key: None,
+                playlist: None,
+                has_genre: None,
+                exclude_samples: false,
+                limit: Some(5),
             };
             // Should not panic or error
             let result = search_tracks(&conn, &params);
@@ -1125,19 +1288,31 @@ mod tests {
 
         // Verify the difference is the sampler tracks
         let diff = stats_all.total_tracks - stats_filtered.total_tracks;
-        eprintln!("[integration] Sample exclusion: {} sampler tracks filtered out", diff);
+        eprintln!(
+            "[integration] Sample exclusion: {} sampler tracks filtered out",
+            diff
+        );
 
         // Search with exclude_samples=true should not return sampler paths
         let params = SearchParams {
-            query: None, artist: None, genre: None, rating_min: None,
-            bpm_min: None, bpm_max: None, key: None, playlist: None,
-            has_genre: None, exclude_samples: true, limit: Some(200),
+            query: None,
+            artist: None,
+            genre: None,
+            rating_min: None,
+            bpm_min: None,
+            bpm_max: None,
+            key: None,
+            playlist: None,
+            has_genre: None,
+            exclude_samples: true,
+            limit: Some(200),
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
             assert!(
                 !t.file_path.starts_with(SAMPLER_PATH_PREFIX),
-                "sampler track not excluded: {}", t.file_path
+                "sampler track not excluded: {}",
+                t.file_path
             );
         }
     }
@@ -1172,6 +1347,9 @@ mod tests {
         }
 
         // Most tracks should be canonical or alias-able
-        assert!(alias_count > 100, "expected >100 alias-able tracks, got {alias_count}");
+        assert!(
+            alias_count > 100,
+            "expected >100 alias-able tracks, got {alias_count}"
+        );
     }
 }
