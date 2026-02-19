@@ -15,6 +15,7 @@ use serde::Deserialize;
 use crate::audio;
 use crate::beatport;
 use crate::changes::ChangeManager;
+use crate::color;
 use crate::corpus;
 use crate::db;
 use crate::discogs;
@@ -444,9 +445,19 @@ pub struct WriteXmlParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct PreviewChangesParams {
+    #[schemars(description = "Filter to specific track IDs (if empty, shows all staged changes)")]
+    pub track_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ClearChangesParams {
     #[schemars(description = "Track IDs to clear (if empty, clears all)")]
     pub track_ids: Option<Vec<String>>,
+    #[schemars(
+        description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\". If omitted, clears all fields (removes entire entries)."
+    )]
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -703,6 +714,19 @@ impl ReklawdboxServer {
                     ));
                 }
             }
+            if let Some(ref col) = c.color {
+                if !color::is_valid_color(col) {
+                    let valid: Vec<&str> = color::COLORS.iter().map(|(n, _)| *n).collect();
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "unknown color '{}'. Valid colors: {}",
+                            col,
+                            valid.join(", ")
+                        ),
+                        None,
+                    ));
+                }
+            }
         }
 
         let mut warnings: Vec<String> = Vec::new();
@@ -723,7 +747,24 @@ impl ReklawdboxServer {
                 genre: c.genre,
                 comments: c.comments,
                 rating: c.rating,
-                color: c.color,
+                color: c.color.map(|col| {
+                    color::canonical_casing(&col)
+                        .map(String::from)
+                        .unwrap_or(col)
+                }),
+            })
+            .collect();
+
+        let echo: Vec<serde_json::Value> = changes
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "track_id": c.track_id,
+                    "genre": c.genre,
+                    "comments": c.comments,
+                    "rating": c.rating,
+                    "color": c.color,
+                })
             })
             .collect();
 
@@ -731,6 +772,7 @@ impl ReklawdboxServer {
         let mut result = serde_json::json!({
             "staged": staged,
             "total_pending": total,
+            "changes": echo,
         });
         if !warnings.is_empty() {
             result["warnings"] = serde_json::json!(warnings);
@@ -814,12 +856,26 @@ impl ReklawdboxServer {
     }
 
     #[tool(description = "Preview all staged changes, showing what will differ from current state")]
-    async fn preview_changes(&self) -> Result<CallToolResult, McpError> {
-        let ids = self.state.changes.pending_ids();
+    async fn preview_changes(
+        &self,
+        params: Parameters<PreviewChangesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut ids = self.state.changes.pending_ids();
         if ids.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
                 "No changes staged.",
             )]));
+        }
+
+        // Filter to requested track IDs if provided
+        if let Some(ref filter_ids) = params.0.track_ids {
+            let filter_set: HashSet<&str> = filter_ids.iter().map(|s| s.as_str()).collect();
+            ids.retain(|id| filter_set.contains(id.as_str()));
+            if ids.is_empty() {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "No staged changes for the specified track IDs.",
+                )]));
+            }
         }
 
         let conn = self.conn()?;
@@ -904,13 +960,39 @@ impl ReklawdboxServer {
         &self,
         params: Parameters<ClearChangesParams>,
     ) -> Result<CallToolResult, McpError> {
-        let (cleared, remaining) = self.state.changes.clear(params.0.track_ids);
-        let result = serde_json::json!({
-            "cleared": cleared,
-            "remaining": remaining,
-        });
-        let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        const VALID_FIELDS: &[&str] = &["genre", "comments", "rating", "color"];
+
+        if let Some(ref fields) = params.0.fields {
+            for f in fields {
+                if !VALID_FIELDS.contains(&f.as_str()) {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "unknown field '{}'. Valid fields: {}",
+                            f,
+                            VALID_FIELDS.join(", ")
+                        ),
+                        None,
+                    ));
+                }
+            }
+            let (affected, remaining) =
+                self.state.changes.clear_fields(params.0.track_ids, fields);
+            let result = serde_json::json!({
+                "affected": affected,
+                "remaining": remaining,
+                "fields_cleared": fields,
+            });
+            let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+            Ok(CallToolResult::success(vec![Content::text(json)]))
+        } else {
+            let (cleared, remaining) = self.state.changes.clear(params.0.track_ids);
+            let result = serde_json::json!({
+                "cleared": cleared,
+                "remaining": remaining,
+            });
+            let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+            Ok(CallToolResult::success(vec![Content::text(json)]))
+        }
     }
 
     #[tool(

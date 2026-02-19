@@ -1,6 +1,7 @@
 mod audio;
 mod beatport;
 mod changes;
+mod color;
 mod corpus;
 mod db;
 mod discogs;

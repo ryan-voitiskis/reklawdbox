@@ -46,13 +46,18 @@ pub struct TrackChange {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ChangeDiff {
-    pub track_id: String,
-    pub title: String,
-    pub artist: String,
+pub struct FieldDiff {
     pub field: String,
     pub old_value: String,
     pub new_value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrackDiff {
+    pub track_id: String,
+    pub title: String,
+    pub artist: String,
+    pub changes: Vec<FieldDiff>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

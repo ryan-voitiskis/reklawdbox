@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::types::{ChangeDiff, Track, TrackChange};
+use crate::color;
+use crate::types::{FieldDiff, Track, TrackChange, TrackDiff};
 
 pub struct ChangeManager {
     changes: Mutex<HashMap<String, TrackChange>>,
@@ -56,24 +57,23 @@ impl ChangeManager {
             .cloned()
     }
 
-    pub fn preview(&self, current_tracks: &[Track]) -> Vec<ChangeDiff> {
+    pub fn preview(&self, current_tracks: &[Track]) -> Vec<TrackDiff> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         let track_map: HashMap<&str, &Track> =
             current_tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
-        let mut diffs = Vec::new();
+        let mut result = Vec::new();
 
         for (track_id, change) in map.iter() {
             let Some(track) = track_map.get(track_id.as_str()) else {
                 continue;
             };
 
+            let mut fields = Vec::new();
+
             if let Some(ref new_genre) = change.genre {
                 if *new_genre != track.genre {
-                    diffs.push(ChangeDiff {
-                        track_id: track_id.clone(),
-                        title: track.title.clone(),
-                        artist: track.artist.clone(),
+                    fields.push(FieldDiff {
                         field: "genre".to_string(),
                         old_value: track.genre.clone(),
                         new_value: new_genre.clone(),
@@ -83,10 +83,7 @@ impl ChangeManager {
 
             if let Some(ref new_comments) = change.comments {
                 if *new_comments != track.comments {
-                    diffs.push(ChangeDiff {
-                        track_id: track_id.clone(),
-                        title: track.title.clone(),
-                        artist: track.artist.clone(),
+                    fields.push(FieldDiff {
                         field: "comments".to_string(),
                         old_value: track.comments.clone(),
                         new_value: new_comments.clone(),
@@ -96,10 +93,7 @@ impl ChangeManager {
 
             if let Some(new_rating) = change.rating {
                 if new_rating != track.rating {
-                    diffs.push(ChangeDiff {
-                        track_id: track_id.clone(),
-                        title: track.title.clone(),
-                        artist: track.artist.clone(),
+                    fields.push(FieldDiff {
                         field: "rating".to_string(),
                         old_value: track.rating.to_string(),
                         new_value: new_rating.to_string(),
@@ -109,21 +103,27 @@ impl ChangeManager {
 
             if let Some(ref new_color) = change.color {
                 if *new_color != track.color {
-                    diffs.push(ChangeDiff {
-                        track_id: track_id.clone(),
-                        title: track.title.clone(),
-                        artist: track.artist.clone(),
+                    fields.push(FieldDiff {
                         field: "color".to_string(),
                         old_value: track.color.clone(),
                         new_value: new_color.clone(),
                     });
                 }
             }
+
+            if !fields.is_empty() {
+                fields.sort_by(|a, b| a.field.cmp(&b.field));
+                result.push(TrackDiff {
+                    track_id: track_id.clone(),
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    changes: fields,
+                });
+            }
         }
 
-        // Sort for deterministic output
-        diffs.sort_by(|a, b| a.track_id.cmp(&b.track_id).then(a.field.cmp(&b.field)));
-        diffs
+        result.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+        result
     }
 
     pub fn apply_changes(&self, tracks: &[Track]) -> Vec<Track> {
@@ -144,6 +144,9 @@ impl ChangeManager {
                     }
                     if let Some(ref color) = change.color {
                         modified.color = color.clone();
+                        if let Some(code) = color::color_name_to_code(color) {
+                            modified.color_code = code;
+                        }
                     }
                     modified
                 } else {
@@ -151,6 +154,60 @@ impl ChangeManager {
                 }
             })
             .collect()
+    }
+
+    /// Clear specific fields from staged changes. Returns (tracks_affected, remaining_tracks).
+    /// If all fields on a track become None, the entry is removed entirely.
+    pub fn clear_fields(
+        &self,
+        track_ids: Option<Vec<String>>,
+        fields: &[String],
+    ) -> (usize, usize) {
+        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let target_ids: Vec<String> = match track_ids {
+            Some(ids) => ids,
+            None => map.keys().cloned().collect(),
+        };
+
+        let mut affected = 0;
+        for id in &target_ids {
+            if let Some(entry) = map.get_mut(id) {
+                let mut touched = false;
+                for field in fields {
+                    match field.as_str() {
+                        "genre" if entry.genre.is_some() => {
+                            entry.genre = None;
+                            touched = true;
+                        }
+                        "comments" if entry.comments.is_some() => {
+                            entry.comments = None;
+                            touched = true;
+                        }
+                        "rating" if entry.rating.is_some() => {
+                            entry.rating = None;
+                            touched = true;
+                        }
+                        "color" if entry.color.is_some() => {
+                            entry.color = None;
+                            touched = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if touched {
+                    affected += 1;
+                }
+                // Remove entry if all fields are now None
+                if entry.genre.is_none()
+                    && entry.comments.is_none()
+                    && entry.rating.is_none()
+                    && entry.color.is_none()
+                {
+                    map.remove(id);
+                }
+            }
+        }
+        (affected, map.len())
     }
 
     pub fn clear(&self, track_ids: Option<Vec<String>>) -> (usize, usize) {
@@ -252,21 +309,12 @@ mod tests {
         // Verify merge: genre updated, comments added, rating preserved
         let tracks = vec![make_track("t1", "Techno", 2)];
         let diffs = cm.preview(&tracks);
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "genre" && d.new_value == "Deep House")
-        );
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "comments" && d.new_value == "great track")
-        );
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "rating" && d.new_value == "4")
-        );
+        assert_eq!(diffs.len(), 1);
+        let td = &diffs[0];
+        assert_eq!(td.track_id, "t1");
+        assert!(td.changes.iter().any(|f| f.field == "genre" && f.new_value == "Deep House"));
+        assert!(td.changes.iter().any(|f| f.field == "comments" && f.new_value == "great track"));
+        assert!(td.changes.iter().any(|f| f.field == "rating" && f.new_value == "4"));
     }
 
     #[test]
@@ -282,22 +330,12 @@ mod tests {
         }]);
 
         let diffs = cm.preview(&tracks);
-        assert_eq!(diffs.len(), 3); // genre, comments, rating changed
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "genre" && d.new_value == "Deep House")
-        );
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "comments" && d.new_value == "great bassline")
-        );
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "rating" && d.new_value == "5")
-        );
+        assert_eq!(diffs.len(), 1); // one track with changes
+        let td = &diffs[0];
+        assert_eq!(td.changes.len(), 3); // genre, comments, rating changed
+        assert!(td.changes.iter().any(|f| f.field == "genre" && f.new_value == "Deep House"));
+        assert!(td.changes.iter().any(|f| f.field == "comments" && f.new_value == "great bassline"));
+        assert!(td.changes.iter().any(|f| f.field == "rating" && f.new_value == "5"));
     }
 
     #[test]
@@ -384,6 +422,151 @@ mod tests {
         assert_eq!(remaining, 0);
     }
 
+    #[test]
+    fn test_clear_fields() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            comments: Some("great".to_string()),
+            rating: Some(4),
+            color: Some("Green".to_string()),
+        }]);
+
+        // Clear just the color field
+        let (affected, remaining) = cm.clear_fields(
+            Some(vec!["t1".to_string()]),
+            &["color".to_string()],
+        );
+        assert_eq!(affected, 1);
+        assert_eq!(remaining, 1); // entry still exists (other fields set)
+
+        let change = cm.get("t1").unwrap();
+        assert!(change.color.is_none());
+        assert_eq!(change.genre, Some("House".to_string()));
+        assert_eq!(change.rating, Some(4));
+    }
+
+    #[test]
+    fn test_clear_fields_removes_empty_entry() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            comments: None,
+            rating: None,
+            color: None,
+        }]);
+
+        let (affected, remaining) = cm.clear_fields(
+            Some(vec!["t1".to_string()]),
+            &["genre".to_string()],
+        );
+        assert_eq!(affected, 1);
+        assert_eq!(remaining, 0); // entry removed since all fields are None
+        assert!(cm.get("t1").is_none());
+    }
+
+    #[test]
+    fn test_clear_fields_all_tracks() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![
+            TrackChange {
+                track_id: "t1".to_string(),
+                genre: Some("House".to_string()),
+                comments: None,
+                rating: Some(3),
+                color: None,
+            },
+            TrackChange {
+                track_id: "t2".to_string(),
+                genre: Some("Techno".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+            },
+        ]);
+
+        // Clear genre from all tracks (no track_ids filter)
+        let (affected, remaining) = cm.clear_fields(None, &["genre".to_string()]);
+        assert_eq!(affected, 2);
+        assert_eq!(remaining, 1); // t1 still has rating, t2 removed entirely
+
+        assert!(cm.get("t1").is_some());
+        assert!(cm.get("t1").unwrap().genre.is_none());
+        assert!(cm.get("t2").is_none());
+    }
+
+    #[test]
+    fn test_preview_grouped() {
+        let cm = ChangeManager::new();
+        let tracks = vec![make_track("t1", "House", 3), make_track("t2", "Techno", 2)];
+        cm.stage(vec![
+            TrackChange {
+                track_id: "t1".to_string(),
+                genre: Some("Deep House".to_string()),
+                comments: None,
+                rating: Some(5),
+                color: None,
+            },
+            TrackChange {
+                track_id: "t2".to_string(),
+                genre: None,
+                comments: Some("nice track".to_string()),
+                rating: None,
+                color: None,
+            },
+        ]);
+
+        let diffs = cm.preview(&tracks);
+        assert_eq!(diffs.len(), 2); // two tracks
+        // Sorted by track_id
+        assert_eq!(diffs[0].track_id, "t1");
+        assert_eq!(diffs[0].changes.len(), 2); // genre + rating
+        assert_eq!(diffs[1].track_id, "t2");
+        assert_eq!(diffs[1].changes.len(), 1); // comments
+        assert_eq!(diffs[1].changes[0].field, "comments");
+    }
+
+    #[test]
+    fn test_apply_changes_with_color_code() {
+        let cm = ChangeManager::new();
+        let tracks = vec![make_track("t1", "House", 3)];
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: None,
+            comments: None,
+            rating: None,
+            color: Some("Green".to_string()),
+        }]);
+
+        let modified = cm.apply_changes(&tracks);
+        assert_eq!(modified[0].color, "Green");
+        assert_eq!(modified[0].color_code, 0x00FF00);
+    }
+
+    #[test]
+    fn test_apply_changes_color_code_preserves_original_when_no_change() {
+        let cm = ChangeManager::new();
+        let mut track = make_track("t1", "House", 3);
+        track.color = "Red".to_string();
+        track.color_code = 0xFF0000;
+        let tracks = vec![track];
+
+        // Stage a genre change only, no color change
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("Techno".to_string()),
+            comments: None,
+            rating: None,
+            color: None,
+        }]);
+
+        let modified = cm.apply_changes(&tracks);
+        assert_eq!(modified[0].color, "Red");
+        assert_eq!(modified[0].color_code, 0xFF0000);
+    }
+
     // ==================== Integration tests (real DB) ====================
 
     #[test]
@@ -425,15 +608,12 @@ mod tests {
         // 3. Preview changes
         let diffs = cm.preview(&tracks);
         assert!(!diffs.is_empty(), "expected diffs for staged changes");
+        let td = &diffs[0];
+        assert!(td.changes.iter().any(|f| f.field == "genre" && f.new_value == "Deep House"));
         assert!(
-            diffs
+            td.changes
                 .iter()
-                .any(|d| d.field == "genre" && d.new_value == "Deep House")
-        );
-        assert!(
-            diffs
-                .iter()
-                .any(|d| d.field == "comments" && d.new_value == "integration test")
+                .any(|f| f.field == "comments" && f.new_value == "integration test")
         );
 
         // 4. Apply changes
