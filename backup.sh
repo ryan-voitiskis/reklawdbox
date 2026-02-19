@@ -1,5 +1,5 @@
 #!/bin/bash
-# crate-dig: Rekordbox library backup tool
+# reklawdbox: Rekordbox library backup tool
 # Snapshots the full Rekordbox library state to timestamped archives.
 #
 # Usage:
@@ -264,7 +264,7 @@ case "${1:-}" in
         rotate_backups "db" "$MAX_DB_BACKUPS"
         ;;
     --pre-op)
-        # Silent pre-operation backup (called by crate-dig tools)
+        # Silent pre-operation backup (called by reklawdbox tools)
         check_rekordbox_running || true
         backup_db_only "pre-op" > /dev/null
         rotate_backups "pre-op" "$MAX_DB_BACKUPS"
@@ -282,7 +282,7 @@ case "${1:-}" in
         restore_backup "$2"
         ;;
     --help|-h)
-        echo "crate-dig: Rekordbox library backup tool"
+        echo "reklawdbox: Rekordbox library backup tool"
         echo ""
         echo "Usage:"
         echo "  ./backup.sh                  Full backup (~1GB compressed)"

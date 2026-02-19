@@ -1,7 +1,7 @@
 # Rekordbox Software Orchestration Plan
 
 ## Scope
-Production-grade corpus integration for `crate-dig`:
+Production-grade corpus integration for `reklawdbox`:
 1. Manifest-first corpus retrieval integrated into MCP tool flows.
 2. Corpus-backed XML and genre-tagging workflows.
 3. CI automation for corpus validation/verification.

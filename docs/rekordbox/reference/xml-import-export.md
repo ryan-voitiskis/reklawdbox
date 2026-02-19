@@ -16,7 +16,7 @@ verified_by: agent
 
 # rekordbox XML Import/Export Reference
 
-This document consolidates XML workflow behavior from official rekordbox docs and crate-dig project notes.
+This document consolidates XML workflow behavior from official rekordbox docs and reklawdbox project notes.
 
 ## What XML Is Used For
 
@@ -60,7 +60,7 @@ Based on `guides/xml-format-spec.md` (XML format list PDF):
 - Reimport consistency: keep stable `TrackID` and/or `Location` values to reduce duplicate/mismatch behavior across repeated imports.
 - File paths: URI encoding and path normalization are required; malformed `Location` values commonly break matching.
 - Playlist naming collisions: same-level duplicate playlist/folder names are not allowed in imported structures.
-- Operational safety for crate-dig: prefer idempotent XML generation and dry-run validation before replacing production XML files.
+- Operational safety for reklawdbox: prefer idempotent XML generation and dry-run validation before replacing production XML files.
 
 ## Source Evidence Highlights
 

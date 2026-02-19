@@ -2,7 +2,7 @@
 
 ## Overview
 
-crate-dig includes a backup system that snapshots your Rekordbox library before any
+reklawdbox includes a backup system that snapshots your Rekordbox library before any
 modifications. This document covers usage, restore procedures, and what's protected.
 
 ## Backup Location
@@ -20,7 +20,7 @@ modifications. This document covers usage, restore procedures, and what's protec
 # Database only (~92MB compressed) — just the critical metadata files
 ./backup.sh --db-only
 
-# Pre-operation snapshot (called automatically by crate-dig tools)
+# Pre-operation snapshot (called automatically by reklawdbox tools)
 ./backup.sh --pre-op
 
 # List all backups
@@ -62,7 +62,7 @@ Everything above **plus**:
 
 | Scenario | Backup Type |
 |----------|-------------|
-| Before running crate-dig write operations | `--db-only` (automatic via `--pre-op`) |
+| Before running reklawdbox write operations | `--db-only` (automatic via `--pre-op`) |
 | Before a Rekordbox update | Full backup |
 | Weekly routine | `--db-only` |
 | Before major library reorganization | Full backup |

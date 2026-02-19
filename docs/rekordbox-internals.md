@@ -1,6 +1,6 @@
 # Rekordbox Internals: Knowledge Corpus
 
-> Reference document for crate-dig development. Covers Rekordbox file structure,
+> Reference document for reklawdbox development. Covers Rekordbox file structure,
 > database encryption, XML format, analysis files, and ecosystem tools.
 > Last updated: 2026-02-15
 
@@ -458,7 +458,7 @@ Display format selectable in Preferences > View > Key display format: Classic or
 ### What Survives a Round-Trip (Export → Modify → Import)
 
 **Preserved on reimport:**
-- Genre, Comments, Rating, Colour — **these are the primary targets for crate-dig**
+- Genre, Comments, Rating, Colour — **these are the primary targets for reklawdbox**
 - Track title, artist, album, composer, remixer, label
 - Tonality (key), BPM
 - Cue points (POSITION_MARK) — including hot cue colors
@@ -573,7 +573,7 @@ each byte from offset 18 with `(XOR_MASK[i % 19] + len_entries) & 0xFF`.
 - Sampler pad assignments
 - Related tracks grouping
 
-### Genre Strategy for crate-dig
+### Genre Strategy for reklawdbox
 
 The `Genre` field is free text — Rekordbox has no predefined genre list.
 This means we can set any genre string we want. Recommendations:
@@ -610,7 +610,7 @@ GitHub: https://github.com/dylanljones/pyrekordbox
 4. **ANLZ Parsing**: Uses `construct` library for binary struct definitions
 5. **XML Handling**: Standard `xml.etree.cElementTree` with custom Track/Node wrappers
 
-### Relevance to crate-dig
+### Relevance to reklawdbox
 
 We will **not** build on pyrekordbox directly (it's Python), but we learn from it:
 

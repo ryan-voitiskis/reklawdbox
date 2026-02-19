@@ -4,7 +4,7 @@ use std::path::PathBuf;
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("crate-dig")
+        .join("reklawdbox")
         .join("internal.sqlite3")
 }
 

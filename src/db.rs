@@ -417,7 +417,7 @@ pub(crate) fn open_real_db() -> Option<Connection> {
         return None;
     }
 
-    let dest = "/tmp/crate-dig-test";
+    let dest = "/tmp/reklawdbox-test";
     let db_path = format!("{dest}/master.db");
 
     // Ensure extraction happens exactly once across all test threads

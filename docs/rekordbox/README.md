@@ -1,6 +1,6 @@
 # Rekordbox Knowledge Corpus
 
-Comprehensive rekordbox 7.x corpus for crate-dig agent workflows (library management, metadata operations, XML import/export, and operational troubleshooting).
+Comprehensive rekordbox 7.x corpus for reklawdbox agent workflows (library management, metadata operations, XML import/export, and operational troubleshooting).
 
 - Software baseline: `7.2.8`
 - Last updated: `2026-02-17`

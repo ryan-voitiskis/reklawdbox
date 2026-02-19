@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-cargo build --release          # Binary: ./target/release/crate-dig (~12MB arm64)
+cargo build --release          # Binary: ./target/release/reklawdbox (~12MB arm64)
 cargo test                     # Unit tests only (44 tests, in-memory SQLite)
 cargo test -- --ignored        # Integration tests (21 tests, real encrypted DB)
 cargo test test_name           # Run a single test by name
@@ -13,7 +13,7 @@ cargo test test_name           # Run a single test by name
 
 Integration tests require a Rekordbox DB backup tarball. Set `REKORDBOX_TEST_BACKUP` or it defaults to `~/Library/Pioneer/rekordbox-backups/db_20260215_233936.tar.gz`. Missing tarball = tests silently skipped.
 
-Register with Claude Code: `claude mcp add crate-dig ./target/release/crate-dig`
+Register with Claude Code: `claude mcp add reklawdbox ./target/release/reklawdbox`
 
 ## Commit Messages
 
@@ -35,7 +35,7 @@ Single-crate Rust MCP server targeting Rekordbox 7.x, using rmcp 0.15. No CLI fl
 
 ```
 main.rs           Entry point (19 lines), stdio transport setup
-tools.rs          All 13 MCP tool definitions + CrateDigServer + ServerState
+tools.rs          All 13 MCP tool definitions + ReklawdboxServer + ServerState
 db.rs             SQLCipher connection, all SQL queries, sample exclusion
 types.rs          Shared types: Track, Playlist, TrackChange, LibraryStats, rating conversion
 genre.rs          Genre taxonomy (35 genres), alias map (37 entries), normalize_genre()
@@ -47,7 +47,7 @@ beatport.rs       Beatport __NEXT_DATA__ HTML scraper, rate-limited
 
 **Data flow:** Read from encrypted SQLCipher master.db → stage changes in memory → write Rekordbox-compatible XML for reimport. Never writes directly to the DB.
 
-**State:** `CrateDigServer` is `Clone` (rmcp requirement), holds `Arc<ServerState>`. DB connection lazy-initialized via `OnceLock`. Changes held in `ChangeManager` until `write_xml` exports them.
+**State:** `ReklawdboxServer` is `Clone` (rmcp requirement), holds `Arc<ServerState>`. DB connection lazy-initialized via `OnceLock`. Changes held in `ChangeManager` until `write_xml` exports them.
 
 ## rmcp 0.15 Patterns
 
@@ -55,7 +55,7 @@ beatport.rs       Beatport __NEXT_DATA__ HTML scraper, rate-limited
 - `#[tool_handler]` on `impl ServerHandler` (auto-generates list/call routing)
 - Tool params: `Parameters<ConcreteStruct>` — MUST use the literal struct name, type aliases break schema generation
 - Errors: `ErrorData::internal_error(msg, None)` for runtime errors, `McpError::invalid_params(msg, None)` for validation
-- `CrateDigServer` must remain `Clone` — shared state goes in `Arc<ServerState>`
+- `ReklawdboxServer` must remain `Clone` — shared state goes in `Arc<ServerState>`
 
 ## Rekordbox Gotchas
 

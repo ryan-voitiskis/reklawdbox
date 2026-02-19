@@ -34,12 +34,12 @@ struct ServerState {
 }
 
 #[derive(Clone)]
-pub struct CrateDigServer {
+pub struct ReklawdboxServer {
     state: Arc<ServerState>,
     tool_router: ToolRouter<Self>,
 }
 
-impl CrateDigServer {
+impl ReklawdboxServer {
     fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
         let result = self.state.db.get_or_init(|| {
             let path = match self.state.db_path.clone().or_else(db::resolve_db_path) {
@@ -196,7 +196,7 @@ fn probe_essentia_python_from_sources(
 fn probe_essentia_python_path() -> Option<String> {
     let env_override = std::env::var(ESSENTIA_PYTHON_ENV_VAR).ok();
     let default_candidate =
-        dirs::home_dir().map(|home| home.join(".local/share/crate-dig/essentia-venv/bin/python"));
+        dirs::home_dir().map(|home| home.join(".local/share/reklawdbox/essentia-venv/bin/python"));
     probe_essentia_python_from_sources(env_override.as_deref(), default_candidate)
 }
 
@@ -438,7 +438,7 @@ pub struct TrackChangeInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteXmlParams {
     #[schemars(
-        description = "Output file path (default: ./rekordbox-exports/crate-dig-{timestamp}.xml)"
+        description = "Output file path (default: ./rekordbox-exports/reklawdbox-{timestamp}.xml)"
     )]
     pub output_path: Option<String>,
 }
@@ -578,7 +578,7 @@ pub struct ResolveTracksDataParams {
 use rmcp::handler::server::wrapper::Parameters;
 
 #[tool_router]
-impl CrateDigServer {
+impl ReklawdboxServer {
     pub fn new(db_path: Option<String>) -> Self {
         let http = reqwest::Client::builder()
             .user_agent("CrateGuide/2.0")
@@ -856,18 +856,18 @@ impl CrateDigServer {
 
         let backup_script = std::path::Path::new("backup.sh");
         if backup_script.exists() {
-            eprintln!("[crate-dig] Running pre-op backup...");
+            eprintln!("[reklawdbox] Running pre-op backup...");
             let output = std::process::Command::new("bash")
                 .arg("backup.sh")
                 .arg("--pre-op")
                 .output();
             match output {
-                Ok(o) if o.status.success() => eprintln!("[crate-dig] Backup completed."),
+                Ok(o) if o.status.success() => eprintln!("[reklawdbox] Backup completed."),
                 Ok(o) => {
                     let stderr_out = String::from_utf8_lossy(&o.stderr);
-                    eprintln!("[crate-dig] Backup warning: {stderr_out}");
+                    eprintln!("[reklawdbox] Backup warning: {stderr_out}");
                 }
-                Err(e) => eprintln!("[crate-dig] Backup skipped: {e}"),
+                Err(e) => eprintln!("[reklawdbox] Backup skipped: {e}"),
             }
         }
 
@@ -878,7 +878,7 @@ impl CrateDigServer {
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let output_path = params.0.output_path.map(PathBuf::from).unwrap_or_else(|| {
-            PathBuf::from(format!("rekordbox-exports/crate-dig-{timestamp}.xml"))
+            PathBuf::from(format!("rekordbox-exports/reklawdbox-{timestamp}.xml"))
         });
 
         xml::write_xml(&modified_tracks, &output_path)
@@ -2062,7 +2062,7 @@ fn resolve_file_path(raw_path: &str) -> Result<String, McpError> {
 }
 
 #[tool_handler]
-impl ServerHandler for CrateDigServer {
+impl ServerHandler for ReklawdboxServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
@@ -2128,7 +2128,7 @@ mod tests {
     ) -> CallToolResult {
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
         let (server_result, client_result) = tokio::join!(
-            CrateDigServer::new(None).serve(server_io),
+            ReklawdboxServer::new(None).serve(server_io),
             ().serve(client_io)
         );
         let mut server = server_result.expect("server should start over in-memory transport");
@@ -2177,8 +2177,8 @@ mod tests {
         db_conn: Connection,
         store_conn: Connection,
         http: reqwest::Client,
-    ) -> CrateDigServer {
-        let server = CrateDigServer {
+    ) -> ReklawdboxServer {
+        let server = ReklawdboxServer {
             state: Arc::new(ServerState {
                 db: OnceLock::new(),
                 internal_db: OnceLock::new(),
@@ -2187,7 +2187,7 @@ mod tests {
                 changes: ChangeManager::new(),
                 http,
             }),
-            tool_router: CrateDigServer::tool_router(),
+            tool_router: ReklawdboxServer::tool_router(),
         };
 
         server
@@ -2206,7 +2206,7 @@ mod tests {
 
     fn create_real_server_with_temp_store(
         http: reqwest::Client,
-    ) -> Option<(CrateDigServer, TempDir)> {
+    ) -> Option<(ReklawdboxServer, TempDir)> {
         let db_conn = db::open_real_db()?;
         let store_dir = tempfile::tempdir().ok()?;
         let store_path = store_dir.path().join("internal.sqlite3");
@@ -2221,7 +2221,7 @@ mod tests {
         Some((server, store_dir))
     }
 
-    fn sample_real_tracks(server: &CrateDigServer, limit: u32) -> Vec<crate::types::Track> {
+    fn sample_real_tracks(server: &ReklawdboxServer, limit: u32) -> Vec<crate::types::Track> {
         let conn = server
             .conn()
             .expect("real DB connection should be available for integration test");
@@ -2581,7 +2581,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_xml_no_change_path_includes_provenance() {
-        let server = CrateDigServer::new(None);
+        let server = ReklawdboxServer::new(None);
 
         let result = server
             .write_xml(Parameters(WriteXmlParams { output_path: None }))
@@ -2616,7 +2616,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_tracks_includes_provenance() {
-        let server = CrateDigServer::new(None);
+        let server = ReklawdboxServer::new(None);
         let known_genre = genre::get_taxonomy()
             .into_iter()
             .next()
@@ -2705,7 +2705,7 @@ mod tests {
 
     #[tokio::test]
     async fn enrich_tracks_invalid_provider_returns_error() {
-        let server = CrateDigServer::new(None);
+        let server = ReklawdboxServer::new(None);
 
         let err = server
             .enrich_tracks(Parameters(EnrichTracksParams {

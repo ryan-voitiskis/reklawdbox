@@ -1,4 +1,4 @@
-# crate-dig
+# reklawdbox
 
 MCP server for Rekordbox 7.x library management. Reads directly from the encrypted master.db,
 stages metadata changes in memory, and writes Rekordbox-compatible XML for safe reimport.
@@ -12,12 +12,12 @@ Claude Code — no web UI, no CLI flags, just MCP.
 cargo build --release
 ```
 
-The binary is at `./target/release/crate-dig` (~12 MB, arm64).
+The binary is at `./target/release/reklawdbox` (~12 MB, arm64).
 
 ## Register with Claude Code
 
 ```bash
-claude mcp add crate-dig ./target/release/crate-dig
+claude mcp add reklawdbox ./target/release/reklawdbox
 ```
 
 The server auto-detects the Rekordbox database at `~/Library/Pioneer/rekordbox/master.db`.

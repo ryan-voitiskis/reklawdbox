@@ -122,7 +122,7 @@ async fn lookup_inner(
         if is_retry {
             return Err("rate limited after retry".into());
         }
-        eprintln!("[crate-dig] Discogs rate limited, waiting 30s...");
+        eprintln!("[reklawdbox] Discogs rate limited, waiting 30s...");
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         return Box::pin(lookup_inner(client, artist, title, true)).await;
     }
