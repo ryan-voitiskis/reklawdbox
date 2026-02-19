@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::{Duration, timeout};
 
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::DecoderOptions;
@@ -24,6 +26,102 @@ pub struct StratumResult {
     pub analyzer_version: String,
     pub flags: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+const ESSENTIA_TIMEOUT_SECS: u64 = 300;
+
+const ESSENTIA_SCRIPT: &str = r#"
+import json
+import sys
+import essentia
+import essentia.standard as es
+
+audio = es.MonoLoader(filename=sys.argv[1], sampleRate=44100)()
+features = {}
+
+features["danceability"] = float(es.Danceability()(audio)[0])
+
+ebu = es.LoudnessEBUR128()(audio)
+features["loudness_integrated"] = float(ebu[0])
+features["loudness_range"] = float(ebu[2])
+
+features["dynamic_complexity"] = float(es.DynamicComplexity()(audio)[0])
+features["average_loudness"] = float(es.Loudness()(audio))
+
+rhythm = es.RhythmExtractor2013(method="multifeature")(audio)
+features["bpm_essentia"] = float(rhythm[0])
+features["onset_rate"] = float(es.OnsetRate()(audio)[0])
+
+beats = rhythm[1]
+if len(beats) > 4:
+    bl = es.BeatsLoudness(beats=beats)(audio)
+    band_ratios = bl[1]
+    if len(band_ratios) > 0:
+        downbeat_values = [band_ratios[i][0] for i in range(0, len(band_ratios), 4)]
+        all_values = [row[0] for row in band_ratios]
+        downbeat_energy = sum(downbeat_values) / max(len(downbeat_values), 1)
+        all_energy = sum(all_values) / max(len(all_values), 1)
+        features["rhythm_regularity"] = float(downbeat_energy / max(all_energy, 1e-6))
+    else:
+        features["rhythm_regularity"] = None
+else:
+    features["rhythm_regularity"] = None
+
+spectral_centroid = es.SpectralCentroidTime()(audio)
+if hasattr(spectral_centroid, "__len__") and len(spectral_centroid) > 0:
+    features["spectral_centroid_mean"] = float(sum(spectral_centroid) / len(spectral_centroid))
+else:
+    features["spectral_centroid_mean"] = None
+
+features["analyzer_version"] = essentia.__version__
+
+json.dump(features, sys.stdout)
+"#;
+
+/// Parse Essentia subprocess stdout into JSON.
+fn parse_essentia_stdout(stdout: &[u8]) -> Result<serde_json::Value, String> {
+    let text = std::str::from_utf8(stdout)
+        .map_err(|e| format!("Essentia stdout was not valid UTF-8: {e}"))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("Essentia stdout was empty".to_string());
+    }
+    serde_json::from_str(trimmed).map_err(|e| format!("Failed to parse Essentia JSON output: {e}"))
+}
+
+/// Run Essentia feature extraction through a Python subprocess.
+pub async fn run_essentia(
+    python_path: &str,
+    audio_path: &str,
+) -> Result<serde_json::Value, String> {
+    let mut command = Command::new(python_path);
+    command.args(["-c", ESSENTIA_SCRIPT, audio_path]);
+    command.kill_on_drop(true);
+
+    let output = timeout(Duration::from_secs(ESSENTIA_TIMEOUT_SECS), command.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "Essentia analysis timed out after {}s for '{}'",
+                ESSENTIA_TIMEOUT_SECS, audio_path
+            )
+        })?
+        .map_err(|e| format!("Failed to start Essentia subprocess: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = if stderr.is_empty() {
+            "(no stderr output)".to_string()
+        } else {
+            stderr
+        };
+        return Err(format!(
+            "Essentia subprocess failed for '{}': {}",
+            audio_path, stderr
+        ));
+    }
+
+    parse_essentia_stdout(&output.stdout)
 }
 
 /// Decode an audio file to mono f32 samples using symphonia.
@@ -222,6 +320,36 @@ mod tests {
         assert_eq!(back.analyzer_version, "stratum-dsp-1.0.0");
         assert_eq!(back.flags, vec!["MultimodalBpm"]);
         assert_eq!(back.warnings, vec!["Low key clarity"]);
+    }
+
+    #[test]
+    fn parse_essentia_stdout_trims_whitespace() {
+        let parsed =
+            parse_essentia_stdout(b"\n  {\"danceability\": 0.82, \"analyzer_version\": \"2.1\"}\n")
+                .expect("valid JSON with whitespace should parse");
+        assert_eq!(parsed["danceability"], 0.82);
+        assert_eq!(parsed["analyzer_version"], "2.1");
+    }
+
+    #[test]
+    fn parse_essentia_stdout_rejects_empty_output() {
+        let err =
+            parse_essentia_stdout(b"   \n").expect_err("empty output should produce a parse error");
+        assert!(
+            err.contains("empty"),
+            "error should mention empty stdout, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_essentia_reports_subprocess_start_failure() {
+        let err = run_essentia("/definitely/missing/python", "/tmp/does-not-matter.wav")
+            .await
+            .expect_err("missing python binary should fail");
+        assert!(
+            err.contains("Failed to start Essentia subprocess"),
+            "expected startup failure context, got: {err}"
+        );
     }
 
     // ==================== Integration tests (real audio files) ====================
