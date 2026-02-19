@@ -1,6 +1,9 @@
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
@@ -94,13 +97,81 @@ fn err(msg: String) -> McpError {
 
 const ESSENTIA_PYTHON_ENV_VAR: &str = "CRATE_DIG_ESSENTIA_PYTHON";
 const ESSENTIA_IMPORT_CHECK_SCRIPT: &str = "import essentia; print(essentia.__version__)";
+const ESSENTIA_PROBE_TIMEOUT_SECS: u64 = 5;
 
 fn validate_essentia_python(path: &str) -> bool {
-    std::process::Command::new(path)
+    validate_essentia_python_with_timeout(path, Duration::from_secs(ESSENTIA_PROBE_TIMEOUT_SECS))
+}
+
+fn validate_essentia_python_with_timeout(path: &str, timeout: Duration) -> bool {
+    let mut child = match std::process::Command::new(path)
         .args(["-c", ESSENTIA_IMPORT_CHECK_SCRIPT])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+
+    let Some(mut stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+    let Some(mut stderr_pipe) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let _stderr = stderr_handle.join().unwrap_or_default();
+
+    let Some(status) = status else {
+        return false;
+    };
+    if !status.success() {
+        return false;
+    }
+
+    let stdout = String::from_utf8_lossy(&stdout);
+    let version_line = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+    matches!(
+        version_line,
+        Some(line) if line.chars().any(|ch| ch.is_ascii_digit())
+    )
 }
 
 fn probe_essentia_python_from_sources(
@@ -2346,7 +2417,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("temp dir should create");
         let fake_python = dir.path().join("fake-python");
-        std::fs::write(&fake_python, "#!/bin/sh\nexit 0\n")
+        std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
             .expect("fake python script should be written");
         let mut perms = std::fs::metadata(&fake_python)
             .expect("fake python metadata should be readable")
@@ -2364,6 +2435,63 @@ mod tests {
             resolved.as_deref(),
             fake_python.to_str(),
             "valid env override should win over default candidate"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn probe_essentia_python_rejects_success_without_version_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        let fake_python = dir.path().join("fake-python-empty");
+        std::fs::write(&fake_python, "#!/bin/sh\nexit 0\n")
+            .expect("fake python script should be written");
+        let mut perms = std::fs::metadata(&fake_python)
+            .expect("fake python metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_python, perms)
+            .expect("fake python script should be executable");
+
+        let resolved = probe_essentia_python_from_sources(
+            fake_python.to_str(),
+            Some(dir.path().join("other")),
+        );
+        assert!(
+            resolved.is_none(),
+            "probe should reject candidates that do not emit version output"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn validate_essentia_python_times_out() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        let fake_python = dir.path().join("fake-python-slow");
+        std::fs::write(&fake_python, "#!/bin/sh\nsleep 2\necho '2.1b6.dev1389'\n")
+            .expect("fake python script should be written");
+        let mut perms = std::fs::metadata(&fake_python)
+            .expect("fake python metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_python, perms)
+            .expect("fake python script should be executable");
+
+        let start = std::time::Instant::now();
+        let is_valid = validate_essentia_python_with_timeout(
+            fake_python.to_str().unwrap(),
+            Duration::from_millis(100),
+        );
+        assert!(
+            !is_valid,
+            "slow candidate should be rejected when probe timeout elapses"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "probe timeout should fail fast"
         );
     }
 
