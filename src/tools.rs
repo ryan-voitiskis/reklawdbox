@@ -3476,7 +3476,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
         let Some((server, _store_dir)) =
             create_real_server_with_temp_store(default_http_client_for_tests())
@@ -3486,10 +3485,10 @@ mod tests {
         };
 
         let candidates = sample_real_tracks(&server, 30);
-        assert!(
-            !candidates.is_empty(),
-            "integration test needs candidate tracks from real DB"
-        );
+        if candidates.is_empty() {
+            eprintln!("Skipping: integration test needs candidate tracks from real DB");
+            return;
+        }
 
         let mut selected_track: Option<crate::types::Track> = None;
         for track in candidates.into_iter().take(10) {
@@ -3516,10 +3515,13 @@ mod tests {
             }
         }
 
-        let track = selected_track.expect(
-            "could not find a track with a successful Beatport match; \
-             rerun when network/providers are available",
-        );
+        let Some(track) = selected_track else {
+            eprintln!(
+                "Skipping: could not find a track with a successful Beatport match; \
+                 rerun when network/providers are available"
+            );
+            return;
+        };
         let norm_artist = discogs::normalize(&track.artist);
         let norm_title = discogs::normalize(&track.title);
 
