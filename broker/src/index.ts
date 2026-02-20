@@ -1,3 +1,5 @@
+import { CALLBACK_LOGO_DATA_URI, BERKELEY_MONO_FONT_DATA_URI } from "./branding";
+
 interface Env {
   DB: D1Database;
   DISCOGS_CONSUMER_KEY: string;
@@ -304,7 +306,13 @@ async function handleDiscogsOauthLink(env: Env, url: URL): Promise<Response> {
   }
 
   if (row.status === "finalized") {
-    return html("<h1>Already linked</h1><p>This device is already linked. Return to the client.</p>", 200);
+    return html(
+      oauthCallbackPage(
+        "Already linked",
+        "This device is already linked. Return to your client.",
+      ),
+      200,
+    );
   }
 
   const callbackBase = publicBaseUrl(env, url);
@@ -351,21 +359,27 @@ async function handleDiscogsOauthCallback(env: Env, url: URL): Promise<Response>
 
   if (!deviceId || !pendingToken || !oauthToken || !oauthVerifier) {
     return html(
-      "<h1>Auth failed</h1><p>Missing required callback parameters. Restart auth from your client.</p>",
+      oauthCallbackPage(
+        "Auth failed",
+        "Missing required callback parameters. Restart auth from your client.",
+      ),
       400,
     );
   }
 
   const session = await getSessionByDeviceAndPending(env, deviceId, pendingToken);
   if (!session) {
-    return html("<h1>Auth failed</h1><p>Device session not found.</p>", 404);
+    return html(oauthCallbackPage("Auth failed", "Device session not found."), 404);
   }
 
   const now = nowSeconds();
   if (now >= session.expires_at) {
     await markSessionStatus(env, session.device_id, "expired", now);
     return html(
-      "<h1>Auth expired</h1><p>The device session expired. Restart auth from your client.</p>",
+      oauthCallbackPage(
+        "Auth expired",
+        "The device session expired. Restart auth from your client.",
+      ),
       410,
     );
   }
@@ -380,7 +394,10 @@ async function handleDiscogsOauthCallback(env: Env, url: URL): Promise<Response>
 
   if (!temp) {
     return html(
-      "<h1>Auth failed</h1><p>OAuth request token was not found or expired. Restart auth.</p>",
+      oauthCallbackPage(
+        "Auth failed",
+        "OAuth request token was not found or expired. Restart auth.",
+      ),
       400,
     );
   }
@@ -412,7 +429,10 @@ async function handleDiscogsOauthCallback(env: Env, url: URL): Promise<Response>
     .run();
 
   return html(
-    "<h1>Discogs linked</h1><p>You can close this tab and return to your client.</p>",
+    oauthCallbackPage(
+      "Discogs linked",
+      "You can close this tab and return to your client.",
+    ),
     200,
   );
 }
@@ -877,6 +897,94 @@ function asErrorMessage(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function oauthCallbackPage(title: string, message: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)} | reklawdbox</title>
+  <style>
+    @font-face {
+      font-family: 'BerkeleyMono';
+      font-style: normal;
+      font-weight: 100 150;
+      font-display: swap;
+      src: url('${BERKELEY_MONO_FONT_DATA_URI}') format('woff2-variations');
+    }
+    :root {
+      color-scheme: dark;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: 'BerkeleyMono', monospace;
+      font-weight: 110;
+      background: #0c0c0c;
+      color: #e0e0e0;
+    }
+    .card {
+      width: min(520px, 100%);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.04);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+      padding: 40px 32px;
+      text-align: center;
+    }
+    .logo {
+      width: 192px;
+      height: 192px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 22px;
+      font-weight: 130;
+      line-height: 1.2;
+      letter-spacing: -0.01em;
+    }
+    p {
+      margin: 0 auto;
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .brand {
+      margin-top: 20px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.2);
+      letter-spacing: 0.03em;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <img class="logo" src="${CALLBACK_LOGO_DATA_URI}" alt="reklawdbox" />
+    <h1>${escapeHtml(title)}</h1>
+    <p>${message.split(/(?<=\.) /).map(escapeHtml).join('<br />')}</p>
+    <div class="brand">reklawdbox</div>
+  </main>
+</body>
+</html>`;
 }
 
 function json(payload: unknown, status = 200): Response {

@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "d1:migrate:local": "wrangler d1 migrations apply REKLAWDBOX_BROKER_DB --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply REKLAWDBOX_BROKER_DB --remote"
+    "d1:migrate:local": "wrangler d1 migrations apply DB --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260227.0",
     "typescript": "^5.7.3",
     "wrangler": "^3.109.2"
   }
