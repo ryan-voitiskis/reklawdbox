@@ -1,0 +1,35 @@
+---
+title: reklawdbox Documentation
+description: MCP-first docs for Rekordbox 7.x library management workflows.
+template: splash
+hero:
+  tagline: Build, run, and operate reklawdbox with confidence.
+  actions:
+    - text: Start with Getting Started
+      link: /getting-started/
+      icon: right-arrow
+    - text: View Source on GitHub
+      link: https://github.com/ryan-voitiskis/reklawdbox
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Getting Started" icon="rocket" href="/getting-started/">
+    Install and run the MCP server quickly.
+  </Card>
+  <Card title="Concepts" icon="open-book" href="/concepts/">
+    Understand architecture, state, and safety boundaries.
+  </Card>
+  <Card title="Workflows" icon="pencil" href="/workflows/">
+    Follow repeatable library update workflows.
+  </Card>
+  <Card title="Reference" icon="document" href="/reference/">
+    Review tools, environment variables, and behavior contracts.
+  </Card>
+  <Card title="Troubleshooting" icon="warning" href="/troubleshooting/">
+    Diagnose common setup and runtime problems.
+  </Card>
+</CardGrid>
