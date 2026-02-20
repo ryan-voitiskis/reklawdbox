@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -625,11 +625,23 @@ pub struct TrackChangeInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WriteXmlPlaylistInput {
+    #[schemars(description = "Playlist name")]
+    pub name: String,
+    #[schemars(description = "Track IDs in playlist order")]
+    pub track_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteXmlParams {
     #[schemars(
         description = "Output file path (default: ./rekordbox-exports/reklawdbox-{timestamp}.xml)"
     )]
     pub output_path: Option<String>,
+    #[schemars(
+        description = "Optional playlist exports. Each playlist includes a name and ordered track_ids."
+    )]
+    pub playlists: Option<Vec<WriteXmlPlaylistInput>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -814,6 +826,69 @@ pub struct ResolveTracksDataParams {
     pub added_before: Option<String>,
     #[schemars(description = "Max tracks to resolve (default 50)")]
     pub max_tracks: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SetPriority {
+    Balanced,
+    Harmonic,
+    Energy,
+    Genre,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EnergyPhase {
+    Warmup,
+    Build,
+    Peak,
+    Release,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EnergyCurvePreset {
+    WarmupBuildPeakRelease,
+    Flat,
+    PeakOnly,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum EnergyCurveInput {
+    Preset(EnergyCurvePreset),
+    Custom(Vec<EnergyPhase>),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BuildSetParams {
+    #[schemars(description = "Pool of candidate track IDs (pre-filtered by agent)")]
+    pub track_ids: Vec<String>,
+    #[schemars(description = "Desired number of tracks in each candidate set")]
+    pub target_tracks: u32,
+    #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
+    pub priority: Option<SetPriority>,
+    #[schemars(
+        description = "Energy curve: preset name ('warmup_build_peak_release', 'flat', 'peak_only') or an array of phase strings (warmup/build/peak/release), one per target position."
+    )]
+    pub energy_curve: Option<EnergyCurveInput>,
+    #[schemars(description = "Optional track ID to force as the opening track")]
+    pub start_track_id: Option<String>,
+    #[schemars(description = "Number of set candidates to generate (default 2, max 3)")]
+    pub candidates: Option<u8>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScoreTransitionParams {
+    #[schemars(description = "Source track ID")]
+    pub from_track_id: String,
+    #[schemars(description = "Destination track ID")]
+    pub to_track_id: String,
+    #[schemars(description = "Energy phase preference (warmup, build, peak, release)")]
+    pub energy_phase: Option<EnergyPhase>,
+    #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
+    pub priority: Option<SetPriority>,
 }
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -1127,14 +1202,16 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Write staged changes to a Rekordbox-compatible XML file. Runs backup first."
+        description = "Write staged changes and optional playlists to a Rekordbox-compatible XML file. Runs backup first."
     )]
     async fn write_xml(
         &self,
         params: Parameters<WriteXmlParams>,
     ) -> Result<CallToolResult, McpError> {
+        let playlists = params.0.playlists.unwrap_or_default();
+        let has_playlists = !playlists.is_empty();
         let snapshot = self.state.changes.take(None);
-        if snapshot.is_empty() {
+        if snapshot.is_empty() && !has_playlists {
             let mut result = serde_json::json!({
                 "message": "No changes to write.",
                 "track_count": 0,
@@ -1162,10 +1239,20 @@ impl ReklawdboxServer {
             }
         }
 
-        let ids: Vec<String> = snapshot
-            .iter()
-            .map(|change| change.track_id.clone())
-            .collect();
+        let mut ids = Vec::new();
+        let mut seen_ids = HashSet::new();
+        for change in &snapshot {
+            if seen_ids.insert(change.track_id.clone()) {
+                ids.push(change.track_id.clone());
+            }
+        }
+        for playlist in &playlists {
+            for track_id in &playlist.track_ids {
+                if seen_ids.insert(track_id.clone()) {
+                    ids.push(track_id.clone());
+                }
+            }
+        }
 
         let conn = match self.conn() {
             Ok(conn) => conn,
@@ -1181,28 +1268,61 @@ impl ReklawdboxServer {
                 return Err(err(format!("DB error: {e}")));
             }
         };
+        let mut tracks_by_id: HashMap<String, crate::types::Track> = current_tracks
+            .into_iter()
+            .map(|track| (track.id.clone(), track))
+            .collect();
+        let missing_ids: Vec<String> = ids
+            .iter()
+            .filter(|id| !tracks_by_id.contains_key(id.as_str()))
+            .cloned()
+            .collect();
+        if !missing_ids.is_empty() {
+            self.state.changes.restore(snapshot);
+            return Err(err(format!(
+                "Track IDs not found in database: {}",
+                missing_ids.join(", ")
+            )));
+        }
+        let ordered_tracks: Vec<crate::types::Track> = ids
+            .iter()
+            .filter_map(|id| tracks_by_id.remove(id))
+            .collect();
         let modified_tracks = self
             .state
             .changes
-            .apply_snapshot(&current_tracks, &snapshot);
+            .apply_snapshot(&ordered_tracks, &snapshot);
+        let playlist_defs: Vec<xml::PlaylistDef> = playlists
+            .iter()
+            .map(|playlist| xml::PlaylistDef {
+                name: playlist.name.clone(),
+                track_ids: playlist.track_ids.clone(),
+            })
+            .collect();
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let output_path = params.0.output_path.map(PathBuf::from).unwrap_or_else(|| {
             PathBuf::from(format!("rekordbox-exports/reklawdbox-{timestamp}.xml"))
         });
 
-        if let Err(e) = xml::write_xml(&modified_tracks, &output_path) {
+        if let Err(e) =
+            xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path)
+        {
             self.state.changes.restore(snapshot);
             return Err(err(format!("Write error: {e}")));
         }
 
         let track_count = modified_tracks.len();
+        let changes_applied = snapshot.len();
 
         let mut result = serde_json::json!({
             "path": output_path.to_string_lossy(),
             "track_count": track_count,
-            "changes_applied": track_count,
+            "changes_applied": changes_applied,
         });
+        if has_playlists {
+            result["playlist_count"] = serde_json::json!(playlists.len());
+        }
         attach_corpus_provenance(&mut result, consult_xml_workflow_docs());
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -2158,6 +2278,231 @@ impl ReklawdboxServer {
     }
 
     #[tool(
+        description = "Score a single transition between two tracks using key, BPM, energy, and genre compatibility."
+    )]
+    async fn score_transition(
+        &self,
+        params: Parameters<ScoreTransitionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        let priority = p.priority.unwrap_or(SetPriority::Balanced);
+
+        let (from_track, to_track) = {
+            let conn = self.conn()?;
+            let from = db::get_track(&conn, &p.from_track_id)
+                .map_err(|e| err(format!("DB error: {e}")))?
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Track '{}' not found", p.from_track_id), None)
+                })?;
+            let to = db::get_track(&conn, &p.to_track_id)
+                .map_err(|e| err(format!("DB error: {e}")))?
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Track '{}' not found", p.to_track_id), None)
+                })?;
+            (from, to)
+        };
+
+        let (from_profile, to_profile) = {
+            let store = self.internal_conn()?;
+            let from = build_track_profile(from_track, &store)
+                .map_err(|e| err(format!("Failed to build source track profile: {e}")))?;
+            let to = build_track_profile(to_track, &store)
+                .map_err(|e| err(format!("Failed to build destination track profile: {e}")))?;
+            (from, to)
+        };
+
+        let scores = score_track_transition(&from_profile, &to_profile, p.energy_phase, priority);
+
+        let result = serde_json::json!({
+            "from": {
+                "track_id": from_profile.track.id,
+                "title": from_profile.track.title,
+                "artist": from_profile.track.artist,
+                "key": from_profile.key_display,
+                "bpm": round_score(from_profile.bpm),
+                "energy": round_score(from_profile.energy),
+                "genre": from_profile.track.genre,
+            },
+            "to": {
+                "track_id": to_profile.track.id,
+                "title": to_profile.track.title,
+                "artist": to_profile.track.artist,
+                "key": to_profile.key_display,
+                "bpm": round_score(to_profile.bpm),
+                "energy": round_score(to_profile.energy),
+                "genre": to_profile.track.genre,
+            },
+            "scores": scores.to_json(),
+        });
+
+        let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Generate 2-3 candidate set orderings from a track pool using greedy heuristic sequencing."
+    )]
+    async fn build_set(
+        &self,
+        params: Parameters<BuildSetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        if p.track_ids.is_empty() {
+            return Err(McpError::invalid_params(
+                "track_ids must include at least one track".to_string(),
+                None,
+            ));
+        }
+        if p.target_tracks == 0 {
+            return Err(McpError::invalid_params(
+                "target_tracks must be at least 1".to_string(),
+                None,
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        let deduped_ids: Vec<String> = p
+            .track_ids
+            .into_iter()
+            .filter(|track_id| seen.insert(track_id.clone()))
+            .collect();
+        if deduped_ids.is_empty() {
+            return Err(McpError::invalid_params(
+                "track_ids must include at least one unique track ID".to_string(),
+                None,
+            ));
+        }
+
+        let requested_candidates = p.candidates.unwrap_or(2).clamp(1, 3) as usize;
+        let requested_target = p.target_tracks as usize;
+        let priority = p.priority.unwrap_or(SetPriority::Balanced);
+        let phases = resolve_energy_curve(p.energy_curve.as_ref(), requested_target)
+            .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?;
+
+        let tracks = {
+            let conn = self.conn()?;
+            db::get_tracks_by_ids(&conn, &deduped_ids).map_err(|e| err(format!("DB error: {e}")))?
+        };
+        if tracks.is_empty() {
+            return Err(McpError::invalid_params(
+                "No valid tracks found for provided track_ids".to_string(),
+                None,
+            ));
+        }
+
+        let mut profiles_by_id: HashMap<String, TrackProfile> = HashMap::new();
+        {
+            let store = self.internal_conn()?;
+            for track in tracks {
+                let profile = build_track_profile(track, &store)
+                    .map_err(|e| err(format!("Failed to build track profile: {e}")))?;
+                profiles_by_id.insert(profile.track.id.clone(), profile);
+            }
+        }
+
+        if let Some(start_track_id) = p.start_track_id.as_deref() {
+            if !profiles_by_id.contains_key(start_track_id) {
+                return Err(McpError::invalid_params(
+                    format!("start_track_id '{start_track_id}' is not in track_ids"),
+                    None,
+                ));
+            }
+        }
+
+        let actual_target = requested_target.min(profiles_by_id.len());
+        let start_tracks = select_start_track_ids(
+            &profiles_by_id,
+            requested_candidates,
+            phases[0],
+            p.start_track_id.as_deref(),
+        );
+
+        let mut candidates = Vec::with_capacity(requested_candidates);
+        for candidate_index in 0..requested_candidates {
+            let start_track_id = start_tracks[candidate_index % start_tracks.len()].clone();
+            let plan = build_candidate_plan(
+                &profiles_by_id,
+                &start_track_id,
+                actual_target,
+                &phases,
+                priority,
+                candidate_index,
+            );
+
+            let tracks_json: Vec<serde_json::Value> = plan
+                .ordered_ids
+                .iter()
+                .filter_map(|track_id| profiles_by_id.get(track_id))
+                .map(|profile| {
+                    serde_json::json!({
+                        "track_id": profile.track.id,
+                        "title": profile.track.title,
+                        "artist": profile.track.artist,
+                        "key": profile.key_display,
+                        "bpm": profile.bpm,
+                        "energy": profile.energy,
+                        "genre": profile.track.genre,
+                    })
+                })
+                .collect();
+
+            let transitions_json: Vec<serde_json::Value> = plan
+                .transitions
+                .iter()
+                .map(|transition| {
+                    serde_json::json!({
+                        "from_index": transition.from_index,
+                        "to_index": transition.to_index,
+                        "scores": transition.scores.to_json(),
+                    })
+                })
+                .collect();
+
+            let total_seconds: i32 = plan
+                .ordered_ids
+                .iter()
+                .filter_map(|track_id| profiles_by_id.get(track_id))
+                .map(|profile| {
+                    if profile.track.length > 0 {
+                        profile.track.length
+                    } else {
+                        6 * 60
+                    }
+                })
+                .sum();
+            let estimated_duration_minutes = (total_seconds as f64 / 60.0).round() as i64;
+
+            let mean_composite = if plan.transitions.is_empty() {
+                0.0
+            } else {
+                plan.transitions
+                    .iter()
+                    .map(|transition| transition.scores.composite)
+                    .sum::<f64>()
+                    / plan.transitions.len() as f64
+            };
+            let set_score = mean_composite * 10.0;
+
+            let id = ((b'A' + (candidate_index as u8)) as char).to_string();
+            candidates.push(serde_json::json!({
+                "id": id,
+                "tracks": tracks_json,
+                "transitions": transitions_json,
+                "set_score": set_score,
+                "estimated_duration_minutes": estimated_duration_minutes,
+            }));
+        }
+
+        let result = serde_json::json!({
+            "candidates": candidates,
+            "pool_size": profiles_by_id.len(),
+            "tracks_used": actual_target,
+        });
+        let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
         description = "Get all available data for a track in one call: Rekordbox metadata, cached audio analysis, cached enrichment, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
     )]
     async fn resolve_track_data(
@@ -2290,6 +2635,948 @@ impl ReklawdboxServer {
         let json = serde_json::to_string_pretty(&results).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(
+        description = "Report cache completeness for a filtered track scope. Cache-only — no external calls."
+    )]
+    async fn cache_coverage(
+        &self,
+        params: Parameters<ResolveTracksDataParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        let filter_description = describe_resolve_scope(&p);
+
+        let (total_tracks, tracks) = {
+            let conn = self.conn()?;
+            let sample_prefix = format!("{}%", db::SAMPLER_PATH_PREFIX);
+            let total_tracks: usize = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM djmdContent
+                     WHERE rb_local_deleted = 0
+                       AND FolderPath NOT LIKE ?1 ESCAPE '\\'",
+                    rusqlite::params![sample_prefix],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| err(format!("DB error: {e}")))?
+                .max(0) as usize;
+
+            let tracks = if let Some(ref ids) = p.track_ids {
+                let mut selected = db::get_tracks_by_ids(&conn, ids)
+                    .map_err(|e| err(format!("DB error: {e}")))?
+                    .into_iter()
+                    .filter(|track| !track.file_path.starts_with(db::SAMPLER_PATH_PREFIX))
+                    .collect::<Vec<_>>();
+                if let Some(max_tracks) = p.max_tracks {
+                    selected.truncate(max_tracks as usize);
+                }
+                selected
+            } else if let Some(ref playlist_id) = p.playlist_id {
+                let mut selected = db::get_playlist_tracks_unbounded(&conn, playlist_id, None)
+                    .map_err(|e| err(format!("DB error: {e}")))?
+                    .into_iter()
+                    .filter(|track| !track.file_path.starts_with(db::SAMPLER_PATH_PREFIX))
+                    .collect::<Vec<_>>();
+                if let Some(max_tracks) = p.max_tracks {
+                    selected.truncate(max_tracks as usize);
+                }
+                selected
+            } else {
+                let search = db::SearchParams {
+                    query: p.query,
+                    artist: p.artist,
+                    genre: p.genre,
+                    rating_min: p.rating_min,
+                    bpm_min: p.bpm_min,
+                    bpm_max: p.bpm_max,
+                    key: p.key,
+                    playlist: None,
+                    has_genre: p.has_genre,
+                    label: p.label,
+                    path: p.path,
+                    added_after: p.added_after,
+                    added_before: p.added_before,
+                    exclude_samples: true,
+                    limit: p.max_tracks,
+                };
+                db::search_tracks_unbounded(&conn, &search)
+                    .map_err(|e| err(format!("DB error: {e}")))?
+            };
+
+            (total_tracks, tracks)
+        };
+
+        let matched_tracks = tracks.len();
+        let essentia_installed = self.essentia_python_path().is_some();
+
+        let mut stratum_cached = 0usize;
+        let mut essentia_cached = 0usize;
+        let mut discogs_cached = 0usize;
+        let mut beatport_cached = 0usize;
+        let mut no_audio_analysis = 0usize;
+        let mut no_enrichment = 0usize;
+        let mut no_data_at_all = 0usize;
+
+        {
+            let store = self.internal_conn()?;
+            for track in &tracks {
+                let norm_artist = discogs::normalize(&track.artist);
+                let norm_title = discogs::normalize(&track.title);
+                let audio_cache_key =
+                    resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
+
+                let has_discogs =
+                    store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
+                        .map_err(|e| err(format!("Cache read error: {e}")))?
+                        .is_some();
+                let has_beatport =
+                    store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
+                        .map_err(|e| err(format!("Cache read error: {e}")))?
+                        .is_some();
+                let has_stratum =
+                    store::get_audio_analysis(&store, &audio_cache_key, "stratum-dsp")
+                        .map_err(|e| err(format!("Cache read error: {e}")))?
+                        .is_some();
+                let has_essentia = store::get_audio_analysis(&store, &audio_cache_key, "essentia")
+                    .map_err(|e| err(format!("Cache read error: {e}")))?
+                    .is_some();
+
+                if has_stratum {
+                    stratum_cached += 1;
+                }
+                if has_essentia {
+                    essentia_cached += 1;
+                }
+                if has_discogs {
+                    discogs_cached += 1;
+                }
+                if has_beatport {
+                    beatport_cached += 1;
+                }
+                if !has_stratum {
+                    no_audio_analysis += 1;
+                }
+                if !has_discogs && !has_beatport {
+                    no_enrichment += 1;
+                }
+                if !has_stratum && !has_essentia && !has_discogs && !has_beatport {
+                    no_data_at_all += 1;
+                }
+            }
+        }
+
+        let result = serde_json::json!({
+            "scope": {
+                "total_tracks": total_tracks,
+                "filter_description": filter_description,
+                "matched_tracks": matched_tracks,
+            },
+            "coverage": {
+                "stratum_dsp": {
+                    "cached": stratum_cached,
+                    "percent": to_percent(stratum_cached, matched_tracks),
+                },
+                "essentia": {
+                    "cached": essentia_cached,
+                    "percent": to_percent(essentia_cached, matched_tracks),
+                    "installed": essentia_installed,
+                },
+                "discogs": {
+                    "cached": discogs_cached,
+                    "percent": to_percent(discogs_cached, matched_tracks),
+                },
+                "beatport": {
+                    "cached": beatport_cached,
+                    "percent": to_percent(beatport_cached, matched_tracks),
+                },
+            },
+            "gaps": {
+                "no_audio_analysis": no_audio_analysis,
+                "no_enrichment": no_enrichment,
+                "no_data_at_all": no_data_at_all,
+            },
+        });
+
+        let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+}
+
+fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String {
+    if let Some(track_ids) = &params.track_ids {
+        if let Some(max_tracks) = params.max_tracks {
+            return format!(
+                "track_ids ({}) [max_tracks = {max_tracks}]",
+                track_ids.len()
+            );
+        }
+        return format!("track_ids ({})", track_ids.len());
+    }
+
+    if let Some(playlist_id) = &params.playlist_id {
+        if let Some(max_tracks) = params.max_tracks {
+            return format!("playlist_id = \"{playlist_id}\", max_tracks = {max_tracks}");
+        }
+        return format!("playlist_id = \"{playlist_id}\"");
+    }
+
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(query) = &params.query {
+        filters.push(format!("query ~= \"{query}\""));
+    }
+    if let Some(artist) = &params.artist {
+        filters.push(format!("artist ~= \"{artist}\""));
+    }
+    if let Some(genre) = &params.genre {
+        filters.push(format!("genre ~= \"{genre}\""));
+    }
+    if let Some(has_genre) = params.has_genre {
+        filters.push(format!("has_genre = {has_genre}"));
+    }
+    if let Some(bpm_min) = params.bpm_min {
+        filters.push(format!("bpm_min = {bpm_min}"));
+    }
+    if let Some(bpm_max) = params.bpm_max {
+        filters.push(format!("bpm_max = {bpm_max}"));
+    }
+    if let Some(key) = &params.key {
+        filters.push(format!("key = \"{key}\""));
+    }
+    if let Some(rating_min) = params.rating_min {
+        filters.push(format!("rating_min = {rating_min}"));
+    }
+    if let Some(label) = &params.label {
+        filters.push(format!("label ~= \"{label}\""));
+    }
+    if let Some(path) = &params.path {
+        filters.push(format!("path ~= \"{path}\""));
+    }
+    if let Some(added_after) = &params.added_after {
+        filters.push(format!("added_after = \"{added_after}\""));
+    }
+    if let Some(added_before) = &params.added_before {
+        filters.push(format!("added_before = \"{added_before}\""));
+    }
+    if let Some(max_tracks) = params.max_tracks {
+        filters.push(format!("max_tracks = {max_tracks}"));
+    }
+
+    if filters.is_empty() {
+        "all tracks".to_string()
+    } else {
+        filters.join(", ")
+    }
+}
+
+fn to_percent(count: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        ((count as f64 / total as f64) * 1000.0).round() / 10.0
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TrackProfile {
+    track: crate::types::Track,
+    camelot_key: Option<CamelotKey>,
+    key_display: String,
+    bpm: f64,
+    energy: f64,
+    canonical_genre: Option<String>,
+    genre_family: GenreFamily,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CamelotKey {
+    number: u8,
+    letter: char,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenreFamily {
+    House,
+    Techno,
+    Bass,
+    Downtempo,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+struct AxisScore {
+    value: f64,
+    label: String,
+}
+
+#[derive(Debug, Clone)]
+struct TransitionScores {
+    key: AxisScore,
+    bpm: AxisScore,
+    energy: AxisScore,
+    genre: AxisScore,
+    composite: f64,
+}
+
+impl TransitionScores {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "key": { "value": round_score(self.key.value), "label": self.key.label },
+            "bpm": { "value": round_score(self.bpm.value), "label": self.bpm.label },
+            "energy": { "value": round_score(self.energy.value), "label": self.energy.label },
+            "genre": { "value": round_score(self.genre.value), "label": self.genre.label },
+            "composite": round_score(self.composite),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CandidateTransition {
+    from_index: usize,
+    to_index: usize,
+    scores: TransitionScores,
+}
+
+#[derive(Debug, Clone)]
+struct CandidatePlan {
+    ordered_ids: Vec<String>,
+    transitions: Vec<CandidateTransition>,
+}
+
+fn resolve_energy_curve(
+    energy_curve: Option<&EnergyCurveInput>,
+    target_tracks: usize,
+) -> Result<Vec<EnergyPhase>, String> {
+    if target_tracks == 0 {
+        return Err("target_tracks must be at least 1".to_string());
+    }
+
+    match energy_curve {
+        Some(EnergyCurveInput::Custom(phases)) => {
+            if phases.len() != target_tracks {
+                return Err(format!(
+                    "custom phase array length ({}) must match target_tracks ({target_tracks})",
+                    phases.len()
+                ));
+            }
+            Ok(phases.clone())
+        }
+        Some(EnergyCurveInput::Preset(preset)) => Ok((0..target_tracks)
+            .map(|position| preset_energy_phase(*preset, position, target_tracks))
+            .collect()),
+        None => Ok((0..target_tracks)
+            .map(|position| {
+                preset_energy_phase(
+                    EnergyCurvePreset::WarmupBuildPeakRelease,
+                    position,
+                    target_tracks,
+                )
+            })
+            .collect()),
+    }
+}
+
+fn preset_energy_phase(preset: EnergyCurvePreset, position: usize, total: usize) -> EnergyPhase {
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        position as f64 / total as f64
+    };
+    match preset {
+        EnergyCurvePreset::WarmupBuildPeakRelease => {
+            if fraction < 0.15 {
+                EnergyPhase::Warmup
+            } else if fraction < 0.45 {
+                EnergyPhase::Build
+            } else if fraction < 0.75 {
+                EnergyPhase::Peak
+            } else {
+                EnergyPhase::Release
+            }
+        }
+        EnergyCurvePreset::Flat => EnergyPhase::Peak,
+        EnergyCurvePreset::PeakOnly => {
+            if fraction < 0.10 {
+                EnergyPhase::Build
+            } else if fraction < 0.85 {
+                EnergyPhase::Peak
+            } else {
+                EnergyPhase::Release
+            }
+        }
+    }
+}
+
+fn select_start_track_ids(
+    profiles_by_id: &HashMap<String, TrackProfile>,
+    requested_candidates: usize,
+    first_phase: EnergyPhase,
+    forced_start: Option<&str>,
+) -> Vec<String> {
+    if let Some(track_id) = forced_start {
+        return vec![track_id.to_string()];
+    }
+
+    let prefer_low_energy = matches!(first_phase, EnergyPhase::Warmup | EnergyPhase::Build);
+    let mut profiles: Vec<&TrackProfile> = profiles_by_id.values().collect();
+    profiles.sort_by(|left, right| {
+        let energy_cmp = if prefer_low_energy {
+            left.energy
+                .partial_cmp(&right.energy)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            right
+                .energy
+                .partial_cmp(&left.energy)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        };
+        energy_cmp.then_with(|| left.track.id.cmp(&right.track.id))
+    });
+
+    let wanted = requested_candidates.max(1);
+    let mut out: Vec<String> = profiles
+        .into_iter()
+        .take(wanted)
+        .map(|profile| profile.track.id.clone())
+        .collect();
+    if out.is_empty() {
+        out.extend(profiles_by_id.keys().take(1).cloned());
+    }
+    out
+}
+
+fn build_candidate_plan(
+    profiles_by_id: &HashMap<String, TrackProfile>,
+    start_track_id: &str,
+    target_tracks: usize,
+    phases: &[EnergyPhase],
+    priority: SetPriority,
+    variation_index: usize,
+) -> CandidatePlan {
+    let mut ordered_ids = vec![start_track_id.to_string()];
+    let mut transitions = Vec::new();
+    let mut remaining: HashSet<String> = profiles_by_id.keys().cloned().collect();
+    remaining.remove(start_track_id);
+
+    while ordered_ids.len() < target_tracks && !remaining.is_empty() {
+        let Some(from_track_id) = ordered_ids.last() else {
+            break;
+        };
+        let Some(from_profile) = profiles_by_id.get(from_track_id) else {
+            break;
+        };
+
+        let phase = phases.get(ordered_ids.len()).copied();
+        let mut scored_next: Vec<(String, TransitionScores)> = remaining
+            .iter()
+            .filter_map(|candidate_id| {
+                profiles_by_id.get(candidate_id).map(|to_profile| {
+                    (
+                        candidate_id.clone(),
+                        score_transition_profiles(from_profile, to_profile, phase, priority),
+                    )
+                })
+            })
+            .collect();
+
+        scored_next.sort_by(|left, right| {
+            right
+                .1
+                .composite
+                .partial_cmp(&left.1.composite)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+
+        if scored_next.is_empty() {
+            break;
+        }
+
+        let pick_rank = transition_pick_rank(variation_index, ordered_ids.len(), scored_next.len());
+        let (next_track_id, transition_scores) = scored_next[pick_rank].clone();
+
+        transitions.push(CandidateTransition {
+            from_index: ordered_ids.len() - 1,
+            to_index: ordered_ids.len(),
+            scores: transition_scores,
+        });
+        ordered_ids.push(next_track_id.clone());
+        remaining.remove(&next_track_id);
+    }
+
+    CandidatePlan {
+        ordered_ids,
+        transitions,
+    }
+}
+
+fn transition_pick_rank(
+    variation_index: usize,
+    current_length: usize,
+    available_options: usize,
+) -> usize {
+    if available_options <= 1 {
+        return 0;
+    }
+    let preferred_rank = if current_length == 1 {
+        variation_index
+    } else if variation_index > 0 && current_length % 4 == 0 {
+        variation_index.min(1)
+    } else {
+        0
+    };
+    preferred_rank.min(available_options - 1)
+}
+
+fn build_track_profile(
+    track: crate::types::Track,
+    store_conn: &Connection,
+) -> Result<TrackProfile, String> {
+    let cache_key = resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
+    let stratum_json = store::get_audio_analysis(store_conn, &cache_key, "stratum-dsp")
+        .map_err(|e| format!("stratum cache read error: {e}"))?
+        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
+    let essentia_json = store::get_audio_analysis(store_conn, &cache_key, "essentia")
+        .map_err(|e| format!("essentia cache read error: {e}"))?
+        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
+
+    let bpm = stratum_json
+        .as_ref()
+        .and_then(|v| v.get("bpm"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(track.bpm)
+        .max(0.0);
+
+    let camelot_key = stratum_json
+        .as_ref()
+        .and_then(|v| v.get("key_camelot").and_then(serde_json::Value::as_str))
+        .and_then(parse_camelot_key)
+        .or_else(|| key_to_camelot(&track.key));
+
+    let key_display = camelot_key
+        .map(format_camelot)
+        .unwrap_or_else(|| match track.key.trim() {
+            "" => "Unknown".to_string(),
+            _ => track.key.clone(),
+        });
+
+    let energy = compute_track_energy(essentia_json.as_ref(), bpm);
+    let canonical_genre = canonicalize_genre(&track.genre);
+    let genre_family = canonical_genre
+        .as_deref()
+        .map(genre_family_for)
+        .unwrap_or(GenreFamily::Other);
+
+    Ok(TrackProfile {
+        track,
+        camelot_key,
+        key_display,
+        bpm,
+        energy,
+        canonical_genre,
+        genre_family,
+    })
+}
+
+fn score_transition_profiles(
+    from: &TrackProfile,
+    to: &TrackProfile,
+    phase: Option<EnergyPhase>,
+    priority: SetPriority,
+) -> TransitionScores {
+    let key = score_key_axis(from.camelot_key, to.camelot_key);
+    let bpm = score_bpm_axis(from.bpm, to.bpm);
+    let energy = score_energy_axis(from.energy, to.energy, phase);
+    let genre = score_genre_axis(
+        from.canonical_genre.as_deref(),
+        to.canonical_genre.as_deref(),
+        from.genre_family,
+        to.genre_family,
+    );
+    let composite = composite_score(key.value, bpm.value, energy.value, genre.value, priority);
+
+    TransitionScores {
+        key,
+        bpm,
+        energy,
+        genre,
+        composite,
+    }
+}
+
+fn score_track_transition(
+    from: &TrackProfile,
+    to: &TrackProfile,
+    phase: Option<EnergyPhase>,
+    priority: SetPriority,
+) -> TransitionScores {
+    score_transition_profiles(from, to, phase, priority)
+}
+
+fn round_score(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+fn score_key_axis(from: Option<CamelotKey>, to: Option<CamelotKey>) -> AxisScore {
+    let Some(from) = from else {
+        return AxisScore {
+            value: 0.1,
+            label: "Clash (missing key)".to_string(),
+        };
+    };
+    let Some(to) = to else {
+        return AxisScore {
+            value: 0.1,
+            label: "Clash (missing key)".to_string(),
+        };
+    };
+
+    if from.number == to.number && from.letter == to.letter {
+        return AxisScore {
+            value: 1.0,
+            label: "Perfect".to_string(),
+        };
+    }
+    if from.number == to.number && from.letter != to.letter {
+        return AxisScore {
+            value: 0.8,
+            label: "Mood shift (A↔B)".to_string(),
+        };
+    }
+
+    let clockwise = ((to.number as i16 - from.number as i16 + 12) % 12) as u8;
+    if from.letter == to.letter && clockwise == 1 {
+        AxisScore {
+            value: 0.9,
+            label: "Energy boost (+1)".to_string(),
+        }
+    } else if from.letter == to.letter && clockwise == 11 {
+        AxisScore {
+            value: 0.9,
+            label: "Energy drop (-1)".to_string(),
+        }
+    } else if from.letter == to.letter && (clockwise == 2 || clockwise == 10) {
+        AxisScore {
+            value: 0.5,
+            label: "Acceptable (+/-2)".to_string(),
+        }
+    } else if from.letter != to.letter && (clockwise == 1 || clockwise == 11) {
+        AxisScore {
+            value: 0.4,
+            label: "Rough (+/-1, A↔B)".to_string(),
+        }
+    } else {
+        AxisScore {
+            value: 0.1,
+            label: "Clash".to_string(),
+        }
+    }
+}
+
+fn score_bpm_axis(from_bpm: f64, to_bpm: f64) -> AxisScore {
+    let delta = (from_bpm - to_bpm).abs();
+    if delta <= 2.0 {
+        AxisScore {
+            value: 1.0,
+            label: format!("Seamless (delta {:.1})", delta),
+        }
+    } else if delta <= 4.0 {
+        AxisScore {
+            value: 0.8,
+            label: format!("Comfortable pitch adjust (delta {:.1})", delta),
+        }
+    } else if delta <= 6.0 {
+        AxisScore {
+            value: 0.5,
+            label: format!("Noticeable (delta {:.1})", delta),
+        }
+    } else if delta <= 8.0 {
+        AxisScore {
+            value: 0.3,
+            label: format!("Needs creative transition (delta {:.1})", delta),
+        }
+    } else {
+        AxisScore {
+            value: 0.1,
+            label: format!("Likely jarring (delta {:.1})", delta),
+        }
+    }
+}
+
+fn score_energy_axis(from_energy: f64, to_energy: f64, phase: Option<EnergyPhase>) -> AxisScore {
+    let delta = to_energy - from_energy;
+    match phase {
+        Some(EnergyPhase::Warmup) => {
+            let met = (-0.03..=0.12).contains(&delta);
+            AxisScore {
+                value: if met { 1.0 } else { 0.5 },
+                label: if met {
+                    "Stable/slight rise (warmup phase)".to_string()
+                } else {
+                    "Too abrupt for warmup".to_string()
+                },
+            }
+        }
+        Some(EnergyPhase::Build) => {
+            let met = delta >= 0.03;
+            AxisScore {
+                value: if met { 1.0 } else { 0.3 },
+                label: if met {
+                    "Rising (build phase)".to_string()
+                } else {
+                    "Not rising (build phase)".to_string()
+                },
+            }
+        }
+        Some(EnergyPhase::Peak) => {
+            let met = to_energy >= 0.65 && delta.abs() <= 0.10;
+            AxisScore {
+                value: if met { 1.0 } else { 0.5 },
+                label: if met {
+                    "High and stable (peak phase)".to_string()
+                } else {
+                    "Not high/stable (peak phase)".to_string()
+                },
+            }
+        }
+        Some(EnergyPhase::Release) => {
+            let met = delta <= -0.03;
+            AxisScore {
+                value: if met { 1.0 } else { 0.3 },
+                label: if met {
+                    "Dropping (release phase)".to_string()
+                } else {
+                    "Not dropping (release phase)".to_string()
+                },
+            }
+        }
+        None => AxisScore {
+            value: 1.0,
+            label: "No phase preference".to_string(),
+        },
+    }
+}
+
+fn score_genre_axis(
+    from_genre: Option<&str>,
+    to_genre: Option<&str>,
+    from_family: GenreFamily,
+    to_family: GenreFamily,
+) -> AxisScore {
+    let Some(from_genre) = from_genre else {
+        return AxisScore {
+            value: 0.3,
+            label: "Different families".to_string(),
+        };
+    };
+    let Some(to_genre) = to_genre else {
+        return AxisScore {
+            value: 0.3,
+            label: "Different families".to_string(),
+        };
+    };
+
+    if from_genre.eq_ignore_ascii_case(to_genre) {
+        AxisScore {
+            value: 1.0,
+            label: "Same genre".to_string(),
+        }
+    } else if from_family == to_family && from_family != GenreFamily::Other {
+        AxisScore {
+            value: 0.7,
+            label: "Same family".to_string(),
+        }
+    } else {
+        AxisScore {
+            value: 0.3,
+            label: "Different families".to_string(),
+        }
+    }
+}
+
+fn priority_weights(priority: SetPriority) -> (f64, f64, f64, f64) {
+    match priority {
+        SetPriority::Balanced => (0.35, 0.25, 0.20, 0.20),
+        SetPriority::Harmonic => (0.55, 0.20, 0.15, 0.10),
+        SetPriority::Energy => (0.15, 0.20, 0.50, 0.15),
+        SetPriority::Genre => (0.20, 0.20, 0.15, 0.45),
+    }
+}
+
+fn composite_score(
+    key_score: f64,
+    bpm_score: f64,
+    energy_score: f64,
+    genre_score: f64,
+    priority: SetPriority,
+) -> f64 {
+    let (w_key, w_bpm, w_energy, w_genre) = priority_weights(priority);
+    (w_key * key_score) + (w_bpm * bpm_score) + (w_energy * energy_score) + (w_genre * genre_score)
+}
+
+fn compute_track_energy(essentia_json: Option<&serde_json::Value>, bpm: f64) -> f64 {
+    let bpm_proxy = ((bpm - 80.0) / 100.0).clamp(0.0, 1.0);
+    let Some(essentia_json) = essentia_json else {
+        return bpm_proxy;
+    };
+
+    let danceability = essentia_json
+        .get("danceability")
+        .and_then(serde_json::Value::as_f64);
+    let loudness_integrated = essentia_json
+        .get("loudness_integrated")
+        .and_then(serde_json::Value::as_f64);
+    let onset_rate = essentia_json
+        .get("onset_rate")
+        .and_then(serde_json::Value::as_f64);
+
+    match (danceability, loudness_integrated, onset_rate) {
+        (Some(dance), Some(loudness), Some(onset)) => {
+            let normalized_loudness = ((loudness + 30.0) / 30.0).clamp(0.0, 1.0);
+            let onset_rate_normalized = (onset / 10.0).clamp(0.0, 1.0);
+            ((0.4 * dance.clamp(0.0, 1.0))
+                + (0.3 * normalized_loudness)
+                + (0.3 * onset_rate_normalized))
+                .clamp(0.0, 1.0)
+        }
+        _ => bpm_proxy,
+    }
+}
+
+fn canonicalize_genre(raw_genre: &str) -> Option<String> {
+    let trimmed = raw_genre.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(canonical) = genre::canonical_casing(trimmed) {
+        return Some(canonical.to_string());
+    }
+    if let Some(alias_target) = genre::normalize_genre(trimmed) {
+        return Some(alias_target.to_string());
+    }
+    None
+}
+
+fn genre_family_for(canonical_genre: &str) -> GenreFamily {
+    match canonical_genre.trim().to_ascii_lowercase().as_str() {
+        "house" | "deep house" | "tech house" | "afro house" | "garage" | "speed garage" => {
+            GenreFamily::House
+        }
+        "techno" | "deep techno" | "minimal" | "dub techno" | "ambient techno" | "hard techno"
+        | "acid" | "electro" => GenreFamily::Techno,
+        "drum & bass" | "drum and bass" | "jungle" | "dubstep" | "breakbeat" | "uk bass"
+        | "grime" | "bassline" | "broken beat" => GenreFamily::Bass,
+        "ambient" | "downtempo" | "dub" | "idm" | "experimental" => GenreFamily::Downtempo,
+        "hip hop" | "disco" | "trance" | "psytrance" | "pop" | "r&b" | "rnb" | "reggae"
+        | "dancehall" | "rock" | "synth-pop" | "synth pop" => GenreFamily::Other,
+        _ => GenreFamily::Other,
+    }
+}
+
+fn key_to_camelot(raw_key: &str) -> Option<CamelotKey> {
+    parse_camelot_key(raw_key).or_else(|| standard_key_to_camelot(raw_key))
+}
+
+fn parse_camelot_key(raw_key: &str) -> Option<CamelotKey> {
+    let trimmed = raw_key.trim().to_ascii_uppercase();
+    if trimmed.len() < 2 {
+        return None;
+    }
+    let (number, letter_str) = trimmed.split_at(trimmed.len() - 1);
+    let letter = letter_str.chars().next()?;
+    if letter != 'A' && letter != 'B' {
+        return None;
+    }
+    let number: u8 = number.parse().ok()?;
+    if !(1..=12).contains(&number) {
+        return None;
+    }
+    Some(CamelotKey { number, letter })
+}
+
+fn standard_key_to_camelot(raw_key: &str) -> Option<CamelotKey> {
+    let normalized = raw_key.trim().replace('♯', "#").replace('♭', "b");
+    if normalized.is_empty() {
+        return None;
+    }
+    let lower = normalized.to_ascii_lowercase();
+
+    let (root_raw, is_minor) = if lower.ends_with("minor") && normalized.len() > 5 {
+        (&normalized[..normalized.len() - 5], true)
+    } else if lower.ends_with("min") && normalized.len() > 3 {
+        (&normalized[..normalized.len() - 3], true)
+    } else if lower.ends_with('m') && normalized.len() > 1 {
+        (&normalized[..normalized.len() - 1], true)
+    } else if lower.ends_with("major") && normalized.len() > 5 {
+        (&normalized[..normalized.len() - 5], false)
+    } else if lower.ends_with("maj") && normalized.len() > 3 {
+        (&normalized[..normalized.len() - 3], false)
+    } else {
+        (normalized.as_str(), false)
+    };
+    let root = normalize_key_root(root_raw)?;
+
+    let (number, letter) = if is_minor {
+        match root.as_str() {
+            "G#" | "Ab" => (1, 'A'),
+            "D#" | "Eb" => (2, 'A'),
+            "A#" | "Bb" => (3, 'A'),
+            "F" => (4, 'A'),
+            "C" => (5, 'A'),
+            "G" => (6, 'A'),
+            "D" => (7, 'A'),
+            "A" => (8, 'A'),
+            "E" => (9, 'A'),
+            "B" => (10, 'A'),
+            "F#" | "Gb" => (11, 'A'),
+            "C#" | "Db" => (12, 'A'),
+            _ => return None,
+        }
+    } else {
+        match root.as_str() {
+            "B" => (1, 'B'),
+            "F#" | "Gb" => (2, 'B'),
+            "C#" | "Db" => (3, 'B'),
+            "G#" | "Ab" => (4, 'B'),
+            "D#" | "Eb" => (5, 'B'),
+            "A#" | "Bb" => (6, 'B'),
+            "F" => (7, 'B'),
+            "C" => (8, 'B'),
+            "G" => (9, 'B'),
+            "D" => (10, 'B'),
+            "A" => (11, 'B'),
+            "E" => (12, 'B'),
+            _ => return None,
+        }
+    };
+    Some(CamelotKey { number, letter })
+}
+
+fn normalize_key_root(root: &str) -> Option<String> {
+    let stripped: String = root.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if stripped.is_empty() {
+        return None;
+    }
+    let mut chars = stripped.chars();
+    let letter = chars.next()?.to_ascii_uppercase();
+    if !matches!(letter, 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G') {
+        return None;
+    }
+
+    let accidental = chars.next();
+    if chars.next().is_some() {
+        return None;
+    }
+
+    let normalized = match accidental {
+        Some('#') => format!("{letter}#"),
+        Some('b') | Some('B') => format!("{letter}b"),
+        Some(_) => return None,
+        None => letter.to_string(),
+    };
+    Some(normalized)
+}
+
+fn format_camelot(key: CamelotKey) -> String {
+    format!("{}{}", key.number, key.letter)
 }
 
 /// Map a genre/style string through the taxonomy.
@@ -2759,6 +4046,28 @@ mod tests {
         conn
     }
 
+    fn insert_test_track(
+        conn: &Connection,
+        track_id: &str,
+        title: &str,
+        genre_id: &str,
+        file_path: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO djmdContent (
+                ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                SampleRate, FileType, created_at, rb_local_deleted
+            ) VALUES (
+                ?1, ?2, 'a1', 'al1', ?3, 'k1', 'c1', 'l1', '',
+                12700, 102, 'cache coverage test', 2025, 220, ?4, '0', 1411,
+                44100, 5, '2025-01-02', 0
+            )",
+            params![track_id, title, genre_id, file_path],
+        )
+        .expect("test track should insert");
+    }
+
     fn canonical_genre_name(raw_genre: &str) -> String {
         if let Some(canonical) = genre::canonical_casing(raw_genre) {
             return canonical.to_string();
@@ -2799,6 +4108,332 @@ mod tests {
             Some(Err(e)) => panic!("fixture lookup failed for {artist} - {title}: {e}"),
             None => None,
         }
+    }
+
+    fn create_build_set_test_db() -> (Connection, Vec<String>) {
+        let conn = create_single_track_test_db("set-track-1", "/tmp/set-track-1.flac");
+        conn.execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'House');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Tech House');
+
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Em');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k3', 'Bm');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k4', 'F#m');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k5', 'C#m');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k6', 'Dm');
+            ",
+        )
+        .expect("build_set fixture taxonomy inserts should succeed");
+
+        let tracks: [(&str, &str, &str, &str, i32, i32); 5] = [
+            ("set-track-2", "Second Step", "g1", "k2", 12400, 300),
+            ("set-track-3", "Third Wave", "g2", "k3", 12600, 0),
+            ("set-track-4", "Fourth Lift", "g3", "k4", 12800, 360),
+            ("set-track-5", "Fifth Peak", "g3", "k5", 12950, 420),
+            ("set-track-6", "Sixth Release", "g2", "k6", 12350, 250),
+        ];
+
+        for (index, (track_id, title, genre_id, key_id, bpm, length)) in tracks.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, ?2, 'a1', 'al1', ?3, ?4, 'c1', 'l1', '',
+                    ?5, 153, 'build_set fixture', 2025, ?6, ?7, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+                params![
+                    *track_id,
+                    *title,
+                    *genre_id,
+                    *key_id,
+                    *bpm,
+                    *length,
+                    format!("/tmp/{track_id}.flac"),
+                ],
+            )
+            .unwrap_or_else(|e| panic!("fixture track insert {index} should succeed: {e}"));
+        }
+
+        (
+            conn,
+            vec![
+                "set-track-1".to_string(),
+                "set-track-2".to_string(),
+                "set-track-3".to_string(),
+                "set-track-4".to_string(),
+                "set-track-5".to_string(),
+                "set-track-6".to_string(),
+            ],
+        )
+    }
+
+    fn seed_build_set_cache(store_conn: &Connection) {
+        let rows: [(&str, f64, &str, f64); 6] = [
+            ("/tmp/set-track-1.flac", 122.0, "8A", 0.34),
+            ("/tmp/set-track-2.flac", 124.0, "9A", 0.40),
+            ("/tmp/set-track-3.flac", 126.0, "10A", 0.48),
+            ("/tmp/set-track-4.flac", 128.0, "11A", 0.60),
+            ("/tmp/set-track-5.flac", 130.0, "12A", 0.74),
+            ("/tmp/set-track-6.flac", 123.5, "7A", 0.42),
+        ];
+
+        for (index, (path, bpm, key_camelot, danceability)) in rows.iter().enumerate() {
+            let stratum = serde_json::json!({
+                "bpm": *bpm,
+                "key": "Am",
+                "key_camelot": *key_camelot,
+                "analyzer_version": "stratum-dsp-test"
+            });
+            let essentia = serde_json::json!({
+                "danceability": *danceability,
+                "loudness_integrated": -16.0 + (*danceability * 8.0),
+                "onset_rate": 3.0 + (*danceability * 4.0),
+                "analyzer_version": "essentia-test"
+            });
+            store::set_audio_analysis(
+                store_conn,
+                path,
+                "stratum-dsp",
+                1000 + index as i64,
+                2000 + index as i64,
+                "stratum-dsp-test",
+                &stratum.to_string(),
+            )
+            .unwrap_or_else(|e| panic!("stratum cache seed {index} should succeed: {e}"));
+            store::set_audio_analysis(
+                store_conn,
+                path,
+                "essentia",
+                1000 + index as i64,
+                2000 + index as i64,
+                "essentia-test",
+                &essentia.to_string(),
+            )
+            .unwrap_or_else(|e| panic!("essentia cache seed {index} should succeed: {e}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn build_set_generates_candidates_and_transition_scores() {
+        let (db_conn, track_ids) = create_build_set_test_db();
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        seed_build_set_cache(&store_conn);
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .build_set(Parameters(BuildSetParams {
+                track_ids,
+                target_tracks: 4,
+                priority: Some(SetPriority::Balanced),
+                energy_curve: Some(EnergyCurveInput::Preset(
+                    EnergyCurvePreset::WarmupBuildPeakRelease,
+                )),
+                start_track_id: None,
+                candidates: Some(3),
+            }))
+            .await
+            .expect("build_set should succeed for fixture pool");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["pool_size"], 6);
+        assert_eq!(payload["tracks_used"], 4);
+        let candidates = payload["candidates"]
+            .as_array()
+            .expect("candidates should be an array");
+        assert_eq!(candidates.len(), 3);
+
+        for candidate in candidates {
+            let tracks = candidate["tracks"]
+                .as_array()
+                .expect("candidate tracks should be an array");
+            let transitions = candidate["transitions"]
+                .as_array()
+                .expect("candidate transitions should be an array");
+            assert_eq!(tracks.len(), 4);
+            assert_eq!(transitions.len(), 3);
+            assert!(
+                candidate["set_score"].as_f64().is_some(),
+                "set_score should be numeric"
+            );
+            assert!(
+                candidate["estimated_duration_minutes"].as_i64().is_some(),
+                "estimated_duration_minutes should be numeric"
+            );
+            for transition in transitions {
+                assert!(
+                    transition["scores"]["composite"].as_f64().is_some(),
+                    "each transition should include numeric composite score"
+                );
+            }
+        }
+
+        let candidate_a_ids: Vec<String> = candidates[0]["tracks"]
+            .as_array()
+            .expect("candidate A tracks array")
+            .iter()
+            .map(|track| {
+                track["track_id"]
+                    .as_str()
+                    .expect("candidate track should include track_id")
+                    .to_string()
+            })
+            .collect();
+        let candidate_b_ids: Vec<String> = candidates[1]["tracks"]
+            .as_array()
+            .expect("candidate B tracks array")
+            .iter()
+            .map(|track| {
+                track["track_id"]
+                    .as_str()
+                    .expect("candidate track should include track_id")
+                    .to_string()
+            })
+            .collect();
+        assert_ne!(
+            candidate_a_ids, candidate_b_ids,
+            "candidate generation should include variation"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_set_custom_curve_and_small_pool_are_handled() {
+        let db_conn = create_single_track_test_db("single-set-1", "/tmp/single-set-1.flac");
+        db_conn
+            .execute(
+                "UPDATE djmdContent SET Length = 0 WHERE ID = ?1",
+                params!["single-set-1"],
+            )
+            .expect("single-track fixture should update");
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .build_set(Parameters(BuildSetParams {
+                track_ids: vec!["single-set-1".to_string()],
+                target_tracks: 4,
+                priority: Some(SetPriority::Energy),
+                energy_curve: Some(EnergyCurveInput::Custom(vec![
+                    EnergyPhase::Warmup,
+                    EnergyPhase::Build,
+                    EnergyPhase::Peak,
+                    EnergyPhase::Release,
+                ])),
+                start_track_id: None,
+                candidates: Some(2),
+            }))
+            .await
+            .expect("build_set should succeed for single-track pool");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["pool_size"], 1);
+        assert_eq!(payload["tracks_used"], 1);
+        let candidates = payload["candidates"]
+            .as_array()
+            .expect("candidates should be an array");
+        assert_eq!(candidates.len(), 2);
+        let first = &candidates[0];
+        assert_eq!(
+            first["tracks"]
+                .as_array()
+                .expect("tracks should be array")
+                .len(),
+            1
+        );
+        assert_eq!(
+            first["transitions"]
+                .as_array()
+                .expect("transitions should be array")
+                .len(),
+            0
+        );
+        assert_eq!(
+            first["estimated_duration_minutes"]
+                .as_i64()
+                .expect("duration should be integer"),
+            6
+        );
+    }
+
+    #[tokio::test]
+    async fn build_set_handles_all_same_key_pool() {
+        let db_conn = create_single_track_test_db("same-key-1", "/tmp/same-key-1.flac");
+        insert_test_track(
+            &db_conn,
+            "same-key-2",
+            "Same Key Two",
+            "g1",
+            "/tmp/same-key-2.flac",
+        );
+        insert_test_track(
+            &db_conn,
+            "same-key-3",
+            "Same Key Three",
+            "g1",
+            "/tmp/same-key-3.flac",
+        );
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .build_set(Parameters(BuildSetParams {
+                track_ids: vec![
+                    "same-key-1".to_string(),
+                    "same-key-2".to_string(),
+                    "same-key-3".to_string(),
+                ],
+                target_tracks: 3,
+                priority: Some(SetPriority::Harmonic),
+                energy_curve: Some(EnergyCurveInput::Preset(EnergyCurvePreset::Flat)),
+                start_track_id: None,
+                candidates: Some(2),
+            }))
+            .await
+            .expect("build_set should succeed when all tracks share the same key");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["pool_size"], 3);
+        assert_eq!(payload["tracks_used"], 3);
+        let candidates = payload["candidates"]
+            .as_array()
+            .expect("candidates should be an array");
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0]["transitions"]
+                .as_array()
+                .expect("transitions should be an array")
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -3007,7 +4642,10 @@ mod tests {
         let server = ReklawdboxServer::new(None);
 
         let result = server
-            .write_xml(Parameters(WriteXmlParams { output_path: None }))
+            .write_xml(Parameters(WriteXmlParams {
+                output_path: None,
+                playlists: None,
+            }))
             .await
             .expect("write_xml should succeed when no changes are staged");
 
@@ -3035,6 +4673,191 @@ mod tests {
             "No changes to write."
         );
         assert_has_provenance(&payload);
+    }
+
+    #[tokio::test]
+    async fn write_xml_with_playlists_exports_without_staged_changes() {
+        let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        let output_dir = tempfile::tempdir().expect("temp output dir should create");
+        let output_path = output_dir.path().join("playlist-export.xml");
+        let output_path_str = output_path.to_string_lossy().to_string();
+
+        let result = server
+            .write_xml(Parameters(WriteXmlParams {
+                output_path: Some(output_path_str.clone()),
+                playlists: Some(vec![WriteXmlPlaylistInput {
+                    name: "Set & Test".to_string(),
+                    track_ids: vec!["playlist-track-1".to_string()],
+                }]),
+            }))
+            .await
+            .expect("write_xml should export playlist-only requests");
+
+        let payload = extract_json(&result);
+        assert_eq!(payload["track_count"], 1);
+        assert_eq!(payload["changes_applied"], 0);
+        assert_eq!(payload["playlist_count"], 1);
+        assert_eq!(
+            payload["path"].as_str().expect("path should be present"),
+            output_path_str
+        );
+
+        let xml = std::fs::read_to_string(&output_path).expect("XML output should be readable");
+        assert!(xml.contains("<PLAYLISTS>"));
+        assert!(xml.contains("Name=\"Set &amp; Test\""));
+        assert!(xml.contains("<TRACK Key=\"1\"/>"));
+    }
+
+    #[tokio::test]
+    async fn write_xml_with_playlists_reports_missing_track_ids() {
+        let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        let err = server
+            .write_xml(Parameters(WriteXmlParams {
+                output_path: None,
+                playlists: Some(vec![WriteXmlPlaylistInput {
+                    name: "Bad Set".to_string(),
+                    track_ids: vec!["does-not-exist".to_string()],
+                }]),
+            }))
+            .await
+            .expect_err("missing playlist track IDs should fail");
+
+        let msg = format!("{err:?}");
+        assert!(msg.contains("Track IDs not found in database"));
+        assert!(msg.contains("does-not-exist"));
+    }
+
+    #[tokio::test]
+    async fn write_xml_with_playlists_and_staged_changes_exports_union_once() {
+        let db_conn = create_single_track_test_db("staged-track-1", "/tmp/staged-track-1.flac");
+        insert_test_track(
+            &db_conn,
+            "playlist-track-2",
+            "Playlist Only",
+            "g1",
+            "/tmp/playlist-track-2.flac",
+        );
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        server
+            .update_tracks(Parameters(UpdateTracksParams {
+                changes: vec![TrackChangeInput {
+                    track_id: "staged-track-1".to_string(),
+                    genre: None,
+                    comments: Some("staged only comment".to_string()),
+                    rating: Some(5),
+                    color: None,
+                }],
+            }))
+            .await
+            .expect("staging update should succeed");
+
+        let output_dir = tempfile::tempdir().expect("temp output dir should create");
+        let output_path = output_dir.path().join("mixed-export.xml");
+        let output_path_str = output_path.to_string_lossy().to_string();
+
+        let result = server
+            .write_xml(Parameters(WriteXmlParams {
+                output_path: Some(output_path_str.clone()),
+                playlists: Some(vec![WriteXmlPlaylistInput {
+                    name: "Mixed Export".to_string(),
+                    track_ids: vec!["playlist-track-2".to_string(), "staged-track-1".to_string()],
+                }]),
+            }))
+            .await
+            .expect("write_xml should succeed for mixed staged + playlist exports");
+
+        let payload = extract_json(&result);
+        assert_eq!(payload["track_count"], 2);
+        assert_eq!(payload["changes_applied"], 1);
+        assert_eq!(payload["playlist_count"], 1);
+        assert_eq!(
+            payload["path"].as_str().expect("path should be present"),
+            output_path_str
+        );
+
+        let xml = std::fs::read_to_string(&output_path).expect("XML output should be readable");
+        assert!(xml.contains("<COLLECTION Entries=\"2\">"));
+        assert_eq!(xml.matches("<TRACK TrackID=\"").count(), 2);
+        assert_eq!(xml.matches("Name=\"Señorita\"").count(), 1);
+        assert_eq!(xml.matches("Name=\"Playlist Only\"").count(), 1);
+
+        let staged_line = xml
+            .lines()
+            .find(|line| line.contains("Name=\"Señorita\""))
+            .expect("staged track line should exist");
+        assert!(
+            staged_line.contains("Comments=\"staged only comment\""),
+            "staged comment should be applied to staged track"
+        );
+        assert!(
+            staged_line.contains("Rating=\"255\""),
+            "5-star staged rating should be encoded as 255"
+        );
+
+        let playlist_only_line = xml
+            .lines()
+            .find(|line| line.contains("Name=\"Playlist Only\""))
+            .expect("playlist-only track line should exist");
+        assert!(
+            playlist_only_line.contains("Comments=\"cache coverage test\""),
+            "playlist-only track should keep DB comments when no staged changes exist"
+        );
+        assert!(
+            playlist_only_line.contains("Rating=\"102\""),
+            "playlist-only track should keep DB-derived rating when not staged"
+        );
+
+        let playlist_start = xml
+            .find("<NODE Type=\"1\" Name=\"Mixed Export\" Entries=\"2\" KeyType=\"0\">")
+            .expect("playlist node should exist");
+        let playlist_end = playlist_start
+            + xml[playlist_start..]
+                .find("</NODE>")
+                .expect("playlist node should close");
+        let playlist_block = &xml[playlist_start..playlist_end];
+        let key2 = playlist_block
+            .find("<TRACK Key=\"2\"/>")
+            .expect("playlist should reference playlist-only track");
+        let key1 = playlist_block
+            .find("<TRACK Key=\"1\"/>")
+            .expect("playlist should reference staged track");
+        assert!(
+            key2 < key1,
+            "playlist key order should follow input track_ids order"
+        );
     }
 
     #[tokio::test]
@@ -3425,6 +5248,250 @@ mod tests {
             "audio_analysis.stratum_dsp should be populated from cache"
         );
         assert_eq!(payload["audio_analysis"]["stratum_dsp"]["key"], "Am");
+    }
+
+    #[tokio::test]
+    async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
+        let db_conn = create_single_track_test_db("coverage-with-genre", "/music/coverage-1.flac");
+        insert_test_track(
+            &db_conn,
+            "coverage-no-genre-1",
+            "No Genre One",
+            "",
+            "/music/coverage-2.flac",
+        );
+        insert_test_track(
+            &db_conn,
+            "coverage-no-genre-2",
+            "No Genre Two",
+            "",
+            "/music/coverage-3.flac",
+        );
+        insert_test_track(
+            &db_conn,
+            "coverage-no-genre-3",
+            "No Genre Three",
+            "",
+            "/music/coverage-4.flac",
+        );
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        let norm_artist = discogs::normalize("Aníbal");
+        let norm_title_one = discogs::normalize("No Genre One");
+        let norm_title_two = discogs::normalize("No Genre Two");
+
+        store::set_audio_analysis(
+            &store_conn,
+            "/music/coverage-2.flac",
+            "stratum-dsp",
+            1234,
+            1_700_000_001,
+            "stratum-dsp-1.0.0",
+            r#"{"bpm":127.1,"key":"Am"}"#,
+        )
+        .expect("stratum cache should be seeded");
+        store::set_audio_analysis(
+            &store_conn,
+            "/music/coverage-2.flac",
+            "essentia",
+            1234,
+            1_700_000_001,
+            "essentia-2.1",
+            r#"{"danceability":0.81}"#,
+        )
+        .expect("essentia cache should be seeded");
+        store::set_enrichment(
+            &store_conn,
+            "discogs",
+            &norm_artist,
+            &norm_title_one,
+            Some("exact"),
+            Some(r#"{"styles":["Deep House"]}"#),
+        )
+        .expect("discogs cache should be seeded for first ungenred track");
+        store::set_enrichment(
+            &store_conn,
+            "beatport",
+            &norm_artist,
+            &norm_title_one,
+            Some("exact"),
+            Some(r#"{"genre":"Deep House"}"#),
+        )
+        .expect("beatport cache should be seeded for first ungenred track");
+        store::set_enrichment(
+            &store_conn,
+            "discogs",
+            &norm_artist,
+            &norm_title_two,
+            Some("exact"),
+            Some(r#"{"styles":["Tech House"]}"#),
+        )
+        .expect("discogs cache should be seeded for second ungenred track");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        server
+            .state
+            .essentia_python
+            .set(Some("/tmp/fake-essentia-python".to_string()))
+            .expect("essentia probe cache should be set exactly once");
+
+        let result = server
+            .cache_coverage(Parameters(ResolveTracksDataParams {
+                track_ids: None,
+                playlist_id: None,
+                query: None,
+                artist: None,
+                genre: None,
+                has_genre: Some(false),
+                bpm_min: None,
+                bpm_max: None,
+                key: None,
+                rating_min: None,
+                label: None,
+                path: None,
+                added_after: None,
+                added_before: None,
+                max_tracks: None,
+            }))
+            .await
+            .expect("cache_coverage should succeed");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["scope"]["total_tracks"], 4);
+        assert_eq!(payload["scope"]["matched_tracks"], 3);
+        assert_eq!(payload["scope"]["filter_description"], "has_genre = false");
+
+        assert_eq!(payload["coverage"]["stratum_dsp"]["cached"], 1);
+        assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 33.3);
+
+        assert_eq!(payload["coverage"]["essentia"]["cached"], 1);
+        assert_eq!(payload["coverage"]["essentia"]["percent"], 33.3);
+        assert_eq!(payload["coverage"]["essentia"]["installed"], true);
+
+        assert_eq!(payload["coverage"]["discogs"]["cached"], 2);
+        assert_eq!(payload["coverage"]["discogs"]["percent"], 66.7);
+
+        assert_eq!(payload["coverage"]["beatport"]["cached"], 1);
+        assert_eq!(payload["coverage"]["beatport"]["percent"], 33.3);
+
+        assert_eq!(payload["gaps"]["no_audio_analysis"], 2);
+        assert_eq!(payload["gaps"]["no_enrichment"], 1);
+        assert_eq!(payload["gaps"]["no_data_at_all"], 1);
+    }
+
+    #[tokio::test]
+    async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
+        let db_conn = create_single_track_test_db("coverage-base", "/music/coverage-base.flac");
+        insert_test_track(
+            &db_conn,
+            "coverage-nonsample",
+            "Coverage Non Sample",
+            "",
+            "/music/coverage-nonsample.flac",
+        );
+        let sampler_path = format!("{}CoverageSampler.wav", db::SAMPLER_PATH_PREFIX);
+        insert_test_track(
+            &db_conn,
+            "coverage-sampler",
+            "Coverage Sampler",
+            "",
+            &sampler_path,
+        );
+
+        db_conn
+            .execute_batch(
+                "CREATE TABLE djmdSongPlaylist (
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER
+                );",
+            )
+            .expect("playlist table should be created for test");
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-cache", "coverage-nonsample", 1],
+            )
+            .expect("non-sampler playlist entry should insert");
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-cache", "coverage-sampler", 2],
+            )
+            .expect("sampler playlist entry should insert");
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        let id_scope = server
+            .cache_coverage(Parameters(ResolveTracksDataParams {
+                track_ids: Some(vec![
+                    "coverage-nonsample".to_string(),
+                    "coverage-sampler".to_string(),
+                ]),
+                playlist_id: None,
+                query: None,
+                artist: None,
+                genre: None,
+                has_genre: None,
+                bpm_min: None,
+                bpm_max: None,
+                key: None,
+                rating_min: None,
+                label: None,
+                path: None,
+                added_after: None,
+                added_before: None,
+                max_tracks: None,
+            }))
+            .await
+            .expect("cache_coverage track_ids scope should succeed");
+        let id_payload = extract_json(&id_scope);
+        assert_eq!(id_payload["scope"]["total_tracks"], 2);
+        assert_eq!(id_payload["scope"]["matched_tracks"], 1);
+        assert_eq!(id_payload["gaps"]["no_data_at_all"], 1);
+
+        let playlist_scope = server
+            .cache_coverage(Parameters(ResolveTracksDataParams {
+                track_ids: None,
+                playlist_id: Some("pl-cache".to_string()),
+                query: None,
+                artist: None,
+                genre: None,
+                has_genre: None,
+                bpm_min: None,
+                bpm_max: None,
+                key: None,
+                rating_min: None,
+                label: None,
+                path: None,
+                added_after: None,
+                added_before: None,
+                max_tracks: None,
+            }))
+            .await
+            .expect("cache_coverage playlist scope should succeed");
+        let playlist_payload = extract_json(&playlist_scope);
+        assert_eq!(playlist_payload["scope"]["total_tracks"], 2);
+        assert_eq!(playlist_payload["scope"]["matched_tracks"], 1);
+        assert_eq!(playlist_payload["gaps"]["no_data_at_all"], 1);
     }
 
     #[tokio::test]
@@ -4240,5 +6307,192 @@ mod tests {
             result["data_completeness"]["discogs"], true,
             "cache entry exists so completeness is true"
         );
+    }
+
+    #[test]
+    fn standard_key_to_camelot_converts_major_minor_and_flats() {
+        assert_eq!(
+            standard_key_to_camelot("Am").map(format_camelot).as_deref(),
+            Some("8A")
+        );
+        assert_eq!(
+            standard_key_to_camelot("C").map(format_camelot).as_deref(),
+            Some("8B")
+        );
+        assert_eq!(
+            standard_key_to_camelot("F#m")
+                .map(format_camelot)
+                .as_deref(),
+            Some("11A")
+        );
+        assert_eq!(
+            standard_key_to_camelot("Bb").map(format_camelot).as_deref(),
+            Some("6B")
+        );
+        assert_eq!(
+            standard_key_to_camelot("Dbm")
+                .map(format_camelot)
+                .as_deref(),
+            Some("12A")
+        );
+        assert_eq!(
+            key_to_camelot("8a").map(format_camelot).as_deref(),
+            Some("8A")
+        );
+        assert_eq!(standard_key_to_camelot("not-a-key"), None);
+    }
+
+    #[test]
+    fn camelot_distance_scoring_handles_wrap_and_mode_shift() {
+        let wrap_up = score_key_axis(parse_camelot_key("12A"), parse_camelot_key("1A"));
+        assert_eq!(wrap_up.value, 0.9);
+        assert!(
+            wrap_up.label.contains("Energy boost"),
+            "wrap-around up should be treated as +1"
+        );
+
+        let wrap_down = score_key_axis(parse_camelot_key("1A"), parse_camelot_key("12A"));
+        assert_eq!(wrap_down.value, 0.9);
+        assert!(
+            wrap_down.label.contains("Energy drop"),
+            "wrap-around down should be treated as -1"
+        );
+
+        let mood_shift = score_key_axis(parse_camelot_key("6A"), parse_camelot_key("6B"));
+        assert_eq!(mood_shift.value, 0.8);
+
+        let rough = score_key_axis(parse_camelot_key("6A"), parse_camelot_key("7B"));
+        assert_eq!(rough.value, 0.4);
+    }
+
+    #[test]
+    fn composite_scoring_changes_by_priority_axis() {
+        let approx = |left: f64, right: f64| (left - right).abs() < 1e-9;
+
+        assert!(approx(
+            composite_score(1.0, 0.0, 0.0, 0.0, SetPriority::Balanced),
+            0.35
+        ));
+        assert!(approx(
+            composite_score(1.0, 0.0, 0.0, 0.0, SetPriority::Harmonic),
+            0.55
+        ));
+        assert!(approx(
+            composite_score(1.0, 0.0, 0.0, 0.0, SetPriority::Energy),
+            0.15
+        ));
+        assert!(approx(
+            composite_score(1.0, 0.0, 0.0, 0.0, SetPriority::Genre),
+            0.20
+        ));
+
+        assert!(approx(
+            composite_score(0.0, 0.0, 0.0, 1.0, SetPriority::Balanced),
+            0.20
+        ));
+        assert!(approx(
+            composite_score(0.0, 0.0, 0.0, 1.0, SetPriority::Genre),
+            0.45
+        ));
+    }
+
+    #[tokio::test]
+    async fn score_transition_returns_expected_axis_scores() {
+        let db_conn = create_single_track_test_db("from-track", "/tmp/from-track.flac");
+        db_conn
+            .execute(
+                "INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Em')",
+                [],
+            )
+            .expect("second key should insert");
+        db_conn
+            .execute(
+                "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, 'Second Track', 'a1', 'al1', 'g1', 'k2', 'c1', 'l1', '',
+                    12350, 153, 'score transition test', 2025, 260, ?2, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+                params!["to-track", "/tmp/to-track.flac"],
+            )
+            .expect("second track should insert");
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        store::set_audio_analysis(
+            &store_conn,
+            "/tmp/from-track.flac",
+            "stratum-dsp",
+            1,
+            1,
+            "stratum-dsp-1.0.0",
+            r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
+        )
+        .expect("source stratum cache should seed");
+        store::set_audio_analysis(
+            &store_conn,
+            "/tmp/to-track.flac",
+            "stratum-dsp",
+            1,
+            1,
+            "stratum-dsp-1.0.0",
+            r#"{"bpm":123.5,"key":"Em","key_camelot":"9A"}"#,
+        )
+        .expect("destination stratum cache should seed");
+
+        store::set_audio_analysis(
+            &store_conn,
+            "/tmp/from-track.flac",
+            "essentia",
+            1,
+            1,
+            "essentia-2.1",
+            r#"{"danceability":0.30,"loudness_integrated":-12.0,"onset_rate":3.0}"#,
+        )
+        .expect("source essentia cache should seed");
+        store::set_audio_analysis(
+            &store_conn,
+            "/tmp/to-track.flac",
+            "essentia",
+            1,
+            1,
+            "essentia-2.1",
+            r#"{"danceability":0.60,"loudness_integrated":-8.0,"onset_rate":5.0}"#,
+        )
+        .expect("destination essentia cache should seed");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .score_transition(Parameters(ScoreTransitionParams {
+                from_track_id: "from-track".to_string(),
+                to_track_id: "to-track".to_string(),
+                energy_phase: Some(EnergyPhase::Build),
+                priority: Some(SetPriority::Balanced),
+            }))
+            .await
+            .expect("score_transition should succeed");
+
+        let payload = extract_json(&result);
+        assert_eq!(payload["from"]["track_id"], "from-track");
+        assert_eq!(payload["from"]["key"], "8A");
+        assert_eq!(payload["to"]["track_id"], "to-track");
+        assert_eq!(payload["to"]["key"], "9A");
+
+        assert_eq!(payload["scores"]["key"]["value"], 0.9);
+        assert_eq!(payload["scores"]["bpm"]["value"], 1.0);
+        assert_eq!(payload["scores"]["energy"]["value"], 1.0);
+        assert_eq!(payload["scores"]["genre"]["value"], 1.0);
+        assert_eq!(payload["scores"]["composite"], 0.965);
     }
 }

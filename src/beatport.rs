@@ -92,9 +92,9 @@ fn classify_http_status(
 
 fn http_status_error(status: reqwest::StatusCode, retry_after: Option<&str>, kind: &str) -> String {
     match retry_after {
-        Some(delay) if !delay.is_empty() => format!(
-            "Beatport {kind} HTTP {status} (Retry-After: {delay})"
-        ),
+        Some(delay) if !delay.is_empty() => {
+            format!("Beatport {kind} HTTP {status} (Retry-After: {delay})")
+        }
         _ => format!("Beatport {kind} HTTP {status}"),
     }
 }

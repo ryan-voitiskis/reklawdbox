@@ -1,8 +1,15 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
 use crate::types::Track;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistDef {
+    pub name: String,
+    pub track_ids: Vec<String>,
+}
 
 pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -106,7 +113,16 @@ fn write_track(out: &mut String, track: &Track, track_id: usize) {
 }
 
 pub fn generate_xml(tracks: &[Track]) -> String {
+    generate_xml_with_playlists(tracks, &[])
+        .expect("playlist validation should not fail when no playlists are provided")
+}
+
+pub fn generate_xml_with_playlists(
+    tracks: &[Track],
+    playlists: &[PlaylistDef],
+) -> Result<String, String> {
     let mut out = String::with_capacity(tracks.len() * 512);
+    let mut track_id_map = HashMap::with_capacity(tracks.len());
 
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<DJ_PLAYLISTS Version=\"1.0.0\">\n");
@@ -119,20 +135,66 @@ pub fn generate_xml(tracks: &[Track]) -> String {
     .unwrap();
 
     for (i, track) in tracks.iter().enumerate() {
-        write_track(&mut out, track, i + 1);
+        let xml_track_id = i + 1;
+        track_id_map.insert(track.id.clone(), xml_track_id);
+        write_track(&mut out, track, xml_track_id);
     }
 
     out.push_str("  </COLLECTION>\n");
+
+    if !playlists.is_empty() {
+        out.push_str("  <PLAYLISTS>\n");
+        write!(
+            out,
+            "    <NODE Type=\"0\" Name=\"ROOT\" Count=\"{}\">\n",
+            playlists.len()
+        )
+        .unwrap();
+
+        for playlist in playlists {
+            write!(
+                out,
+                "      <NODE Type=\"1\" Name=\"{}\" Entries=\"{}\" KeyType=\"0\">\n",
+                xml_escape(&playlist.name),
+                playlist.track_ids.len()
+            )
+            .unwrap();
+
+            for track_id in &playlist.track_ids {
+                let key = track_id_map.get(track_id).ok_or_else(|| {
+                    format!(
+                        "Playlist '{}' references unknown track ID '{}'",
+                        playlist.name, track_id
+                    )
+                })?;
+                write!(out, "        <TRACK Key=\"{key}\"/>\n").unwrap();
+            }
+
+            out.push_str("      </NODE>\n");
+        }
+
+        out.push_str("    </NODE>\n");
+        out.push_str("  </PLAYLISTS>\n");
+    }
     out.push_str("</DJ_PLAYLISTS>\n");
 
-    out
+    Ok(out)
 }
 
 pub fn write_xml(tracks: &[Track], path: &Path) -> Result<(), std::io::Error> {
+    write_xml_with_playlists(tracks, &[], path)
+}
+
+pub fn write_xml_with_playlists(
+    tracks: &[Track],
+    playlists: &[PlaylistDef],
+    path: &Path,
+) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let xml = generate_xml(tracks);
+    let xml = generate_xml_with_playlists(tracks, playlists)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     fs::write(path, xml)
 }
 
@@ -254,6 +316,132 @@ mod tests {
         let xml = generate_xml(&[track]);
         assert!(xml.contains("Artist=\"Simon &amp; Garfunkel\""));
         assert!(xml.contains("Comments=\"&quot;great&quot; &lt;track&gt;\""));
+    }
+
+    #[test]
+    fn test_generate_xml_with_playlists_structure_and_key_mapping() {
+        let mut t1 = make_test_track();
+        t1.id = "db-id-1".to_string();
+        t1.title = "Track 1".to_string();
+
+        let mut t2 = make_test_track();
+        t2.id = "db-id-2".to_string();
+        t2.title = "Track 2".to_string();
+
+        let mut t3 = make_test_track();
+        t3.id = "db-id-3".to_string();
+        t3.title = "Track 3".to_string();
+
+        let playlists = vec![PlaylistDef {
+            name: "Set 2026-02-21 & Techno".to_string(),
+            track_ids: vec![
+                "db-id-2".to_string(),
+                "db-id-1".to_string(),
+                "db-id-3".to_string(),
+            ],
+        }];
+
+        let xml = generate_xml_with_playlists(&[t1, t2, t3], &playlists)
+            .expect("playlist XML should generate");
+
+        assert!(xml.contains("<COLLECTION Entries=\"3\">"));
+        assert!(xml.contains("<PLAYLISTS>"));
+        assert!(xml.contains("<NODE Type=\"0\" Name=\"ROOT\" Count=\"1\">"));
+        assert!(
+            xml.contains(
+                "<NODE Type=\"1\" Name=\"Set 2026-02-21 &amp; Techno\" Entries=\"3\" KeyType=\"0\">"
+            ),
+            "playlist name should be XML escaped"
+        );
+
+        let key2 = xml.find("<TRACK Key=\"2\"/>").expect("key 2 should exist");
+        let key1 = xml.find("<TRACK Key=\"1\"/>").expect("key 1 should exist");
+        let key3 = xml.find("<TRACK Key=\"3\"/>").expect("key 3 should exist");
+        assert!(
+            key2 < key1 && key1 < key3,
+            "playlist key order should match input track_ids order"
+        );
+    }
+
+    #[test]
+    fn test_generate_xml_with_playlists_errors_for_unknown_track_id() {
+        let track = make_test_track();
+        let playlists = vec![PlaylistDef {
+            name: "Bad Playlist".to_string(),
+            track_ids: vec!["missing-id".to_string()],
+        }];
+
+        let err = generate_xml_with_playlists(&[track], &playlists)
+            .expect_err("missing track references should fail");
+        assert!(err.contains("missing-id"));
+    }
+
+    #[test]
+    fn test_generate_xml_with_multiple_playlists_sets_root_count() {
+        let mut t1 = make_test_track();
+        t1.id = "db-id-1".to_string();
+        t1.title = "Track 1".to_string();
+
+        let mut t2 = make_test_track();
+        t2.id = "db-id-2".to_string();
+        t2.title = "Track 2".to_string();
+
+        let mut t3 = make_test_track();
+        t3.id = "db-id-3".to_string();
+        t3.title = "Track 3".to_string();
+
+        let playlists = vec![
+            PlaylistDef {
+                name: "First Set".to_string(),
+                track_ids: vec!["db-id-1".to_string(), "db-id-3".to_string()],
+            },
+            PlaylistDef {
+                name: "Second & Set".to_string(),
+                track_ids: vec!["db-id-2".to_string()],
+            },
+        ];
+
+        let xml = generate_xml_with_playlists(&[t1, t2, t3], &playlists)
+            .expect("playlist XML should generate");
+
+        assert!(xml.contains("<NODE Type=\"0\" Name=\"ROOT\" Count=\"2\">"));
+        assert_eq!(xml.matches("<NODE Type=\"1\"").count(), 2);
+        assert!(xml.contains("<NODE Type=\"1\" Name=\"First Set\" Entries=\"2\" KeyType=\"0\">"));
+        assert!(
+            xml.contains("<NODE Type=\"1\" Name=\"Second &amp; Set\" Entries=\"1\" KeyType=\"0\">")
+        );
+
+        let first_start = xml
+            .find("<NODE Type=\"1\" Name=\"First Set\" Entries=\"2\" KeyType=\"0\">")
+            .expect("first playlist should exist");
+        let first_end = first_start
+            + xml[first_start..]
+                .find("</NODE>")
+                .expect("first playlist should close");
+        let first_block = &xml[first_start..first_end];
+        let first_key1 = first_block
+            .find("<TRACK Key=\"1\"/>")
+            .expect("first playlist should reference key 1");
+        let first_key3 = first_block
+            .find("<TRACK Key=\"3\"/>")
+            .expect("first playlist should reference key 3");
+        assert!(
+            first_key1 < first_key3,
+            "first playlist key ordering should match input order"
+        );
+
+        let second_start = xml
+            .find("<NODE Type=\"1\" Name=\"Second &amp; Set\" Entries=\"1\" KeyType=\"0\">")
+            .expect("second playlist should exist");
+        let second_end = second_start
+            + xml[second_start..]
+                .find("</NODE>")
+                .expect("second playlist should close");
+        let second_block = &xml[second_start..second_end];
+        assert!(
+            second_block.contains("<TRACK Key=\"2\"/>"),
+            "second playlist should reference key 2"
+        );
     }
 
     #[test]

@@ -118,19 +118,11 @@ pub struct SearchParams {
     pub limit: Option<u32>,
 }
 
-fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-pub fn search_tracks(
-    conn: &Connection,
+fn apply_search_filters(
+    sql: &mut String,
     params: &SearchParams,
-) -> Result<Vec<Track>, rusqlite::Error> {
-    let mut sql = format!("{TRACK_SELECT} WHERE c.rb_local_deleted = 0");
-    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
-
+    bind_values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+) {
     if let Some(ref q) = params.query {
         let idx = bind_values.len() + 1;
         sql.push_str(&format!(
@@ -222,14 +214,84 @@ pub fn search_tracks(
         ));
         bind_values.push(Box::new(playlist_id.clone()));
     }
+}
 
-    let limit = params.limit.unwrap_or(50).min(200);
-    sql.push_str(&format!(" ORDER BY c.Title LIMIT {limit}"));
+fn search_tracks_with_limit_policy(
+    conn: &Connection,
+    params: &SearchParams,
+    default_limit: Option<u32>,
+    max_limit: Option<u32>,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    let mut sql = format!("{TRACK_SELECT} WHERE c.rb_local_deleted = 0");
+    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+    apply_search_filters(&mut sql, params, &mut bind_values);
+
+    sql.push_str(" ORDER BY c.Title");
+    if let Some(mut limit) = params.limit.or(default_limit) {
+        if let Some(max_limit) = max_limit {
+            limit = limit.min(max_limit);
+        }
+        sql.push_str(&format!(" LIMIT {limit}"));
+    }
 
     let mut stmt = conn.prepare(&sql)?;
     let refs: Vec<&dyn rusqlite::types::ToSql> = bind_values.iter().map(|b| b.as_ref()).collect();
     let rows = stmt.query_map(refs.as_slice(), row_to_track)?;
+    rows.collect()
+}
 
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+pub fn search_tracks(
+    conn: &Connection,
+    params: &SearchParams,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    search_tracks_with_limit_policy(conn, params, Some(50), Some(200))
+}
+
+pub fn search_tracks_unbounded(
+    conn: &Connection,
+    params: &SearchParams,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    search_tracks_with_limit_policy(conn, params, None, None)
+}
+
+fn get_playlist_tracks_with_limit_policy(
+    conn: &Connection,
+    playlist_id: &str,
+    limit: Option<u32>,
+    default_limit: Option<u32>,
+    max_limit: Option<u32>,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    let resolved_limit = limit.or(default_limit).map(|value| {
+        if let Some(max_limit) = max_limit {
+            value.min(max_limit)
+        } else {
+            value
+        }
+    });
+
+    // Insert sp.TrackNo column before the FROM clause in TRACK_SELECT
+    let base_sql = TRACK_SELECT.replace(
+        "\nFROM djmdContent c",
+        ",\n    sp.TrackNo AS Position\nFROM djmdContent c",
+    );
+    let mut sql = format!(
+        "{base_sql}
+         INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
+         WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0
+         ORDER BY sp.TrackNo"
+    );
+    if let Some(limit) = resolved_limit {
+        sql.push_str(&format!(" LIMIT {limit}"));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![playlist_id], row_to_playlist_track)?;
     rows.collect()
 }
 
@@ -282,22 +344,15 @@ pub fn get_playlist_tracks(
     playlist_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Track>, rusqlite::Error> {
-    let limit = limit.unwrap_or(200).min(200);
-    // Insert sp.TrackNo column before the FROM clause in TRACK_SELECT
-    let sql = TRACK_SELECT.replace(
-        "\nFROM djmdContent c",
-        ",\n    sp.TrackNo AS Position\nFROM djmdContent c",
-    );
-    let sql = format!(
-        "{sql}
-         INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
-         WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0
-         ORDER BY sp.TrackNo
-         LIMIT {limit}"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![playlist_id], row_to_playlist_track)?;
-    rows.collect()
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, Some(200), Some(200))
+}
+
+pub fn get_playlist_tracks_unbounded(
+    conn: &Connection,
+    playlist_id: &str,
+    limit: Option<u32>,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, None, None)
 }
 
 pub fn get_library_stats(conn: &Connection) -> Result<LibraryStats, rusqlite::Error> {
