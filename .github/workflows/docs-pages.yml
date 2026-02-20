@@ -6,19 +6,17 @@ on:
     paths:
       - "site/**"
       - ".github/workflows/docs-pages.yml"
-      - "README.md"
   pull_request:
     paths:
       - "site/**"
       - ".github/workflows/docs-pages.yml"
-      - "README.md"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
