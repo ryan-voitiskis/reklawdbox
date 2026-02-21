@@ -34,22 +34,78 @@ import json
 import sys
 import essentia
 import essentia.standard as es
+import numpy as np
 
 audio = es.MonoLoader(filename=sys.argv[1], sampleRate=44100)()
 features = {}
 
-features["danceability"] = float(es.Danceability()(audio)[0])
+def first_scalar_or_none(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            scalar = first_scalar_or_none(item)
+            if scalar is not None:
+                return scalar
+        return None
+    try:
+        arr = np.asarray(value)
+        if arr.size > 0:
+            return float(arr.reshape(-1)[0])
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except Exception:
+        return None
 
-ebu = es.LoudnessEBUR128()(audio)
-features["loudness_integrated"] = float(ebu[0])
-features["loudness_range"] = float(ebu[2])
+features["danceability"] = first_scalar_or_none(es.Danceability()(audio))
 
-features["dynamic_complexity"] = float(es.DynamicComplexity()(audio)[0])
-features["average_loudness"] = float(es.Loudness()(audio))
+try:
+    ebu = es.LoudnessEBUR128()(audio)
+except TypeError:
+    # Some Essentia builds require VECTOR_STEREOSAMPLE for EBU R128.
+    # For mono sources, duplicate channel data to synthesize stereo.
+    try:
+        stereo_audio = np.column_stack((audio, audio))
+        ebu = es.LoudnessEBUR128()(stereo_audio)
+    except Exception:
+        ebu = None
+
+if ebu is not None:
+    if isinstance(ebu, (tuple, list)):
+        # Typical output is (momentary, short_term, integrated, loudness_range).
+        # Prefer integrated/range slots when present, otherwise fallback to first two scalars.
+        if len(ebu) >= 4:
+            integrated = first_scalar_or_none(ebu[2])
+            loudness_range = first_scalar_or_none(ebu[3])
+        else:
+            integrated = None
+            loudness_range = None
+
+        if integrated is None or loudness_range is None:
+            scalar_values = [first_scalar_or_none(v) for v in ebu]
+            scalar_values = [v for v in scalar_values if v is not None]
+            if integrated is None:
+                integrated = scalar_values[0] if len(scalar_values) > 0 else None
+            if loudness_range is None:
+                loudness_range = scalar_values[1] if len(scalar_values) > 1 else None
+
+        features["loudness_integrated"] = integrated
+        features["loudness_range"] = loudness_range
+    else:
+        features["loudness_integrated"] = first_scalar_or_none(ebu)
+        features["loudness_range"] = None
+else:
+    features["loudness_integrated"] = None
+    features["loudness_range"] = None
+
+features["dynamic_complexity"] = first_scalar_or_none(es.DynamicComplexity()(audio))
+features["average_loudness"] = first_scalar_or_none(es.Loudness()(audio))
 
 rhythm = es.RhythmExtractor2013(method="multifeature")(audio)
-features["bpm_essentia"] = float(rhythm[0])
-features["onset_rate"] = float(es.OnsetRate()(audio)[0])
+features["bpm_essentia"] = first_scalar_or_none(rhythm[0] if isinstance(rhythm, (tuple, list)) and len(rhythm) > 0 else rhythm)
+features["onset_rate"] = first_scalar_or_none(es.OnsetRate()(audio))
 
 beats = rhythm[1]
 if len(beats) > 4:
@@ -308,6 +364,7 @@ pub fn analyze(samples: &[f32], sample_rate: u32) -> Result<StratumResult, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Stdio;
 
     #[test]
     fn stratum_result_serialization_round_trip() {
@@ -413,6 +470,152 @@ mod tests {
         assert!(
             err.contains("Failed to start Essentia subprocess"),
             "expected startup failure context, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_essentia_handles_non_scalar_outputs_via_stereo_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let python = ["python3", "/usr/bin/python3"]
+            .into_iter()
+            .find(|candidate| {
+                std::process::Command::new(candidate)
+                    .arg("--version")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+            .unwrap_or("python3");
+
+        let tmp = tempfile::tempdir().expect("temp dir should be created");
+        let essentia_pkg = tmp.path().join("essentia");
+        std::fs::create_dir_all(&essentia_pkg).expect("essentia package dir should be created");
+
+        std::fs::write(
+            essentia_pkg.join("__init__.py"),
+            "__version__ = '2.1-test'\n",
+        )
+        .expect("fake essentia __init__ should be written");
+
+        std::fs::write(
+            essentia_pkg.join("standard.py"),
+            r#"
+class MonoLoader:
+    def __init__(self, filename, sampleRate=44100):
+        self.filename = filename
+        self.sampleRate = sampleRate
+    def __call__(self):
+        return [0.1, 0.2, 0.3, 0.4]
+
+class Danceability:
+    def __call__(self, audio):
+        return [0.82]
+
+class LoudnessEBUR128:
+    def __call__(self, audio):
+        if isinstance(audio, tuple) and len(audio) > 0 and audio[0] == "stereo":
+            return ([1.0, 2.0], [3.0], -14.5, 4.2)
+        raise TypeError("Cannot convert data from type VECTOR_REAL to VECTOR_STEREOSAMPLE")
+
+class DynamicComplexity:
+    def __call__(self, audio):
+        return [3.4]
+
+class Loudness:
+    def __call__(self, audio):
+        return 21696.25
+
+class RhythmExtractor2013:
+    def __init__(self, method="multifeature"):
+        self.method = method
+    def __call__(self, audio):
+        return (119.02, [0, 1, 2, 3, 4, 5, 6, 7])
+
+class OnsetRate:
+    def __call__(self, audio):
+        return [0.18]
+
+class BeatsLoudness:
+    def __init__(self, beats):
+        self.beats = beats
+    def __call__(self, audio):
+        return (None, [[1.0], [0.8], [1.2], [1.1], [0.9], [0.7], [1.0], [0.95]])
+
+class SpectralCentroidTime:
+    def __call__(self, audio):
+        return [100.0, 200.0]
+"#,
+        )
+        .expect("fake essentia.standard should be written");
+
+        std::fs::write(
+            tmp.path().join("numpy.py"),
+            r#"
+class _FakeArray:
+    def __init__(self, value):
+        self._flat = []
+        self._flatten(value)
+        self.size = len(self._flat)
+
+    def _flatten(self, value):
+        if isinstance(value, _FakeArray):
+            for item in value._flat:
+                self._flatten(item)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                self._flatten(item)
+            return
+        self._flat.append(value)
+
+    def reshape(self, *_):
+        return self._flat
+
+def asarray(value):
+    return _FakeArray(value)
+
+def column_stack(cols):
+    return ("stereo", cols)
+"#,
+        )
+        .expect("fake numpy module should be written");
+
+        let wrapper = tmp.path().join("fake-python");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nPYTHONPATH='{}' exec '{}' \"$@\"\n",
+                tmp.path().to_string_lossy(),
+                python
+            ),
+        )
+        .expect("python wrapper should be written");
+        let mut perms = std::fs::metadata(&wrapper)
+            .expect("wrapper metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&wrapper, perms).expect("wrapper should be executable");
+
+        let result = run_essentia(
+            wrapper
+                .to_str()
+                .expect("wrapper path should be valid UTF-8"),
+            "/tmp/ignored.wav",
+        )
+        .await
+        .expect("run_essentia should succeed with fake modules");
+
+        assert_eq!(result["analyzer_version"], "2.1-test");
+        assert!((result["danceability"].as_f64().unwrap() - 0.82).abs() < 1e-6);
+        assert!((result["loudness_integrated"].as_f64().unwrap() - (-14.5)).abs() < 1e-6);
+        assert!((result["loudness_range"].as_f64().unwrap() - 4.2).abs() < 1e-6);
+        assert!(
+            result["rhythm_regularity"].as_f64().unwrap() > 0.0,
+            "rhythm_regularity should be computed from beat loudness ratios"
         );
     }
 

@@ -35,6 +35,12 @@ Optional enrichment and analysis environment variables:
 - `REKLAWDBOX_DISCOGS_BROKER_TOKEN`
 - `CRATE_DIG_ESSENTIA_PYTHON`
 
+Essentia probe behavior:
+
+- The server only probes `CRATE_DIG_ESSENTIA_PYTHON` and `~/.local/share/reklawdbox/essentia-venv/bin/python`.
+- If neither imports Essentia, tools report Essentia as unavailable and continue with stratum-dsp only.
+- Probe result is memoized for process lifetime, so restart the MCP server after changing Essentia install/config.
+
 Deprecated Discogs fallback (not the default path):
 
 - `REKLAWDBOX_DISCOGS_KEY`
@@ -65,6 +71,22 @@ cp mcp-config.example.json .mcp.json
 - transport: `stdio`
 
 5. Verify wiring by running a simple tool call from Codex (for example `read_library`).
+
+### Essentia Setup (Recommended)
+
+Use the repo script to install Essentia into the default probe location:
+
+```bash
+bash scripts/setup-essentia.sh
+```
+
+Then set `CRATE_DIG_ESSENTIA_PYTHON` in `.mcp.json` to:
+
+```text
+/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python
+```
+
+Restart the MCP host/server after updating config.
 
 ## Discogs Auth Flow
 

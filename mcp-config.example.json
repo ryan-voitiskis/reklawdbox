@@ -7,7 +7,7 @@
         "REKORDBOX_DB_PATH": "/Users/<you>/Library/Pioneer/rekordbox/master.db",
         "REKLAWDBOX_DISCOGS_BROKER_URL": "<optional>",
         "REKLAWDBOX_DISCOGS_BROKER_TOKEN": "<optional>",
-        "CRATE_DIG_ESSENTIA_PYTHON": "<optional>"
+        "CRATE_DIG_ESSENTIA_PYTHON": "/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python"
       }
     }
   }

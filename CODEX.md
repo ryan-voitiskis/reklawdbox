@@ -35,6 +35,7 @@ python3 docs/rekordbox/verify-phase-b.py
   - Discogs broker env vars (`REKLAWDBOX_DISCOGS_BROKER_URL`, `REKLAWDBOX_DISCOGS_BROKER_TOKEN`)
   - Deprecated Discogs legacy env vars (`REKLAWDBOX_DISCOGS_*`)
   - Essentia Python override (`CRATE_DIG_ESSENTIA_PYTHON`)
+  - Recommended Essentia bootstrap script: `bash scripts/setup-essentia.sh`
 
 ## Working Rules
 
