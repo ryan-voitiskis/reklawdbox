@@ -124,6 +124,7 @@ pub struct SearchParams {
     pub added_before: Option<String>,
     pub exclude_samples: bool,
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 fn apply_search_filters(
@@ -244,6 +245,13 @@ fn search_tracks_with_limit_policy(
             limit = limit.min(max_limit);
         }
         sql.push_str(&format!(" LIMIT {limit}"));
+    }
+    if let Some(offset) = params.offset {
+        // SQLite requires LIMIT before OFFSET — use LIMIT -1 (unlimited) if needed
+        if !sql.contains("LIMIT") {
+            sql.push_str(" LIMIT -1");
+        }
+        sql.push_str(&format!(" OFFSET {offset}"));
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -723,6 +731,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 6); // includes sampler track
@@ -747,6 +756,7 @@ mod tests {
             added_before: None,
             exclude_samples: true,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 5); // sampler track excluded
@@ -772,6 +782,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2); // Archangel + Endorphin
@@ -797,6 +808,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2); // 139.5 and 140.0
@@ -822,6 +834,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 1); // Unknown Track has no genre
@@ -847,6 +860,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2); // Archangel (4 stars) + Endorphin (3 stars)
@@ -874,6 +888,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).expect("rating filter should succeed");
         assert_eq!(tracks.len(), 1);
@@ -900,6 +915,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 1);
@@ -925,6 +941,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: None,
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2); // Archangel + R.I.P.
@@ -1161,6 +1178,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(10),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "unfiltered search returned no results");
@@ -1182,6 +1200,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(50),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "BPM 120-130 range returned no results");
@@ -1215,6 +1234,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(200),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
 
@@ -1271,6 +1291,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(50),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
@@ -1299,6 +1320,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(50),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
@@ -1388,6 +1410,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(1),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty());
@@ -1455,6 +1478,7 @@ mod tests {
             added_before: None,
             exclude_samples: true,
             limit: Some(50),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).expect("rating-filtered search should succeed");
 
@@ -1516,6 +1540,7 @@ mod tests {
                 added_before: None,
                 exclude_samples: false,
                 limit: Some(5),
+                offset: None,
             };
             // Should not panic or error
             let result = search_tracks(&conn, &params);
@@ -1563,6 +1588,7 @@ mod tests {
             added_before: None,
             exclude_samples: true,
             limit: Some(200),
+            offset: None,
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {

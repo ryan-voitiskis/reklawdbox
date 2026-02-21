@@ -477,6 +477,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(limit as u32),
+            offset: None,
         };
         Some(crate::db::search_tracks(&conn, &params).unwrap())
     }

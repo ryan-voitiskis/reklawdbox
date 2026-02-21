@@ -738,6 +738,7 @@ mod tests {
             added_before: None,
             exclude_samples: false,
             limit: Some(5),
+            offset: None,
         };
         let tracks = crate::db::search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "need tracks for pipeline test");

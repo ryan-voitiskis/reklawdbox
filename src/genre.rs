@@ -16,21 +16,27 @@ pub const GENRES: &[&str] = &[
     "Deep Techno",
     "Disco",
     "Downtempo",
+    "Drone Techno",
     "Drum & Bass",
     "Dub",
+    "Dub Reggae",
     "Dub Techno",
     "Dubstep",
     "Electro",
     "Experimental",
     "Garage",
+    "Gospel House",
     "Grime",
     "Hard Techno",
+    "Highlife",
     "Hip Hop",
     "House",
     "IDM",
+    "Jazz",
     "Jungle",
     "Minimal",
     "Pop",
+    "Progressive House",
     "Psytrance",
     "R&B",
     "Reggae",
@@ -71,16 +77,12 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("dance-pop", "Synth-pop"),
     ("dnb", "Drum & Bass"),
     ("drone", "Ambient"),
-    ("drone techno", "Deep Techno"),
-    ("dub reggae", "Dub"),
     ("electronic", "Experimental"),
     ("electronica", "Techno"),
     ("gabber", "Hard Techno"),
     ("glitch", "IDM"),
-    ("gospel house", "House"),
     ("hard dance", "Hard Techno"),
     ("hard trance", "Trance"),
-    ("highlife", "Afro House"),
     ("hip-hop", "Hip Hop"),
     ("indie dance", "House"),
     ("italodance", "Disco"),
@@ -89,7 +91,6 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("mainstage", "Trance"),
     ("melodic house & techno", "Deep Techno"),
     ("minimal / deep tech", "Minimal"),
-    ("progressive house", "House"),
     ("r & b", "R&B"),
     ("soundtrack", "Ambient"),
     ("techno (peak time / driving)", "Techno"),
@@ -168,8 +169,8 @@ mod tests {
         assert_eq!(normalize_genre("DnB"), Some("Drum & Bass"));
         assert_eq!(normalize_genre("Electronica"), Some("Techno"));
         assert_eq!(normalize_genre("Bass"), Some("UK Bass"));
-        assert_eq!(normalize_genre("Drone Techno"), Some("Deep Techno"));
-        assert_eq!(normalize_genre("Gospel House"), Some("House"));
+        assert_eq!(normalize_genre("Gabber"), Some("Hard Techno"));
+        assert_eq!(normalize_genre("Glitch"), Some("IDM"));
         assert_eq!(
             normalize_genre("140 / Deep Dubstep / Grime"),
             Some("Dubstep")
@@ -206,8 +207,8 @@ mod tests {
     fn alias_map_not_empty() {
         let aliases = get_alias_map();
         assert!(
-            aliases.len() >= 35,
-            "expected at least 35 aliases, got {}",
+            aliases.len() >= 30,
+            "expected at least 30 aliases, got {}",
             aliases.len()
         );
     }

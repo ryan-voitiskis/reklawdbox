@@ -588,6 +588,8 @@ pub struct SearchTracksParams {
     pub include_samples: Option<bool>,
     #[schemars(description = "Max results (default 50, max 200)")]
     pub limit: Option<u32>,
+    #[schemars(description = "Offset for pagination (skip first N results)")]
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -936,6 +938,7 @@ impl ReklawdboxServer {
             added_before: params.0.added_before,
             exclude_samples: !params.0.include_samples.unwrap_or(false),
             limit: params.0.limit,
+            offset: params.0.offset,
         };
         let tracks =
             db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?;
@@ -1577,7 +1580,8 @@ impl ReklawdboxServer {
         params: Parameters<EnrichTracksParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let max_tracks = p.max_tracks.unwrap_or(50).min(200) as usize;
+        let default_max = p.track_ids.as_ref().map_or(50, |ids| ids.len() as u32);
+        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
         let skip_cached = p.skip_cached.unwrap_or(true);
         let force_refresh = p.force_refresh.unwrap_or(false);
         let providers: Vec<String> = p.providers.unwrap_or_else(|| vec!["discogs".to_string()]);
@@ -1616,6 +1620,7 @@ impl ReklawdboxServer {
                     added_before: p.added_before,
                     exclude_samples: true,
                     limit: Some(max_tracks as u32),
+                    offset: None,
                 };
                 db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
             }
@@ -1942,7 +1947,8 @@ impl ReklawdboxServer {
         params: Parameters<AnalyzeAudioBatchParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let max_tracks = p.max_tracks.unwrap_or(20).min(200) as usize;
+        let default_max = p.track_ids.as_ref().map_or(20, |ids| ids.len() as u32);
+        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
         let skip_cached = p.skip_cached.unwrap_or(true);
 
         let tracks = {
@@ -1969,6 +1975,7 @@ impl ReklawdboxServer {
                     added_before: p.added_before,
                     exclude_samples: true,
                     limit: Some(max_tracks as u32),
+                    offset: None,
                 };
                 db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
             }
@@ -2576,7 +2583,8 @@ impl ReklawdboxServer {
         params: Parameters<ResolveTracksDataParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let max_tracks = p.max_tracks.unwrap_or(50).min(200) as usize;
+        let default_max = p.track_ids.as_ref().map_or(50, |ids| ids.len() as u32);
+        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
 
         let tracks = {
             let conn = self.conn()?;
@@ -2602,6 +2610,7 @@ impl ReklawdboxServer {
                     added_before: p.added_before,
                     exclude_samples: true,
                     limit: Some(max_tracks as u32),
+                    offset: None,
                 };
                 db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
             }
@@ -2708,6 +2717,7 @@ impl ReklawdboxServer {
                     added_before: p.added_before,
                     exclude_samples: true,
                     limit: p.max_tracks,
+                    offset: None,
                 };
                 db::search_tracks_unbounded(&conn, &search)
                     .map_err(|e| err(format!("DB error: {e}")))?
@@ -4136,6 +4146,7 @@ mod tests {
                 added_before: None,
                 exclude_samples: true,
                 limit: Some(limit),
+                offset: None,
             },
         )
         .expect("sample search should succeed")

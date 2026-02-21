@@ -648,6 +648,7 @@ def column_stack(cols):
             added_before: None,
             exclude_samples: true,
             limit: Some(5),
+            offset: None,
         };
         let tracks = crate::db::search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "no tracks found for analysis test");
@@ -759,6 +760,7 @@ def column_stack(cols):
             added_before: None,
             exclude_samples: true,
             limit: Some(5),
+            offset: None,
         };
         let tracks = crate::db::search_tracks(&conn, &params).unwrap();
         let track = tracks
