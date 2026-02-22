@@ -29,6 +29,8 @@ struct ServerState {
     db: OnceLock<Result<Mutex<Connection>, String>>,
     internal_db: OnceLock<Result<Mutex<Connection>, String>>,
     essentia_python: OnceLock<Option<String>>,
+    essentia_python_override: Mutex<Option<String>>,
+    essentia_setup_lock: tokio::sync::Mutex<()>,
     discogs_pending: Mutex<Option<discogs::PendingDeviceSession>>,
     db_path: Option<String>,
     changes: ChangeManager,
@@ -85,6 +87,11 @@ impl ReklawdboxServer {
     }
 
     fn essentia_python_path(&self) -> Option<String> {
+        if let Ok(guard) = self.state.essentia_python_override.lock() {
+            if let Some(ref path) = *guard {
+                return Some(path.clone());
+            }
+        }
         self.state
             .essentia_python
             .get_or_init(probe_essentia_python_path)
@@ -375,6 +382,39 @@ pub(crate) fn probe_essentia_python_path() -> Option<String> {
     let default_candidate =
         dirs::home_dir().map(|home| home.join(".local/share/reklawdbox/essentia-venv/bin/python"));
     probe_essentia_python_from_sources(env_override.as_deref(), default_candidate)
+}
+
+const ESSENTIA_VENV_RELPATH: &str = ".local/share/reklawdbox/essentia-venv";
+
+fn essentia_venv_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(ESSENTIA_VENV_RELPATH))
+}
+
+fn essentia_setup_hint() -> String {
+    let mut checked = Vec::new();
+
+    match std::env::var(ESSENTIA_PYTHON_ENV_VAR) {
+        Ok(val) if !val.trim().is_empty() => {
+            checked.push(format!("env {ESSENTIA_PYTHON_ENV_VAR}={val} (not a valid Essentia Python)"));
+        }
+        _ => {
+            checked.push(format!("env {ESSENTIA_PYTHON_ENV_VAR} (not set)"));
+        }
+    }
+
+    if let Some(venv_dir) = essentia_venv_dir() {
+        let python_path = venv_dir.join("bin/python");
+        if python_path.exists() {
+            checked.push(format!("{} (exists but Essentia import failed)", python_path.display()));
+        } else {
+            checked.push(format!("{} (not found)", python_path.display()));
+        }
+    }
+
+    format!(
+        "Essentia not found. Checked: {}. Call the setup_essentia tool to install automatically.",
+        checked.join(", ")
+    )
 }
 
 struct CorpusConsultation {
@@ -907,6 +947,8 @@ impl ReklawdboxServer {
                 db: OnceLock::new(),
                 internal_db: OnceLock::new(),
                 essentia_python: OnceLock::new(),
+                essentia_python_override: Mutex::new(None),
+                essentia_setup_lock: tokio::sync::Mutex::new(()),
                 discogs_pending: Mutex::new(None),
                 db_path,
                 changes: ChangeManager::new(),
@@ -1924,7 +1966,7 @@ impl ReklawdboxServer {
             }
         }
 
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "track_id": track.id,
             "title": track.title,
             "artist": track.artist,
@@ -1935,6 +1977,9 @@ impl ReklawdboxServer {
             "essentia_available": essentia_available,
             "essentia_error": essentia_error,
         });
+        if !essentia_available {
+            result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
+        }
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -2266,7 +2311,7 @@ impl ReklawdboxServer {
             })
             .collect();
 
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "summary": {
                 "total": total,
                 "analyzed": analyzed,
@@ -2280,8 +2325,177 @@ impl ReklawdboxServer {
             "results": results,
             "failures": failed,
         });
+        if !essentia_available {
+            result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
+        }
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Install Essentia into a managed Python venv. Call this when analyze_track_audio reports essentia_available: false. Creates a venv, installs essentia via pip, and makes it available immediately (no restart needed)."
+    )]
+    async fn setup_essentia(&self) -> Result<CallToolResult, McpError> {
+        // Serialize concurrent setup calls — only one install at a time
+        let _setup_guard = self.state.essentia_setup_lock.lock().await;
+
+        // Check if already available (validate to catch stale overrides)
+        if let Some(path) = self.essentia_python_path() {
+            if validate_essentia_python(&path) {
+                let result = serde_json::json!({
+                    "status": "already_installed",
+                    "python_path": path,
+                    "message": "Essentia is already available.",
+                });
+                let json =
+                    serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+                return Ok(CallToolResult::success(vec![Content::text(json)]));
+            }
+            // Stale override — clear it and proceed with fresh install
+            if let Ok(mut guard) = self.state.essentia_python_override.lock() {
+                *guard = None;
+            }
+        }
+
+        let venv_dir = essentia_venv_dir().ok_or_else(|| {
+            err("Cannot determine home directory for venv location".to_string())
+        })?;
+
+        // Find a suitable Python 3 and try venv+pip with each candidate,
+        // falling through to the next on failure
+        let python_candidates: &[&str] =
+            &["python3.13", "python3.12", "python3.11", "python3.10", "python3.9", "python3"];
+
+        let mut last_error = String::new();
+
+        for &python_bin in python_candidates {
+            // Check this candidate exists
+            let bin_ok = tokio::task::spawn_blocking({
+                let bin = python_bin.to_string();
+                move || {
+                    std::process::Command::new(&bin)
+                        .args(["--version"])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                }
+            })
+            .await
+            .unwrap_or(false);
+
+            if !bin_ok {
+                continue;
+            }
+
+            // Create parent directories
+            if let Some(parent) = venv_dir.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    err(format!("Failed to create directory {}: {e}", parent.display()))
+                })?;
+            }
+
+            // Create venv (--clear ensures a fresh start if a broken venv exists)
+            let venv_dir_str = venv_dir.to_string_lossy().to_string();
+            let venv_output = tokio::task::spawn_blocking({
+                let bin = python_bin.to_string();
+                let dir = venv_dir_str.clone();
+                move || {
+                    std::process::Command::new(&bin)
+                        .args(["-m", "venv", "--clear", &dir])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .output()
+                }
+            })
+            .await
+            .map_err(|e| err(format!("venv task failed: {e}")))?
+            .map_err(|e| err(format!("Failed to run {python_bin} -m venv: {e}")))?;
+
+            if !venv_output.status.success() {
+                last_error = format!(
+                    "{python_bin}: venv creation failed: {}",
+                    String::from_utf8_lossy(&venv_output.stderr)
+                );
+                continue;
+            }
+
+            let venv_pip = venv_dir.join("bin/pip");
+            let venv_python = venv_dir.join("bin/python");
+
+            // Install essentia
+            let pip_output = tokio::task::spawn_blocking({
+                let pip = venv_pip.clone();
+                move || {
+                    std::process::Command::new(&pip)
+                        .args(["install", "--pre", "essentia"])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .output()
+                }
+            })
+            .await
+            .map_err(|e| err(format!("pip task failed: {e}")))?
+            .map_err(|e| err(format!("Failed to run pip install: {e}")))?;
+
+            if !pip_output.status.success() {
+                last_error = format!(
+                    "{python_bin}: pip install essentia failed: {}",
+                    String::from_utf8_lossy(&pip_output.stderr)
+                );
+                continue;
+            }
+
+            // Validate the installation
+            let venv_python_str = venv_python.to_string_lossy().to_string();
+            let validate_output = tokio::task::spawn_blocking({
+                let py = venv_python_str.clone();
+                move || {
+                    std::process::Command::new(&py)
+                        .args(["-c", ESSENTIA_IMPORT_CHECK_SCRIPT])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .output()
+                }
+            })
+            .await
+            .map_err(|e| err(format!("validate task failed: {e}")))?
+            .map_err(|e| err(format!("Failed to validate essentia installation: {e}")))?;
+
+            if !validate_output.status.success() {
+                last_error = format!(
+                    "{python_bin}: Essentia installed but import validation failed: {}",
+                    String::from_utf8_lossy(&validate_output.stderr)
+                );
+                continue;
+            }
+
+            let version = String::from_utf8_lossy(&validate_output.stdout)
+                .trim()
+                .to_string();
+
+            // Set the override so it's available immediately (no restart)
+            let mut guard = self.state.essentia_python_override.lock()
+                .map_err(|_| err("essentia override lock poisoned".to_string()))?;
+            *guard = Some(venv_python_str.clone());
+            drop(guard);
+
+            let result = serde_json::json!({
+                "status": "installed",
+                "python_path": venv_python_str,
+                "python_bin_used": python_bin,
+                "essentia_version": version,
+                "venv_dir": venv_dir.to_string_lossy(),
+                "message": "Essentia installed successfully. Audio analysis will now include Essentia features — no restart needed.",
+            });
+            let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
+
+        Err(err(format!(
+            "All Python candidates failed. Last error: {last_error}"
+        )))
     }
 
     #[tool(
@@ -4068,6 +4282,8 @@ mod tests {
                 db: OnceLock::new(),
                 internal_db: OnceLock::new(),
                 essentia_python: OnceLock::new(),
+                essentia_python_override: Mutex::new(None),
+                essentia_setup_lock: tokio::sync::Mutex::new(()),
                 discogs_pending: Mutex::new(None),
                 db_path: None,
                 changes: ChangeManager::new(),
@@ -4772,6 +4988,17 @@ mod tests {
             payload["stratum_dsp"].is_object(),
             "stratum_dsp should still be returned"
         );
+        let hint = payload["essentia_setup_hint"]
+            .as_str()
+            .expect("essentia_setup_hint should be present when unavailable");
+        assert!(
+            hint.contains("setup_essentia"),
+            "hint should mention setup_essentia tool"
+        );
+        assert!(
+            hint.contains("CRATE_DIG_ESSENTIA_PYTHON"),
+            "hint should mention the env var that was checked"
+        );
     }
 
     #[tokio::test]
@@ -4842,6 +5069,65 @@ mod tests {
         assert_eq!(second_payload["essentia_available"], true);
         assert_eq!(second_payload["stratum_cache_hit"], true);
         assert_eq!(second_payload["essentia_cache_hit"], true);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn setup_essentia_returns_already_installed_when_override_is_valid() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        let fake_python = dir.path().join("fake-python");
+        std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
+            .expect("fake python script should be written");
+        let mut perms = std::fs::metadata(&fake_python)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_python, perms)
+            .expect("fake python should be executable");
+        let fake_path = fake_python.to_string_lossy().to_string();
+
+        let server = ReklawdboxServer::new(None);
+        {
+            let mut guard = server.state.essentia_python_override.lock().unwrap();
+            *guard = Some(fake_path.clone());
+        }
+
+        let result = server
+            .setup_essentia()
+            .await
+            .expect("setup_essentia should succeed when already installed");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["status"], "already_installed");
+        assert_eq!(payload["python_path"], fake_path.as_str());
+    }
+
+    #[tokio::test]
+    async fn essentia_python_override_takes_precedence() {
+        let server = ReklawdboxServer::new(None);
+        // Seed the OnceLock probe to None (not found)
+        server
+            .state
+            .essentia_python
+            .set(None)
+            .expect("essentia probe should be seeded once");
+        assert!(
+            server.essentia_python_path().is_none(),
+            "should be None before override"
+        );
+
+        // Set an override
+        {
+            let mut guard = server.state.essentia_python_override.lock().unwrap();
+            *guard = Some("/override/python".to_string());
+        }
+        assert_eq!(
+            server.essentia_python_path().as_deref(),
+            Some("/override/python"),
+            "override should take precedence over OnceLock probe"
+        );
     }
 
     #[tokio::test]
