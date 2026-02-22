@@ -1,14 +1,8 @@
 # Collection Audit — Agent SOP
 
-Standard operating procedure for detecting and fixing convention violations in an organized music collection. Agents must follow this document step-by-step.
+Detect and fix naming/tagging convention violations in a music collection. Follow step-by-step.
 
-## Overview
-
-This SOP systematically audits audio files in a music collection against naming and tagging conventions, then fixes violations with appropriate safety levels. It uses CLI tools for file operations and reklawdbox MCP for metadata lookups.
-
-**Primary use case:** A user has an organized collection (or partially organized) and wants to verify everything conforms to their conventions before importing into Rekordbox.
-
-**Goal:** After running this SOP, any track file can be dragged into Rekordbox and have Artist, Title, Album, Year, Track Number, and Label display correctly without manual editing. Genre is handled separately via the genre classification SOP.
+**Goal:** After this SOP, any track file can be imported into Rekordbox with Artist, Title, Album, Year, Track Number, and Label displaying correctly. Genre is handled separately via the genre classification SOP.
 
 ## Rekordbox Import Readiness
 
@@ -23,23 +17,20 @@ What Rekordbox reads on import by format:
 | Track | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
 | Cover art | Embedded (auto) | **Not imported** | Embedded (auto) |
 
-**WAV cover art limitation:** Rekordbox does not read embedded cover art from WAV files. RIFF INFO has no standard picture field, and Rekordbox ignores ID3v2 picture tags in WAVs. Cover art for WAV tracks must be added manually in Rekordbox after import (drag image onto track artwork area). The SOP still embeds cover art into WAV tag 2 for compatibility with other applications, but documents this limitation to the user.
+**WAV critical:** Rekordbox reads **only** RIFF INFO (tag 3) from WAV files. ID3v2 (tag 2) is ignored. Both must be written — tag 2 for general compatibility, tag 3 for Rekordbox.
 
-**Critical:** WAV files **must** have RIFF INFO (tag 3) tags written. Rekordbox ignores ID3v2 tags in WAV files. If only tag 2 is written, Rekordbox will show blank Artist/Title/Album fields.
+**WAV cover art:** Rekordbox cannot import cover art from WAV files. Embed in tag 2 for other apps, but note WAV tracks need manual cover art in Rekordbox after import.
 
 ## Constraints
 
-- **Read-only by default.** Every scan phase is non-destructive. No files are modified until the user approves a fix plan.
-- **Batch approval.** Auto-fixable issues are grouped and presented for batch approval. Ambiguous issues require per-item approval.
-- **Stop on ambiguity.** If the agent cannot determine the correct fix with high confidence, flag it for user review — never guess.
-- **Process in small batches.** Work through one artist or album at a time. Report progress after each.
-- **Verify after fixing.** Re-read tags/filenames after every fix to confirm correctness.
-- **Never delete audio files.** Renaming and tag editing only. File deletion requires explicit user instruction.
-- **WAV dual-tag rule.** WAV files must have tags in both tag 2 (ID3v2) and tag 3 (RIFF INFO). Always write both when fixing WAV tags.
+- **Read-only by default.** No files modified until user approves a fix plan.
+- **Stop on ambiguity.** If the correct fix isn't clear, flag for user review — never guess.
+- **Process in small batches.** One artist or album at a time. Report progress after each.
+- **Verify after fixing.** Re-read tags/filenames after every fix.
+- **Never delete audio files.** Renaming and tag editing only.
+- **WAV dual-tag rule.** Always write both tag 2 and tag 3 for WAV files.
 
 ## Prerequisites
-
-### Required tools
 
 | Tool | Purpose | Install |
 |------|---------|---------|
@@ -47,19 +38,9 @@ What Rekordbox reads on import by format:
 | `exiftool` | Batch tag reading as JSON | `brew install exiftool` |
 | `reklawdbox` MCP | Discogs/Beatport metadata lookups | This project |
 
-### Optional tools
-
-| Tool | Purpose |
-|------|---------|
-| `check_filenames.sh` | Bulk filename convention scan (if available in user's scripts/) |
-| `metaflac` | FLAC-specific tag operations |
-| `ffprobe` | Quick format inspection |
-
----
+`lookup_discogs` and `lookup_beatport` are MCP tool calls, not shell commands. If MCP is unavailable, continue the audit without lookups and mark metadata gaps for manual review.
 
 ## Convention Reference
-
-These are the default conventions this SOP validates against. Users should confirm or customize these before starting.
 
 ### Directory structure
 
@@ -82,7 +63,7 @@ collection/
 - **Loose tracks:** `Artist Name - Track Title.ext` (no track number)
 - **Multi-disc:** Track numbers restart at 01 per disc, in `CD1/`, `CD2/` subdirs
 
-### Required tags (all files)
+### Required tags
 
 | Tag | Format | Example |
 |-----|--------|---------|
@@ -100,107 +81,69 @@ collection/
 | AlbumArtist | Required for VA, recommended for all |
 | Disc | Required for multi-disc albums |
 
-### What must NOT be set
+### Must NOT be set
 
 | Tag | Reason |
 |-----|--------|
-| Genre | Left blank for manual Rekordbox curation via reklawdbox |
-
-### WAV-specific
-
-WAV files require tags in both:
-- **tag 2** (ID3v2.3.0) — general compatibility
-- **tag 3** (RIFF INFO) — Rekordbox reads this
+| Genre | Left blank for Rekordbox curation via reklawdbox |
 
 ---
 
 ## Step 0: Scope Selection
 
-**Goal:** Define what to audit and confirm conventions with the user.
-
-### Present to user
-
-```
-Collection Audit — Scope Selection
-
-What would you like to audit?
-1. Entire collection (collection/)
-2. Entire play directory (play/)
+Ask the user what to audit:
+1. Entire collection directory
+2. Entire play directory
 3. Specific artist directory
 4. Specific album
-5. Specific play subdirectory (e.g., play/play29/)
+5. Specific play subdirectory (e.g., `play/play29/`)
 6. Custom path
 
-Conventions:
-- Filenames: NN Artist - Title.ext
-- Required tags: Artist, Title, Track, Album, Year
-- Genre: NOT set (manual Rekordbox curation)
-- WAV: Both tag 2 and tag 3
-
-Confirm conventions or specify overrides?
-```
-
-### Estimate scale
-
-After user selects scope:
+Confirm conventions or ask for overrides. Then count audio files:
 
 ```sh
-# Count audio files in scope
-find "TARGET_PATH" -type f \( -name "*.flac" -o -name "*.wav" -o -name "*.mp3" -o -name "*.m4a" \) | wc -l
+find "/path/to/scope" -type f \( -name "*.flac" -o -name "*.wav" -o -name "*.mp3" -o -name "*.m4a" \) | wc -l
 ```
 
-If file count exceeds 500, recommend processing in artist-level batches:
+If >500 files, recommend processing in artist-level batches.
 
-```
-Found ~2400 audio files in collection/.
-Recommend processing artist-by-artist to keep batches manageable.
-Start with artists A-C? Or specify a starting artist?
-```
+**Shell note:** Claude Code does not persist shell state between tool calls. All shell snippets below use literal paths — substitute the actual path selected by the user.
 
 ---
 
 ## Step 1: Filename Scan
 
-**Goal:** Detect files whose names don't match the `NN Artist - Title.ext` convention.
+**Goal:** Detect files whose names don't match conventions. Read-only — don't fix anything yet.
 
-### 1a: Run filename check (if check_filenames.sh available)
+### 1a: Album track filename scan
 
-```sh
-check_filenames.sh -rv "TARGET_PATH"
-```
-
-This reports albums with incorrect filenames and a summary count.
-
-### 1b: Manual filename scan (if script not available)
-
-For each album directory, check files against the pattern:
+For each album directory, check audio files against `NN Artist - Title.ext`:
 
 ```sh
-# List all audio files and check pattern
-cd "ALBUM_PATH"
-for f in *.flac *.wav *.mp3 *.m4a; do
-    [ -f "$f" ] || continue
-    if [[ ! "$f" =~ ^[0-9][0-9]\ .+\ -\ .+\..+$ ]]; then
+find "/path/to/album" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -print0 | while IFS= read -r -d '' f; do
+    name=$(basename "$f")
+    if [[ ! "$name" =~ ^[0-9][0-9]\ .+\ -\ .+\..+$ ]]; then
         echo "MISMATCH: $f"
     fi
 done
 ```
 
-### 1c: Directory naming scan
+### 1b: Directory naming scan
 
-For each album directory, check for convention violations:
+Check for tech specs in names and missing years:
 
 ```sh
-# Check for tech specs in album directory names
-find "TARGET_PATH" -type d | while read -r dir; do
+find "/path/to/scope" -type d -print0 | while IFS= read -r -d '' dir; do
     name=$(basename "$dir")
-    # Flag directories with common tech spec patterns
     if [[ "$name" =~ \[FLAC\]|\[WAV\]|\[MP3\]|24-96|16-44|24bit|PBTHAL|vtwin88cube ]]; then
         echo "TECH_SPECS: $dir"
     fi
-    # Flag album directories missing year
-    # (only for dirs that contain audio files directly)
-    if ls "$dir"/*.{flac,wav,mp3} >/dev/null 2>&1; then
+    first_audio=$(find "$dir" -maxdepth 1 -type f \
+        \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+        -print -quit)
+    if [ -n "$first_audio" ]; then
         if [[ ! "$name" =~ \([0-9]{4}\) ]]; then
             echo "NO_YEAR: $dir"
         fi
@@ -208,442 +151,274 @@ find "TARGET_PATH" -type d | while read -r dir; do
 done
 ```
 
-### 1d: Loose track naming scan
+### 1c: Loose track naming scan
 
-For play directories, check loose tracks at root:
+For play directories, check loose tracks match `Artist - Title.ext`:
 
 ```sh
-# Check for (Original Mix) in filenames
-ls "PLAY_PATH"/*"(Original Mix)"* 2>/dev/null && echo "HAS_ORIGINAL_MIX"
-
-# Check for tracks missing artist-title separator
-for f in "PLAY_PATH"/*.{flac,wav,mp3}; do
-    [ -f "$f" ] || continue
+find "/path/to/play" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -print0 | while IFS= read -r -d '' f; do
     name=$(basename "$f")
-    # Loose tracks should match: Artist - Title.ext
-    if [[ ! "$name" =~ ^.+\ -\ .+\..+$ ]]; then
+    if [[ "$name" == *"(Original Mix)"* ]]; then
+        echo "ORIGINAL_MIX: $name"
+    elif [[ ! "$name" =~ ^.+\ -\ .+\..+$ ]]; then
         echo "BAD_LOOSE: $name"
     fi
 done
 ```
 
-### Record findings
-
-Track all filename issues with their paths. Do not fix anything yet — this is read-only.
-
 ---
 
 ## Step 2: Tag Audit
 
-**Goal:** Read tags from audio files and detect missing, empty, or inconsistent metadata.
+**Goal:** Read tags and detect missing, empty, or inconsistent metadata.
 
 ### 2a: Batch tag read
 
 For each album directory:
 
 ```sh
-cd "ALBUM_PATH"
-exiftool -j -Artist -Title -Album -Year -TrackNumber -Publisher -AlbumArtist *.flac *.wav *.mp3 2>/dev/null
+find "/path/to/album" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -exec exiftool -j -Artist -Title -Album -Year -TrackNumber -Publisher -AlbumArtist {} + 2>/dev/null
 ```
 
-### 2b: Detect tag issues
+For large scopes, process one top-level directory at a time.
 
-For each file, check against these patterns. Categorize every issue found.
+### 2b: Issue detection
 
-#### Issue A: Empty artist tag
+Check each file against these patterns:
 
-**Detection:** Artist tag is empty or missing.
+| Issue | Detection | Auto-fixable? |
+|-------|-----------|---------------|
+| **A: Empty artist** | Artist tag empty/missing | Yes — parse from filename |
+| **B: Artist-in-title** | Title contains `Artist - Title` | Yes — strip artist prefix |
+| **C: Missing required tags** | Any of Artist/Title/Track/Album/Year empty | Sometimes — filename, directory, or Discogs |
+| **D: WAV missing tag 3** | WAV has tag 2 but empty tag 3 | Yes — copy from tag 2 |
+| **E: Genre tag set** | Genre not empty | Flag for user review |
+| **F: Track number format** | Zero-padded in tag or missing | Yes — parse from filename |
+| **G: Filename/tag mismatch** | Filename and tags disagree | No — flag for user review |
 
-```
-File: 01 Kangding Ray - Amber Decay.wav
-Tags: Artist=(empty), Title="Kangding Ray - Amber Decay"
-```
-
-**Auto-fix available:** Parse artist from filename. If filename matches `NN ARTIST - TITLE.ext`, extract artist and title.
-
-#### Issue B: Artist-in-title
-
-**Detection:** Title tag contains a hyphen-separated prefix that matches the expected artist.
-
-```
-File: 01 Kangding Ray - Amber Decay.wav
-Tags: Artist="Kangding Ray", Title="Kangding Ray - Amber Decay"
-```
-
-**Auto-fix available:** Strip artist prefix from title. Title should be `Amber Decay`.
-
-#### Issue C: Missing required tags
-
-**Detection:** Any of Artist, Title, Track, Album, Year is empty.
-
-**Fix depends on source:** May be derivable from filename, directory name, or Discogs lookup.
-
-#### Issue D: WAV missing tag 3 (RIFF INFO)
-
-**Detection:** WAV file has tag 2 but not tag 3.
-
+To check WAV tag 3:
 ```sh
-kid3-cli -c "tag 3" -c "get" "file.wav"
-# If output shows no tags or empty fields → tag 3 missing
+kid3-cli -c "tag 3" -c "get" "/path/to/file.wav"
 ```
 
-**Auto-fix available:** Copy tag 2 values to tag 3.
+### 2c: Metadata lookups for gaps
 
-#### Issue E: Genre tag set
-
-**Detection:** Genre tag is not empty.
-
-**Action:** Flag for user review — user may want to keep existing genre or clear it.
-
-#### Issue F: Track number format
-
-**Detection:** Track number is zero-padded in tag (`01` instead of `1`) or missing.
-
-**Auto-fix available:** Parse from filename or fix format.
-
-#### Issue G: Filename/tag mismatch
-
-**Detection:** Filename says one thing, tags say another.
+When tags are missing and can't be derived from filenames, use MCP lookups:
 
 ```
-File: 03 Artist A - Some Track.flac
-Tags: Artist="Artist B", Title="Different Track", Track=5
+lookup_discogs(artist="Artist Name", title="Track Title")
+lookup_beatport(artist="Artist Name", title="Track Title")
 ```
 
-**Action:** Flag for user review — cannot determine which source is correct.
-
-### 2c: Efficient batch processing
-
-For large collections, process one artist directory at a time:
-
-```sh
-# Get list of all artist directories
-ls -d "collection"/*/ | sort
-
-# For each artist, read all tags at once
-for artist_dir in "collection"/*/; do
-    artist=$(basename "$artist_dir")
-    echo "=== Scanning: $artist ==="
-
-    for album_dir in "$artist_dir"*/; do
-        [ -d "$album_dir" ] || continue
-        album=$(basename "$album_dir")
-
-        # Read all tags in album
-        exiftool -j -Artist -Title -Album -Year -TrackNumber \
-            "$album_dir"/*.{flac,wav,mp3,m4a} 2>/dev/null
-    done
-done
-```
-
-### 2d: Use reklawdbox for metadata gaps
-
-When tags are missing and cannot be derived from filenames:
-
-```
-lookup_discogs(artist="Kangding Ray", title="Amber Decay")
-lookup_beatport(artist="Kangding Ray", title="Amber Decay")
-```
-
-Use lookup results to fill Album, Year, and Publisher tags. Never auto-set Genre from lookup results.
+Use results to fill Album, Year, and Publisher. Never auto-set Genre from lookups.
 
 ---
 
 ## Step 3: Issue Report
 
-**Goal:** Present all findings to the user, categorized by fix type.
+Present findings to the user in three categories:
 
-### Issue categories
+1. **Auto-fixable** — unambiguous fixes, present as batch for single approval
+2. **Needs per-item approval** — multiple valid fixes exist, present options for each
+3. **Needs investigation** — user must inspect and decide
 
-#### Auto-fixable (batch approval)
-
-Issues where the correct fix is unambiguous. Present as a batch for single approval.
-
-| # | Issue | File | Current | Proposed Fix |
-|---|-------|------|---------|--------------|
-| 1 | Empty artist | `01 Kangding Ray - Amber Decay.wav` | Artist=(empty) | Artist="Kangding Ray" |
-| 2 | Artist-in-title | `01 Kangding Ray - Amber Decay.wav` | Title="Kangding Ray - Amber Decay" | Title="Amber Decay" |
-| 3 | WAV tag 3 missing | `01 Kangding Ray - Amber Decay.wav` | tag 3=(empty) | Copy from tag 2 |
-
-#### Needs approval (per-item)
-
-Issues where multiple valid fixes exist. Present each with options.
-
-```
-Issue: Missing year for album "Unknown Album"
-  Path: collection/Artist/Unknown Album/
-  Options:
-    a) Set year to 2020 (from Discogs match)
-    b) Set year to 2019 (from alternative Discogs match)
-    c) Skip — leave as-is
-    d) Other — specify year
-```
-
-#### Needs investigation
-
-Issues that require the user to inspect the file or provide information the agent cannot determine.
-
-```
-Issue: Filename/tag conflict
-  File: 03 Artist A - Track.flac
-  Filename says: Track 3, "Artist A - Track"
-  Tags say: Track 5, Artist="Artist B", Title="Other Track"
-  → Which source is correct?
-```
-
-### Summary table
-
-```
-Collection Audit Results — [scope]
-═══════════════════════════════════════
-Total files scanned:        2,400
-Files passing all checks:   2,180 (90.8%)
-Issues found:                 220
-
-By category:
-  Auto-fixable:              180 (approve batch fix?)
-  Needs per-item approval:    25
-  Needs investigation:        15
-
-By issue type:
-  Empty artist tag:           45
-  Artist-in-title:            45
-  WAV tag 3 missing:          60
-  Missing required tags:      30
-  Filename mismatch:          15
-  Directory naming:            8
-  Genre set (clear?):         12
-  (Original Mix) in name:      5
-═══════════════════════════════════════
-```
+Include a summary with total files scanned, pass rate, and counts per issue type.
 
 ---
 
 ## Step 4: Fix Execution
 
-**Goal:** Apply approved fixes safely, in batches.
+### 4a: Pre-fix safety checkpoint
 
-### 4a: Auto-fixes (after batch approval)
+Before any file modifications:
 
-Process one album at a time. For each album with auto-fixable issues:
+```sh
+# Confirm tools are runnable
+command -v exiftool >/dev/null || { echo "Missing exiftool"; exit 1; }
+kid3-cli --help >/dev/null 2>&1 || { echo "kid3-cli not runnable"; exit 1; }
+
+# Create rollback backup of scope
+tar -cf "./collection-audit-backup-$(date +%Y%m%d-%H%M%S).tar" \
+    -C "/path/to/parent" "scope-dir"
+```
+
+Proceed only after backup succeeds and user confirms.
+
+### 4b: Auto-fixes (after batch approval)
+
+Process one album at a time.
 
 #### Fix empty artist / artist-in-title
 
-Parse artist and title from filename, write to tags:
+Parse artist and title from filename, write to tags. Use `APPLY=0` for dry-run preview first, `APPLY=1` to write:
 
 ```sh
-cd "ALBUM_PATH"
+escape_kid3() {
+    printf "%s" "$1" | sed "s/'/\\\\'/g"
+}
 
-# For each file: parse filename, write corrected tags
-# Pattern: "NN Artist Name - Track Title.ext"
-for f in *.wav *.flac *.mp3; do
-    [ -f "$f" ] || continue
-    filename=$(basename "$f")
-
-    # Extract components from filename
-    # Strip extension
+find "/path/to/album" -maxdepth 1 -type f \
+    \( -iname "*.wav" -o -iname "*.flac" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -print0 | while IFS= read -r -d '' path; do
+    filename=$(basename "$path")
     base="${filename%.*}"
-    # Extract track number (first 2 chars)
+
+    if [[ ! "$base" =~ ^[0-9][0-9]\ .+\ -\ .+$ ]]; then
+        echo "SKIP: $filename"
+        continue
+    fi
+
     track_num="${base:0:2}"
-    # Extract "Artist - Title" (everything after "NN ")
     rest="${base:3}"
-    # Split on " - "
     artist="${rest%% - *}"
     title="${rest#* - }"
+    track_int=$((10#$track_num))
 
-    # Verify parse looks correct before writing
-    echo "  File: $filename"
-    echo "  → Artist: $artist"
-    echo "  → Title: $title"
-    echo "  → Track: $((10#$track_num))"
+    echo "File: $filename -> Artist: $artist | Title: $title | Track: $track_int"
+
+    [ "$APPLY" -eq 1 ] || continue
+
+    artist_esc=$(escape_kid3 "$artist")
+    title_esc=$(escape_kid3 "$title")
+    filename_esc=$(escape_kid3 "$filename")
+
+    case "${filename##*.}" in
+        [Ww][Aa][Vv])
+            kid3-cli -c "select '$filename_esc'" \
+                     -c "tag 2" \
+                     -c "set artist '$artist_esc'" \
+                     -c "set title '$title_esc'" \
+                     -c "set track number $track_int" \
+                     -c "tag 3" \
+                     -c "set artist '$artist_esc'" \
+                     -c "set title '$title_esc'" \
+                     -c "set track number $track_int" \
+                     -c "save" .
+            ;;
+        [Mm]4[Aa])
+            exiftool -overwrite_original \
+                -Artist="$artist" -Title="$title" -TrackNumber="$track_int" \
+                "$path" >/dev/null
+            ;;
+        *)
+            kid3-cli -c "select '$filename_esc'" -c "tag 2" \
+                     -c "set artist '$artist_esc'" \
+                     -c "set title '$title_esc'" \
+                     -c "set track number $track_int" \
+                     -c "save" .
+            ;;
+    esac
+
+    # Verify write
+    actual_artist=$(exiftool -s3 -Artist "$path")
+    actual_title=$(exiftool -s3 -Title "$path")
+    actual_track=$(exiftool -s3 -TrackNumber "$path" | sed 's#/.*##')
+
+    if [ "$actual_artist" = "$artist" ] && [ "$actual_title" = "$title" ] && [ "$actual_track" = "$track_int" ]; then
+        echo "OK: $filename"
+    else
+        echo "VERIFY_FAIL: $filename"
+    fi
 done
-```
-
-After confirming the parse output looks correct, write tags:
-
-```sh
-# For FLAC/MP3:
-kid3-cli -c "select '$filename'" -c "tag 2" \
-         -c "set artist '$artist'" \
-         -c "set title '$title'" \
-         -c "set track number $((10#$track_num))" \
-         -c "save" .
-
-# For WAV (both tag 2 AND tag 3):
-kid3-cli -c "select '$filename'" \
-         -c "tag 2" \
-         -c "set artist '$artist'" \
-         -c "set title '$title'" \
-         -c "set track number $((10#$track_num))" \
-         -c "tag 3" \
-         -c "set artist '$artist'" \
-         -c "set title '$title'" \
-         -c "set track number $((10#$track_num))" \
-         -c "save" .
 ```
 
 #### Fix WAV tag 3 missing
 
-Read existing tag 2 values, write them to tag 3:
+Read tag 2 values, write to tag 3:
 
 ```sh
-# Read current tag 2 values
-kid3-cli -c "get" "file.wav"
+artist=$(exiftool -s3 -Artist "/path/to/file.wav")
+title=$(exiftool -s3 -Title "/path/to/file.wav")
+album=$(exiftool -s3 -Album "/path/to/file.wav")
+year=$(exiftool -s3 -Year "/path/to/file.wav")
+track=$(exiftool -s3 -TrackNumber "/path/to/file.wav" | sed 's#/.*##')
 
-# Write same values to tag 3
+artist_esc=$(printf "%s" "$artist" | sed "s/'/\\\\'/g")
+title_esc=$(printf "%s" "$title" | sed "s/'/\\\\'/g")
+album_esc=$(printf "%s" "$album" | sed "s/'/\\\\'/g")
+
 kid3-cli -c "select 'file.wav'" \
          -c "tag 3" \
-         -c "set artist 'ARTIST_FROM_TAG2'" \
-         -c "set title 'TITLE_FROM_TAG2'" \
-         -c "set album 'ALBUM_FROM_TAG2'" \
-         -c "set date YEAR_FROM_TAG2" \
-         -c "set track number TRACK_FROM_TAG2" \
+         -c "set artist '$artist_esc'" \
+         -c "set title '$title_esc'" \
+         -c "set album '$album_esc'" \
+         -c "set date $year" \
+         -c "set track number $track" \
          -c "save" .
 ```
 
 #### Fix (Original Mix) in filenames
 
+Strip `(Original Mix)` from loose track filenames:
+
 ```sh
-cd "PLAY_PATH"
-for f in *" (Original Mix)".*; do
-    [ -e "$f" ] && mv "$f" "${f/ (Original Mix)/}"
+find "/path/to/play" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -name "* (Original Mix)*" -print0 | while IFS= read -r -d '' f; do
+    base=$(basename "$f")
+    new_base=$(printf "%s" "$base" | sed 's/ (Original Mix)//')
+    new_path="$(dirname "$f")/$new_base"
+
+    if [ -e "$new_path" ]; then
+        echo "SKIP (target exists): $new_path"
+        continue
+    fi
+
+    mv -- "$f" "$new_path" && echo "RENAMED: $base -> $new_base" || echo "FAIL: $base"
 done
 ```
 
-#### Fill missing tags from reklawdbox lookups
+#### Fill missing tags from lookups
 
-When Artist and Title are known but Album/Year/Publisher are missing:
+When Artist/Title are known but Album/Year/Publisher are missing, use `lookup_discogs(artist=..., title=...)`. Write tags on clear match; flag for user review on ambiguity.
 
-```
-lookup_discogs(artist="Artist Name", title="Track Title")
-```
+### 4c: Per-item fixes
 
-If a clear match is found, write the additional tags. If multiple matches or no match, flag for user review.
+Present each ambiguous issue to the user with options and wait for approval before applying.
 
-### 4b: Per-item fixes (with individual approval)
+### 4d: Investigation items
 
-Present each issue to the user with proposed fix and wait for approval:
-
-```
-Fix 1/25: Missing album year
-  Path: collection/Artist/Album Name/
-  Discogs match: "Album Name" (2019) on Label Records
-
-  Proposed: Rename directory to "Album Name (2019)"
-            Set date=2019, publisher="Label Records" on all tracks
-
-  Apply? [yes / no / skip / other year]
-```
-
-### 4c: Investigation items
-
-Present context and ask user to decide:
-
-```
-Investigation 1/15: Tag/filename conflict
-  File: collection/Artist/Album (2020)/03 Artist - Track.flac
-
-  Filename says: Track 3, "Track"
-  Tag says: Track 5, Title="Different Track"
-
-  What should this be?
-  a) Trust filename (set tags to match)
-  b) Trust tags (rename file to match)
-  c) Neither — specify correct values
-  d) Skip for now
-```
+Present context (filename vs tag values) and ask the user to decide which source is correct.
 
 ---
 
 ## Step 5: Verification
 
-**Goal:** Confirm all fixes were applied correctly.
-
-### 5a: Re-scan fixed files
-
-After completing fixes for an album or batch:
+After fixing an album or batch:
 
 ```sh
 # Re-read tags
-exiftool -j -Artist -Title -Album -Year -TrackNumber "$ALBUM_PATH"/*.{flac,wav,mp3} 2>/dev/null
+find "/path/to/album" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -exec exiftool -j -Artist -Title -Album -Year -TrackNumber {} + 2>/dev/null
 
-# For WAV: also verify tag 3
-for f in "$ALBUM_PATH"/*.wav; do
-    [ -f "$f" ] || continue
+# Verify WAV tag 3
+find "/path/to/album" -maxdepth 1 -type f \( -iname "*.wav" \) -print0 | \
+while IFS= read -r -d '' f; do
     echo "=== $(basename "$f") tag 3 ==="
     kid3-cli -c "tag 3" -c "get" "$f"
 done
-```
 
-### 5b: Re-run filename check
-
-```sh
-check_filenames.sh -v "ALBUM_PATH"
-```
-
-### 5c: Report per-album
-
-```
-✓ Fixed: Kangding Ray / Ultrachroma (2022)
-  Files: 10
-  Fixes applied:
-    - Artist tag written (was empty): 10 files
-    - Title tag cleaned (artist prefix removed): 10 files
-    - WAV tag 3 synced: 10 files
-  Verified: All tags correct, all filenames correct
+# Re-check filenames
+find "/path/to/album" -maxdepth 1 -type f \
+    \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" \) \
+    -print0 | while IFS= read -r -d '' f; do
+    name=$(basename "$f")
+    if [[ ! "$name" =~ ^[0-9][0-9]\ .+\ -\ .+\..+$ ]]; then
+        echo "MISMATCH: $f"
+    fi
+done
 ```
 
 ---
 
 ## Step 6: Final Report
 
-**Goal:** Summarize the entire audit session.
-
-```
-═══════════════════════════════════════════════
-Collection Audit Complete
-═══════════════════════════════════════════════
-
-Scope: collection/ (full scan)
-Files scanned: 2,400
-Time: ~45 minutes
-
-Results:
-  Already correct:     2,180 (90.8%)
-  Auto-fixed:            180
-  Fixed with approval:    22
-  Skipped by user:         3
-  Still needs attention:  15
-
-Fixes by type:
-  Artist tags written:     45
-  Titles cleaned:          45
-  WAV tag 3 synced:        60
-  Missing tags filled:     30
-  Filenames corrected:     15
-  Directories renamed:      7
-
-Remaining issues:
-  - collection/Unknown Artist/Mystery Album/
-    → 8 files with no identifiable metadata
-  - collection/Various Artists/[no label]/
-    → 7 files need label identification
-
-WAV cover art (manual Rekordbox step):
-  45 WAV files have embedded cover art in tag 2 but
-  Rekordbox will not import it. After importing these
-  tracks, set cover art manually in Rekordbox:
-  - Kangding Ray / Ultrachroma (2022) — 10 WAV tracks
-  - System 7 / 777 (1993) — 10 WAV tracks
-  - [etc.]
-
-Next steps:
-  1. Manually review remaining 15 issues
-  2. Import/reimport fixed tracks into Rekordbox
-  3. Set cover art for WAV tracks manually in Rekordbox
-  4. Run genre classification SOP
-═══════════════════════════════════════════════
-```
+Summarize: scope, files scanned, pass rate, fixes applied by type, remaining issues, and next steps (manual review items, Rekordbox import, WAV cover art, genre classification SOP).
 
 ---
 
@@ -670,44 +445,21 @@ Next steps:
 
 Pattern: `NN Artist Name - Track Title.ext`
 
-```
-Input:  "01 Kangding Ray - Amber Decay.wav"
-Output: track=1, artist="Kangding Ray", title="Amber Decay"
-```
-
-Parsing steps:
 1. Strip file extension
-2. First 2 characters = track number (zero-padded)
-3. Character 3 = space (skip)
-4. Everything from character 4 to first ` - ` = artist
-5. Everything after first ` - ` = title
+2. First 2 chars = track number (zero-padded)
+3. Char 3 = space (skip)
+4. Char 4 to first ` - ` = artist
+5. After first ` - ` = title
 
-**Edge case:** Title contains ` - ` (e.g., "Artist - Track - Subtitle"). Use first occurrence only for the artist/title split, unless the artist name is known from the directory structure.
+**Edge case:** Title contains ` - ` (e.g., "Artist - Track - Subtitle"). Split on first occurrence only, unless artist is known from directory.
 
-**Edge case:** VA compilations. Each track may have a different artist. The filename artist should match the per-track artist tag, not the AlbumArtist.
+**Edge case:** VA compilations — filename artist matches per-track artist tag, not AlbumArtist.
 
 ### Loose tracks
 
 Pattern: `Artist Name - Track Title.ext` (no track number prefix)
 
-```
-Input:  "Kangding Ray - Amber Decay.wav"
-Output: artist="Kangding Ray", title="Amber Decay"
-```
-
-## Appendix C: Safe kid3-cli Patterns
-
-### Read before write
-
-Always read current tags before modifying:
-
-```sh
-# Read current state
-kid3-cli -c "get" "file.wav"
-
-# Only then write
-kid3-cli -c "select 'file.wav'" -c "tag 2" -c "set artist 'Name'" -c "save" .
-```
+## Appendix C: kid3-cli Patterns
 
 ### WAV dual-tag write
 
@@ -725,7 +477,6 @@ kid3-cli -c "select 'file.wav'" \
 ### Batch album-wide tags
 
 ```sh
-cd "album_directory"
 kid3-cli -c "select all" -c "tag 2" \
          -c "set album 'Album Name'" \
          -c "set date 2022" \
