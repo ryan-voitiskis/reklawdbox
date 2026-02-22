@@ -20,6 +20,8 @@ pub fn xml_escape(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            // XML 1.0 forbids most C0 control chars.
+            c if c.is_control() && c != '\n' && c != '\r' && c != '\t' => {}
             _ => out.push(c),
         }
     }
@@ -29,9 +31,25 @@ pub fn xml_escape(s: &str) -> String {
 /// Convert a file system path to a Rekordbox Location URI.
 /// e.g. `/Users/vz/Music/file name.flac` → `file://localhost/Users/vz/Music/file%20name.flac`
 pub fn path_to_location(file_path: &str) -> String {
-    use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+    use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
-    let mut normalized = file_path.replace('\\', "/");
+    let (uri_path, is_file_uri_input) = if let Some(path) = file_path.strip_prefix("file://localhost")
+    {
+        (path, true)
+    } else if let Some(path) = file_path.strip_prefix("file://") {
+        (path, true)
+    } else {
+        (file_path, false)
+    };
+
+    // Only URI inputs are percent-decoded first to avoid double-encoding URI segments.
+    // Raw filesystem paths should keep literal '%' so it can be encoded as '%25'.
+    let normalized_source = if is_file_uri_input {
+        percent_decode_str(uri_path).decode_utf8_lossy().into_owned()
+    } else {
+        uri_path.to_string()
+    };
+    let mut normalized = normalized_source.replace('\\', "/");
     let bytes = normalized.as_bytes();
     let is_windows_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     if is_windows_drive {
@@ -243,6 +261,12 @@ mod tests {
     }
 
     #[test]
+    fn test_xml_escape_filters_invalid_control_chars() {
+        let escaped = xml_escape("ok\u{0000}\u{0008}\t\n\rtext");
+        assert_eq!(escaped, "ok\t\n\rtext");
+    }
+
+    #[test]
     fn test_path_to_location() {
         assert_eq!(
             path_to_location("/Users/vz/Music/track.flac"),
@@ -267,6 +291,22 @@ mod tests {
         assert_eq!(
             path_to_location(r"C:\Users\vz\Music\my track.flac"),
             "file://localhost/C:/Users/vz/Music/my%20track.flac"
+        );
+    }
+
+    #[test]
+    fn test_path_to_location_encodes_literal_percent_triplets_in_raw_paths() {
+        assert_eq!(
+            path_to_location("/Users/vz/Music/my%20track.flac"),
+            "file://localhost/Users/vz/Music/my%2520track.flac"
+        );
+    }
+
+    #[test]
+    fn test_path_to_location_accepts_file_uri_input() {
+        assert_eq!(
+            path_to_location("file://localhost/Users/vz/Music/my%20track.flac"),
+            "file://localhost/Users/vz/Music/my%20track.flac"
         );
     }
 

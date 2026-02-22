@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::path::{Component, Path};
 
     use crate::corpus::{self, CorpusHit, CorpusIndex, CorpusQuery};
 
@@ -110,8 +111,35 @@ mod tests {
             .documents
             .iter()
             .find(|document| document.id == doc_id)
-            .map(|document| format!("{}/{}", corpus::REKORDBOX_DOCS_ROOT, document.path))
+            .map(|document| normalize_manifest_doc_path(&document.path))
             .unwrap_or_else(|| panic!("manifest is missing expected doc id '{doc_id}'"))
+    }
+
+    fn normalize_manifest_doc_path(path: &str) -> String {
+        let trimmed = path.trim();
+        let mut normalized_parts = Vec::new();
+        for component in Path::new(trimmed).components() {
+            match component {
+                Component::Normal(segment) => {
+                    normalized_parts.push(segment.to_string_lossy().into_owned())
+                }
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    panic!("manifest path for eval contains unsupported component: '{trimmed}'")
+                }
+            }
+        }
+
+        assert!(
+            !normalized_parts.is_empty(),
+            "manifest path for eval is empty after normalization: '{trimmed}'"
+        );
+
+        format!(
+            "{}/{}",
+            corpus::REKORDBOX_DOCS_ROOT,
+            normalized_parts.join("/")
+        )
     }
 
     fn evaluate_case(index: &CorpusIndex, case: &WorkflowEvalCase) -> EvalReport {
@@ -388,8 +416,13 @@ mod tests {
     #[test]
     fn task_success_eval_manifest_first_workflows() {
         let index = corpus::rekordbox_index().expect("rekordbox manifest index should load");
+        let cases = workflow_cases();
+        assert!(
+            !cases.is_empty(),
+            "workflow eval must include at least one case"
+        );
 
-        for case in workflow_cases() {
+        for case in cases {
             let report = evaluate_case(index, case);
             assert!(
                 report.passed(),
@@ -397,5 +430,78 @@ mod tests {
                 report.render()
             );
         }
+    }
+
+    #[test]
+    fn repo_path_for_doc_id_matches_normalized_hit_paths() {
+        let index = CorpusIndex::from_manifest_str(
+            r#"
+schema_version: 1
+corpus: rekordbox
+documents:
+  - id: prefixed-path
+    title: Prefixed Path Guide
+    type: guide
+    path: ./guides/prefixed-path.md
+    topics: [xml]
+    modes: [common]
+"#,
+        )
+        .expect("fixture manifest should parse");
+
+        let expected_path = repo_path_for_doc_id(&index, "prefixed-path");
+        let observed_path = index
+            .query(CorpusQuery {
+                topic: Some("xml"),
+                mode: Some("common"),
+                doc_type: Some("guide"),
+                search_text: Some("prefixed path"),
+                limit: Some(1),
+            })
+            .into_iter()
+            .next()
+            .expect("fixture query should produce one hit")
+            .path;
+
+        assert_eq!(expected_path, observed_path);
+        assert_eq!(expected_path, "docs/rekordbox/guides/prefixed-path.md");
+    }
+
+    #[test]
+    fn repo_path_for_doc_id_trims_whitespace_before_normalizing() {
+        let index = CorpusIndex::from_manifest_str(
+            r#"
+schema_version: 1
+corpus: rekordbox
+documents:
+  - id: prefixed-whitespace-path
+    title: Prefixed Whitespace Path Guide
+    type: guide
+    path: "  ./guides/prefixed-whitespace-path.md  "
+    topics: [xml]
+    modes: [common]
+"#,
+        )
+        .expect("fixture manifest should parse");
+
+        let expected_path = repo_path_for_doc_id(&index, "prefixed-whitespace-path");
+        let observed_path = index
+            .query(CorpusQuery {
+                topic: Some("xml"),
+                mode: Some("common"),
+                doc_type: Some("guide"),
+                search_text: Some("prefixed whitespace path"),
+                limit: Some(1),
+            })
+            .into_iter()
+            .next()
+            .expect("fixture query should produce one hit")
+            .path;
+
+        assert_eq!(expected_path, observed_path);
+        assert_eq!(
+            expected_path,
+            "docs/rekordbox/guides/prefixed-whitespace-path.md"
+        );
     }
 }

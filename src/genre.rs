@@ -55,6 +55,7 @@ pub fn get_taxonomy() -> Vec<String> {
 
 /// Returns the canonical casing of a genre if it's in the taxonomy.
 pub fn canonical_casing(genre: &str) -> Option<&'static str> {
+    let genre = genre.trim();
     GENRES
         .iter()
         .find(|g| g.eq_ignore_ascii_case(genre))
@@ -66,7 +67,7 @@ pub fn is_known_genre(genre: &str) -> bool {
 }
 
 /// Alias entries mapping non-canonical genre strings to canonical genres.
-/// Keys must be lowercase. Sorted alphabetically by key.
+/// Keys must be lowercase ASCII. Sorted alphabetically by key.
 pub const ALIASES: &[(&str, &str)] = &[
     ("140 / deep dubstep / grime", "Dubstep"),
     ("afrobeat", "Afro House"),
@@ -100,21 +101,42 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("uk garage", "Garage"),
 ];
 
-/// Static alias map built once via OnceLock. Maps lowercase alias → canonical genre.
+fn build_alias_map(aliases: &[(&str, &'static str)]) -> HashMap<String, &'static str> {
+    let mut map = HashMap::with_capacity(aliases.len());
+    for &(alias, canonical) in aliases {
+        assert_eq!(
+            alias,
+            alias.trim(),
+            "alias '{}' has leading/trailing whitespace",
+            alias
+        );
+        assert!(alias.is_ascii(), "alias '{}' must be ASCII", alias);
+        assert_eq!(
+            alias,
+            alias.to_ascii_lowercase(),
+            "alias '{}' must be lowercase ASCII",
+            alias
+        );
+        let key = alias.to_ascii_lowercase();
+        let previous = map.insert(key.clone(), canonical);
+        assert!(
+            previous.is_none(),
+            "duplicate alias key '{}' (case-insensitive)",
+            key
+        );
+    }
+    map
+}
+
+/// Static alias map built once via OnceLock. Maps lowercase ASCII alias → canonical genre.
 fn alias_map() -> &'static HashMap<String, &'static str> {
     static MAP: OnceLock<HashMap<String, &'static str>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut map = HashMap::with_capacity(ALIASES.len());
-        for &(alias, canonical) in ALIASES {
-            map.insert(alias.to_lowercase(), canonical);
-        }
-        map
-    })
+    MAP.get_or_init(|| build_alias_map(ALIASES))
 }
 
 /// Returns the canonical genre if the input is a known alias, `None` if already canonical or unknown.
 pub fn normalize_genre(genre: &str) -> Option<&'static str> {
-    alias_map().get(&genre.to_lowercase()).copied()
+    alias_map().get(&genre.trim().to_ascii_lowercase()).copied()
 }
 
 pub fn get_alias_map() -> Vec<(String, String)> {
@@ -129,6 +151,8 @@ pub fn get_alias_map() -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -164,6 +188,13 @@ mod tests {
     }
 
     #[test]
+    fn known_genre_trims_whitespace() {
+        assert!(is_known_genre(" Techno"));
+        assert!(is_known_genre("Techno "));
+        assert!(is_known_genre("\tDeep House\t"));
+    }
+
+    #[test]
     fn normalize_known_aliases() {
         assert_eq!(normalize_genre("Hip-Hop"), Some("Hip Hop"));
         assert_eq!(normalize_genre("DnB"), Some("Drum & Bass"));
@@ -184,6 +215,13 @@ mod tests {
         assert_eq!(normalize_genre("Hip-Hop"), Some("Hip Hop"));
         assert_eq!(normalize_genre("dnb"), Some("Drum & Bass"));
         assert_eq!(normalize_genre("DNB"), Some("Drum & Bass"));
+    }
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_genre(" hip-hop"), Some("Hip Hop"));
+        assert_eq!(normalize_genre("HIP-HOP "), Some("Hip Hop"));
+        assert_eq!(normalize_genre("\tdnb\t"), Some("Drum & Bass"));
     }
 
     #[test]
@@ -223,6 +261,34 @@ mod tests {
                 w[1].0
             );
         }
+    }
+
+    #[test]
+    fn aliases_are_lowercase_and_casefold_unique() {
+        let mut seen = HashSet::new();
+        for &(alias, _) in ALIASES {
+            assert!(alias.is_ascii(), "alias '{}' must be ASCII", alias);
+            assert_eq!(
+                alias,
+                alias.to_ascii_lowercase(),
+                "alias '{}' must be lowercase ASCII",
+                alias
+            );
+            let inserted = seen.insert(alias.to_ascii_lowercase());
+            assert!(
+                inserted,
+                "duplicate alias key '{}' (case-insensitive)",
+                alias
+            );
+        }
+    }
+
+    #[test]
+    fn non_ascii_aliases_are_rejected() {
+        let result = std::panic::catch_unwind(|| {
+            let _ = build_alias_map(&[("Électro", "Electro")]);
+        });
+        assert!(result.is_err(), "expected non-ASCII alias to panic");
     }
 
     #[test]

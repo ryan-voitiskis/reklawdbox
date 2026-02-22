@@ -13,7 +13,7 @@ mod tests {
         topic: Option<&'static str>,
         mode: Option<&'static str>,
         doc_type: Option<&'static str>,
-        search_text: &'static str,
+        search_text: Option<&'static str>,
         expected_id: &'static str,
         expected_path: &'static str,
         min_top_score: i32,
@@ -34,7 +34,7 @@ mod tests {
             topic: Some("xml"),
             mode: Some("export"),
             doc_type: Some("reference"),
-            search_text: "xml import export",
+            search_text: Some("xml import export"),
             expected_id: "xml-import-export",
             expected_path: "docs/rekordbox/reference/xml-import-export.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -44,7 +44,7 @@ mod tests {
             topic: Some("xml"),
             mode: Some("common"),
             doc_type: Some("guide"),
-            search_text: "xml format list",
+            search_text: Some("xml format list"),
             expected_id: "xml-format-spec",
             expected_path: "docs/rekordbox/guides/xml-format-spec.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -54,7 +54,7 @@ mod tests {
             topic: Some("usb"),
             mode: Some("export"),
             doc_type: Some("guide"),
-            search_text: "usb export playlists",
+            search_text: Some("usb export playlists"),
             expected_id: "usb-export",
             expected_path: "docs/rekordbox/guides/usb-export.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -64,7 +64,7 @@ mod tests {
             topic: Some("pro-dj-link"),
             mode: Some("export"),
             doc_type: Some("guide"),
-            search_text: "setup link equipment",
+            search_text: Some("setup link equipment"),
             expected_id: "pro-dj-link-setup",
             expected_path: "docs/rekordbox/guides/pro-dj-link-setup.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -74,7 +74,7 @@ mod tests {
             topic: Some("dvs"),
             mode: Some("performance"),
             doc_type: Some("guide"),
-            search_text: "dvs setup compatibility",
+            search_text: Some("dvs setup compatibility"),
             expected_id: "dvs-setup",
             expected_path: "docs/rekordbox/guides/dvs-setup.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -84,7 +84,7 @@ mod tests {
             topic: Some("lighting"),
             mode: Some("lighting"),
             doc_type: Some("guide"),
-            search_text: "lighting mode midi",
+            search_text: Some("lighting mode midi"),
             expected_id: "lighting-mode",
             expected_path: "docs/rekordbox/guides/lighting-mode.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -94,7 +94,7 @@ mod tests {
             topic: Some("streaming"),
             mode: Some("common"),
             doc_type: Some("guide"),
-            search_text: "streaming service usage",
+            search_text: Some("streaming service usage"),
             expected_id: "streaming-services",
             expected_path: "docs/rekordbox/guides/streaming-services.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -104,7 +104,7 @@ mod tests {
             topic: Some("browsing"),
             mode: Some("performance"),
             doc_type: Some("guide"),
-            search_text: "keyboard shortcut reference",
+            search_text: Some("keyboard shortcut reference"),
             expected_id: "keyboard-shortcuts",
             expected_path: "docs/rekordbox/guides/keyboard-shortcuts.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -114,7 +114,7 @@ mod tests {
             topic: Some("preferences"),
             mode: Some("performance"),
             doc_type: Some("manual"),
-            search_text: "preferences window",
+            search_text: Some("preferences window"),
             expected_id: "preferences",
             expected_path: "docs/rekordbox/manual/31-preferences.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -124,7 +124,7 @@ mod tests {
             topic: Some("collaborative-playlists"),
             mode: Some("common"),
             doc_type: Some("manual"),
-            search_text: "collaborative playlist",
+            search_text: Some("collaborative playlist"),
             expected_id: "collaborative-playlists",
             expected_path: "docs/rekordbox/manual/09-collaborative-playlists.md",
             min_top_score: TOP1_SCORE_THRESHOLD,
@@ -202,7 +202,7 @@ mod tests {
             topic: case.topic,
             mode: case.mode,
             doc_type: case.doc_type,
-            search_text: Some(case.search_text),
+            search_text: Some(case.search_text.unwrap_or(case.prompt)),
             limit: Some(TOP_K),
         });
 
@@ -238,9 +238,10 @@ mod tests {
         score_pass_hits: usize,
         min_score_hits: usize,
     ) -> String {
+        let score_floor = summarize_score_floor(results);
         let mut lines = Vec::new();
         lines.push(format!(
-            "Routing Eval Summary: top1={top1_hits}/{total} (threshold >= {min_top1_hits}), score={score_pass_hits}/{total} (threshold >= {min_score_hits}), score_floor={TOP1_SCORE_THRESHOLD}"
+            "Routing Eval Summary: top1={top1_hits}/{total} (threshold >= {min_top1_hits}), score={score_pass_hits}/{total} (threshold >= {min_score_hits}), score_floor={score_floor}"
         ));
 
         for (idx, result) in results.iter().enumerate() {
@@ -264,5 +265,109 @@ mod tests {
         }
 
         lines.join("\n")
+    }
+
+    fn summarize_score_floor(results: &[CaseResult]) -> String {
+        let mut floors = results.iter().map(|result| result.case.min_top_score);
+        let Some(first_floor) = floors.next() else {
+            return "n/a".to_string();
+        };
+
+        let (min_floor, max_floor) = floors.fold(
+            (first_floor, first_floor),
+            |(min_floor, max_floor), floor| (min_floor.min(floor), max_floor.max(floor)),
+        );
+
+        if min_floor == max_floor {
+            min_floor.to_string()
+        } else {
+            format!("{min_floor}..={max_floor}")
+        }
+    }
+
+    #[test]
+    fn evaluate_case_uses_prompt_text_for_query() {
+        let index = CorpusIndex::from_manifest_str(
+            r#"
+schema_version: 1
+corpus: rekordbox
+documents:
+  - id: alpha-doc
+    title: General Notes
+    type: guide
+    path: guides/a-general.md
+    topics: [misc]
+    modes: [common]
+  - id: zeta-doc
+    title: Target Phrase Setup
+    type: guide
+    path: guides/z-target.md
+    topics: [misc]
+    modes: [common]
+"#,
+        )
+        .expect("fixture manifest should parse");
+
+        let case = RoutingCase {
+            prompt: "target phrase",
+            topic: None,
+            mode: None,
+            doc_type: None,
+            search_text: None,
+            expected_id: "zeta-doc",
+            expected_path: "docs/rekordbox/guides/z-target.md",
+            min_top_score: 1,
+        };
+
+        let result = evaluate_case(&index, case);
+        assert!(
+            result.top1_match,
+            "prompt text should drive retrieval; got {:?}",
+            result.top_hit
+        );
+    }
+
+    #[test]
+    fn report_score_floor_shows_range_for_mixed_case_thresholds() {
+        let results = vec![
+            CaseResult {
+                case: RoutingCase {
+                    prompt: "one",
+                    topic: None,
+                    mode: None,
+                    doc_type: None,
+                    search_text: None,
+                    expected_id: "doc-a",
+                    expected_path: "docs/rekordbox/guides/a.md",
+                    min_top_score: 120,
+                },
+                top_hit: None,
+                top_candidates: vec![],
+                top1_match: false,
+                score_ok: false,
+            },
+            CaseResult {
+                case: RoutingCase {
+                    prompt: "two",
+                    topic: None,
+                    mode: None,
+                    doc_type: None,
+                    search_text: None,
+                    expected_id: "doc-b",
+                    expected_path: "docs/rekordbox/guides/b.md",
+                    min_top_score: 180,
+                },
+                top_hit: None,
+                top_candidates: vec![],
+                top1_match: false,
+                score_ok: false,
+            },
+        ];
+
+        let report = build_report(&results, 2, 0, 2, 0, 2);
+        assert!(
+            report.contains("score_floor=120..=180"),
+            "report should include floor range; got {report}"
+        );
     }
 }

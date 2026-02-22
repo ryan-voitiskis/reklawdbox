@@ -17,14 +17,44 @@ mod xml;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
+fn should_run_cli<I, S>(mut args: I) -> bool
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.nth(1).is_some_and(|arg| arg.as_ref() == "analyze")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().len() > 1 {
+    if should_run_cli(std::env::args()) {
         cli::main().await
     } else {
         let server = tools::ReklawdboxServer::new(db::resolve_db_path());
         let service = server.serve(stdio()).await?;
         service.waiting().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_run_cli;
+
+    #[test]
+    fn runs_server_when_no_subcommand_is_given() {
+        assert!(!should_run_cli(vec!["reklawdbox"].into_iter()));
+    }
+
+    #[test]
+    fn runs_cli_for_analyze_subcommand() {
+        assert!(should_run_cli(vec!["reklawdbox", "analyze"].into_iter()));
+    }
+
+    #[test]
+    fn runs_server_for_unrecognized_args() {
+        assert!(!should_run_cli(
+            vec!["reklawdbox", "--transport", "stdio"].into_iter()
+        ));
     }
 }

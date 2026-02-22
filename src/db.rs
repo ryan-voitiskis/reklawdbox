@@ -106,7 +106,19 @@ fn decode_rating_stars(rating_raw: i32) -> u8 {
     }
 }
 
+/// Legacy absolute path retained for compatibility with other modules.
 pub const SAMPLER_PATH_PREFIX: &str = "/Users/vz/Music/rekordbox/Sampler/";
+/// Rekordbox sampler files live under this path fragment across installations.
+pub const SAMPLER_PATH_FRAGMENT: &str = "/rekordbox/Sampler/";
+
+fn sampler_path_like_pattern() -> String {
+    format!("%{}%", escape_like(SAMPLER_PATH_FRAGMENT))
+}
+
+#[cfg(test)]
+fn is_sampler_path(path: &str) -> bool {
+    path.contains(SAMPLER_PATH_FRAGMENT)
+}
 
 pub struct SearchParams {
     pub query: Option<String>,
@@ -216,7 +228,7 @@ fn apply_search_filters(
     if params.exclude_samples {
         let idx = bind_values.len() + 1;
         sql.push_str(&format!(" AND c.FolderPath NOT LIKE ?{idx} ESCAPE '\\'"));
-        bind_values.push(Box::new(format!("{}%", escape_like(SAMPLER_PATH_PREFIX))));
+        bind_values.push(Box::new(sampler_path_like_pattern()));
     }
 
     // Playlist filter: join through djmdSongPlaylist
@@ -334,7 +346,12 @@ pub fn get_playlists(conn: &Connection) -> Result<Vec<Playlist>, rusqlite::Error
             COALESCE(p.Name, '') AS Name,
             COALESCE(p.ParentID, '') AS ParentID,
             COALESCE(p.Attribute, 0) AS Attribute,
-            (SELECT COUNT(*) FROM djmdSongPlaylist sp WHERE sp.PlaylistID = p.ID) AS TrackCount
+            (
+                SELECT COUNT(*)
+                FROM djmdSongPlaylist sp
+                INNER JOIN djmdContent c ON c.ID = sp.ContentID
+                WHERE sp.PlaylistID = p.ID AND c.rb_local_deleted = 0
+            ) AS TrackCount
         FROM djmdPlaylist p
         WHERE p.rb_local_deleted = 0 AND p.ID != '200000'
         ORDER BY p.Seq
@@ -385,13 +402,14 @@ pub fn get_library_stats_filtered(
     conn: &Connection,
     exclude_samples: bool,
 ) -> Result<LibraryStats, rusqlite::Error> {
+    let sampler_pattern = sampler_path_like_pattern();
     let sample_filter = if exclude_samples {
-        format!(" AND FolderPath NOT LIKE '{}%'", SAMPLER_PATH_PREFIX)
+        format!(" AND FolderPath NOT LIKE '{sampler_pattern}' ESCAPE '\\'")
     } else {
         String::new()
     };
     let sample_filter_c = if exclude_samples {
-        format!(" AND c.FolderPath NOT LIKE '{}%'", SAMPLER_PATH_PREFIX)
+        format!(" AND c.FolderPath NOT LIKE '{sampler_pattern}' ESCAPE '\\'")
     } else {
         String::new()
     };
@@ -474,14 +492,18 @@ pub fn get_tracks_by_exact_genre(
 ) -> Result<Vec<Track>, rusqlite::Error> {
     let mut sql = format!("{TRACK_SELECT} WHERE c.rb_local_deleted = 0 AND g.Name = ?1");
     if exclude_samples {
-        sql.push_str(&format!(
-            " AND c.FolderPath NOT LIKE '{}%'",
-            SAMPLER_PATH_PREFIX
-        ));
+        sql.push_str(" AND c.FolderPath NOT LIKE ?2 ESCAPE '\\'");
     }
     sql.push_str(" ORDER BY c.Title");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![genre_name], row_to_track)?;
+    let rows = if exclude_samples {
+        stmt.query_map(
+            params![genre_name, sampler_path_like_pattern()],
+            row_to_track,
+        )?
+    } else {
+        stmt.query_map(params![genre_name], row_to_track)?
+    };
     rows.collect()
 }
 
@@ -699,7 +721,7 @@ mod tests {
             INSERT INTO djmdContent (ID, Title, ArtistID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
             VALUES ('t5', 'Unknown Track', 'a1', 0, 200, '/Users/vz/Music/unknown.mp3', 320, 44100, 1, '2023-04-01');
             INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t6', 'Loop Sample 01', 'a1', 'g2', 12000, 8, '/Users/vz/Music/rekordbox/Sampler/Loop/01.wav', 1411, 44100, 11, '2023-01-01');
+            VALUES ('t6', 'Loop Sample 01', 'a1', 'g2', 12000, 8, '/Users/alice/Music/rekordbox/Sampler/Loop/01.wav', 1411, 44100, 11, '2023-01-01');
 
             -- Playlists
             INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID) VALUES ('p1', 1, 'Deep Cuts', 0, 'root');
@@ -980,6 +1002,26 @@ mod tests {
         assert!(!deep_cuts.is_folder);
         let folders = playlists.iter().find(|p| p.name == "Folders").unwrap();
         assert!(folders.is_folder);
+    }
+
+    #[test]
+    fn test_get_playlists_track_count_excludes_deleted_tracks() {
+        let conn = create_test_db();
+        conn.execute(
+            "UPDATE djmdContent SET rb_local_deleted = 1 WHERE ID = 't3'",
+            [],
+        )
+        .expect("fixture update should succeed");
+
+        let playlists = get_playlists(&conn).expect("playlist query should succeed");
+        let deep_cuts = playlists
+            .iter()
+            .find(|p| p.id == "p1")
+            .expect("fixture playlist should exist");
+        assert_eq!(deep_cuts.track_count, 1);
+
+        let tracks = get_playlist_tracks(&conn, "p1", None).expect("playlist tracks should load");
+        assert_eq!(tracks.len(), 1);
     }
 
     #[test]
@@ -1593,7 +1635,7 @@ mod tests {
         let tracks = search_tracks(&conn, &params).unwrap();
         for t in &tracks {
             assert!(
-                !t.file_path.starts_with(SAMPLER_PATH_PREFIX),
+                !is_sampler_path(&t.file_path),
                 "sampler track not excluded: {}",
                 t.file_path
             );

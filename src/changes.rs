@@ -18,8 +18,12 @@ impl ChangeManager {
     /// Stage changes for one or more tracks. Merges with previously staged changes for the same track.
     pub fn stage(&self, changes: Vec<TrackChange>) -> (usize, usize) {
         let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
-        let staged = changes.len();
+        let mut staged = 0;
         for change in changes {
+            if !has_any_staged_field(&change) {
+                continue;
+            }
+            staged += 1;
             map.entry(change.track_id.clone())
                 .and_modify(|existing| merge_track_change(existing, &change))
                 .or_insert(change);
@@ -29,9 +33,12 @@ impl ChangeManager {
 
     pub fn pending_ids(&self) -> Vec<String> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
-        map.keys().cloned().collect()
+        let mut ids: Vec<String> = map.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 
+    #[cfg(test)]
     pub fn pending_count(&self) -> usize {
         self.changes.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
@@ -113,6 +120,7 @@ impl ChangeManager {
         result
     }
 
+    #[cfg(test)]
     pub fn apply_changes(&self, tracks: &[Track]) -> Vec<Track> {
         let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         apply_changes_with_map(tracks, &map)
@@ -132,7 +140,11 @@ impl ChangeManager {
         let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
         match track_ids {
             Some(ids) => ids.into_iter().filter_map(|id| map.remove(&id)).collect(),
-            None => map.drain().map(|(_, change)| change).collect(),
+            None => {
+                let mut drained: Vec<TrackChange> = map.drain().map(|(_, change)| change).collect();
+                drained.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+                drained
+            }
         }
     }
 
@@ -222,6 +234,13 @@ impl ChangeManager {
         };
         (cleared, map.len())
     }
+}
+
+fn has_any_staged_field(change: &TrackChange) -> bool {
+    change.genre.is_some()
+        || change.comments.is_some()
+        || change.rating.is_some()
+        || change.color.is_some()
 }
 
 fn merge_track_change(existing: &mut TrackChange, incoming: &TrackChange) {
@@ -378,6 +397,48 @@ mod tests {
                 .iter()
                 .any(|f| f.field == "rating" && f.new_value == "4")
         );
+    }
+
+    #[test]
+    fn test_stage_ignores_noop_changes() {
+        let cm = ChangeManager::new();
+        let (staged, total) = cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: None,
+            comments: None,
+            rating: None,
+            color: None,
+        }]);
+        assert_eq!(staged, 0);
+        assert_eq!(total, 0);
+        assert_eq!(cm.pending_count(), 0);
+        assert!(cm.get("t1").is_none());
+    }
+
+    #[test]
+    fn test_stage_noop_does_not_modify_existing_change() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            comments: None,
+            rating: Some(4),
+            color: None,
+        }]);
+
+        let (staged, total) = cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: None,
+            comments: None,
+            rating: None,
+            color: None,
+        }]);
+
+        assert_eq!(staged, 0);
+        assert_eq!(total, 1);
+        let change = cm.get("t1").expect("existing change should remain");
+        assert_eq!(change.genre.as_deref(), Some("House"));
+        assert_eq!(change.rating, Some(4));
     }
 
     #[test]
@@ -682,6 +743,55 @@ mod tests {
         let snapshot = cm.take(None);
         assert_eq!(snapshot.len(), 2);
         assert_eq!(cm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_pending_ids_are_sorted() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![
+            TrackChange {
+                track_id: "t2".to_string(),
+                genre: Some("House".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+            },
+            TrackChange {
+                track_id: "t1".to_string(),
+                genre: Some("Techno".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+            },
+        ]);
+
+        assert_eq!(cm.pending_ids(), vec!["t1".to_string(), "t2".to_string()]);
+    }
+
+    #[test]
+    fn test_take_all_returns_sorted_snapshot() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![
+            TrackChange {
+                track_id: "t2".to_string(),
+                genre: Some("House".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+            },
+            TrackChange {
+                track_id: "t1".to_string(),
+                genre: Some("Techno".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+            },
+        ]);
+
+        let snapshot = cm.take(None);
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].track_id, "t1");
+        assert_eq!(snapshot[1].track_id, "t2");
     }
 
     #[test]

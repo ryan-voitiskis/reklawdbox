@@ -3,12 +3,12 @@
 pub const COLORS: &[(&str, i32)] = &[
     ("Blue", 0x0000FF),
     ("Green", 0x00FF00),
-    ("Magenta", 0xFF00FF),
-    ("Olive", 0x808000),
+    ("Lemon", 0xFFFF00),
     ("Orange", 0xFFA500),
-    ("Pink", 0xFFC0CB),
     ("Red", 0xFF0000),
     ("Rose", 0xFF007F),
+    ("Turquoise", 0x25FDE9),
+    ("Violet", 0x660099),
 ];
 
 /// Convert a color name to its Rekordbox hex code. Case-insensitive.
@@ -42,9 +42,9 @@ mod tests {
         assert_eq!(color_name_to_code("Blue"), Some(0x0000FF));
         assert_eq!(color_name_to_code("Green"), Some(0x00FF00));
         assert_eq!(color_name_to_code("Orange"), Some(0xFFA500));
-        assert_eq!(color_name_to_code("Pink"), Some(0xFFC0CB));
-        assert_eq!(color_name_to_code("Magenta"), Some(0xFF00FF));
-        assert_eq!(color_name_to_code("Olive"), Some(0x808000));
+        assert_eq!(color_name_to_code("Lemon"), Some(0xFFFF00));
+        assert_eq!(color_name_to_code("Turquoise"), Some(0x25FDE9));
+        assert_eq!(color_name_to_code("Violet"), Some(0x660099));
     }
 
     #[test]
@@ -54,6 +54,7 @@ mod tests {
         assert_eq!(color_name_to_code("rOsE"), Some(0xFF007F));
         assert_eq!(color_name_to_code("red"), Some(0xFF0000));
         assert_eq!(color_name_to_code("GREEN"), Some(0x00FF00));
+        assert_eq!(color_name_to_code("vIoLeT"), Some(0x660099));
     }
 
     #[test]
@@ -62,6 +63,9 @@ mod tests {
         assert_eq!(color_name_to_code("Yellow"), None);
         assert_eq!(color_name_to_code(""), None);
         assert_eq!(color_name_to_code("Teal"), None);
+        assert_eq!(color_name_to_code("Pink"), None);
+        assert_eq!(color_name_to_code("Magenta"), None);
+        assert_eq!(color_name_to_code("Olive"), None);
     }
 
     #[test]
@@ -69,6 +73,7 @@ mod tests {
         assert_eq!(canonical_casing("rose"), Some("Rose"));
         assert_eq!(canonical_casing("RED"), Some("Red"));
         assert_eq!(canonical_casing("green"), Some("Green"));
+        assert_eq!(canonical_casing("TURQUOISE"), Some("Turquoise"));
         assert_eq!(canonical_casing("Purple"), None);
     }
 
@@ -77,7 +82,11 @@ mod tests {
         assert!(is_valid_color("Rose"));
         assert!(is_valid_color("rose"));
         assert!(is_valid_color("RED"));
+        assert!(is_valid_color("Lemon"));
+        assert!(is_valid_color("Turquoise"));
+        assert!(is_valid_color("Violet"));
         assert!(!is_valid_color("Purple"));
+        assert!(!is_valid_color("Pink"));
         assert!(!is_valid_color(""));
     }
 

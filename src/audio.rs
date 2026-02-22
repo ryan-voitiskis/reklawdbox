@@ -392,10 +392,10 @@ where
         return Vec::new();
     }
     let num_channels = planes.len();
-    let num_frames = planes[0].len();
+    let num_frames = planes.iter().map(|ch| ch.len()).min().unwrap_or(0);
 
     if num_channels == 1 {
-        return planes[0].iter().map(&convert).collect();
+        return planes[0].iter().take(num_frames).map(&convert).collect();
     }
 
     let scale = 1.0 / num_channels as f32;
@@ -544,6 +544,43 @@ mod tests {
         assert_eq!(to_camelot("X"), "X");
         assert_eq!(to_camelot("0A"), "0A");
         assert_eq!(to_camelot("13A"), "13A");
+    }
+
+    #[test]
+    fn mix_to_mono_truncates_to_shortest_channel() {
+        let left = [0.25_f32, 0.50, 0.75];
+        let right = [0.75_f32, 0.25];
+        let planes: &[&[f32]] = &[&left, &right];
+
+        let mono = mix_to_mono(planes, |&v| v);
+
+        assert_eq!(mono.len(), 2, "should use the shortest channel length");
+        assert!((mono[0] - 0.50).abs() < f32::EPSILON);
+        assert!((mono[1] - 0.375).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mix_to_mono_single_channel_uses_all_frames() {
+        let mono_src = [0.1_f32, 0.2, 0.3];
+        let planes: &[&[f32]] = &[&mono_src];
+
+        let mono = mix_to_mono(planes, |&v| v);
+
+        assert_eq!(mono, mono_src);
+    }
+
+    #[test]
+    fn mix_to_mono_returns_empty_when_any_channel_is_empty() {
+        let left: [f32; 0] = [];
+        let right = [0.25_f32, 0.50, 0.75];
+        let planes: &[&[f32]] = &[&left, &right];
+
+        let mono = mix_to_mono(planes, |&v| v);
+
+        assert!(
+            mono.is_empty(),
+            "expected empty output when one channel has zero frames"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use rand::Rng;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::OnceLock;
@@ -22,15 +22,9 @@ pub struct BrokerConfig {
 
 impl BrokerConfig {
     pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var(BROKER_URL_ENV).ok()?.trim().to_string();
-        if base_url.is_empty() {
-            return None;
-        }
-        let base_url = base_url.trim_end_matches('/').to_string();
-        let broker_token = std::env::var(BROKER_TOKEN_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+        let raw_base_url = std::env::var(BROKER_URL_ENV).ok()?;
+        let base_url = normalize_base_url(&raw_base_url)?;
+        let broker_token = env_var_trimmed_non_empty(BROKER_TOKEN_ENV);
         Some(Self {
             base_url,
             broker_token,
@@ -163,11 +157,54 @@ pub fn normalize(s: &str) -> String {
         .to_string()
 }
 
+fn env_var_trimmed_non_empty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn normalize_base_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = Url::parse(trimmed).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    if parsed.host_str().is_none() {
+        return None;
+    }
+    let normalized = parsed.as_str().trim_end_matches('/').to_string();
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn legacy_values_configured(
+    key: Option<&str>,
+    secret: Option<&str>,
+    token: Option<&str>,
+    token_secret: Option<&str>,
+) -> bool {
+    [key, secret, token, token_secret]
+        .iter()
+        .all(|v| v.is_some_and(|s| !s.trim().is_empty()))
+}
+
 pub fn legacy_credentials_configured() -> bool {
-    std::env::var(LEGACY_KEY_ENV).is_ok()
-        && std::env::var(LEGACY_SECRET_ENV).is_ok()
-        && std::env::var(LEGACY_TOKEN_ENV).is_ok()
-        && std::env::var(LEGACY_TOKEN_SECRET_ENV).is_ok()
+    let key = std::env::var(LEGACY_KEY_ENV).ok();
+    let secret = std::env::var(LEGACY_SECRET_ENV).ok();
+    let token = std::env::var(LEGACY_TOKEN_ENV).ok();
+    let token_secret = std::env::var(LEGACY_TOKEN_SECRET_ENV).ok();
+    legacy_values_configured(
+        key.as_deref(),
+        secret.as_deref(),
+        token.as_deref(),
+        token_secret.as_deref(),
+    )
 }
 
 pub fn missing_auth_remediation() -> AuthRemediation {
@@ -387,14 +424,14 @@ static CREDENTIALS: OnceLock<Result<Credentials, String>> = OnceLock::new();
 
 fn get_credentials() -> Result<&'static Credentials, String> {
     let result = CREDENTIALS.get_or_init(|| {
-        let key =
-            std::env::var(LEGACY_KEY_ENV).map_err(|_| format!("{} not set", LEGACY_KEY_ENV))?;
-        let secret = std::env::var(LEGACY_SECRET_ENV)
-            .map_err(|_| format!("{} not set", LEGACY_SECRET_ENV))?;
-        let token =
-            std::env::var(LEGACY_TOKEN_ENV).map_err(|_| format!("{} not set", LEGACY_TOKEN_ENV))?;
-        let token_secret = std::env::var(LEGACY_TOKEN_SECRET_ENV)
-            .map_err(|_| format!("{} not set", LEGACY_TOKEN_SECRET_ENV))?;
+        let key = env_var_trimmed_non_empty(LEGACY_KEY_ENV)
+            .ok_or_else(|| format!("{} not set or empty", LEGACY_KEY_ENV))?;
+        let secret = env_var_trimmed_non_empty(LEGACY_SECRET_ENV)
+            .ok_or_else(|| format!("{} not set or empty", LEGACY_SECRET_ENV))?;
+        let token = env_var_trimmed_non_empty(LEGACY_TOKEN_ENV)
+            .ok_or_else(|| format!("{} not set or empty", LEGACY_TOKEN_ENV))?;
+        let token_secret = env_var_trimmed_non_empty(LEGACY_TOKEN_SECRET_ENV)
+            .ok_or_else(|| format!("{} not set or empty", LEGACY_TOKEN_SECRET_ENV))?;
         let signature = format!("{secret}&{token_secret}");
         Ok(Credentials {
             consumer_key: key,
@@ -409,6 +446,27 @@ fn nonce() -> String {
     let mut rng = rand::rng();
     let bytes: [u8; 16] = rng.random();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn build_legacy_search_url(base_url: &str, query_params: &str) -> String {
+    format!(
+        "{}/database/search?{query_params}",
+        base_url.trim_end_matches('/')
+    )
+}
+
+fn build_legacy_oauth_authorization_header(
+    creds: &Credentials,
+    oauth_nonce: &str,
+    timestamp: u64,
+) -> String {
+    format!(
+        "OAuth oauth_consumer_key=\"{consumer_key}\", oauth_nonce=\"{nonce}\", oauth_signature=\"{signature}\", oauth_signature_method=\"PLAINTEXT\", oauth_timestamp=\"{timestamp}\", oauth_token=\"{token}\", oauth_version=\"1.0\"",
+        consumer_key = urlencoding(&creds.consumer_key),
+        nonce = urlencoding(oauth_nonce),
+        signature = urlencoding(&creds.signature),
+        token = urlencoding(&creds.token),
+    )
 }
 
 pub async fn lookup_with_legacy_credentials(
@@ -447,27 +505,17 @@ async fn lookup_inner_legacy(
     }
 
     let base_url = std::env::var(DISCOGS_API_BASE_URL_ENV)
-        .unwrap_or_else(|_| "https://api.discogs.com".to_string())
-        .trim_end_matches('/')
-        .to_string();
+        .ok()
+        .and_then(|raw| normalize_base_url(&raw))
+        .unwrap_or_else(|| "https://api.discogs.com".to_string());
 
-    let url = format!(
-        "{base_url}/database/search?{query_params}\
-         &oauth_consumer_key={key}\
-         &oauth_nonce={nonce}\
-         &oauth_signature={sig}\
-         &oauth_signature_method=PLAINTEXT\
-         &oauth_timestamp={timestamp}\
-         &oauth_token={token}\
-         &oauth_version=1.0",
-        key = creds.consumer_key,
-        nonce = nonce(),
-        sig = urlencoding(&creds.signature),
-        token = creds.token,
-    );
+    let oauth_nonce = nonce();
+    let url = build_legacy_search_url(&base_url, &query_params);
+    let auth_header = build_legacy_oauth_authorization_header(creds, &oauth_nonce, timestamp);
 
     let resp = client
         .get(&url)
+        .header(reqwest::header::AUTHORIZATION, auth_header)
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
@@ -615,5 +663,64 @@ mod tests {
     #[test]
     fn result_title_match_allows_short_artist_names() {
         assert!(result_title_matches_artist("Random Result", "DJ"));
+    }
+
+    #[test]
+    fn normalize_base_url_rejects_blank_or_malformed_urls() {
+        assert_eq!(
+            normalize_base_url("https://broker.example.com/"),
+            Some("https://broker.example.com".to_string())
+        );
+        assert_eq!(normalize_base_url("   "), None);
+        assert_eq!(normalize_base_url("///"), None);
+        assert_eq!(normalize_base_url("https://"), None);
+        assert_eq!(normalize_base_url("http:///"), None);
+        assert_eq!(normalize_base_url("ftp://broker.example.com"), None);
+    }
+
+    #[test]
+    fn legacy_values_configured_requires_non_empty_values() {
+        assert!(legacy_values_configured(
+            Some("key"),
+            Some("secret"),
+            Some("token"),
+            Some("token-secret")
+        ));
+        assert!(!legacy_values_configured(
+            Some("key"),
+            Some("  "),
+            Some("token"),
+            Some("token-secret")
+        ));
+        assert!(!legacy_values_configured(
+            Some("key"),
+            None,
+            Some("token"),
+            Some("token-secret")
+        ));
+    }
+
+    #[test]
+    fn legacy_request_keeps_oauth_secrets_out_of_url() {
+        let creds = Credentials {
+            consumer_key: "consumer key".to_string(),
+            signature: "secret/part&token?secret".to_string(),
+            token: "token value".to_string(),
+        };
+        let query = "artist=Artist&track=Title&type=release&per_page=15";
+        let url = build_legacy_search_url("https://api.discogs.com", query);
+        let auth =
+            build_legacy_oauth_authorization_header(&creds, "nonce value", 1_700_000_000_u64);
+
+        assert_eq!(
+            url,
+            "https://api.discogs.com/database/search?artist=Artist&track=Title&type=release&per_page=15"
+        );
+        assert!(!url.contains("oauth_"));
+        assert!(auth.starts_with("OAuth "));
+        assert!(auth.contains("oauth_consumer_key=\"consumer%20key\""));
+        assert!(auth.contains("oauth_nonce=\"nonce%20value\""));
+        assert!(auth.contains("oauth_signature=\"secret%2Fpart%26token%3Fsecret\""));
+        assert!(auth.contains("oauth_token=\"token%20value\""));
     }
 }

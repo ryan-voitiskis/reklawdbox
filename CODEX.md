@@ -27,6 +27,7 @@ python3 docs/rekordbox/verify-phase-b.py
 ## Codex Integration Notes
 
 - Register or launch `./target/release/reklawdbox` as a stdio MCP server in your Codex host.
+- Recommended persistent launcher: `./scripts/run-reklawdbox-mcp.sh` with user env file `~/.config/reklawdbox/mcp.env` (template: `mcp.env.example`).
 - Use `mcp-config.example.json` as the safe template for local host config.
 - Required local data access:
   - Rekordbox DB path (`REKORDBOX_DB_PATH`, optional if default path exists)

@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, ffi, params};
 use std::path::PathBuf;
 
 pub fn default_path() -> PathBuf {
@@ -11,7 +11,17 @@ pub fn default_path() -> PathBuf {
 pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
     let p = std::path::Path::new(path);
     if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent).map_err(|err| {
+            rusqlite::Error::SqliteFailure(
+                ffi::Error::new(ffi::SQLITE_CANTOPEN),
+                Some(format!(
+                    "failed to create parent directory {} for {}: {}",
+                    parent.display(),
+                    p.display(),
+                    err
+                )),
+            )
+        })?;
     }
     let conn = Connection::open_with_flags(
         path,
@@ -29,41 +39,36 @@ pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
 
 fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS enrichment_cache (
-                provider TEXT NOT NULL,
-                query_artist TEXT NOT NULL,
-                query_title TEXT NOT NULL,
-                match_quality TEXT,
-                response_json TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (provider, query_artist, query_title)
-            );
-            CREATE TABLE IF NOT EXISTS audio_analysis_cache (
-                file_path TEXT NOT NULL,
-                analyzer TEXT NOT NULL,
-                file_size INTEGER NOT NULL,
-                file_mtime INTEGER NOT NULL,
-                analysis_version TEXT NOT NULL,
-                features_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (file_path, analyzer)
-            );
-            PRAGMA user_version = 1;",
-        )?;
-    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS enrichment_cache (
+            provider TEXT NOT NULL,
+            query_artist TEXT NOT NULL,
+            query_title TEXT NOT NULL,
+            match_quality TEXT,
+            response_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (provider, query_artist, query_title)
+        );
+        CREATE TABLE IF NOT EXISTS audio_analysis_cache (
+            file_path TEXT NOT NULL,
+            analyzer TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_mtime INTEGER NOT NULL,
+            analysis_version TEXT NOT NULL,
+            features_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (file_path, analyzer)
+        );
+        CREATE TABLE IF NOT EXISTS broker_discogs_session (
+            broker_url TEXT PRIMARY KEY,
+            session_token TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )?;
     if version < 2 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS broker_discogs_session (
-                broker_url TEXT PRIMARY KEY,
-                session_token TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            PRAGMA user_version = 2;",
-        )?;
+        conn.execute_batch("PRAGMA user_version = 2;")?;
     }
     Ok(())
 }
@@ -75,6 +80,14 @@ pub struct CachedEnrichment {
     pub match_quality: Option<String>,
     pub response_json: Option<String>,
     pub created_at: String,
+}
+
+fn touch_cached_enrichment(entry: &CachedEnrichment) {
+    let _ = (
+        entry.provider.as_str(),
+        entry.query_artist.as_str(),
+        entry.query_title.as_str(),
+    );
 }
 
 pub fn get_enrichment(
@@ -99,7 +112,10 @@ pub fn get_enrichment(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Ok(entry)) => {
+            touch_cached_enrichment(&entry);
+            Ok(Some(entry))
+        }
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -133,6 +149,15 @@ pub struct CachedAudioAnalysis {
     pub created_at: String,
 }
 
+fn touch_cached_audio_analysis(entry: &CachedAudioAnalysis) {
+    let _ = (
+        entry.file_path.as_str(),
+        entry.analyzer.as_str(),
+        entry.analysis_version.as_str(),
+        entry.created_at.as_str(),
+    );
+}
+
 pub fn get_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -155,7 +180,10 @@ pub fn get_audio_analysis(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Ok(entry)) => {
+            touch_cached_audio_analysis(&entry);
+            Ok(Some(entry))
+        }
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -188,6 +216,14 @@ pub struct BrokerDiscogsSession {
     pub updated_at: String,
 }
 
+fn touch_broker_discogs_session(entry: &BrokerDiscogsSession) {
+    let _ = (
+        entry.broker_url.as_str(),
+        entry.created_at.as_str(),
+        entry.updated_at.as_str(),
+    );
+}
+
 pub fn get_broker_discogs_session(
     conn: &Connection,
     broker_url: &str,
@@ -207,7 +243,10 @@ pub fn get_broker_discogs_session(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Ok(entry)) => {
+            touch_broker_discogs_session(&entry);
+            Ok(Some(entry))
+        }
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -288,6 +327,76 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn test_open_accepts_bare_relative_filename_path() {
+        use std::sync::{Mutex, OnceLock};
+
+        struct CwdGuard(std::path::PathBuf);
+        impl Drop for CwdGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        // set_current_dir is process-global, so serialize this test section.
+        static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _lock = CWD_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("cwd lock poisoned");
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let _restore_cwd = CwdGuard(original_cwd);
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let db_name = "internal.sqlite3";
+        let conn = open(db_name).unwrap();
+        drop(conn);
+
+        assert!(dir.path().join(db_name).is_file());
+    }
+
+    #[test]
+    fn test_open_reports_parent_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_directory = dir.path().join("not-a-directory");
+        std::fs::write(&not_a_directory, b"blocker").unwrap();
+        let db_path = not_a_directory.join("test.sqlite3");
+
+        let err = open(db_path.to_str().unwrap()).unwrap_err();
+        match err {
+            rusqlite::Error::SqliteFailure(_, Some(message)) => {
+                assert!(message.contains("failed to create parent directory"));
+                assert!(message.contains("not-a-directory"));
+            }
+            other => panic!("expected sqlite failure with context, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_open_repairs_missing_tables_when_user_version_is_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sqlite3");
+        let path_str = path.to_str().unwrap();
+
+        let conn = Connection::open(path_str).unwrap();
+        conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(tables.contains(&"enrichment_cache".to_string()));
+        assert!(tables.contains(&"audio_analysis_cache".to_string()));
+        assert!(tables.contains(&"broker_discogs_session".to_string()));
     }
 
     #[test]

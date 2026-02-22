@@ -107,6 +107,7 @@ pub struct CorpusHit {
 
 #[derive(Debug, Clone)]
 pub struct CorpusIndex {
+    #[cfg(test)]
     manifest: CorpusManifest,
     documents: Vec<IndexedDocument>,
 }
@@ -179,6 +180,7 @@ impl CorpusIndex {
         Self::from_manifest_path(REKORDBOX_MANIFEST_PATH)
     }
 
+    #[cfg(test)]
     pub fn manifest(&self) -> &CorpusManifest {
         &self.manifest
     }
@@ -235,6 +237,7 @@ impl CorpusIndex {
                 "manifest has no documents".to_string(),
             ));
         }
+        touch_manifest_metadata(&manifest);
 
         let mut documents = Vec::with_capacity(manifest.documents.len());
         for (manifest_order, document) in manifest.documents.iter().cloned().enumerate() {
@@ -284,6 +287,7 @@ impl CorpusIndex {
         }
 
         Ok(Self {
+            #[cfg(test)]
             manifest,
             documents,
         })
@@ -308,11 +312,17 @@ fn normalize_optional_filter(value: Option<&str>) -> Option<String> {
 }
 
 fn to_repo_relative_doc_path(path: &str) -> Option<String> {
-    if path.trim().is_empty() {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
         return None;
     }
 
-    let input = Path::new(path.trim());
+    // Reject Windows-style absolute/path-separator forms even on Unix hosts.
+    if trimmed.contains('\\') || looks_like_windows_drive_path(trimmed) {
+        return None;
+    }
+
+    let input = Path::new(trimmed);
     if input.is_absolute() {
         return None;
     }
@@ -332,6 +342,37 @@ fn to_repo_relative_doc_path(path: &str) -> Option<String> {
     }
 
     Some(format!("{REKORDBOX_DOCS_ROOT}/{}", parts.join("/")))
+}
+
+fn looks_like_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn touch_manifest_metadata(manifest: &CorpusManifest) {
+    let _ = (
+        manifest.schema_version,
+        manifest.corpus.as_str(),
+        manifest.description.as_deref(),
+        manifest.software_version.as_deref(),
+        manifest.last_updated.as_deref(),
+    );
+
+    if let Some(source_documents) = manifest.source_documents.as_ref() {
+        let _ = (
+            source_documents.pdfs,
+            source_documents.faq_items,
+            source_documents.web_pages,
+        );
+    }
+
+    if let Some(taxonomy) = manifest.taxonomy.as_ref() {
+        let _ = (&taxonomy.topics, &taxonomy.modes, &taxonomy.types);
+    }
+
+    for document in &manifest.documents {
+        let _ = document.confidence.as_deref();
+    }
 }
 
 fn document_matches_filters(document: &IndexedDocument, query: &NormalizedQuery) -> bool {
@@ -550,5 +591,28 @@ documents:
         let error =
             CorpusIndex::from_manifest_str(manifest).expect_err("must fail path validation");
         assert!(format!("{error}").contains("invalid relative path"));
+    }
+
+    #[test]
+    fn rejects_windows_style_drive_paths() {
+        for path in ["C:\\docs\\guide.md", "C:/docs/guide.md", "C:docs/guide.md"] {
+            let manifest = format!(
+                r#"
+schema_version: 1
+corpus: rekordbox
+documents:
+  - id: win-abs
+    title: Windows Absolute
+    type: guide
+    path: '{path}'
+    topics: [xml]
+    modes: [common]
+"#
+            );
+
+            let error =
+                CorpusIndex::from_manifest_str(&manifest).expect_err("must fail path validation");
+            assert!(format!("{error}").contains("invalid relative path"));
+        }
     }
 }

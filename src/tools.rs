@@ -104,6 +104,11 @@ impl ReklawdboxServer {
         title: &str,
         album: Option<&str>,
     ) -> Result<Option<discogs::DiscogsResult>, discogs::LookupError> {
+        #[cfg(test)]
+        if let Some(result) = take_test_discogs_lookup_override(artist, title, album) {
+            return result;
+        }
+
         if let Some(cfg) = discogs::BrokerConfig::from_env() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -258,10 +263,124 @@ impl ReklawdboxServer {
             discogs::missing_auth_remediation(),
         ))
     }
+
+    async fn lookup_beatport_live(
+        &self,
+        artist: &str,
+        title: &str,
+    ) -> Result<Option<beatport::BeatportResult>, String> {
+        #[cfg(test)]
+        if let Some(result) = take_test_beatport_lookup_override(artist, title) {
+            return result;
+        }
+
+        beatport::lookup(&self.state.http, artist, title).await
+    }
 }
 
 fn err(msg: String) -> McpError {
     McpError::internal_error(msg, None)
+}
+
+#[cfg(test)]
+type DiscogsLookupOverrideResult = Result<Option<discogs::DiscogsResult>, discogs::LookupError>;
+#[cfg(test)]
+type BeatportLookupOverrideResult = Result<Option<beatport::BeatportResult>, String>;
+
+#[cfg(test)]
+type DiscogsLookupOverrideKey = (String, String, Option<String>);
+#[cfg(test)]
+type BeatportLookupOverrideKey = (String, String);
+
+#[cfg(test)]
+static TEST_DISCOGS_LOOKUP_OVERRIDES: OnceLock<
+    Mutex<HashMap<DiscogsLookupOverrideKey, DiscogsLookupOverrideResult>>,
+> = OnceLock::new();
+#[cfg(test)]
+static TEST_BEATPORT_LOOKUP_OVERRIDES: OnceLock<
+    Mutex<HashMap<BeatportLookupOverrideKey, BeatportLookupOverrideResult>>,
+> = OnceLock::new();
+
+#[cfg(test)]
+fn set_test_discogs_lookup_override(
+    artist: &str,
+    title: &str,
+    album: Option<&str>,
+    result: DiscogsLookupOverrideResult,
+) {
+    let map = TEST_DISCOGS_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        guard.insert(
+            (
+                artist.to_string(),
+                title.to_string(),
+                album.map(str::to_string),
+            ),
+            result,
+        );
+    }
+}
+
+#[cfg(test)]
+fn take_test_discogs_lookup_override(
+    artist: &str,
+    title: &str,
+    album: Option<&str>,
+) -> Option<DiscogsLookupOverrideResult> {
+    let map = TEST_DISCOGS_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock().ok()?.remove(&(
+        artist.to_string(),
+        title.to_string(),
+        album.map(str::to_string),
+    ))
+}
+
+#[cfg(test)]
+fn set_test_beatport_lookup_override(
+    artist: &str,
+    title: &str,
+    result: BeatportLookupOverrideResult,
+) {
+    let map = TEST_BEATPORT_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        guard.insert((artist.to_string(), title.to_string()), result);
+    }
+}
+
+#[cfg(test)]
+fn take_test_beatport_lookup_override(
+    artist: &str,
+    title: &str,
+) -> Option<BeatportLookupOverrideResult> {
+    let map = TEST_BEATPORT_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock()
+        .ok()?
+        .remove(&(artist.to_string(), title.to_string()))
+}
+
+fn lookup_output_with_cache_metadata(
+    payload: serde_json::Value,
+    cache_hit: bool,
+    cached_at: Option<&str>,
+) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut map) => {
+            map.insert("cache_hit".to_string(), serde_json::json!(cache_hit));
+            if let Some(cached_at) = cached_at {
+                map.insert("cached_at".to_string(), serde_json::json!(cached_at));
+            }
+            serde_json::Value::Object(map)
+        }
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("result".to_string(), other);
+            map.insert("cache_hit".to_string(), serde_json::json!(cache_hit));
+            if let Some(cached_at) = cached_at {
+                map.insert("cached_at".to_string(), serde_json::json!(cached_at));
+            }
+            serde_json::Value::Object(map)
+        }
+    }
 }
 
 fn auth_remediation_message(remediation: &discogs::AuthRemediation) -> String {
@@ -1415,7 +1534,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Look up a track on Discogs for genre/style enrichment. Returns release info with genres and styles, or null if not found. Results are cached. Pass track_id to auto-fill artist/title/album from the library."
+        description = "Look up a track on Discogs for genre/style enrichment. Returns an object payload with lookup data plus cache metadata (`cache_hit`, optional `cached_at`). On no match, `result` is null. Results are cached. Pass track_id to auto-fill artist/title/album from the library."
     )]
     async fn lookup_discogs(
         &self,
@@ -1459,24 +1578,16 @@ impl ReklawdboxServer {
                 store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
                     .map_err(|e| err(format!("Cache read error: {e}")))?
             {
-                let mut result = match &cached.response_json {
+                let result = match &cached.response_json {
                     Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
                         .unwrap_or(serde_json::Value::Null),
                     None => serde_json::Value::Null,
                 };
-                if let serde_json::Value::Object(ref mut map) = result {
-                    map.insert("cache_hit".to_string(), serde_json::json!(true));
-                    map.insert(
-                        "cached_at".to_string(),
-                        serde_json::json!(cached.created_at),
-                    );
-                } else {
-                    result = serde_json::json!({
-                        "result": null,
-                        "cache_hit": true,
-                        "cached_at": cached.created_at,
-                    });
-                }
+                let result = lookup_output_with_cache_metadata(
+                    result,
+                    true,
+                    Some(cached.created_at.as_str()),
+                );
                 let json =
                     serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
                 return Ok(CallToolResult::success(vec![Content::text(json)]));
@@ -1512,16 +1623,17 @@ impl ReklawdboxServer {
             .map_err(|e| err(format!("Cache write error: {e}")))?;
         }
 
-        let mut output = serde_json::to_value(&result).map_err(|e| err(format!("{e}")))?;
-        if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("cache_hit".to_string(), serde_json::json!(false));
-        }
+        let output = lookup_output_with_cache_metadata(
+            serde_json::to_value(&result).map_err(|e| err(format!("{e}")))?,
+            false,
+            None,
+        );
         let json = serde_json::to_string_pretty(&output).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     #[tool(
-        description = "Look up a track on Beatport for genre/BPM/key enrichment. Returns track info or null if not found. Results are cached. Pass track_id to auto-fill artist/title from the library."
+        description = "Look up a track on Beatport for genre/BPM/key enrichment. Returns an object payload with lookup data plus cache metadata (`cache_hit`, optional `cached_at`). On no match, `result` is null. Results are cached. Pass track_id to auto-fill artist/title from the library."
     )]
     async fn lookup_beatport(
         &self,
@@ -1560,31 +1672,24 @@ impl ReklawdboxServer {
                 store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
                     .map_err(|e| err(format!("Cache read error: {e}")))?
             {
-                let mut result = match &cached.response_json {
+                let result = match &cached.response_json {
                     Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
                         .unwrap_or(serde_json::Value::Null),
                     None => serde_json::Value::Null,
                 };
-                if let serde_json::Value::Object(ref mut map) = result {
-                    map.insert("cache_hit".to_string(), serde_json::json!(true));
-                    map.insert(
-                        "cached_at".to_string(),
-                        serde_json::json!(cached.created_at),
-                    );
-                } else {
-                    result = serde_json::json!({
-                        "result": null,
-                        "cache_hit": true,
-                        "cached_at": cached.created_at,
-                    });
-                }
+                let result = lookup_output_with_cache_metadata(
+                    result,
+                    true,
+                    Some(cached.created_at.as_str()),
+                );
                 let json =
                     serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
                 return Ok(CallToolResult::success(vec![Content::text(json)]));
             }
         }
 
-        let result = beatport::lookup(&self.state.http, &artist, &title)
+        let result = self
+            .lookup_beatport_live(&artist, &title)
             .await
             .map_err(|e| err(format!("Beatport error: {e}")))?;
 
@@ -1608,10 +1713,11 @@ impl ReklawdboxServer {
             .map_err(|e| err(format!("Cache write error: {e}")))?;
         }
 
-        let mut output = serde_json::to_value(&result).map_err(|e| err(format!("{e}")))?;
-        if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("cache_hit".to_string(), serde_json::json!(false));
-        }
+        let output = lookup_output_with_cache_metadata(
+            serde_json::to_value(&result).map_err(|e| err(format!("{e}")))?,
+            false,
+            None,
+        );
         let json = serde_json::to_string_pretty(&output).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -1671,7 +1777,8 @@ impl ReklawdboxServer {
         };
 
         let tracks: Vec<_> = tracks.into_iter().take(max_tracks).collect();
-        let total = tracks.len();
+        let total_tracks = tracks.len();
+        let total = total_tracks.saturating_mul(providers.len());
 
         let mut enriched = 0usize;
         let mut cached = 0usize;
@@ -1814,6 +1921,7 @@ impl ReklawdboxServer {
 
         let result = serde_json::json!({
             "summary": {
+                "tracks_total": total_tracks,
                 "total": total,
                 "enriched": enriched,
                 "cached": cached,
@@ -2605,8 +2713,6 @@ impl ReklawdboxServer {
         let requested_candidates = p.candidates.unwrap_or(2).clamp(1, 3) as usize;
         let requested_target = p.target_tracks as usize;
         let priority = p.priority.unwrap_or(SetPriority::Balanced);
-        let phases = resolve_energy_curve(p.energy_curve.as_ref(), requested_target)
-            .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?;
 
         let tracks = {
             let conn = self.conn()?;
@@ -2639,6 +2745,17 @@ impl ReklawdboxServer {
         }
 
         let actual_target = requested_target.min(profiles_by_id.len());
+        let phases = match p.energy_curve.as_ref() {
+            Some(EnergyCurveInput::Custom(_)) => {
+                let requested_phases =
+                    resolve_energy_curve(p.energy_curve.as_ref(), requested_target).map_err(
+                        |e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None),
+                    )?;
+                requested_phases.into_iter().take(actual_target).collect()
+            }
+            _ => resolve_energy_curve(p.energy_curve.as_ref(), actual_target)
+                .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?,
+        };
         let effective_candidates = if profiles_by_id.len() <= actual_target {
             1
         } else {
@@ -4839,6 +4956,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn build_set_recomputes_preset_curve_when_pool_is_smaller_than_target() {
+        let (db_conn, track_ids) = create_build_set_test_db();
+        let selected: Vec<String> = track_ids.into_iter().take(3).collect();
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        seed_build_set_cache(&store_conn);
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .build_set(Parameters(BuildSetParams {
+                track_ids: selected,
+                target_tracks: 6,
+                priority: Some(SetPriority::Balanced),
+                energy_curve: Some(EnergyCurveInput::Preset(
+                    EnergyCurvePreset::WarmupBuildPeakRelease,
+                )),
+                start_track_id: None,
+                candidates: Some(1),
+            }))
+            .await
+            .expect("build_set should succeed when pool is smaller than target");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["tracks_used"], 3);
+        let transitions = payload["candidates"][0]["transitions"]
+            .as_array()
+            .expect("candidate transitions should be an array");
+        assert_eq!(transitions.len(), 2);
+        let second_energy_label = transitions[1]["scores"]["energy"]["label"]
+            .as_str()
+            .expect("second transition should include energy label");
+        assert!(
+            second_energy_label.contains("peak phase"),
+            "phase scaling should include a peak phase for the final transition when tracks_used=3; got: {second_energy_label}"
+        );
+    }
+
     #[test]
     #[cfg(unix)]
     fn probe_essentia_python_prefers_env_override_when_valid() {
@@ -4921,6 +5084,35 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_secs(1),
             "probe timeout should fail fast"
+        );
+    }
+
+    #[test]
+    fn lookup_output_with_cache_metadata_normalizes_non_object_payloads() {
+        let output = lookup_output_with_cache_metadata(serde_json::Value::Null, false, None);
+        assert_eq!(output["result"], serde_json::Value::Null);
+        assert_eq!(output["cache_hit"], false);
+        assert!(
+            output.get("cached_at").is_none(),
+            "live payload should not include cached_at"
+        );
+    }
+
+    #[test]
+    fn lookup_output_with_cache_metadata_keeps_object_payload_shape() {
+        let output = lookup_output_with_cache_metadata(
+            serde_json::json!({
+                "genre": "Techno"
+            }),
+            true,
+            Some("2026-02-20T10:00:00Z"),
+        );
+        assert_eq!(output["genre"], "Techno");
+        assert_eq!(output["cache_hit"], true);
+        assert_eq!(output["cached_at"], "2026-02-20T10:00:00Z");
+        assert!(
+            output.get("result").is_none(),
+            "object payloads should not be wrapped in a result envelope"
         );
     }
 
@@ -5511,6 +5703,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lookup_discogs_no_match_payload_is_consistent_across_live_and_cache_paths() {
+        let db_conn =
+            create_single_track_test_db("discogs-no-match-track", "/tmp/discogs-no-match.flac");
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        let artist = "Discogs NoMatch Artist";
+        let title = "Discogs NoMatch Title";
+        set_test_discogs_lookup_override(artist, title, None, Ok(None));
+
+        let live_result = server
+            .lookup_discogs(Parameters(LookupDiscogsParams {
+                track_id: None,
+                artist: Some(artist.to_string()),
+                title: Some(title.to_string()),
+                album: None,
+                force_refresh: Some(true),
+            }))
+            .await
+            .expect("live discogs no-match should succeed");
+        let live_payload = extract_json(&live_result);
+        assert_eq!(live_payload["result"], serde_json::Value::Null);
+        assert_eq!(live_payload["cache_hit"], false);
+        assert!(
+            live_payload.get("cached_at").is_none(),
+            "live payload should omit cached_at"
+        );
+
+        let cache_result = server
+            .lookup_discogs(Parameters(LookupDiscogsParams {
+                track_id: None,
+                artist: Some(artist.to_string()),
+                title: Some(title.to_string()),
+                album: None,
+                force_refresh: Some(false),
+            }))
+            .await
+            .expect("cached discogs no-match should succeed");
+        let cache_payload = extract_json(&cache_result);
+        assert_eq!(cache_payload["result"], serde_json::Value::Null);
+        assert_eq!(cache_payload["cache_hit"], true);
+
+        let cache_hit_timestamp = cache_payload
+            .get("cached_at")
+            .and_then(serde_json::Value::as_str)
+            .expect("cached no-match payload should include cached_at");
+        let norm_artist = discogs::normalize(artist);
+        let norm_title = discogs::normalize(title);
+        let cache_entry = {
+            let store = server
+                .internal_conn()
+                .expect("internal store should be available");
+            store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
+                .expect("cache read should succeed")
+                .expect("discogs no-match lookup should create cache entry")
+        };
+        assert!(
+            cache_entry.response_json.is_none(),
+            "discogs no-match cache entry should store null response as no payload"
+        );
+        assert_eq!(
+            cache_hit_timestamp,
+            cache_entry.created_at.as_str(),
+            "cached_at should match persisted cache timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_beatport_no_match_payload_is_consistent_across_live_and_cache_paths() {
+        let db_conn = create_single_track_test_db(
+            "beatport-no-match-track",
+            "/tmp/beatport-no-match.flac",
+        );
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        let artist = "Beatport NoMatch Artist";
+        let title = "Beatport NoMatch Title";
+        set_test_beatport_lookup_override(artist, title, Ok(None));
+
+        let live_result = server
+            .lookup_beatport(Parameters(LookupBeatportParams {
+                track_id: None,
+                artist: Some(artist.to_string()),
+                title: Some(title.to_string()),
+                force_refresh: Some(true),
+            }))
+            .await
+            .expect("live beatport no-match should succeed");
+        let live_payload = extract_json(&live_result);
+        assert_eq!(live_payload["result"], serde_json::Value::Null);
+        assert_eq!(live_payload["cache_hit"], false);
+        assert!(
+            live_payload.get("cached_at").is_none(),
+            "live payload should omit cached_at"
+        );
+
+        let cache_result = server
+            .lookup_beatport(Parameters(LookupBeatportParams {
+                track_id: None,
+                artist: Some(artist.to_string()),
+                title: Some(title.to_string()),
+                force_refresh: Some(false),
+            }))
+            .await
+            .expect("cached beatport no-match should succeed");
+        let cache_payload = extract_json(&cache_result);
+        assert_eq!(cache_payload["result"], serde_json::Value::Null);
+        assert_eq!(cache_payload["cache_hit"], true);
+
+        let cache_hit_timestamp = cache_payload
+            .get("cached_at")
+            .and_then(serde_json::Value::as_str)
+            .expect("cached no-match payload should include cached_at");
+        let norm_artist = discogs::normalize(artist);
+        let norm_title = discogs::normalize(title);
+        let cache_entry = {
+            let store = server
+                .internal_conn()
+                .expect("internal store should be available");
+            store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
+                .expect("cache read should succeed")
+                .expect("beatport no-match lookup should create cache entry")
+        };
+        assert!(
+            cache_entry.response_json.is_none(),
+            "beatport no-match cache entry should store null response as no payload"
+        );
+        assert_eq!(
+            cache_hit_timestamp,
+            cache_entry.created_at.as_str(),
+            "cached_at should match persisted cache timestamp"
+        );
+    }
+
+    #[tokio::test]
     async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         let db_conn = create_single_track_test_db("cached-track-1", "/tmp/cached-track-1.flac");
         db_conn
@@ -5677,6 +6021,74 @@ mod tests {
             entry_two.response_json.as_deref(),
             Some(cached_two.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn enrich_tracks_summary_uses_provider_attempt_totals() {
+        let db_conn = create_single_track_test_db("cached-track-1", "/tmp/cached-track-1.flac");
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path
+                .to_str()
+                .expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        let norm_artist = discogs::normalize("Aníbal");
+        let norm_title = discogs::normalize("Señorita");
+        store::set_enrichment(
+            &store_conn,
+            "discogs",
+            &norm_artist,
+            &norm_title,
+            Some("exact"),
+            Some(r#"{"styles":["Deep House"]}"#),
+        )
+        .expect("discogs cache should seed");
+        store::set_enrichment(
+            &store_conn,
+            "beatport",
+            &norm_artist,
+            &norm_title,
+            Some("exact"),
+            Some(r#"{"genre":"Deep House"}"#),
+        )
+        .expect("beatport cache should seed");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+        let result = server
+            .enrich_tracks(Parameters(EnrichTracksParams {
+                track_ids: Some(vec!["cached-track-1".to_string()]),
+                playlist_id: None,
+                query: None,
+                artist: None,
+                genre: None,
+                has_genre: None,
+                bpm_min: None,
+                bpm_max: None,
+                key: None,
+                rating_min: None,
+                label: None,
+                path: None,
+                added_after: None,
+                added_before: None,
+                max_tracks: Some(1),
+                providers: Some(vec!["discogs".to_string(), "beatport".to_string()]),
+                skip_cached: Some(true),
+                force_refresh: Some(false),
+            }))
+            .await
+            .expect("enrich_tracks should resolve from cache for both providers");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["summary"]["tracks_total"], 1);
+        assert_eq!(payload["summary"]["total"], 2);
+        assert_eq!(payload["summary"]["cached"], 2);
+        assert_eq!(payload["summary"]["enriched"], 0);
+        assert_eq!(payload["summary"]["skipped"], 0);
+        assert_eq!(payload["summary"]["failed"], 0);
     }
 
     #[tokio::test]

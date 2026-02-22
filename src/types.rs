@@ -108,7 +108,7 @@ pub fn file_type_to_kind(file_type: i32) -> &'static str {
     }
 }
 
-/// Convert 1-5 star rating to Rekordbox DB/XML encoding (0/51/102/153/204/255).
+/// Convert 0-5 star rating to Rekordbox DB/XML encoding (0/51/102/153/204/255).
 pub fn stars_to_rating(stars: u8) -> u16 {
     match stars {
         0 => 0,
@@ -117,7 +117,7 @@ pub fn stars_to_rating(stars: u8) -> u16 {
         3 => 153,
         4 => 204,
         5 => 255,
-        _ => 0,
+        _ => 255,
     }
 }
 
@@ -158,5 +158,26 @@ mod tests {
         assert_eq!(stars_to_rating(3), 153);
         assert_eq!(stars_to_rating(4), 204);
         assert_eq!(stars_to_rating(5), 255);
+    }
+
+    #[test]
+    fn stars_out_of_range_saturates_to_five_stars() {
+        assert_eq!(stars_to_rating(6), 255);
+        assert_eq!(stars_to_rating(u8::MAX), 255);
+    }
+
+    #[test]
+    fn rating_bucket_boundaries() {
+        assert_eq!(rating_to_stars(25), 0);
+        assert_eq!(rating_to_stars(26), 1);
+        assert_eq!(rating_to_stars(76), 1);
+        assert_eq!(rating_to_stars(77), 2);
+        assert_eq!(rating_to_stars(127), 2);
+        assert_eq!(rating_to_stars(128), 3);
+        assert_eq!(rating_to_stars(178), 3);
+        assert_eq!(rating_to_stars(179), 4);
+        assert_eq!(rating_to_stars(229), 4);
+        assert_eq!(rating_to_stars(230), 5);
+        assert_eq!(rating_to_stars(255), 5);
     }
 }

@@ -114,54 +114,65 @@ fn parse_beatport_html(
         Err(_) => return Ok(None),
     };
 
-    // Navigate: props.pageProps.dehydratedState.queries[0].state.data.data
-    let tracks = next_data.pointer("/props/pageProps/dehydratedState/queries/0/state/data/data");
-
-    let tracks = match tracks.and_then(|v| v.as_array()) {
+    // Search every dehydrated query entry for track arrays.
+    let queries = match next_data.pointer("/props/pageProps/dehydratedState/queries") {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let queries = match queries.as_array() {
         Some(arr) => arr,
         None => return Ok(None),
     };
 
-    for track in tracks {
-        if is_track_match(track, artist, title) {
-            let track_name = track
-                .get("track_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let artists = track
-                .get("artists")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a.get("artist_name").and_then(|n| n.as_str()))
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let genre = track
-                .get("genre")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|g| g.get("genre_name"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
+    for query in queries {
+        let Some(tracks) = query.pointer("/state/data/data").and_then(|v| v.as_array()) else {
+            continue;
+        };
 
-            let bpm = track.get("bpm").and_then(|v| v.as_i64()).map(|v| v as i32);
+        for track in tracks {
+            if is_track_match(track, artist, title) {
+                let track_name = track
+                    .get("track_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let artists = track
+                    .get("artists")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| a.get("artist_name").and_then(|n| n.as_str()))
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let genre = track
+                    .get("genre")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|g| g.get("genre_name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
-            let key = track
-                .get("key_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                let bpm = track
+                    .get("bpm")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|v| i32::try_from(v).ok());
 
-            return Ok(Some(BeatportResult {
-                genre,
-                bpm,
-                key,
-                track_name: track_name.to_string(),
-                artists,
-            }));
+                let key = track
+                    .get("key_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                return Ok(Some(BeatportResult {
+                    genre,
+                    bpm,
+                    key,
+                    track_name: track_name.to_string(),
+                    artists,
+                }));
+            }
         }
     }
 
@@ -181,8 +192,11 @@ fn extract_next_data_json(html: &str) -> Option<&str> {
 }
 
 fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool {
-    let norm_artist = artist.to_lowercase();
-    let norm_title = title.to_lowercase();
+    let norm_artist = artist.trim().to_lowercase();
+    let norm_title = title.trim().to_lowercase();
+    if norm_artist.is_empty() || norm_title.is_empty() {
+        return false;
+    }
 
     let artist_match = track
         .get("artists")
@@ -198,7 +212,11 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
         .get("track_name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
+        .trim()
         .to_lowercase();
+    if track_name.is_empty() {
+        return false;
+    }
     let title_match = track_name.contains(&norm_title) || norm_title.contains(&track_name);
 
     artist_match && title_match
@@ -218,20 +236,12 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn build_html_with_tracks(tracks: serde_json::Value) -> String {
+    fn build_html_with_queries(queries: serde_json::Value) -> String {
         let next_data = serde_json::json!({
             "props": {
                 "pageProps": {
                     "dehydratedState": {
-                        "queries": [
-                            {
-                                "state": {
-                                    "data": {
-                                        "data": tracks
-                                    }
-                                }
-                            }
-                        ]
+                        "queries": queries
                     }
                 }
             }
@@ -240,6 +250,18 @@ mod tests {
             r#"<html><head><script id="__NEXT_DATA__" type="application/json">{}</script></head><body></body></html>"#,
             next_data
         )
+    }
+
+    fn build_html_with_tracks(tracks: serde_json::Value) -> String {
+        build_html_with_queries(serde_json::json!([
+            {
+                "state": {
+                    "data": {
+                        "data": tracks
+                    }
+                }
+            }
+        ]))
     }
 
     #[test]
@@ -333,6 +355,97 @@ mod tests {
             .unwrap()
             .expect("expected a beatport match");
         assert_eq!(result.track_name, "Archangel");
+    }
+
+    #[test]
+    fn test_parse_finds_match_when_tracks_live_in_nonzero_query_index() {
+        let html = build_html_with_queries(serde_json::json!([
+            {
+                "state": {
+                    "data": {
+                        "data": [
+                            {
+                                "track_id": 9,
+                                "track_name": "Different Track",
+                                "artists": [{"artist_name": "Different Artist"}],
+                                "bpm": 125,
+                                "key_name": "Fm",
+                                "genre": [{"genre_name": "Tech House"}]
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "state": {
+                    "data": {
+                        "data": [
+                            {
+                                "track_id": 10,
+                                "track_name": "Archangel",
+                                "artists": [{"artist_name": "Burial"}],
+                                "bpm": 140,
+                                "key_name": "Am",
+                                "genre": [{"genre_name": "Bass / Club"}]
+                            }
+                        ]
+                    }
+                }
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match from queries[1]");
+        assert_eq!(result.track_name, "Archangel");
+    }
+
+    #[test]
+    fn test_parse_does_not_match_when_track_name_is_empty() {
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 4,
+                "track_name": "",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 140,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Bass / Club"}]
+            }
+        ]));
+        let result = parse_beatport_html(&html, "Burial", "Archangel").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_ignores_out_of_range_bpm() {
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 5,
+                "track_name": "Archangel",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 4_294_967_295_i64,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Bass / Club"}]
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match");
+        assert_eq!(result.bpm, None);
+    }
+
+    #[test]
+    fn test_is_track_match_rejects_empty_query_inputs() {
+        let track = serde_json::json!({
+            "track_name": "Archangel",
+            "artists": [{"artist_name": "Burial"}]
+        });
+
+        assert!(!is_track_match(&track, "", "Archangel"));
+        assert!(!is_track_match(&track, "Burial", ""));
+        assert!(!is_track_match(&track, "   ", "Archangel"));
+        assert!(!is_track_match(&track, "Burial", "   "));
     }
 
     #[test]
