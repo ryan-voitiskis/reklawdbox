@@ -141,8 +141,8 @@ Synth-pop, Tech House, Techno, Trance, UK Bass
 ## Documentation
 
 - [reklawdbox.com](https://reklawdbox.com) — Astro Starlight docs site
-- [`docs/rekordbox-internals.md`](docs/rekordbox-internals.md) — Rekordbox file formats, database schema, XML structure, ecosystem tools
-- [`docs/backup-and-restore.md`](docs/backup-and-restore.md) — Backup usage and restore procedures
-- [`docs/discogs-broker-auth.md`](docs/discogs-broker-auth.md) — Discogs broker setup, first-run auth, and re-auth/reset guidance
+- [`docs/reference/rekordbox-internals.md`](docs/reference/rekordbox-internals.md) — Rekordbox file formats, database schema, XML structure, ecosystem tools
+- [`docs/operations/runbooks/backup-and-restore.md`](docs/operations/runbooks/backup-and-restore.md) — Backup usage and restore procedures
+- [`docs/integrations/discogs/auth.md`](docs/integrations/discogs/auth.md) — Discogs broker setup, first-run auth, and re-auth/reset guidance
 - [`CODEX.md`](CODEX.md) — Codex-specific operator/developer workflow notes
 - [`CLAUDE.md`](CLAUDE.md) — Claude Code-specific operator/developer workflow notes

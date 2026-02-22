@@ -1,6 +1,6 @@
 # SOP Test Session Log — 2026-02-20/22
 
-End-to-end test of `docs/genre-classification-sop.md` against a live Rekordbox library (2460 tracks, 468 ungenred).
+End-to-end test of `docs/operations/sops/genre-classification.md` against a live Rekordbox library (2460 tracks, 468 ungenred).
 
 ## Steps Completed
 
@@ -19,7 +19,7 @@ Cache was near-empty. Hydrated via audio analysis (Stratum-DSP) and enrichment (
 2. `max_tracks` defaults to 20 even when `track_ids` is provided — must set explicitly.
 3. `skip_cached` doesn't filter search results, only prevents re-processing — confusing when combined with the 200-result cap.
 
-Report: `docs/tmp/sop-step1-hydration-report.md`
+Detailed step notes were consolidated into this report.
 
 ### Step 2: Taxonomy Review
 
@@ -35,7 +35,7 @@ Ran `suggest_normalizations`. Reviewed 199 alias tracks, 13 unknown-genre tracks
 
 **SOP feedback:** Taxonomy should be refined through conversation with user *before* presenting mapping recommendations, not after.
 
-Report: `docs/tmp/sop-step2-taxonomy-report.md`
+Detailed step notes were consolidated into this report.
 
 ### Step 3: Classification (partial)
 
@@ -82,3 +82,9 @@ Exported as playlist: `rekordbox-exports/reklawdbox-20260221-213905.xml`
 | Empty artist fields break enrichment | Moderate | SOP needs handling |
 | 6 wrong alias mappings in `genre.rs` | Moderate | Fix in code |
 | SOP should refine taxonomy first | Process | Update SOP |
+
+## Post-Session Status (2026-02-22)
+
+- `search_tracks` now supports `offset` pagination.
+- `analyze_audio_batch` and `enrich_tracks` now default `max_tracks` to `track_ids.len()` when `track_ids` is provided.
+- Taxonomy updates from this session are reflected in `src/genre.rs` (including `Dub Reggae`, `Drone Techno`, `Gospel House`, `Progressive House`, `Highlife`, and `Jazz`).

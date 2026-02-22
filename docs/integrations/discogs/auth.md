@@ -46,4 +46,4 @@ Legacy `REKLAWDBOX_DISCOGS_*` auth vars still exist as a fallback path, but are 
 
 Default internal store location resolves to platform data dir + `reklawdbox/internal.sqlite3` (for example on macOS: `~/Library/Application Support/reklawdbox/internal.sqlite3`).
 
-Deployment runbook: `docs/discogs-broker-test-first-handover.md`
+Deployment runbook: `broker/README.md` (`Release Runbook (Test-First)` section).
