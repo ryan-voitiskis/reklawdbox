@@ -186,6 +186,17 @@ rotate_backups() {
     fi
 }
 
+is_allowed_db_file() {
+    local candidate="$1"
+    local allowed
+    for allowed in "${DB_FILES[@]}"; do
+        if [[ "$allowed" == "$candidate" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 restore_backup() {
     local archive="$1"
 
@@ -220,9 +231,12 @@ restore_backup() {
     fi
     echo ""
 
+    local restore_mode
     if [[ "$basename" == full_* ]]; then
+        restore_mode="full"
         warn "This is a FULL restore. It will replace your entire Rekordbox data directory."
     else
+        restore_mode="db"
         warn "This is a DB restore. It will replace database and config files only."
         warn "Analysis data and artwork will remain unchanged."
     fi
@@ -238,16 +252,94 @@ restore_backup() {
     log "Creating safety backup of current state..."
     backup_db_only "pre-restore"
 
-    if [[ "$basename" == full_* ]]; then
-        # Full restore: replace entire directory
-        log "Restoring full backup..."
-        # The full backup contains the 'rekordbox' directory itself
-        tar -xzf "$archive" -C "$(dirname "$RB_DATA")"
-    else
-        # DB restore: extract into the rekordbox directory
-        log "Restoring database files..."
-        tar -xzf "$archive" -C "$RB_DATA"
+    local staging_dir
+    staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/reklawdbox-restore.XXXXXX")"
+    if ! tar -xzf "$archive" -C "$staging_dir"; then
+        err "Restore failed while extracting archive into staging."
+        rm -rf "$staging_dir"
+        exit 1
     fi
+
+    if [[ "$restore_mode" == "full" ]]; then
+        # Full restore: replace the entire directory with the staged snapshot.
+        log "Restoring full backup..."
+
+        local rb_name
+        rb_name="$(basename "$RB_DATA")"
+        local staged_rb_dir
+        staged_rb_dir="$staging_dir/$rb_name"
+        if [[ ! -d "$staged_rb_dir" ]]; then
+            err "Full backup is missing expected top-level directory: $rb_name"
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local unexpected_entry
+        unexpected_entry="$(find "$staging_dir" -mindepth 1 -maxdepth 1 ! -name "$rb_name" -print -quit)"
+        if [[ -n "$unexpected_entry" ]]; then
+            err "Full backup contains unexpected top-level entry: $(basename "$unexpected_entry")"
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local rollback_dir
+        rollback_dir="${RB_DATA}.restore-backup-${TIMESTAMP}"
+        mv "$RB_DATA" "$rollback_dir"
+        if ! mv "$staged_rb_dir" "$RB_DATA"; then
+            err "Failed to move restored data into place; attempting rollback."
+            if ! mv "$rollback_dir" "$RB_DATA"; then
+                err "Rollback failed. Previous data is at: $rollback_dir"
+            fi
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+        rm -rf "$rollback_dir"
+    else
+        # DB restore: apply only validated top-level DB files.
+        log "Restoring database files..."
+
+        local nested_entry
+        nested_entry="$(find "$staging_dir" -mindepth 2 -print -quit)"
+        if [[ -n "$nested_entry" ]]; then
+            err "DB backup contains nested paths; refusing restore."
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local special_entry
+        special_entry="$(find "$staging_dir" -mindepth 1 \( -type l -o -type p -o -type b -o -type c -o -type s \) -print -quit)"
+        if [[ -n "$special_entry" ]]; then
+            err "DB backup contains unsupported file types; refusing restore."
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local -a staged_files=()
+        while IFS= read -r staged_file; do
+            local file_name
+            file_name="$(basename "$staged_file")"
+            if ! is_allowed_db_file "$file_name"; then
+                err "DB backup contains unexpected file: $file_name"
+                rm -rf "$staging_dir"
+                exit 1
+            fi
+            staged_files+=("$staged_file")
+        done < <(find "$staging_dir" -mindepth 1 -maxdepth 1 -type f -print | sort)
+
+        if [[ "${#staged_files[@]}" -eq 0 ]]; then
+            err "DB backup contained no restorable files."
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local staged_file
+        for staged_file in "${staged_files[@]}"; do
+            local file_name
+            file_name="$(basename "$staged_file")"
+            cp -f "$staged_file" "$RB_DATA/$file_name"
+        done
+    fi
+    rm -rf "$staging_dir"
 
     log "Restore complete!"
     log "Start Rekordbox to verify your library."
@@ -255,16 +347,16 @@ restore_backup() {
 
 # --- Main ---
 
-check_source_exists
-
 case "${1:-}" in
     --db-only)
+        check_source_exists
         check_rekordbox_running || true
         backup_db_only "db"
         rotate_backups "db" "$MAX_DB_BACKUPS"
         ;;
     --pre-op)
         # Silent pre-operation backup (called by reklawdbox tools)
+        check_source_exists
         check_rekordbox_running || true
         backup_db_only "pre-op" > /dev/null
         rotate_backups "pre-op" "$MAX_DB_BACKUPS"
@@ -279,6 +371,7 @@ case "${1:-}" in
             list_backups
             exit 1
         fi
+        check_source_exists
         restore_backup "$2"
         ;;
     --help|-h)
@@ -295,6 +388,7 @@ case "${1:-}" in
         echo "Backups stored in: $BACKUP_DIR"
         ;;
     "")
+        check_source_exists
         check_rekordbox_running || true
         backup_full
         rotate_backups "full" "$MAX_FULL_BACKUPS"

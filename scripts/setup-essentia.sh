@@ -4,9 +4,18 @@ set -euo pipefail
 DEFAULT_VENV_PATH="${HOME}/.local/share/reklawdbox/essentia-venv"
 VENV_PATH="${ESSENTIA_VENV_PATH:-$DEFAULT_VENV_PATH}"
 
+python_supported() {
+  local bin="$1"
+  "${bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1
+}
+
 pick_python() {
   if [[ -n "${ESSENTIA_PYTHON_BIN:-}" ]]; then
     if command -v "${ESSENTIA_PYTHON_BIN}" >/dev/null 2>&1; then
+      if ! python_supported "${ESSENTIA_PYTHON_BIN}"; then
+        echo "Configured ESSENTIA_PYTHON_BIN is unsupported (<3.9): ${ESSENTIA_PYTHON_BIN}" >&2
+        return 1
+      fi
       command -v "${ESSENTIA_PYTHON_BIN}"
       return 0
     fi
@@ -20,17 +29,21 @@ pick_python() {
     python3.11
     python3.10
     python3.9
+    python3
   )
   local candidate
   for candidate in "${candidates[@]}"; do
     if command -v "${candidate}" >/dev/null 2>&1; then
+      if ! python_supported "${candidate}"; then
+        continue
+      fi
       command -v "${candidate}"
       return 0
     fi
   done
 
   echo "No supported Python found (tried: ${candidates[*]})." >&2
-  echo "Install Python 3.13 and retry." >&2
+  echo "Install Python 3.9+ (Python 3.13 recommended) and retry." >&2
   return 1
 }
 
