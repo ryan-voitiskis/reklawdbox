@@ -17,13 +17,14 @@ Set with `wrangler secret put`:
 
 - `DISCOGS_CONSUMER_KEY`
 - `DISCOGS_CONSUMER_SECRET`
+- `BROKER_CLIENT_TOKEN` (required unless explicitly running unauthenticated local-dev mode)
 
-## Optional vars
+## Runtime vars
 
 Set in `wrangler.toml` `[vars]`:
 
 - `BROKER_PUBLIC_BASE_URL`
-- `BROKER_CLIENT_TOKEN`
+- `ALLOW_UNAUTHENTICATED_BROKER` (optional dev-only override; set to `true` to allow requests without a client token)
 - `DEVICE_SESSION_TTL_SECONDS` (default `900`)
 - `SESSION_TOKEN_TTL_SECONDS` (default `2592000`)
 - `SEARCH_CACHE_TTL_SECONDS` (default `604800`)
@@ -56,8 +57,8 @@ Ship broker auth changes in strict order:
 
 - `wrangler login` completed for the target Cloudflare account.
 - `broker/wrangler.toml` points to the real D1 `database_id`.
-- Required secrets are set (`DISCOGS_CONSUMER_KEY`, `DISCOGS_CONSUMER_SECRET`).
-- Optional vars are configured as needed (`BROKER_PUBLIC_BASE_URL`, `BROKER_CLIENT_TOKEN`).
+- Required secrets are set (`DISCOGS_CONSUMER_KEY`, `DISCOGS_CONSUMER_SECRET`, and `BROKER_CLIENT_TOKEN` unless unauthenticated mode is explicitly enabled).
+- Runtime vars are configured as needed (`BROKER_PUBLIC_BASE_URL`, optional `ALLOW_UNAUTHENTICATED_BROKER=true` for local-only unauthenticated mode).
 
 ### Gate 1: Rust Build/Test
 
@@ -86,7 +87,7 @@ In another terminal:
 ```bash
 curl -sS -X POST "http://127.0.0.1:8787/v1/device/session/start" \
   -H "content-type: application/json" \
-  -H "x-reklawdbox-broker-token: <BROKER_CLIENT_TOKEN_IF_ENABLED>"
+  -H "x-reklawdbox-broker-token: <BROKER_CLIENT_TOKEN>"
 ```
 
 Expected payload includes:
@@ -97,7 +98,7 @@ Expected payload includes:
 Set MCP host env:
 
 - `REKLAWDBOX_DISCOGS_BROKER_URL` (local or deployed broker URL)
-- `REKLAWDBOX_DISCOGS_BROKER_TOKEN` (if broker enforces client token)
+- `REKLAWDBOX_DISCOGS_BROKER_TOKEN` (required by default; skip only if broker sets `ALLOW_UNAUTHENTICATED_BROKER=true`)
 
 Run `lookup_discogs` from MCP client:
 
@@ -137,7 +138,7 @@ In terminal 2 (`jq` required):
 
 ```bash
 BROKER_URL="http://127.0.0.1:8787"
-BROKER_TOKEN="<BROKER_CLIENT_TOKEN_IF_ENABLED>"
+BROKER_TOKEN="<BROKER_CLIENT_TOKEN>"
 
 START_JSON=$(curl -sS -X POST "${BROKER_URL}/v1/device/session/start" \
   -H "x-reklawdbox-broker-token: ${BROKER_TOKEN}")
@@ -180,12 +181,18 @@ Expected proxy response includes `result`, `match_quality`, and `cache_hit`.
 `device_id` + `pending_token` pair and returns the same `session_token` on retries;
 the pending token is still invalidated immediately after the first success.
 
+For local-only unauthenticated mode, set `ALLOW_UNAUTHENTICATED_BROKER=true`.
+When this override is set, broker client-token checks are disabled even if
+`BROKER_CLIENT_TOKEN` is present, and you can omit the
+`x-reklawdbox-broker-token` header.
+
 ## Failure Triage
 
 <!-- dprint-ignore -->
 | Surface | Signal | Meaning | Action |
 |---|---|---|---|
-| `start/status/finalize` | `401 invalid broker client token` | `BROKER_CLIENT_TOKEN` mismatch | Fix token in broker env and MCP env/header. |
+| `start/status/finalize` | `401 invalid broker client token` | `BROKER_CLIENT_TOKEN` mismatch | Fix token in broker secret and MCP env/header. |
+| `start/status/finalize` | `401 broker client token is required ...` | broker started without `BROKER_CLIENT_TOKEN` and unauthenticated mode is not enabled | Set `BROKER_CLIENT_TOKEN` (recommended) or explicitly set `ALLOW_UNAUTHENTICATED_BROKER=true` for local development only. |
 | `status/finalize` | `404 device session not found` | bad/expired `device_id` + `pending_token` pair | Restart from `POST /v1/device/session/start`. |
 | `finalize` | `409 device session is not authorized yet` | browser OAuth not completed | Complete auth URL flow, retry finalize. |
 | `finalize` | `410 device session expired; restart auth` | session TTL elapsed | Start a new device session and re-auth. |

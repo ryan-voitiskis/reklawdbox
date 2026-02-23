@@ -9,6 +9,7 @@ interface Env {
   DISCOGS_CONSUMER_SECRET: string
   BROKER_PUBLIC_BASE_URL?: string
   BROKER_CLIENT_TOKEN?: string
+  ALLOW_UNAUTHENTICATED_BROKER?: string
   DEVICE_SESSION_TTL_SECONDS?: string
   SESSION_TOKEN_TTL_SECONDS?: string
   SEARCH_CACHE_TTL_SECONDS?: string
@@ -148,7 +149,7 @@ async function handleDeviceSessionStart(
   url: URL,
 ): Promise<Response> {
   if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse()
+    return unauthorizedBrokerClientResponse(env,)
   }
 
   assertDiscogsOAuthEnv(env,)
@@ -198,7 +199,7 @@ async function handleDeviceSessionStatus(
   url: URL,
 ): Promise<Response> {
   if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse()
+    return unauthorizedBrokerClientResponse(env,)
   }
 
   const deviceId = url.searchParams.get('device_id',)?.trim()
@@ -262,7 +263,7 @@ async function handleDeviceSessionFinalize(
   env: Env,
 ): Promise<Response> {
   if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse()
+    return unauthorizedBrokerClientResponse(env,)
   }
 
   const body = await parseJsonBody<
@@ -1105,16 +1106,31 @@ function publicBaseUrl(env: Env, requestUrl: URL,): string {
 }
 
 function isBrokerClientAuthorized(request: Request, env: Env,): boolean {
-  const expected = env.BROKER_CLIENT_TOKEN?.trim()
-  if (!expected) {
+  if (isUnauthenticatedBrokerAllowed(env,)) {
     return true
   }
 
-  const provided = request.headers.get('x-reklawdbox-broker-token',)?.trim()
-  return provided === expected
+  const expected = env.BROKER_CLIENT_TOKEN?.trim()
+  if (expected) {
+    const provided = request.headers.get('x-reklawdbox-broker-token',)?.trim()
+    return provided === expected
+  }
+
+  return false
 }
 
-function unauthorizedBrokerClientResponse(): Response {
+function unauthorizedBrokerClientResponse(env: Env,): Response {
+  if (!env.BROKER_CLIENT_TOKEN?.trim() && !isUnauthenticatedBrokerAllowed(env,)) {
+    return json(
+      {
+        error: 'unauthorized',
+        message:
+          'broker client token is required; set BROKER_CLIENT_TOKEN or ALLOW_UNAUTHENTICATED_BROKER=true for local development',
+      },
+      401,
+    )
+  }
+
   return json(
     {
       error: 'unauthorized',
@@ -1122,6 +1138,10 @@ function unauthorizedBrokerClientResponse(): Response {
     },
     401,
   )
+}
+
+function isUnauthenticatedBrokerAllowed(env: Env,): boolean {
+  return env.ALLOW_UNAUTHENTICATED_BROKER?.trim().toLowerCase() === 'true'
 }
 
 function oauthHeader(params: Record<string, string>,): string {

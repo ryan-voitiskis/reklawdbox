@@ -11,7 +11,7 @@
 Set these in your MCP host env:
 
 - `REKLAWDBOX_DISCOGS_BROKER_URL` (required for broker path)
-- `REKLAWDBOX_DISCOGS_BROKER_TOKEN` (optional, only if broker enforces it)
+- `REKLAWDBOX_DISCOGS_BROKER_TOKEN` (required by default; optional only if broker explicitly sets `ALLOW_UNAUTHENTICATED_BROKER=true` for local development)
 
 Legacy `REKLAWDBOX_DISCOGS_*` auth vars still exist as a fallback path, but are deprecated from default docs and config.
 

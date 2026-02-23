@@ -5,8 +5,8 @@
       "command": "./target/release/reklawdbox",
       "env": {
         "REKORDBOX_DB_PATH": "/Users/<you>/Library/Pioneer/rekordbox/master.db",
-        "REKLAWDBOX_DISCOGS_BROKER_URL": "<optional>",
-        "REKLAWDBOX_DISCOGS_BROKER_TOKEN": "<optional>",
+        "REKLAWDBOX_DISCOGS_BROKER_URL": "<set-broker-url>",
+        "REKLAWDBOX_DISCOGS_BROKER_TOKEN": "<set-broker-token>",
         "CRATE_DIG_ESSENTIA_PYTHON": "/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python"
       }
     }
