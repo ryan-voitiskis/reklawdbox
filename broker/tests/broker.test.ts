@@ -3,7 +3,7 @@ import {
   env,
   waitOnExecutionContext,
 } from 'cloudflare:test'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index'
 
 const BASE_URL = 'https://broker.test'
@@ -378,6 +378,118 @@ describe('broker test runner baseline', () => {
     )
       .first<{ count: number }>()
     expect(Number(remainingCacheRows?.count ?? 0,)).toBe(1)
+  },)
+},)
+
+describe('discogs proxy rate limiting', () => {
+  it('serializes concurrent proxy searches through the global rate-limit gate', async () => {
+    const minIntervalMs = 120
+    const sessionToken = 'session-rate-limit-token'
+    const sessionTokenHash = await sha256Hex(sessionToken,)
+    const now = Math.floor(Date.now() / 1000,)
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id,
+        pending_token,
+        status,
+        poll_interval_seconds,
+        created_at,
+        updated_at,
+        expires_at,
+        authorized_at,
+        oauth_access_token,
+        oauth_access_token_secret,
+        oauth_identity,
+        session_token_hash,
+        session_expires_at,
+        finalized_at
+      ) VALUES (
+        ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, ?5, ?6, 'tester', ?7, ?4, ?3
+      )`,
+    )
+      .bind(
+        'device-rate-limit',
+        'pending-rate-limit',
+        now,
+        now + 3600,
+        'oauth-access-token',
+        'oauth-access-secret',
+        sessionTokenHash,
+      )
+      .run()
+
+    const discogsCallTimes: number[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (input: RequestInfo | URL,) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (!url.startsWith('https://api.discogs.com/database/search?')) {
+          throw new Error(`unexpected fetch URL: ${url}`)
+        }
+        discogsCallTimes.push(Date.now(),)
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                title: 'Test Artist - Test Track',
+                year: 2025,
+                label: ['Test Label',],
+                genre: ['Electronic',],
+                style: ['House',],
+                uri: '/release/123',
+              },
+            ],
+          },),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        )
+      },
+    )
+
+    try {
+      const titles = ['Track A', 'Track B', 'Track C',]
+      const startedAt = Date.now()
+      const responses = await Promise.all(
+        titles.map((title,) =>
+          request(
+            '/v1/discogs/proxy/search',
+            {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${sessionToken}`,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                artist: 'Test Artist',
+                title,
+              },),
+            },
+            {
+              DISCOGS_MIN_INTERVAL_MS: `${minIntervalMs}`,
+            },
+          )
+        ),
+      )
+      const elapsedMs = Date.now() - startedAt
+
+      expect(responses,).toHaveLength(3)
+      for (const response of responses) {
+        expect(response.status).toBe(200)
+      }
+      expect(discogsCallTimes,).toHaveLength(3)
+
+      const gapOneMs = discogsCallTimes[1] - discogsCallTimes[0]
+      const gapTwoMs = discogsCallTimes[2] - discogsCallTimes[1]
+      expect(gapOneMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
+      expect(gapTwoMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
+      expect(elapsedMs).toBeGreaterThanOrEqual((minIntervalMs * 2) - 25)
+    } finally {
+      fetchSpy.mockRestore()
+    }
   },)
 },)
 

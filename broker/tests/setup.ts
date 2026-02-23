@@ -7,6 +7,7 @@ declare module 'cloudflare:test' {
     TEST_MIGRATIONS: unknown
     DISCOGS_CONSUMER_KEY: string
     DISCOGS_CONSUMER_SECRET: string
+    DISCOGS_MIN_INTERVAL_MS?: string
     BROKER_CLIENT_TOKEN: string
     BROKER_PUBLIC_BASE_URL: string
     ALLOW_UNAUTHENTICATED_BROKER?: string
