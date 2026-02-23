@@ -108,25 +108,25 @@ export default {
       const method = request.method.toUpperCase()
 
       if (url.pathname === '/v1/device/session/start' && method === 'POST') {
-        return handleDeviceSessionStart(request, env, url,)
+        return await handleDeviceSessionStart(request, env, url,)
       }
       if (url.pathname === '/v1/device/session/status' && method === 'GET') {
-        return handleDeviceSessionStatus(request, env, url,)
+        return await handleDeviceSessionStatus(request, env, url,)
       }
       if (url.pathname === '/v1/device/session/finalize' && method === 'POST') {
-        return handleDeviceSessionFinalize(request, env,)
+        return await handleDeviceSessionFinalize(request, env,)
       }
       if (url.pathname === '/v1/discogs/oauth/link' && method === 'GET') {
-        return handleDiscogsOauthLink(env, url,)
+        return await handleDiscogsOauthLink(env, url,)
       }
       if (url.pathname === '/v1/discogs/oauth/callback' && method === 'GET') {
-        return handleDiscogsOauthCallback(env, url,)
+        return await handleDiscogsOauthCallback(env, url,)
       }
       if (url.pathname === '/v1/discogs/proxy/search' && method === 'POST') {
-        return handleDiscogsProxySearch(request, env,)
+        return await handleDiscogsProxySearch(request, env,)
       }
       if (url.pathname === '/v1/health' && method === 'GET') {
-        return handleHealth(env,)
+        return await handleHealth(env,)
       }
 
       return json(
