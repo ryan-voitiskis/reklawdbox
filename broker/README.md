@@ -4,6 +4,7 @@ Maintainer-hosted broker for Discogs OAuth and proxied search.
 
 ## Endpoints
 
+- `GET /v1/health`
 - `POST /v1/device/session/start`
 - `GET /v1/device/session/status?device_id=...&pending_token=...`
 - `POST /v1/device/session/finalize`
@@ -38,6 +39,15 @@ the Worker `scheduled()` handler to prune expired rows from:
 - `device_sessions`
 - `oauth_request_tokens`
 - `discogs_search_cache`
+
+## Health endpoint
+
+`GET /v1/health` returns broker runtime health and auth posture:
+
+- `status: "ok"` when client-token auth is enforced (`BROKER_CLIENT_TOKEN` set and unauthenticated mode disabled).
+- `status: "warning"` when either:
+  - `ALLOW_UNAUTHENTICATED_BROKER=true` (dev override; client-token checks disabled), or
+  - `BROKER_CLIENT_TOKEN` is unset while unauthenticated mode is disabled (fail-closed; protected routes return `401`).
 
 ## Local dev
 

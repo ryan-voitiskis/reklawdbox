@@ -70,6 +70,18 @@ interface NormalizedProxyPayload {
   cache_hit: boolean
 }
 
+type BrokerClientAuthMode =
+  | 'token_required'
+  | 'unauthenticated_dev_override'
+  | 'misconfigured_no_token'
+
+interface BrokerClientAuthHealth {
+  mode: BrokerClientAuthMode
+  token_configured: boolean
+  allow_unauthenticated_broker: boolean
+  warning?: string
+}
+
 const DEFAULT_POLL_INTERVAL_SECONDS = 5
 const DEFAULT_DEVICE_SESSION_TTL_SECONDS = 15 * 60
 const DEFAULT_BROKER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -112,6 +124,9 @@ export default {
       }
       if (url.pathname === '/v1/discogs/proxy/search' && method === 'POST') {
         return handleDiscogsProxySearch(request, env,)
+      }
+      if (url.pathname === '/v1/health' && method === 'GET') {
+        return handleHealth(env,)
       }
 
       return json(
@@ -773,6 +788,14 @@ async function handleDiscogsProxySearch(
   return json(payload,)
 }
 
+function handleHealth(env: Env,): Response {
+  const brokerClientAuth = brokerClientAuthHealth(env,)
+  return json({
+    status: brokerClientAuth.warning ? 'warning' : 'ok',
+    broker_client_auth: brokerClientAuth,
+  },)
+}
+
 async function lookupDiscogsViaApi(
   env: Env,
   params: {
@@ -1183,6 +1206,36 @@ function unauthorizedBrokerClientResponse(env: Env,): Response {
 
 function isUnauthenticatedBrokerAllowed(env: Env,): boolean {
   return env.ALLOW_UNAUTHENTICATED_BROKER?.trim().toLowerCase() === 'true'
+}
+
+function brokerClientAuthHealth(env: Env,): BrokerClientAuthHealth {
+  const tokenConfigured = Boolean(env.BROKER_CLIENT_TOKEN?.trim(),)
+  const allowUnauthenticatedBroker = isUnauthenticatedBrokerAllowed(env,)
+  if (allowUnauthenticatedBroker) {
+    return {
+      mode: 'unauthenticated_dev_override',
+      token_configured: tokenConfigured,
+      allow_unauthenticated_broker: true,
+      warning:
+        'ALLOW_UNAUTHENTICATED_BROKER=true disables broker client-token checks; use for local development only',
+    }
+  }
+
+  if (!tokenConfigured) {
+    return {
+      mode: 'misconfigured_no_token',
+      token_configured: false,
+      allow_unauthenticated_broker: false,
+      warning:
+        'BROKER_CLIENT_TOKEN is not set; protected endpoints will reject requests until configured',
+    }
+  }
+
+  return {
+    mode: 'token_required',
+    token_configured: true,
+    allow_unauthenticated_broker: false,
+  }
 }
 
 function oauthHeader(params: Record<string, string>,): string {
