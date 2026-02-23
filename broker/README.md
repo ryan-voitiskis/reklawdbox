@@ -30,6 +30,15 @@ Set in `wrangler.toml` `[vars]`:
 - `SEARCH_CACHE_TTL_SECONDS` (default `604800`)
 - `DISCOGS_MIN_INTERVAL_MS` (default `1100`)
 
+## Scheduled maintenance
+
+`wrangler.toml` config includes an hourly cron trigger (`0 * * * *`) that runs
+the Worker `scheduled()` handler to prune expired rows from:
+
+- `device_sessions`
+- `oauth_request_tokens`
+- `discogs_search_cache`
+
 ## Local dev
 
 ```bash

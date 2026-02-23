@@ -1,6 +1,9 @@
 name = "reklawdbox-discogs-broker"
 main = "src/index.ts"
-compatibility_date = "2025-01-01"
+compatibility_date = "2026-02-23"
+
+[triggers]
+crons = ["0 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

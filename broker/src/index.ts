@@ -141,6 +141,13 @@ export default {
       )
     }
   },
+  async scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(pruneExpiredRows(env,),)
+  },
 }
 
 async function handleDeviceSessionStart(
@@ -832,9 +839,17 @@ async function lookupDiscogsViaApi(
   }
 
   const normArtist = normalize(params.artist,)
+  if (!normArtist) {
+    return {
+      result: toDiscogsResult(results[0], true,),
+      match_quality: 'fuzzy',
+      cache_hit: false,
+    }
+  }
+
   const matched = results.find((entry,) => {
     const resultTitle = (entry.title ?? '').toLowerCase()
-    return resultTitle.includes(normArtist,) || normArtist.length < 3
+    return resultTitle.includes(normArtist,)
   },)
 
   if (matched) {
@@ -1090,6 +1105,32 @@ async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
       return
     }
   }
+}
+
+async function pruneExpiredRows(env: Env,): Promise<void> {
+  const now = nowSeconds()
+
+  await env.DB.prepare(
+    `DELETE FROM device_sessions
+     WHERE (status != 'finalized' AND expires_at <= ?1)
+        OR (status = 'finalized' AND (session_expires_at IS NULL OR session_expires_at <= ?1))`,
+  )
+    .bind(now,)
+    .run()
+
+  await env.DB.prepare(
+    `DELETE FROM oauth_request_tokens
+     WHERE expires_at <= ?1`,
+  )
+    .bind(now,)
+    .run()
+
+  await env.DB.prepare(
+    `DELETE FROM discogs_search_cache
+     WHERE expires_at <= ?1`,
+  )
+    .bind(now,)
+    .run()
 }
 
 function assertDiscogsOAuthEnv(env: Env,): void {
