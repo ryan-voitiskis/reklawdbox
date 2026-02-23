@@ -1,6 +1,6 @@
 name = "reklawdbox-discogs-broker"
 main = "src/index.ts"
-compatibility_date = "2026-02-23"
+compatibility_date = "2026-02-19"
 
 [triggers]
 crons = ["0 * * * *"]

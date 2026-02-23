@@ -2,6 +2,8 @@
 
 Maintainer-hosted broker for Discogs OAuth and proxied search.
 
+Prerequisite: Node.js `>=20.19.0`.
+
 ## Endpoints
 
 - `GET /v1/health`
@@ -55,6 +57,7 @@ the Worker `scheduled()` handler to prune expired rows from:
 cd broker
 npm install
 npm run d1:migrate:local
+npm test
 npm run dev
 ```
 
@@ -63,6 +66,19 @@ Or run:
 ```bash
 cd broker
 ./scripts/dev.sh
+```
+
+## Testing philosophy
+
+- Prefer deterministic Worker-runtime integration tests over broad mocks.
+- Prioritize auth/session and error-semantics invariants first.
+- Keep external Discogs HTTP calls out of baseline tests unless explicitly running end-to-end flows.
+
+Run broker tests:
+
+```bash
+cd broker
+npm test
 ```
 
 ## Release Runbook (Test-First)
@@ -98,6 +114,7 @@ From repo root:
 cd broker
 npm install
 npm run d1:migrate:local
+npm test
 npm run dev
 ```
 
