@@ -74,7 +74,7 @@ No existing GitHub Actions workflow files were found in `.github/workflows/` at 
 
 ### Wave 0 - Setup
 
-- Read `AGENTS.md`, host guide (`CODEX.md` or `CLAUDE.md`), corpus README + manifest.
+- Read `AGENTS.md`, host guide (`CLAUDE.md` when applicable), corpus README + manifest.
 - Confirm CI/test command baseline.
 - Create this tracker.
 

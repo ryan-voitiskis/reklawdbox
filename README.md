@@ -3,14 +3,14 @@
 MCP server for Rekordbox 7.x library management. Reads directly from the encrypted master.db,
 stages metadata changes in memory, and writes Rekordbox-compatible XML for safe reimport.
 
-Built as a single static Rust binary with zero runtime dependencies. Operated through
-an MCP host (Codex, Claude Code, etc.) — no web UI, no CLI flags, just MCP.
+Built as a single Rust binary. Primary operation is through an MCP host (Codex, Claude Code,
+etc.), with an optional `analyze` CLI subcommand for local batch audio analysis.
 
-### Why MCP, not CLI?
+### Why MCP as the primary interface?
 
-A CLI binary called via shell would work fine from Claude Code (which has Bash access),
-but Claude Desktop and other MCP hosts **cannot execute shell commands** — they can only
-call MCP tools. MCP keeps reklawdbox usable from any compliant host.
+A shell-invoked CLI works from hosts with terminal access, but Claude Desktop and other MCP hosts
+**cannot execute shell commands** and can only call MCP tools. MCP keeps reklawdbox usable from
+any compliant host while still allowing local CLI workflows when needed.
 
 ## Build
 
@@ -18,7 +18,7 @@ call MCP tools. MCP keeps reklawdbox usable from any compliant host.
 cargo build --release
 ```
 
-The binary is at `./target/release/reklawdbox` (~12 MB, arm64).
+The binary is at `./target/release/reklawdbox`.
 
 ## Development
 
@@ -32,9 +32,9 @@ bash docs/rekordbox/validate-corpus.sh
 python3 docs/rekordbox/verify-phase-b.py
 ```
 
-Host-specific workflow notes:
+Agent workflow notes:
 
-- Codex: [`CODEX.md`](CODEX.md)
+- Generic/Codex agents: [`AGENTS.md`](AGENTS.md)
 - Claude Code: [`CLAUDE.md`](CLAUDE.md)
 - Repo docs index: [`docs/README.md`](docs/README.md)
 
@@ -52,12 +52,13 @@ Optional enrichment and analysis environment variables:
 - `REKLAWDBOX_DISCOGS_BROKER_URL`
 - `REKLAWDBOX_DISCOGS_BROKER_TOKEN`
 - `CRATE_DIG_ESSENTIA_PYTHON`
+- `CRATE_DIG_STORE_PATH` (optional override for internal cache SQLite path)
 
 Essentia probe behavior:
 
 - The server only probes `CRATE_DIG_ESSENTIA_PYTHON` and `~/.local/share/reklawdbox/essentia-venv/bin/python`.
 - If neither imports Essentia, tools report Essentia as unavailable and continue with stratum-dsp only.
-- Probe result is memoized for process lifetime, so restart the MCP server after changing Essentia install/config.
+- Probe result is memoized for process lifetime, so restart the MCP server after changing Essentia install/config (or run `setup_essentia`, which installs and activates Essentia immediately).
 
 Deprecated Discogs fallback (not the default path):
 
@@ -65,6 +66,7 @@ Deprecated Discogs fallback (not the default path):
 - `REKLAWDBOX_DISCOGS_SECRET`
 - `REKLAWDBOX_DISCOGS_TOKEN`
 - `REKLAWDBOX_DISCOGS_TOKEN_SECRET`
+- `REKLAWDBOX_DISCOGS_API_BASE_URL` (optional custom Discogs API base URL)
 
 ### Codex Quickstart
 
@@ -110,6 +112,21 @@ cp mcp-config.example.json .mcp.json
 
 7. Verify wiring by running a simple tool call from Codex (for example `read_library`).
 
+## Optional CLI: Batch Audio Analysis
+
+The binary runs MCP server mode by default. Use the `analyze` subcommand for local batch analysis
+and cache priming outside your MCP host:
+
+```bash
+./target/release/reklawdbox analyze --max-tracks 200
+```
+
+Example with filters:
+
+```bash
+./target/release/reklawdbox analyze --playlist <playlist_id> --genre Techno --bpm-min 126 --bpm-max 134
+```
+
 ### Essentia Setup (Recommended)
 
 Use the repo script to install Essentia into the default probe location:
@@ -152,6 +169,15 @@ Restart the MCP host/server after updating config.
 | `suggest_normalizations` | Analyze genres and suggest normalizations to canonical taxonomy |
 | `lookup_discogs` | Look up a track on Discogs for genre/style enrichment |
 | `lookup_beatport` | Look up a track on Beatport for genre/BPM/key enrichment |
+| `enrich_tracks` | Batch enrich tracks via Discogs/Beatport using IDs, playlist, or filters |
+| `analyze_track_audio` | Analyze one track with stratum-dsp and optional Essentia (cached) |
+| `analyze_audio_batch` | Batch audio analysis with stratum-dsp and optional Essentia (cached) |
+| `setup_essentia` | Install/validate Essentia in a local venv and activate it for the running server |
+| `score_transition` | Score a single transition between two tracks (key/BPM/energy/genre/rhythm) |
+| `build_set` | Generate 2-3 candidate set orderings from a track pool |
+| `resolve_track_data` | Return all cached + staged data for one track without external calls |
+| `resolve_tracks_data` | Batched `resolve_track_data` over IDs, playlist, or search scope |
+| `cache_coverage` | Report enrichment/audio cache completeness for a selected track scope |
 
 ## Response Contract Notes
 
@@ -177,6 +203,13 @@ Synth-pop, Tech House, Techno, Trance, UK Bass
 4. **Write** — use `write_xml` to generate the XML file (runs backup automatically)
 5. **Import in Rekordbox** — File > Import > Import Playlist/Collection, select the XML
 
+For enrichment/audio/set workflows, the common sequence is:
+
+1. **Scope tracks** — `search_tracks`, `get_playlist_tracks`, or `resolve_tracks_data`
+2. **Populate cache** — `enrich_tracks` and/or `analyze_audio_batch`
+3. **Inspect completeness** — `resolve_track_data`/`resolve_tracks_data` and `cache_coverage`
+4. **Plan transitions/sets** — `score_transition` and `build_set`
+
 ## Documentation
 
 - [reklawdbox.com](https://reklawdbox.com) — Astro Starlight docs site
@@ -190,5 +223,5 @@ Synth-pop, Tech House, Techno, Trance, UK Bass
 - [`docs/integrations/discogs/auth-plan.md`](docs/integrations/discogs/auth-plan.md) — Discogs broker architecture decisions and phased implementation plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — Development workflow, testing expectations, and pull request checklist
 - [`SECURITY.md`](SECURITY.md) — Supported versions and vulnerability reporting process
-- [`CODEX.md`](CODEX.md) — Codex-specific operator/developer workflow notes
+- [`AGENTS.md`](AGENTS.md) — Agent/operator workflow notes for Codex and compatible hosts
 - [`CLAUDE.md`](CLAUDE.md) — Claude Code-specific operator/developer workflow notes
