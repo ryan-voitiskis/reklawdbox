@@ -1040,35 +1040,55 @@ async function markSessionStatus(
 
 async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
   const bucket = 'discogs-api-global'
-  const nowMs = Date.now()
   const minIntervalMs = envInt(
     env.DISCOGS_MIN_INTERVAL_MS,
     DEFAULT_DISCOGS_MIN_INTERVAL_MS,
   )
 
-  const row = await env.DB.prepare(
-    `SELECT last_request_at_ms
-     FROM rate_limit_state
-     WHERE bucket = ?1`,
-  )
-    .bind(bucket,)
-    .first<{ last_request_at_ms: number }>()
+  for (;;) {
+    const nowMs = Date.now()
+    const row = await env.DB.prepare(
+      `SELECT last_request_at_ms
+       FROM rate_limit_state
+       WHERE bucket = ?1`,
+    )
+      .bind(bucket,)
+      .first<{ last_request_at_ms: number }>()
 
-  if (row?.last_request_at_ms) {
-    const elapsed = nowMs - Number(row.last_request_at_ms,)
-    if (elapsed < minIntervalMs) {
-      await delay(minIntervalMs - elapsed,)
+    if (!row) {
+      const insertResult = await env.DB.prepare(
+        `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
+         VALUES (?1, ?2)
+         ON CONFLICT(bucket) DO NOTHING`,
+      )
+        .bind(bucket, nowMs,)
+        .run()
+
+      if ((insertResult.meta.changes ?? 0) === 1) {
+        return
+      }
+      continue
+    }
+
+    const lastRequestAtMs = Number(row.last_request_at_ms,)
+    const reservedAtMs = Math.max(lastRequestAtMs + minIntervalMs, nowMs,)
+    const updateResult = await env.DB.prepare(
+      `UPDATE rate_limit_state
+       SET last_request_at_ms = ?1
+       WHERE bucket = ?2
+         AND last_request_at_ms = ?3`,
+    )
+      .bind(reservedAtMs, bucket, lastRequestAtMs,)
+      .run()
+
+    if ((updateResult.meta.changes ?? 0) === 1) {
+      const waitMs = reservedAtMs - nowMs
+      if (waitMs > 0) {
+        await delay(waitMs,)
+      }
+      return
     }
   }
-
-  await env.DB.prepare(
-    `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
-     VALUES (?1, ?2)
-     ON CONFLICT(bucket) DO UPDATE SET
-       last_request_at_ms = excluded.last_request_at_ms`,
-  )
-    .bind(bucket, Date.now(),)
-    .run()
 }
 
 function assertDiscogsOAuthEnv(env: Env,): void {
