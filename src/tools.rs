@@ -3400,14 +3400,7 @@ impl ReklawdboxServer {
         let p = params.0;
         let dry_run = p.dry_run.unwrap_or(false);
 
-        // Validate all entries up front
-        for entry in &p.writes {
-            tags::validate_write_tags(&entry.tags).map_err(|e| {
-                McpError::invalid_params(format!("{}: {e}", entry.path), None)
-            })?;
-        }
-
-        // Build WriteEntry values
+        // Build WriteEntry values (per-entry validation happens in tags::write_file_tags)
         let entries: Vec<tags::WriteEntry> = p
             .writes
             .into_iter()
