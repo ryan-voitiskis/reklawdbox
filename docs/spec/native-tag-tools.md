@@ -288,11 +288,11 @@ Embed cover art into audio files. Separate from `write_file_tags` because it han
 {
   "image_path": "/path/to/cover.jpg",        // source image
   "targets": ["/path/to/01.flac", "/path/to/02.flac"],  // files to embed into
-  "picture_type": "front_cover",              // default: front_cover
-  "wav_target": "id3v2"                       // WAV only. Cover art goes in tag 2
-                                              // (Rekordbox can't read cover from WAV)
+  "picture_type": "front_cover"               // default: front_cover
 }
 ```
+
+WAV files always embed into ID3v2 only (Rekordbox can't read WAV cover art anyway). No `wav_target` override needed.
 
 #### Response
 
