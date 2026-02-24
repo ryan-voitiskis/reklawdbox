@@ -608,6 +608,25 @@ fn print_tags_human(result: &tags::FileReadResult) {
     }
 }
 
+/// Title-case a canonical field name for human output.
+/// "album_artist" → "Album Artist", "bpm" → "Bpm", etc.
+fn display_field_name(field: &str) -> String {
+    field
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    format!("{upper}{}", chars.as_str())
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn print_tag_map(tags: &HashMap<String, Option<String>>, indent: usize) {
     let pad = " ".repeat(indent);
     // Print in canonical field order
@@ -617,7 +636,7 @@ fn print_tag_map(tags: &HashMap<String, Option<String>>, indent: usize) {
                 Some(v) => v.as_str(),
                 None => "(missing)",
             };
-            println!("{pad}{:<14}{display}", field);
+            println!("{pad}{:<14}{display}", display_field_name(field));
         }
     }
 }
@@ -767,7 +786,7 @@ fn print_dry_run_human(result: &tags::FileDryRunResult) {
                 if let Some(change) = changes.get(field) {
                     let old = change.old.as_deref().unwrap_or("(missing)");
                     let new = change.new.as_deref().unwrap_or("(delete)");
-                    println!("  {:<14}{} -> {}", field, old, new);
+                    println!("  {:<14}{} -> {}", display_field_name(field), old, new);
                 }
             }
             if let Some(targets) = wav_targets {
