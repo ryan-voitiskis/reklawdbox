@@ -837,9 +837,17 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
         vec![]
     };
 
-    // For the dry-run diff, read from the primary tag (or id3v2 for WAV).
+    // For the dry-run diff, read from the tag layer that will be written.
+    // WAV with riff_info-only target: diff against RIFF INFO.
+    // WAV with id3v2-only or both: diff against ID3v2.
+    // Non-WAV: use primary tag.
     let primary_tag = if is_wav {
-        tagged_file.tag(TagType::Id3v2)
+        let riff_only = wav_targets.len() == 1 && wav_targets[0] == WavTarget::RiffInfo;
+        if riff_only {
+            tagged_file.tag(TagType::RiffInfo)
+        } else {
+            tagged_file.tag(TagType::Id3v2)
+        }
     } else {
         tagged_file
             .primary_tag()
