@@ -549,10 +549,10 @@ pub fn default_db_path() -> Option<String> {
 }
 
 pub fn resolve_db_path() -> Option<String> {
-    if let Ok(path) = std::env::var("REKORDBOX_DB_PATH") {
-        if std::path::Path::new(&path).exists() {
-            return Some(path);
-        }
+    if let Ok(path) = std::env::var("REKORDBOX_DB_PATH")
+        && std::path::Path::new(&path).exists()
+    {
+        return Some(path);
     }
     default_db_path()
 }
@@ -1384,7 +1384,7 @@ mod tests {
         let unicode_tracks: Vec<_> = all
             .iter()
             .filter(|t| {
-                t.title.chars().any(|c| !c.is_ascii()) || t.artist.chars().any(|c| !c.is_ascii())
+                !t.title.is_ascii() || !t.artist.is_ascii()
             })
             .collect();
 

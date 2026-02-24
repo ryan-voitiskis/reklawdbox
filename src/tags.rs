@@ -71,8 +71,9 @@ pub fn field_to_item_key(field: &str) -> Option<ItemKey> {
     }
 }
 
-/// Reverse mapping from `ItemKey` to canonical field name.
-pub fn item_key_to_field(key: &ItemKey) -> Option<&'static str> {
+/// Reverse mapping from `ItemKey` to canonical field name (test-only).
+#[cfg(test)]
+fn item_key_to_field(key: &ItemKey) -> Option<&'static str> {
     match *key {
         ItemKey::TrackArtist => Some("artist"),
         ItemKey::TrackTitle => Some("title"),
@@ -322,7 +323,7 @@ fn read_cover_art_meta(tag: &Tag) -> Option<CoverArtMeta> {
 }
 
 /// Resolve which fields to read — either the supplied filter or all fields.
-fn resolve_fields<'a>(filter: Option<&'a [String]>) -> Vec<&'a str> {
+fn resolve_fields(filter: Option<&[String]>) -> Vec<&str> {
     match filter {
         Some(f) => f.iter().map(|s| s.as_str()).collect(),
         None => ALL_FIELDS.to_vec(),

@@ -164,7 +164,7 @@ mod tests {
     fn taxonomy_sorted() {
         let genres = get_taxonomy();
         let mut sorted = genres.clone();
-        sorted.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        sorted.sort_by_key(|a| a.to_lowercase());
         assert_eq!(genres, sorted, "GENRES array must be sorted alphabetically");
     }
 

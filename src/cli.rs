@@ -456,30 +456,28 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             );
 
             let mut track_success = true;
-            if *needs_essentia {
-                if let Some(ref python) = essentia_python {
-                    match audio::run_essentia(python, &file_path).await {
-                        Ok(essentia_result) => {
-                            let essentia_json = essentia_result.to_string();
-                            let essentia_version = essentia_result
-                                .get("analyzer_version")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            store::set_audio_analysis(
-                                &store_conn,
-                                &file_path,
-                                "essentia",
-                                file_size,
-                                file_mtime,
-                                essentia_version,
-                                &essentia_json,
-                            )?;
-                            eprint!(" +essentia");
-                        }
-                        Err(e) => {
-                            eprint!(" (essentia failed: {e})");
-                            track_success = false;
-                        }
+            if *needs_essentia && let Some(ref python) = essentia_python {
+                match audio::run_essentia(python, &file_path).await {
+                    Ok(essentia_result) => {
+                        let essentia_json = essentia_result.to_string();
+                        let essentia_version = essentia_result
+                            .get("analyzer_version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        store::set_audio_analysis(
+                            &store_conn,
+                            &file_path,
+                            "essentia",
+                            file_size,
+                            file_mtime,
+                            essentia_version,
+                            &essentia_json,
+                        )?;
+                        eprint!(" +essentia");
+                    }
+                    Err(e) => {
+                        eprint!(" (essentia failed: {e})");
+                        track_success = false;
                     }
                 }
             }
@@ -729,10 +727,11 @@ fn parse_wav_targets(
                 );
             }
             if valid.is_empty() {
-                return Err(format!(
+                return Err(
                     "No valid WAV targets. Valid values: id3v2, riff_info"
-                )
-                .into());
+                        .to_string()
+                        .into(),
+                );
             }
             Ok(valid)
         }

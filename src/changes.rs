@@ -65,44 +65,44 @@ impl ChangeManager {
 
             let mut fields = Vec::new();
 
-            if let Some(ref new_genre) = change.genre {
-                if *new_genre != track.genre {
-                    fields.push(FieldDiff {
-                        field: "genre".to_string(),
-                        old_value: track.genre.clone(),
-                        new_value: new_genre.clone(),
-                    });
-                }
+            if let Some(ref new_genre) = change.genre
+                && *new_genre != track.genre
+            {
+                fields.push(FieldDiff {
+                    field: "genre".to_string(),
+                    old_value: track.genre.clone(),
+                    new_value: new_genre.clone(),
+                });
             }
 
-            if let Some(ref new_comments) = change.comments {
-                if *new_comments != track.comments {
-                    fields.push(FieldDiff {
-                        field: "comments".to_string(),
-                        old_value: track.comments.clone(),
-                        new_value: new_comments.clone(),
-                    });
-                }
+            if let Some(ref new_comments) = change.comments
+                && *new_comments != track.comments
+            {
+                fields.push(FieldDiff {
+                    field: "comments".to_string(),
+                    old_value: track.comments.clone(),
+                    new_value: new_comments.clone(),
+                });
             }
 
-            if let Some(new_rating) = change.rating {
-                if new_rating != track.rating {
-                    fields.push(FieldDiff {
-                        field: "rating".to_string(),
-                        old_value: track.rating.to_string(),
-                        new_value: new_rating.to_string(),
-                    });
-                }
+            if let Some(new_rating) = change.rating
+                && new_rating != track.rating
+            {
+                fields.push(FieldDiff {
+                    field: "rating".to_string(),
+                    old_value: track.rating.to_string(),
+                    new_value: new_rating.to_string(),
+                });
             }
 
-            if let Some(ref new_color) = change.color {
-                if *new_color != track.color {
-                    fields.push(FieldDiff {
-                        field: "color".to_string(),
-                        old_value: track.color.clone(),
-                        new_value: new_color.clone(),
-                    });
-                }
+            if let Some(ref new_color) = change.color
+                && *new_color != track.color
+            {
+                fields.push(FieldDiff {
+                    field: "color".to_string(),
+                    old_value: track.color.clone(),
+                    new_value: new_color.clone(),
+                });
             }
 
             if !fields.is_empty() {

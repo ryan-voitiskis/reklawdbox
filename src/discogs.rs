@@ -173,9 +173,7 @@ fn normalize_base_url(raw: &str) -> Option<String> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    if parsed.host_str().is_none() {
-        return None;
-    }
+    parsed.host_str()?;
     let normalized = parsed.as_str().trim_end_matches('/').to_string();
     if normalized.is_empty() {
         return None;

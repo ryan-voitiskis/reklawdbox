@@ -88,10 +88,10 @@ impl ReklawdboxServer {
     }
 
     fn essentia_python_path(&self) -> Option<String> {
-        if let Ok(guard) = self.state.essentia_python_override.lock() {
-            if let Some(ref path) = *guard {
-                return Some(path.clone());
-            }
+        if let Ok(guard) = self.state.essentia_python_override.lock()
+            && let Some(ref path) = *guard
+        {
+            return Some(path.clone());
         }
         self.state
             .essentia_python
@@ -1270,35 +1270,35 @@ impl ReklawdboxServer {
         params: Parameters<UpdateTracksParams>,
     ) -> Result<CallToolResult, McpError> {
         for c in &params.0.changes {
-            if let Some(r) = c.rating {
-                if r == 0 || r > 5 {
-                    return Err(McpError::invalid_params(
-                        format!("rating must be 1-5, got {r}"),
-                        None,
-                    ));
-                }
+            if let Some(r) = c.rating
+                && (r == 0 || r > 5)
+            {
+                return Err(McpError::invalid_params(
+                    format!("rating must be 1-5, got {r}"),
+                    None,
+                ));
             }
-            if let Some(ref col) = c.color {
-                if !color::is_valid_color(col) {
-                    let valid: Vec<&str> = color::COLORS.iter().map(|(n, _)| *n).collect();
-                    return Err(McpError::invalid_params(
-                        format!(
-                            "unknown color '{}'. Valid colors: {}",
-                            col,
-                            valid.join(", ")
-                        ),
-                        None,
-                    ));
-                }
+            if let Some(ref col) = c.color
+                && !color::is_valid_color(col)
+            {
+                let valid: Vec<&str> = color::COLORS.iter().map(|(n, _)| *n).collect();
+                return Err(McpError::invalid_params(
+                    format!(
+                        "unknown color '{}'. Valid colors: {}",
+                        col,
+                        valid.join(", ")
+                    ),
+                    None,
+                ));
             }
         }
 
         let mut warnings: Vec<String> = Vec::new();
         for c in &params.0.changes {
-            if let Some(ref g) = c.genre {
-                if !genre::is_known_genre(g) {
-                    warnings.push(format!("'{}' is not in the genre taxonomy", g));
-                }
+            if let Some(ref g) = c.genre
+                && !genre::is_known_genre(g)
+            {
+                warnings.push(format!("'{}' is not in the genre taxonomy", g));
             }
         }
 
@@ -2065,14 +2065,13 @@ impl ReklawdboxServer {
             let store = self.internal_conn()?;
             if let Some(cached_entry) = store::get_audio_analysis(&store, &file_path, "stratum-dsp")
                 .map_err(|e| err(format!("Cache read error: {e}")))?
+                && cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime
             {
-                if cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime {
-                    stratum_dsp = Some(
-                        serde_json::from_str(&cached_entry.features_json)
-                            .map_err(|e| err(format!("Cache parse error: {e}")))?,
-                    );
-                    stratum_cache_hit = true;
-                }
+                stratum_dsp = Some(
+                    serde_json::from_str(&cached_entry.features_json)
+                        .map_err(|e| err(format!("Cache parse error: {e}")))?,
+                );
+                stratum_cache_hit = true;
             }
         }
 
@@ -2124,15 +2123,13 @@ impl ReklawdboxServer {
                 if let Some(cached_entry) =
                     store::get_audio_analysis(&store, &file_path, "essentia")
                         .map_err(|e| err(format!("Cache read error: {e}")))?
+                    && cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime
                 {
-                    if cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime
-                    {
-                        essentia = Some(
-                            serde_json::from_str(&cached_entry.features_json)
-                                .map_err(|e| err(format!("Cache parse error: {e}")))?,
-                        );
-                        essentia_cache_hit = Some(true);
-                    }
+                    essentia = Some(
+                        serde_json::from_str(&cached_entry.features_json)
+                            .map_err(|e| err(format!("Cache parse error: {e}")))?,
+                    );
+                    essentia_cache_hit = Some(true);
                 }
             }
 
@@ -2297,26 +2294,24 @@ impl ReklawdboxServer {
                 if let Some(cached_entry) =
                     store::get_audio_analysis(&store, &file_path, "stratum-dsp")
                         .map_err(|e| err(format!("Cache read error: {e}")))?
+                    && cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime
                 {
-                    if cached_entry.file_size == file_size && cached_entry.file_mtime == file_mtime
+                    match serde_json::from_str::<serde_json::Value>(&cached_entry.features_json)
                     {
-                        match serde_json::from_str::<serde_json::Value>(&cached_entry.features_json)
-                        {
-                            Ok(cached_json) => {
-                                stratum_dsp = Some(cached_json);
-                                stratum_cache_hit = true;
-                                cached += 1;
-                            }
-                            Err(e) => {
-                                failed.push(serde_json::json!({
-                                    "track_id": track.id,
-                                    "artist": track.artist,
-                                    "title": track.title,
-                                    "analyzer": "stratum-dsp",
-                                    "error": format!("Cache parse error: {e}"),
-                                }));
-                                continue;
-                            }
+                        Ok(cached_json) => {
+                            stratum_dsp = Some(cached_json);
+                            stratum_cache_hit = true;
+                            cached += 1;
+                        }
+                        Err(e) => {
+                            failed.push(serde_json::json!({
+                                "track_id": track.id,
+                                "artist": track.artist,
+                                "title": track.title,
+                                "analyzer": "stratum-dsp",
+                                "error": format!("Cache parse error: {e}"),
+                            }));
+                            continue;
                         }
                     }
                 }
@@ -2426,31 +2421,29 @@ impl ReklawdboxServer {
                     if let Some(cached_entry) =
                         store::get_audio_analysis(&store, &row.file_path, "essentia")
                             .map_err(|e| err(format!("Cache read error: {e}")))?
-                    {
-                        if cached_entry.file_size == row.file_size
+                        && cached_entry.file_size == row.file_size
                             && cached_entry.file_mtime == row.file_mtime
-                        {
-                            match serde_json::from_str::<serde_json::Value>(
-                                &cached_entry.features_json,
-                            ) {
-                                Ok(cached_json) => {
-                                    row.essentia = Some(cached_json);
-                                    row.essentia_cache_hit = Some(true);
-                                    essentia_cached += 1;
-                                    continue;
-                                }
-                                Err(e) => {
-                                    row.essentia_error = Some(format!("Cache parse error: {e}"));
-                                    essentia_failed += 1;
-                                    failed.push(serde_json::json!({
-                                        "track_id": &row.track_id,
-                                        "artist": &row.artist,
-                                        "title": &row.title,
-                                        "analyzer": "essentia",
-                                        "error": format!("Cache parse error: {e}"),
-                                    }));
-                                    continue;
-                                }
+                    {
+                        match serde_json::from_str::<serde_json::Value>(
+                            &cached_entry.features_json,
+                        ) {
+                            Ok(cached_json) => {
+                                row.essentia = Some(cached_json);
+                                row.essentia_cache_hit = Some(true);
+                                essentia_cached += 1;
+                                continue;
+                            }
+                            Err(e) => {
+                                row.essentia_error = Some(format!("Cache parse error: {e}"));
+                                essentia_failed += 1;
+                                failed.push(serde_json::json!({
+                                    "track_id": &row.track_id,
+                                    "artist": &row.artist,
+                                    "title": &row.title,
+                                    "analyzer": "essentia",
+                                    "error": format!("Cache parse error: {e}"),
+                                }));
+                                continue;
                             }
                         }
                     }
@@ -2838,13 +2831,13 @@ impl ReklawdboxServer {
             }
         }
 
-        if let Some(start_track_id) = p.start_track_id.as_deref() {
-            if !profiles_by_id.contains_key(start_track_id) {
-                return Err(McpError::invalid_params(
-                    format!("start_track_id '{start_track_id}' is not in track_ids"),
-                    None,
-                ));
-            }
+        if let Some(start_track_id) = p.start_track_id.as_deref()
+            && !profiles_by_id.contains_key(start_track_id)
+        {
+            return Err(McpError::invalid_params(
+                format!("start_track_id '{start_track_id}' is not in track_ids"),
+                None,
+            ));
         }
 
         let actual_target = requested_target.min(profiles_by_id.len());
@@ -3322,7 +3315,7 @@ impl ReklawdboxServer {
             let recursive = p.recursive.unwrap_or(false);
             let glob_pattern = p.glob.clone();
             scan_audio_directory(&directory, recursive, glob_pattern.as_deref())
-                .map_err(|e| err(e))?
+                .map_err(err)?
         } else {
             unreachable!()
         };
@@ -3504,7 +3497,7 @@ impl ReklawdboxServer {
         })
         .await
         .map_err(|e| err(format!("join error: {e}")))?
-        .map_err(|e| err(e))?;
+        .map_err(err)?;
 
         let json = serde_json::to_string_pretty(&result).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -3987,7 +3980,7 @@ fn transition_pick_rank(
     }
     let preferred_rank = if current_length == 1 {
         variation_index
-    } else if variation_index > 0 && current_length % 4 == 0 {
+    } else if variation_index > 0 && current_length.is_multiple_of(4) {
         variation_index.min(1)
     } else {
         0
@@ -4774,7 +4767,7 @@ fn parse_enrichment_cache(cache: Option<&store::CachedEnrichment>) -> Option<ser
 }
 
 fn resolve_file_path(raw_path: &str) -> Result<String, McpError> {
-    audio::resolve_audio_path(raw_path).map_err(|msg| err(msg))
+    audio::resolve_audio_path(raw_path).map_err(err)
 }
 
 #[tool_handler]

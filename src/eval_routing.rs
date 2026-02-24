@@ -133,9 +133,11 @@ mod tests {
 
     #[test]
     fn corpus_document_routing_meets_quality_thresholds() {
+        #[allow(clippy::const_is_empty)] // guard against future accidental emptying
+        {
+            assert!(!ROUTING_CASES.is_empty(), "routing eval must include cases");
+        }
         let index = CorpusIndex::load_rekordbox().expect("manifest index should load");
-        assert!(!ROUTING_CASES.is_empty(), "routing eval must include cases");
-
         assert_cases_reference_manifest_entries(&index, ROUTING_CASES);
 
         let results = ROUTING_CASES

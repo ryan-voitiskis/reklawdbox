@@ -54,9 +54,7 @@ pub fn path_to_location(file_path: &str) -> String {
     let mut normalized = normalized_source.replace('\\', "/");
     let bytes = normalized.as_bytes();
     let is_windows_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    if is_windows_drive {
-        normalized.insert(0, '/');
-    } else if !normalized.starts_with('/') {
+    if is_windows_drive || !normalized.starts_with('/') {
         normalized.insert(0, '/');
     }
 
@@ -148,9 +146,9 @@ pub fn generate_xml_with_playlists(
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<DJ_PLAYLISTS Version=\"1.0.0\">\n");
     out.push_str("  <PRODUCT Name=\"rekordbox\" Version=\"7.2.10\" Company=\"AlphaTheta\"/>\n");
-    write!(
+    writeln!(
         out,
-        "  <COLLECTION Entries=\"{count}\">\n",
+        "  <COLLECTION Entries=\"{count}\">",
         count = tracks.len()
     )
     .unwrap();
@@ -165,17 +163,17 @@ pub fn generate_xml_with_playlists(
 
     if !playlists.is_empty() {
         out.push_str("  <PLAYLISTS>\n");
-        write!(
+        writeln!(
             out,
-            "    <NODE Type=\"0\" Name=\"ROOT\" Count=\"{}\">\n",
+            "    <NODE Type=\"0\" Name=\"ROOT\" Count=\"{}\">",
             playlists.len()
         )
         .unwrap();
 
         for playlist in playlists {
-            write!(
+            writeln!(
                 out,
-                "      <NODE Type=\"1\" Name=\"{}\" Entries=\"{}\" KeyType=\"0\">\n",
+                "      <NODE Type=\"1\" Name=\"{}\" Entries=\"{}\" KeyType=\"0\">",
                 xml_escape(&playlist.name),
                 playlist.track_ids.len()
             )
@@ -188,7 +186,7 @@ pub fn generate_xml_with_playlists(
                         playlist.name, track_id
                     )
                 })?;
-                write!(out, "        <TRACK Key=\"{key}\"/>\n").unwrap();
+                writeln!(out, "        <TRACK Key=\"{key}\"/>").unwrap();
             }
 
             out.push_str("      </NODE>\n");
@@ -667,7 +665,7 @@ mod tests {
             );
             let mut stmt = conn.prepare(&sql).unwrap();
             let batch: Vec<crate::types::Track> = stmt
-                .query_map([], |row| crate::db::row_to_track(row))
+                .query_map([], crate::db::row_to_track)
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
