@@ -767,13 +767,16 @@ fn write_tag_layer(
         } else {
             let val = value.as_ref().unwrap();
             tag.insert_text(primary_key, val.clone());
-            // For year, also write the Year key for broader compatibility
-            if field == "year" {
-                tag.insert_text(ItemKey::Year, val.clone());
-            }
-            // For bpm, also write the Bpm (fractional) key for Vorbis compat
-            if field == "bpm" {
-                tag.insert_text(ItemKey::Bpm, val.clone());
+            // For non-Vorbis tags, also write secondary keys for compatibility.
+            // Vorbis Comments use DATE (not YEAR) per spec, and BPM is already
+            // the correct key — secondary writes would create duplicate fields.
+            if tag_type != TagType::VorbisComments {
+                if field == "year" {
+                    tag.insert_text(ItemKey::Year, val.clone());
+                }
+                if field == "bpm" {
+                    tag.insert_text(ItemKey::Bpm, val.clone());
+                }
             }
             fields_written.push(field.clone());
             any_changes = true;
