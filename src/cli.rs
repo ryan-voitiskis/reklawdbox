@@ -688,20 +688,35 @@ fn build_tags_from_args(args: &WriteTagsArgs) -> HashMap<String, Option<String>>
     tags
 }
 
-fn parse_wav_targets(raw: &Option<Vec<String>>) -> Vec<tags::WavTarget> {
+fn parse_wav_targets(
+    raw: &Option<Vec<String>>,
+) -> Result<Vec<tags::WavTarget>, Box<dyn std::error::Error>> {
     match raw {
-        Some(targets) => targets
-            .iter()
-            .filter_map(|t| match t.as_str() {
-                "id3v2" => Some(tags::WavTarget::Id3v2),
-                "riff_info" => Some(tags::WavTarget::RiffInfo),
-                _ => {
-                    eprintln!("Warning: unknown WAV target '{}', ignoring", t);
-                    None
+        Some(targets) => {
+            let mut valid = Vec::new();
+            let mut invalid = Vec::new();
+            for t in targets {
+                match t.as_str() {
+                    "id3v2" => valid.push(tags::WavTarget::Id3v2),
+                    "riff_info" => valid.push(tags::WavTarget::RiffInfo),
+                    _ => invalid.push(t.as_str()),
                 }
-            })
-            .collect(),
-        None => vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo],
+            }
+            if !invalid.is_empty() {
+                eprintln!(
+                    "Warning: unknown WAV target(s): {}",
+                    invalid.join(", ")
+                );
+            }
+            if valid.is_empty() {
+                return Err(format!(
+                    "No valid WAV targets. Valid values: id3v2, riff_info"
+                )
+                .into());
+            }
+            Ok(valid)
+        }
+        None => Ok(vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo]),
     }
 }
 
@@ -780,7 +795,7 @@ fn run_write_tags(args: WriteTagsArgs) -> Result<(), Box<dyn std::error::Error>>
         return Err("No tags specified. Use --field flags or --json-input.".into());
     }
 
-    let wav_targets = parse_wav_targets(&args.wav_targets);
+    let wav_targets = parse_wav_targets(&args.wav_targets)?;
     let entry = tags::WriteEntry {
         path: PathBuf::from(&args.path),
         tags: tag_map,
