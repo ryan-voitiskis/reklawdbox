@@ -67,8 +67,33 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     )?;
-    if version < 2 {
-        conn.execute_batch("PRAGMA user_version = 2;")?;
+    if version < 3 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS audit_files (
+                path         TEXT PRIMARY KEY,
+                last_audited TEXT NOT NULL,
+                file_mtime   TEXT NOT NULL,
+                file_size    INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_issues (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                path        TEXT NOT NULL REFERENCES audit_files(path) ON DELETE CASCADE ON UPDATE CASCADE,
+                issue_type  TEXT NOT NULL,
+                detail      TEXT,
+                status      TEXT NOT NULL DEFAULT 'open',
+                resolution  TEXT,
+                note        TEXT,
+                created_at  TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(path, issue_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_issues_status ON audit_issues(status);
+            CREATE INDEX IF NOT EXISTS idx_audit_issues_path ON audit_issues(path);
+
+            PRAGMA user_version = 3;",
+        )?;
     }
     Ok(())
 }
@@ -282,6 +307,303 @@ pub fn clear_broker_discogs_session(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Audit state
+// ---------------------------------------------------------------------------
+
+pub struct AuditFile {
+    pub path: String,
+    pub last_audited: String,
+    pub file_mtime: String,
+    pub file_size: i64,
+}
+
+pub struct AuditIssue {
+    pub id: i64,
+    pub path: String,
+    pub issue_type: String,
+    pub detail: Option<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+}
+
+pub struct AuditSummary {
+    pub by_type_status: Vec<(String, String, i64)>,
+}
+
+pub fn upsert_audit_file(
+    conn: &Connection,
+    path: &str,
+    last_audited: &str,
+    file_mtime: &str,
+    file_size: i64,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO audit_files (path, last_audited, file_mtime, file_size)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(path)
+         DO UPDATE SET last_audited = ?2, file_mtime = ?3, file_size = ?4",
+        params![path, last_audited, file_mtime, file_size],
+    )?;
+    Ok(())
+}
+
+pub fn get_audit_file(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<AuditFile>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT path, last_audited, file_mtime, file_size
+         FROM audit_files WHERE path = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![path], |row| {
+        Ok(AuditFile {
+            path: row.get(0)?,
+            last_audited: row.get(1)?,
+            file_mtime: row.get(2)?,
+            file_size: row.get(3)?,
+        })
+    })?;
+    match rows.next() {
+        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+pub fn get_audit_files_in_scope(
+    conn: &Connection,
+    scope: &str,
+) -> Result<Vec<AuditFile>, rusqlite::Error> {
+    let pattern = format!("{scope}%");
+    let mut stmt = conn.prepare(
+        "SELECT path, last_audited, file_mtime, file_size
+         FROM audit_files WHERE path LIKE ?1",
+    )?;
+    let rows = stmt.query_map(params![pattern], |row| {
+        Ok(AuditFile {
+            path: row.get(0)?,
+            last_audited: row.get(1)?,
+            file_mtime: row.get(2)?,
+            file_size: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn delete_audit_file(conn: &Connection, path: &str) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM audit_files WHERE path = ?1", params![path])?;
+    Ok(())
+}
+
+pub fn upsert_audit_issue(
+    conn: &Connection,
+    path: &str,
+    issue_type: &str,
+    detail: Option<&str>,
+    status: &str,
+    created_at: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO audit_issues (path, issue_type, detail, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(path, issue_type)
+         DO UPDATE SET detail = ?3, status = CASE
+             WHEN audit_issues.status IN ('accepted', 'deferred') THEN audit_issues.status
+             ELSE ?4
+         END",
+        params![path, issue_type, detail, status, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_audit_issues(
+    conn: &Connection,
+    scope: &str,
+    status: Option<&str>,
+    issue_type: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<AuditIssue>, rusqlite::Error> {
+    let pattern = format!("{scope}%");
+    let sql = format!(
+        "SELECT id, path, issue_type, detail, status, resolution, note, created_at, resolved_at
+         FROM audit_issues
+         WHERE path LIKE ?1{}{}
+         ORDER BY path, issue_type
+         LIMIT ?2 OFFSET ?3",
+        if status.is_some() {
+            " AND status = ?4"
+        } else {
+            ""
+        },
+        if issue_type.is_some() {
+            if status.is_some() {
+                " AND issue_type = ?5"
+            } else {
+                " AND issue_type = ?4"
+            }
+        } else {
+            ""
+        },
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows: Vec<AuditIssue> = match (status, issue_type) {
+        (Some(s), Some(it)) => stmt
+            .query_map(params![pattern, limit, offset, s, it], map_audit_issue)?
+            .collect::<Result<_, _>>()?,
+        (Some(s), None) => stmt
+            .query_map(params![pattern, limit, offset, s], map_audit_issue)?
+            .collect::<Result<_, _>>()?,
+        (None, Some(it)) => stmt
+            .query_map(params![pattern, limit, offset, it], map_audit_issue)?
+            .collect::<Result<_, _>>()?,
+        (None, None) => stmt
+            .query_map(params![pattern, limit, offset], map_audit_issue)?
+            .collect::<Result<_, _>>()?,
+    };
+    Ok(rows)
+}
+
+fn map_audit_issue(row: &rusqlite::Row) -> Result<AuditIssue, rusqlite::Error> {
+    Ok(AuditIssue {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        issue_type: row.get(2)?,
+        detail: row.get(3)?,
+        status: row.get(4)?,
+        resolution: row.get(5)?,
+        note: row.get(6)?,
+        created_at: row.get(7)?,
+        resolved_at: row.get(8)?,
+    })
+}
+
+pub fn get_audit_issue_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<AuditIssue>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, issue_type, detail, status, resolution, note, created_at, resolved_at
+         FROM audit_issues WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![id], map_audit_issue)?;
+    match rows.next() {
+        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+pub fn resolve_audit_issues(
+    conn: &Connection,
+    ids: &[i64],
+    resolution: &str,
+    note: Option<&str>,
+    resolved_at: &str,
+) -> Result<usize, rusqlite::Error> {
+    let status = match resolution {
+        "accepted_as_is" => "accepted",
+        "wont_fix" => "accepted",
+        "deferred" => "deferred",
+        _ => "resolved",
+    };
+    let mut count = 0usize;
+    for id in ids {
+        count += conn.execute(
+            "UPDATE audit_issues
+             SET status = ?1, resolution = ?2, note = COALESCE(?3, note), resolved_at = ?4
+             WHERE id = ?5 AND status = 'open'",
+            params![status, resolution, note, resolved_at, id],
+        )?;
+    }
+    Ok(count)
+}
+
+pub fn mark_issues_resolved_for_path(
+    conn: &Connection,
+    path: &str,
+    issue_types_still_open: &[&str],
+    resolved_at: &str,
+) -> Result<usize, rusqlite::Error> {
+    if issue_types_still_open.is_empty() {
+        let count = conn.execute(
+            "UPDATE audit_issues
+             SET status = 'resolved', resolution = 'fixed', resolved_at = ?1
+             WHERE path = ?2 AND status = 'open'",
+            params![resolved_at, path],
+        )?;
+        return Ok(count);
+    }
+    let placeholders: Vec<String> = (0..issue_types_still_open.len())
+        .map(|i| format!("?{}", i + 3))
+        .collect();
+    let sql = format!(
+        "UPDATE audit_issues
+         SET status = 'resolved', resolution = 'fixed', resolved_at = ?1
+         WHERE path = ?2 AND status = 'open' AND issue_type NOT IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_idx = 1;
+    stmt.raw_bind_parameter(param_idx, resolved_at)?;
+    param_idx += 1;
+    stmt.raw_bind_parameter(param_idx, path)?;
+    param_idx += 1;
+    for it in issue_types_still_open {
+        stmt.raw_bind_parameter(param_idx, *it)?;
+        param_idx += 1;
+    }
+    let count = stmt.raw_execute()?;
+    Ok(count)
+}
+
+pub fn get_audit_summary(
+    conn: &Connection,
+    scope: &str,
+) -> Result<AuditSummary, rusqlite::Error> {
+    let pattern = format!("{scope}%");
+    let mut stmt = conn.prepare(
+        "SELECT issue_type, status, COUNT(*) as cnt
+         FROM audit_issues
+         WHERE path LIKE ?1
+         GROUP BY issue_type, status
+         ORDER BY issue_type, status",
+    )?;
+    let rows = stmt.query_map(params![pattern], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+    })?;
+    let by_type_status: Vec<(String, String, i64)> = rows.collect::<Result<_, _>>()?;
+    Ok(AuditSummary { by_type_status })
+}
+
+pub fn delete_missing_audit_files(
+    conn: &Connection,
+    scope: &str,
+    existing_paths: &std::collections::HashSet<String>,
+) -> Result<usize, rusqlite::Error> {
+    let pattern = format!("{scope}%");
+    let mut stmt = conn.prepare(
+        "SELECT path FROM audit_files WHERE path LIKE ?1",
+    )?;
+    let db_paths: Vec<String> = stmt
+        .query_map(params![pattern], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+
+    let mut count = 0usize;
+    for db_path in &db_paths {
+        if !existing_paths.contains(db_path.as_str()) {
+            conn.execute("DELETE FROM audit_files WHERE path = ?1", params![db_path])?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,7 +621,7 @@ mod tests {
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         let tables: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -311,6 +633,8 @@ mod tests {
         assert!(tables.contains(&"enrichment_cache".to_string()));
         assert!(tables.contains(&"audio_analysis_cache".to_string()));
         assert!(tables.contains(&"broker_discogs_session".to_string()));
+        assert!(tables.contains(&"audit_files".to_string()));
+        assert!(tables.contains(&"audit_issues".to_string()));
     }
 
     #[test]
@@ -326,7 +650,7 @@ mod tests {
         let version: i32 = conn2
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -383,7 +707,7 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let conn = Connection::open(path_str).unwrap();
-        conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 3;").unwrap();
         drop(conn);
 
         let conn = open(path_str).unwrap();
@@ -580,5 +904,257 @@ mod tests {
         clear_broker_discogs_session(&conn, "https://broker.example.com").unwrap();
         let missing = get_broker_discogs_session(&conn, "https://broker.example.com").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_audit_file_round_trip() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(
+            &conn,
+            "/music/track.flac",
+            "2026-02-25T12:00:00Z",
+            "2026-02-20T10:00:00Z",
+            12345,
+        )
+        .unwrap();
+
+        let entry = get_audit_file(&conn, "/music/track.flac")
+            .unwrap()
+            .expect("should find audit file");
+        assert_eq!(entry.path, "/music/track.flac");
+        assert_eq!(entry.last_audited, "2026-02-25T12:00:00Z");
+        assert_eq!(entry.file_mtime, "2026-02-20T10:00:00Z");
+        assert_eq!(entry.file_size, 12345);
+    }
+
+    #[test]
+    fn test_audit_file_upsert() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t1", "m1", 100).unwrap();
+        upsert_audit_file(&conn, "/music/track.flac", "t2", "m2", 200).unwrap();
+
+        let entry = get_audit_file(&conn, "/music/track.flac").unwrap().unwrap();
+        assert_eq!(entry.last_audited, "t2");
+        assert_eq!(entry.file_mtime, "m2");
+        assert_eq!(entry.file_size, 200);
+    }
+
+    #[test]
+    fn test_audit_file_miss() {
+        let (_dir, conn) = open_temp_store();
+        let entry = get_audit_file(&conn, "/no/such/file").unwrap();
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_audit_files_in_scope() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/a/1.flac", "t", "m", 100).unwrap();
+        upsert_audit_file(&conn, "/music/a/2.flac", "t", "m", 200).unwrap();
+        upsert_audit_file(&conn, "/music/b/1.flac", "t", "m", 300).unwrap();
+
+        let files = get_audit_files_in_scope(&conn, "/music/a/").unwrap();
+        assert_eq!(files.len(), 2);
+
+        let files = get_audit_files_in_scope(&conn, "/music/").unwrap();
+        assert_eq!(files.len(), 3);
+
+        let files = get_audit_files_in_scope(&conn, "/other/").unwrap();
+        assert_eq!(files.len(), 0);
+    }
+
+    #[test]
+    fn test_audit_issue_round_trip() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.wav", "t", "m", 100).unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.wav",
+            "WAV_TAG3_MISSING",
+            Some(r#"{"fields":["artist"]}"#),
+            "open",
+            "2026-02-25T12:00:00Z",
+        )
+        .unwrap();
+
+        let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "/music/track.wav");
+        assert_eq!(issues[0].issue_type, "WAV_TAG3_MISSING");
+        assert_eq!(issues[0].status, "open");
+        assert!(issues[0].detail.as_ref().unwrap().contains("artist"));
+    }
+
+    #[test]
+    fn test_audit_issue_upsert_preserves_accepted() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
+
+        // Simulate user accepting
+        resolve_audit_issues(&conn, &[1], "accepted_as_is", None, "t2").unwrap();
+
+        // Re-scan upserts the same issue — should preserve accepted status
+        upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t3").unwrap();
+
+        let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
+        assert_eq!(issue.status, "accepted");
+    }
+
+    #[test]
+    fn test_audit_issue_unique_constraint() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", Some("d1"), "open", "t1")
+            .unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", Some("d2"), "open", "t2")
+            .unwrap();
+
+        // Should still be only one issue, with updated detail
+        let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].detail.as_deref(), Some("d2"));
+    }
+
+    #[test]
+    fn test_audit_cascade_delete() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
+            .unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
+            .unwrap();
+
+        let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+
+        delete_audit_file(&conn, "/music/track.flac").unwrap();
+
+        let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 0);
+    }
+
+    #[test]
+    fn test_audit_resolve_issues() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
+            .unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
+            .unwrap();
+
+        let count =
+            resolve_audit_issues(&conn, &[1], "accepted_as_is", Some("intentional"), "t2")
+                .unwrap();
+        assert_eq!(count, 1);
+
+        let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
+        assert_eq!(issue.status, "accepted");
+        assert_eq!(issue.resolution.as_deref(), Some("accepted_as_is"));
+        assert_eq!(issue.note.as_deref(), Some("intentional"));
+
+        // Issue 2 remains open
+        let issue2 = get_audit_issue_by_id(&conn, 2).unwrap().unwrap();
+        assert_eq!(issue2.status, "open");
+    }
+
+    #[test]
+    fn test_audit_query_filters() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/a.flac", "t", "m", 100).unwrap();
+        upsert_audit_file(&conn, "/music/b.wav", "t", "m", 200).unwrap();
+        upsert_audit_issue(&conn, "/music/a.flac", "EMPTY_ARTIST", None, "open", "t1").unwrap();
+        upsert_audit_issue(&conn, "/music/b.wav", "WAV_TAG3_MISSING", None, "open", "t1")
+            .unwrap();
+        resolve_audit_issues(&conn, &[1], "accepted_as_is", None, "t2").unwrap();
+
+        // Filter by status
+        let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].issue_type, "WAV_TAG3_MISSING");
+
+        // Filter by issue_type
+        let wav = get_audit_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0)
+            .unwrap();
+        assert_eq!(wav.len(), 1);
+
+        // Filter by both
+        let both = get_audit_issues(
+            &conn,
+            "/music/",
+            Some("accepted"),
+            Some("EMPTY_ARTIST"),
+            100,
+            0,
+        )
+        .unwrap();
+        assert_eq!(both.len(), 1);
+    }
+
+    #[test]
+    fn test_audit_summary() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/a.flac", "t", "m", 100).unwrap();
+        upsert_audit_file(&conn, "/music/b.wav", "t", "m", 200).unwrap();
+        upsert_audit_issue(&conn, "/music/a.flac", "EMPTY_ARTIST", None, "open", "t1").unwrap();
+        upsert_audit_issue(&conn, "/music/b.wav", "WAV_TAG3_MISSING", None, "open", "t1")
+            .unwrap();
+
+        let summary = get_audit_summary(&conn, "/music/").unwrap();
+        assert_eq!(summary.by_type_status.len(), 2);
+    }
+
+    #[test]
+    fn test_audit_delete_missing_files() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/a.flac", "t", "m", 100).unwrap();
+        upsert_audit_file(&conn, "/music/b.flac", "t", "m", 200).unwrap();
+        upsert_audit_file(&conn, "/music/c.flac", "t", "m", 300).unwrap();
+
+        let existing: std::collections::HashSet<String> =
+            ["/music/a.flac".to_string()].into_iter().collect();
+        let count = delete_missing_audit_files(&conn, "/music/", &existing).unwrap();
+        assert_eq!(count, 2);
+
+        let files = get_audit_files_in_scope(&conn, "/music/").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "/music/a.flac");
+    }
+
+    #[test]
+    fn test_audit_mark_issues_resolved_for_path() {
+        let (_dir, conn) = open_temp_store();
+
+        upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
+            .unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
+            .unwrap();
+        upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
+
+        // Mark resolved except GENRE_SET which is still detected
+        let count = mark_issues_resolved_for_path(
+            &conn,
+            "/music/track.flac",
+            &["GENRE_SET"],
+            "t2",
+        )
+        .unwrap();
+        assert_eq!(count, 2);
+
+        let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].issue_type, "GENRE_SET");
     }
 }

@@ -1,3 +1,4 @@
+mod audit;
 mod audio;
 mod beatport;
 mod changes;

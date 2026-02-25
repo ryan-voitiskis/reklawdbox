@@ -12,6 +12,7 @@ use rusqlite::Connection;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::audit;
 use crate::audio;
 use crate::beatport;
 use crate::changes::ChangeManager;
@@ -85,6 +86,11 @@ impl ReklawdboxServer {
                 .map_err(|_| McpError::internal_error("Internal store lock poisoned", None)),
             Err(msg) => Err(McpError::internal_error(msg.clone(), None)),
         }
+    }
+
+    fn internal_store_path(&self) -> String {
+        std::env::var("CRATE_DIG_STORE_PATH")
+            .unwrap_or_else(|_| store::default_path().to_string_lossy().to_string())
     }
 
     fn essentia_python_path(&self) -> Option<String> {
@@ -1142,6 +1148,60 @@ struct EmbedCoverArtParams {
 
     #[schemars(description = "Picture type (default: front_cover)")]
     picture_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "operation")]
+enum AuditStateParams {
+    #[serde(rename = "scan")]
+    Scan {
+        #[schemars(description = "Directory path to audit (trailing / enforced)")]
+        scope: String,
+
+        #[schemars(description = "Re-read all files including unchanged (default: false)")]
+        revalidate: Option<bool>,
+
+        #[schemars(
+            description = "Issue types to exclude from detection (e.g. [\"GENRE_SET\"])"
+        )]
+        skip_issue_types: Option<Vec<String>>,
+    },
+
+    #[serde(rename = "query_issues")]
+    QueryIssues {
+        #[schemars(description = "Directory path prefix to filter issues")]
+        scope: String,
+
+        #[schemars(description = "Filter by status: open | resolved | accepted | deferred")]
+        status: Option<String>,
+
+        #[schemars(description = "Filter by issue type (e.g. WAV_TAG3_MISSING)")]
+        issue_type: Option<String>,
+
+        #[schemars(description = "Max results (default: 100)")]
+        limit: Option<u32>,
+
+        #[schemars(description = "Offset for pagination (default: 0)")]
+        offset: Option<u32>,
+    },
+
+    #[serde(rename = "resolve_issues")]
+    ResolveIssues {
+        #[schemars(description = "Issue IDs to resolve")]
+        issue_ids: Vec<i64>,
+
+        #[schemars(description = "Resolution: accepted_as_is | wont_fix | deferred")]
+        resolution: String,
+
+        #[schemars(description = "Optional user comment")]
+        note: Option<String>,
+    },
+
+    #[serde(rename = "get_summary")]
+    GetSummary {
+        #[schemars(description = "Directory path prefix for summary")]
+        scope: String,
+    },
 }
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -3568,6 +3628,119 @@ impl ReklawdboxServer {
 
         let json = serde_json::to_string_pretty(&output).map_err(|e| err(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    // -----------------------------------------------------------------------
+    // Audit engine
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        description = "Collection audit engine. Scan files for convention violations, query/resolve issues, and get summaries. Operations: scan, query_issues, resolve_issues, get_summary."
+    )]
+    async fn audit_state(
+        &self,
+        params: Parameters<AuditStateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let store_path = self.internal_store_path();
+
+        match params.0 {
+            AuditStateParams::Scan {
+                scope,
+                revalidate,
+                skip_issue_types,
+            } => {
+                let revalidate = revalidate.unwrap_or(false);
+                let skip: HashSet<audit::IssueType> = skip_issue_types
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| audit::IssueType::from_str(s))
+                    .collect();
+
+                let summary = tokio::task::spawn_blocking(move || {
+                    let conn = store::open(&store_path)
+                        .map_err(|e| format!("Failed to open internal store: {e}"))?;
+                    audit::scan(&conn, &scope, revalidate, &skip)
+                })
+                .await
+                .map_err(|e| err(format!("join error: {e}")))?
+                .map_err(|e| err(e))?;
+
+                let json =
+                    serde_json::to_string_pretty(&summary).map_err(|e| err(format!("{e}")))?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+
+            AuditStateParams::QueryIssues {
+                scope,
+                status,
+                issue_type,
+                limit,
+                offset,
+            } => {
+                let limit = limit.unwrap_or(100);
+                let offset = offset.unwrap_or(0);
+
+                let issues = tokio::task::spawn_blocking(move || {
+                    let conn = store::open(&store_path)
+                        .map_err(|e| format!("Failed to open internal store: {e}"))?;
+                    audit::query_issues(
+                        &conn,
+                        &scope,
+                        status.as_deref(),
+                        issue_type.as_deref(),
+                        limit,
+                        offset,
+                    )
+                })
+                .await
+                .map_err(|e| err(format!("join error: {e}")))?
+                .map_err(|e| err(e))?;
+
+                let json =
+                    serde_json::to_string_pretty(&issues).map_err(|e| err(format!("{e}")))?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+
+            AuditStateParams::ResolveIssues {
+                issue_ids,
+                resolution,
+                note,
+            } => {
+                let count = tokio::task::spawn_blocking(move || {
+                    let conn = store::open(&store_path)
+                        .map_err(|e| format!("Failed to open internal store: {e}"))?;
+                    audit::resolve_issues(
+                        &conn,
+                        &issue_ids,
+                        &resolution,
+                        note.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|e| err(format!("join error: {e}")))?
+                .map_err(|e| err(e))?;
+
+                let json = serde_json::json!({ "resolved": count });
+                let text =
+                    serde_json::to_string_pretty(&json).map_err(|e| err(format!("{e}")))?;
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+
+            AuditStateParams::GetSummary { scope } => {
+                let summary = tokio::task::spawn_blocking(move || {
+                    let conn = store::open(&store_path)
+                        .map_err(|e| format!("Failed to open internal store: {e}"))?;
+                    audit::get_summary(&conn, &scope)
+                })
+                .await
+                .map_err(|e| err(format!("join error: {e}")))?
+                .map_err(|e| err(e))?;
+
+                let json =
+                    serde_json::to_string_pretty(&summary).map_err(|e| err(format!("{e}")))?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+        }
     }
 }
 
