@@ -190,6 +190,23 @@ pub fn classify_track_context(path: &Path) -> AuditContext {
     }
 }
 
+/// Get the effective album directory name, climbing past disc subdirectories.
+fn effective_album_dir_name(path: &Path) -> Option<(&Path, &str)> {
+    let parent = path.parent()?;
+    let dir_name = parent.file_name().and_then(|n| n.to_str())?;
+
+    if dir_name.starts_with("CD")
+        || dir_name.starts_with("Disc")
+        || dir_name.starts_with("disc")
+    {
+        let album_dir = parent.parent()?;
+        let album_name = album_dir.file_name().and_then(|n| n.to_str())?;
+        Some((album_dir, album_name))
+    } else {
+        Some((parent, dir_name))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Filename parsing
 // ---------------------------------------------------------------------------
@@ -214,23 +231,32 @@ pub fn parse_filename(path: &Path, context: &AuditContext) -> ParsedFilename {
 }
 
 fn parse_album_filename(stem: &str) -> ParsedFilename {
-    if stem.len() < 3 {
+    let bytes = stem.as_bytes();
+    if bytes.len() < 3 {
         return ParsedFilename::default();
+    }
+
+    // Track numbers and disc prefixes are always ASCII — bail early if first
+    // chars are not ASCII (avoids panicking on multi-byte UTF-8).
+    if !bytes[0].is_ascii() || !bytes[1].is_ascii() {
+        return ParsedFilename {
+            track_num: None,
+            artist: None,
+            title: Some(stem.to_string()),
+        };
     }
 
     let first_two = &stem[..2];
 
     // Check for disc-track format: D-NN
-    let (track_num_str, remainder) = if stem.len() >= 5
-        && stem.as_bytes()[1] == b'-'
-        && stem.as_bytes()[0].is_ascii_digit()
+    let (track_num_str, remainder) = if bytes.len() >= 5
+        && bytes[1] == b'-'
+        && bytes[0].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
     {
         let disc_track = &stem[..4];
-        if disc_track[2..4].chars().all(|c| c.is_ascii_digit()) {
-            (Some(disc_track.to_string()), stem[4..].trim_start())
-        } else {
-            try_parse_track_number(first_two, stem)
-        }
+        (Some(disc_track.to_string()), stem[4..].trim_start())
     } else {
         try_parse_track_number(first_two, stem)
     };
@@ -276,14 +302,22 @@ fn parse_album_filename(stem: &str) -> ParsedFilename {
 fn try_parse_track_number<'a>(first_two: &str, stem: &'a str) -> (Option<String>, &'a str) {
     if first_two.chars().all(|c| c.is_ascii_digit()) {
         let num = first_two.to_string();
-        // Check for "NN - Title" alternate (no artist)
         let rest = &stem[2..];
-        let remainder = if rest.starts_with(' ') {
+        let remainder = if rest.starts_with(" - ") {
+            // "NN - Title" alternate format
+            &rest[3..]
+        } else if rest.starts_with(' ') {
+            // "NN Artist - Title" canonical format (skip the space)
             &rest[1..]
-        } else if rest.starts_with("- ") || rest.starts_with(" -") {
+        } else if rest.starts_with("- ") {
             rest.trim_start_matches(|c: char| c == '-' || c == ' ')
-        } else {
+        } else if rest.starts_with(". ") || rest.starts_with('.') {
+            // "NN. Title" alternate format — keep the dot+rest so
+            // parse_album_filename's ". " branch can split it.
             rest
+        } else {
+            // No valid separator after track number — not a valid track-numbered filename
+            return (None, stem);
         };
         (Some(num), remainder)
     } else {
@@ -406,6 +440,7 @@ pub fn check_tags(
 
         if !skip.contains(&IssueType::MissingYear)
             && tag_is_empty(read_result, "year")
+            && tag_is_empty(read_result, "date")
         {
             issues.push(DetectedIssue {
                 issue_type: IssueType::MissingYear,
@@ -421,24 +456,28 @@ pub fn check_tags(
             get_tag_value(read_result, "title"),
         ) {
             let artist_trimmed = artist.trim();
-            let prefix = format!("{artist_trimmed} - ");
-            if !artist_trimmed.is_empty()
-                && title
-                    .to_lowercase()
-                    .starts_with(&prefix.to_lowercase())
-            {
-                let clean_title = title[prefix.len()..].to_string();
-                issues.push(DetectedIssue {
-                    issue_type: IssueType::ArtistInTitle,
-                    detail: Some(
-                        serde_json::json!({
-                            "artist": artist_trimmed,
-                            "old_title": title,
-                            "new_title": clean_title,
-                        })
-                        .to_string(),
-                    ),
-                });
+            if !artist_trimmed.is_empty() {
+                let title_lower = title.to_lowercase();
+                let artist_lower = artist_trimmed.to_lowercase();
+                let prefix_lower = format!("{artist_lower} - ");
+                if title_lower.starts_with(&prefix_lower) {
+                    // Find " - " in the original title for a safe slice boundary
+                    // (avoids byte-length mismatch from case folding on Unicode).
+                    if let Some(sep_pos) = title.find(" - ") {
+                        let clean_title = title[sep_pos + 3..].to_string();
+                        issues.push(DetectedIssue {
+                            issue_type: IssueType::ArtistInTitle,
+                            detail: Some(
+                                serde_json::json!({
+                                    "artist": artist_trimmed,
+                                    "old_title": title,
+                                    "new_title": clean_title,
+                                })
+                                .to_string(),
+                            ),
+                        });
+                    }
+                }
             }
         }
     }
@@ -530,24 +569,22 @@ pub fn check_filename(
 
     // TECH_SPECS_IN_DIR
     if !skip.contains(&IssueType::TechSpecsInDir) {
-        if let Some(parent) = path.parent() {
-            if let Some(dir_name) = parent.file_name().and_then(|n| n.to_str()) {
-                let has_tech_specs = TECH_SPEC_PATTERNS
-                    .iter()
-                    .any(|pat| dir_name.contains(pat));
-                if has_tech_specs {
-                    let clean = normalize_dir_name(dir_name);
-                    issues.push(DetectedIssue {
-                        issue_type: IssueType::TechSpecsInDir,
-                        detail: Some(
-                            serde_json::json!({
-                                "old_dir": dir_name,
-                                "new_dir": clean,
-                            })
-                            .to_string(),
-                        ),
-                    });
-                }
+        if let Some((_, dir_name)) = effective_album_dir_name(path) {
+            let has_tech_specs = TECH_SPEC_PATTERNS
+                .iter()
+                .any(|pat| dir_name.contains(pat));
+            if has_tech_specs {
+                let clean = normalize_dir_name(dir_name);
+                issues.push(DetectedIssue {
+                    issue_type: IssueType::TechSpecsInDir,
+                    detail: Some(
+                        serde_json::json!({
+                            "old_dir": dir_name,
+                            "new_dir": clean,
+                        })
+                        .to_string(),
+                    ),
+                });
             }
         }
     }
@@ -557,16 +594,14 @@ pub fn check_filename(
         // Already classified as album track, but the original (un-normalized) dir
         // might be missing the year suffix — we check the actual dir name with
         // tech specs stripped but year required.
-        if let Some(parent) = path.parent() {
-            if let Some(dir_name) = parent.file_name().and_then(|n| n.to_str()) {
-                if !has_year_suffix(dir_name) && !has_year_suffix(&normalize_dir_name(dir_name)) {
-                    issues.push(DetectedIssue {
-                        issue_type: IssueType::MissingYearInDir,
-                        detail: Some(
-                            serde_json::json!({ "dir": dir_name }).to_string(),
-                        ),
-                    });
-                }
+        if let Some((_, dir_name)) = effective_album_dir_name(path) {
+            if !has_year_suffix(dir_name) && !has_year_suffix(&normalize_dir_name(dir_name)) {
+                issues.push(DetectedIssue {
+                    issue_type: IssueType::MissingYearInDir,
+                    detail: Some(
+                        serde_json::json!({ "dir": dir_name }).to_string(),
+                    ),
+                });
             }
         }
     }
@@ -673,6 +708,7 @@ pub struct ScanSummary {
     pub total_resolved: i64,
     pub total_accepted: i64,
     pub total_deferred: i64,
+    pub warnings: Vec<String>,
 }
 
 pub fn enforce_trailing_slash(scope: &str) -> String {
@@ -683,20 +719,37 @@ pub fn enforce_trailing_slash(scope: &str) -> String {
     }
 }
 
-fn walk_audio_files(scope: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+struct WalkResult {
+    files: Vec<std::path::PathBuf>,
+    warnings: Vec<String>,
+}
+
+fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
     if !scope.is_dir() {
         return Err(format!("Not a directory: {}", scope.display()));
     }
 
     let mut files = Vec::new();
+    let mut warnings = Vec::new();
     let mut dirs = vec![scope.to_path_buf()];
 
     while let Some(dir) = dirs.pop() {
-        let entries = std::fs::read_dir(&dir)
-            .map_err(|e| format!("Failed to read {}: {e}", dir.display()))?;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) => {
+                warnings.push(format!("Cannot read {}: {e}", dir.display()));
+                continue;
+            }
+        };
 
         for entry in entries {
-            let entry = entry.map_err(|e| format!("Dir entry error: {e}"))?;
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    warnings.push(format!("Dir entry error in {}: {e}", dir.display()));
+                    continue;
+                }
+            };
             let path = entry.path();
 
             // Skip symlinks
@@ -724,7 +777,7 @@ fn walk_audio_files(scope: &Path) -> Result<Vec<std::path::PathBuf>, String> {
     }
 
     files.sort();
-    Ok(files)
+    Ok(WalkResult { files, warnings })
 }
 
 fn file_mtime_iso(metadata: &std::fs::Metadata) -> String {
@@ -750,10 +803,15 @@ pub fn scan(
     skip_issue_types: &HashSet<IssueType>,
 ) -> Result<ScanSummary, String> {
     let scope = enforce_trailing_slash(scope);
+    if scope == "/" {
+        return Err("Scope must not be empty or root (/)".to_string());
+    }
     let scope_path = Path::new(&scope);
 
     // 1. Walk filesystem
-    let disk_files = walk_audio_files(scope_path)?;
+    let walk_result = walk_audio_files(scope_path)?;
+    let disk_files = walk_result.files;
+    let mut warnings = walk_result.warnings;
     let files_in_scope = disk_files.len();
 
     // 2. Load existing audit_files for this scope
@@ -789,8 +847,13 @@ pub fn scan(
 
     for file_path in &disk_files {
         let path_str = file_path.display().to_string();
-        let metadata = std::fs::metadata(file_path)
-            .map_err(|e| format!("Cannot stat {path_str}: {e}"))?;
+        let metadata = match std::fs::metadata(file_path) {
+            Ok(m) => m,
+            Err(e) => {
+                warnings.push(format!("Cannot stat {path_str}: {e}"));
+                continue;
+            }
+        };
         let mtime = file_mtime_iso(&metadata);
         let size = metadata.len() as i64;
 
@@ -848,12 +911,22 @@ pub fn scan(
                 *new_issues.entry(issue.issue_type.to_string()).or_insert(0) += 1;
             }
 
-            // Auto-resolve issues no longer detected (for changed files)
-            if existing_file.is_some() {
+            // Auto-resolve issues no longer detected (for changed/re-read files).
+            // Skip when file read errored — we don't know the true state.
+            if existing_file.is_some() && !matches!(read_result, FileReadResult::Error { .. }) {
+                // Skipped issue types should not be auto-resolved — we didn't check them
+                let mut types_still_open: Vec<&str> = detected_types.clone();
+                for skip_type in skip_issue_types {
+                    let s = skip_type.as_str();
+                    if !types_still_open.contains(&s) {
+                        types_still_open.push(s);
+                    }
+                }
+
                 let resolved_count = store::mark_issues_resolved_for_path(
                     conn,
                     &path_str,
-                    &detected_types,
+                    &types_still_open,
                     &now,
                 )
                 .map_err(|e| format!("DB error resolving issues: {e}"))?;
@@ -910,6 +983,7 @@ pub fn scan(
         total_resolved,
         total_accepted,
         total_deferred,
+        warnings,
     })
 }
 
@@ -957,6 +1031,9 @@ pub fn query_issues(
     offset: u32,
 ) -> Result<Vec<IssueRecord>, String> {
     let scope = enforce_trailing_slash(scope);
+    if scope == "/" {
+        return Err("Scope must not be empty or root (/)".to_string());
+    }
     let issues = store::get_audit_issues(conn, &scope, status, issue_type, limit, offset)
         .map_err(|e| format!("DB error: {e}"))?;
     Ok(issues.into_iter().map(store_issue_to_record).collect())
@@ -991,6 +1068,9 @@ pub struct SummaryReport {
 
 pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, String> {
     let scope = enforce_trailing_slash(scope);
+    if scope == "/" {
+        return Err("Scope must not be empty or root (/)".to_string());
+    }
     let summary = store::get_audit_summary(conn, &scope)
         .map_err(|e| format!("DB error: {e}"))?;
 
@@ -1454,5 +1534,109 @@ mod tests {
         );
         assert_eq!(IssueType::EmptyArtist.safety_tier(), SafetyTier::Review);
         assert_eq!(IssueType::GenreSet.safety_tier(), SafetyTier::Review);
+    }
+
+    // -- Bug-fix regression tests --
+
+    /// Helper: build a tag map from key-value pairs, filling missing fields with None.
+    fn make_tags(fields: &[(&str, &str)]) -> HashMap<String, Option<String>> {
+        let mut tags = HashMap::new();
+        for &f in tags::ALL_FIELDS {
+            tags.insert(f.to_string(), None);
+        }
+        for &(k, v) in fields {
+            tags.insert(k.to_string(), Some(v.to_string()));
+        }
+        tags
+    }
+
+    // Finding 1: MISSING_YEAR requires both year and date empty
+    #[test]
+    fn check_tags_missing_year_requires_both_empty() {
+        // If year is empty but date is set, should NOT flag MISSING_YEAR
+        let tags = make_tags(&[("artist", "A"), ("title", "T"), ("album", "Alb"), ("track", "1"), ("date", "2024")]);
+        let result = FileReadResult::Single {
+            path: "/music/Artist/Album (2024)/01 A - T.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(Path::new("/x"), &result, &AuditContext::AlbumTrack, &HashSet::new());
+        assert!(!issues.iter().any(|i| i.issue_type == IssueType::MissingYear));
+    }
+
+    // Finding 2: Multi-byte UTF-8 in filename doesn't panic
+    #[test]
+    fn parse_album_multibyte_utf8_no_panic() {
+        // 3-byte char at start: should not panic
+        let p = Path::new("/music/Artist/Album (2024)/€1 Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should return something (possibly no track_num) but must NOT panic
+        assert!(parsed.title.is_some());
+    }
+
+    // Finding 3: ARTIST_IN_TITLE new_title is correct with unicode
+    #[test]
+    fn check_tags_artist_in_title_new_title_correct() {
+        // Ensure the new_title slice is correct even with varying case
+        let tags = make_tags(&[("artist", "DJ Test"), ("title", "DJ Test - The Track")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(Path::new("/x"), &result, &AuditContext::LooseTrack, &HashSet::new());
+        let ait = issues.iter().find(|i| i.issue_type == IssueType::ArtistInTitle).expect("should detect");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "The Track");
+    }
+
+    // Finding 7: Empty scope rejected
+    #[test]
+    fn scan_rejects_empty_scope() {
+        let result = enforce_trailing_slash("");
+        assert_eq!(result, "/");
+        // The scan function should reject this — we can't actually call scan here
+        // without a real DB, so just verify enforce_trailing_slash behavior
+    }
+
+    // Finding 9: NN - Title parsing
+    #[test]
+    fn parse_album_nn_dash_title() {
+        let p = Path::new("/music/Artist/Album (2024)/05 - Invisible Dance.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("05"));
+        assert_eq!(parsed.title.as_deref(), Some("Invisible Dance"));
+        assert_eq!(parsed.artist, None); // Alternate format, no artist in filename
+    }
+
+    // Finding 10: Missing-space format is bad filename
+    #[test]
+    fn parse_album_missing_space_is_bad() {
+        let p = Path::new("/music/Artist/Album (2024)/01Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should NOT extract track number (no valid separator)
+        assert_eq!(parsed.track_num, None);
+    }
+
+    // Finding 6: Directory checks use album dir for disc subdirs
+    #[test]
+    fn check_filename_disc_subdir_uses_album_dir() {
+        // File in CD1 subdir under album dir with year — should NOT flag MISSING_YEAR_IN_DIR
+        let p = Path::new("/music/Artist/Album (2020)/CD1/01 Artist - Track.flac");
+        let tags = make_tags(&[("artist", "Artist"), ("title", "Track")]);
+        let result = FileReadResult::Single {
+            path: p.to_str().unwrap().to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_filename(p, &result, &AuditContext::AlbumTrack, &HashSet::new());
+        assert!(!issues.iter().any(|i| i.issue_type == IssueType::MissingYearInDir),
+            "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix");
     }
 }

@@ -1,6 +1,21 @@
 use rusqlite::{Connection, OpenFlags, ffi, params};
 use std::path::PathBuf;
 
+/// Escape SQL LIKE wildcard characters so they are matched literally.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -378,10 +393,10 @@ pub fn get_audit_files_in_scope(
     conn: &Connection,
     scope: &str,
 ) -> Result<Vec<AuditFile>, rusqlite::Error> {
-    let pattern = format!("{scope}%");
+    let pattern = format!("{}%", escape_like(scope));
     let mut stmt = conn.prepare(
         "SELECT path, last_audited, file_mtime, file_size
-         FROM audit_files WHERE path LIKE ?1",
+         FROM audit_files WHERE path LIKE ?1 ESCAPE '\\'",
     )?;
     let rows = stmt.query_map(params![pattern], |row| {
         Ok(AuditFile {
@@ -428,11 +443,11 @@ pub fn get_audit_issues(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<AuditIssue>, rusqlite::Error> {
-    let pattern = format!("{scope}%");
+    let pattern = format!("{}%", escape_like(scope));
     let sql = format!(
         "SELECT id, path, issue_type, detail, status, resolution, note, created_at, resolved_at
          FROM audit_issues
-         WHERE path LIKE ?1{}{}
+         WHERE path LIKE ?1 ESCAPE '\\'{}{}
          ORDER BY path, issue_type
          LIMIT ?2 OFFSET ?3",
         if status.is_some() {
@@ -566,11 +581,11 @@ pub fn get_audit_summary(
     conn: &Connection,
     scope: &str,
 ) -> Result<AuditSummary, rusqlite::Error> {
-    let pattern = format!("{scope}%");
+    let pattern = format!("{}%", escape_like(scope));
     let mut stmt = conn.prepare(
         "SELECT issue_type, status, COUNT(*) as cnt
          FROM audit_issues
-         WHERE path LIKE ?1
+         WHERE path LIKE ?1 ESCAPE '\\'
          GROUP BY issue_type, status
          ORDER BY issue_type, status",
     )?;
@@ -586,20 +601,31 @@ pub fn delete_missing_audit_files(
     scope: &str,
     existing_paths: &std::collections::HashSet<String>,
 ) -> Result<usize, rusqlite::Error> {
-    let pattern = format!("{scope}%");
+    let pattern = format!("{}%", escape_like(scope));
     let mut stmt = conn.prepare(
-        "SELECT path FROM audit_files WHERE path LIKE ?1",
+        "SELECT path FROM audit_files WHERE path LIKE ?1 ESCAPE '\\'",
     )?;
     let db_paths: Vec<String> = stmt
         .query_map(params![pattern], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
 
+    let to_delete: Vec<&String> = db_paths
+        .iter()
+        .filter(|p| !existing_paths.contains(p.as_str()))
+        .collect();
+
     let mut count = 0usize;
-    for db_path in &db_paths {
-        if !existing_paths.contains(db_path.as_str()) {
-            conn.execute("DELETE FROM audit_files WHERE path = ?1", params![db_path])?;
-            count += 1;
+    for batch in to_delete.chunks(500) {
+        let placeholders: String = (1..=batch.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("DELETE FROM audit_files WHERE path IN ({placeholders})");
+        let mut del_stmt = conn.prepare(&sql)?;
+        for (i, path) in batch.iter().enumerate() {
+            del_stmt.raw_bind_parameter(i + 1, path.as_str())?;
         }
+        count += del_stmt.raw_execute()?;
     }
     Ok(count)
 }
@@ -1156,5 +1182,19 @@ mod tests {
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].issue_type, "GENRE_SET");
+    }
+
+    // Finding 8: LIKE wildcards in path are escaped
+    #[test]
+    fn test_audit_files_in_scope_escapes_like_wildcards() {
+        let (_dir, conn) = open_temp_store();
+        // Path containing SQL LIKE wildcards
+        upsert_audit_file(&conn, "/music/100%_done/track.flac", "t", "m", 100).unwrap();
+        upsert_audit_file(&conn, "/music/100X_done/track.flac", "t", "m", 200).unwrap();
+
+        // Scope with % — should only match the exact prefix, not wildcard-expand
+        let files = get_audit_files_in_scope(&conn, "/music/100%_done/").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "/music/100%_done/track.flac");
     }
 }
