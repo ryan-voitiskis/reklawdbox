@@ -164,13 +164,13 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | ID | Issue | Files |
 |----|-------|-------|
 | M12 | ~~Reopened audit issues keep stale `resolution`/`resolved_at`/`note`~~ ✅ Resolved — ON CONFLICT clears stale fields | |
-| M13 | `get_tracks_by_ids` doesn't preserve caller order, deduplicates | `db.rs:522,532` |
+| M13 | ~~`get_tracks_by_ids` doesn't preserve caller order, deduplicates~~ ✅ Resolved — returns tracks in caller order with dedup | |
 | M14 | Dry-run tag diff can claim RIFF changes that write path will skip | `tags.rs:864,874,748` |
 | M15 | Beatport title matching: permissive bidirectional substring, false-positive prone | `beatport.rs:220` |
 | M16 | Discogs short artist names (<3 chars) auto-match first result | `discogs.rs:580,547` |
-| M17 | Audio decode tolerates frame errors with only stderr logging | `audio.rs:342,357` |
+| M17 | ~~Audio decode tolerates frame errors with only stderr logging~~ ✅ Resolved — single summary line after decode loop | |
 | M18 | ~~Corrupt cache JSON becomes `null` while response still says "cache hit"~~ ✅ Resolved — parse errors surfaced in output JSON | |
-| M19 | `DJPlayCount` dual-type parse failures collapse to 0 | `db.rs:63-70` |
+| M19 | ~~`DJPlayCount` dual-type parse failures collapse to 0~~ ✅ Resolved — logs non-empty parse failures via eprintln | |
 | M20 | ~~`TECH_SPEC_PATTERNS` lists `[FLAC]`/`[flac]` but misses mixed-case~~ ✅ Resolved — case-insensitive matching | |
 | M21 | ~~`date` field in `check_tags` not in `tags::ALL_FIELDS` — no-op for non-WAV~~ ✅ Resolved — removed no-op `date` check | |
 | M22 | Corpus manifest path is cwd-relative, creating non-local behavior | `corpus.rs:9,180` |
@@ -183,8 +183,8 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M24 | ~~Priority weights returned as anonymous 6-tuple~~ ✅ Resolved — `PriorityWeights` named struct | |
 | M25 | ~~Energy computation uses undocumented magic numbers~~ ✅ Resolved — named constants extracted | |
 | M26 | `write_track` two-phase attribute writing (main write + conditional appends + close) | `xml.rs:75-131` |
-| M27 | Migration mixes unconditional `CREATE TABLE IF NOT EXISTS` with version-gated blocks | `store.rs:55-113` |
-| M28 | Migration logic assumes `user_version` implies audit tables exist | `store.rs:85,755` |
+| M27 | ~~Migration mixes unconditional `CREATE TABLE IF NOT EXISTS` with version-gated blocks~~ ✅ Resolved — all DDL unconditional | |
+| M28 | ~~Migration logic assumes `user_version` implies audit tables exist~~ ✅ Resolved — version gate removed | |
 | M29 | All errors in `audio.rs`, `tags.rs`, `beatport.rs` are `Result<_, String>` | Multiple |
 | M30 | `serde(untagged)` enums in `tags.rs` make deser errors opaque | `tags.rs:117-217` |
 | M31 | ~~Analyzer name strings (`"stratum-dsp"`, `"essentia"`) used as DB keys with no constant~~ ✅ Resolved — `ANALYZER_STRATUM`/`ANALYZER_ESSENTIA` constants | |
@@ -266,7 +266,7 @@ Multiple sites return `Ok(None)` or `Ok(0)` where an error occurred. This is
 particularly dangerous for agents because there's no signal that something
 went wrong — the agent assumes success and moves on.
 
-**Affected findings**: ~~H11~~, ~~M12~~, M15-M17, ~~M18~~, M19, L3-L6
+**Affected findings**: ~~H11~~, ~~M12~~, M15, M16, ~~M17~~, ~~M18~~, ~~M19~~, L3-L6
 
 ---
 
