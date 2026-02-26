@@ -1,8 +1,15 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::color;
 use crate::types::{EditableField, FieldDiff, Track, TrackChange, TrackDiff};
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+    mutex.lock().unwrap_or_else(|e| {
+        eprintln!("[changes] mutex poisoned, recovering");
+        e.into_inner()
+    })
+}
 
 pub struct ChangeManager {
     changes: Mutex<HashMap<String, TrackChange>>,
@@ -17,7 +24,7 @@ impl ChangeManager {
 
     /// Stage changes for one or more tracks. Merges with previously staged changes for the same track.
     pub fn stage(&self, changes: Vec<TrackChange>) -> (usize, usize) {
-        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = lock_or_recover(&self.changes);
         let mut staged = 0;
         for change in changes {
             if !has_any_staged_field(&change) {
@@ -32,7 +39,7 @@ impl ChangeManager {
     }
 
     pub fn pending_ids(&self) -> Vec<String> {
-        let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let map = lock_or_recover(&self.changes);
         let mut ids: Vec<String> = map.keys().cloned().collect();
         ids.sort();
         ids
@@ -40,7 +47,7 @@ impl ChangeManager {
 
     #[cfg(test)]
     pub fn pending_count(&self) -> usize {
-        self.changes.lock().unwrap_or_else(|e| e.into_inner()).len()
+        lock_or_recover(&self.changes).len()
     }
 
     pub fn get(&self, track_id: &str) -> Option<TrackChange> {
@@ -52,7 +59,7 @@ impl ChangeManager {
     }
 
     pub fn preview(&self, current_tracks: &[Track]) -> Vec<TrackDiff> {
-        let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let map = lock_or_recover(&self.changes);
         let track_map: HashMap<&str, &Track> =
             current_tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
@@ -122,7 +129,7 @@ impl ChangeManager {
 
     #[cfg(test)]
     pub fn apply_changes(&self, tracks: &[Track]) -> Vec<Track> {
-        let map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let map = lock_or_recover(&self.changes);
         apply_changes_with_map(tracks, &map)
     }
 
@@ -137,7 +144,7 @@ impl ChangeManager {
 
     /// Remove and return staged changes. If `track_ids` is None, drains all staged changes.
     pub fn take(&self, track_ids: Option<Vec<String>>) -> Vec<TrackChange> {
-        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = lock_or_recover(&self.changes);
         match track_ids {
             Some(ids) => ids.into_iter().filter_map(|id| map.remove(&id)).collect(),
             None => {
@@ -150,7 +157,7 @@ impl ChangeManager {
 
     /// Restore previously taken changes without overwriting newer staged values.
     pub fn restore(&self, snapshot: Vec<TrackChange>) -> (usize, usize) {
-        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = lock_or_recover(&self.changes);
         let restored = snapshot.len();
         for change in snapshot {
             map.entry(change.track_id.clone())
@@ -167,7 +174,7 @@ impl ChangeManager {
         track_ids: Option<Vec<String>>,
         fields: &[String],
     ) -> (usize, usize) {
-        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = lock_or_recover(&self.changes);
         let target_ids: Vec<String> = match track_ids {
             Some(ids) => ids,
             None => map.keys().cloned().collect(),
@@ -215,7 +222,7 @@ impl ChangeManager {
     }
 
     pub fn clear(&self, track_ids: Option<Vec<String>>) -> (usize, usize) {
-        let mut map = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = lock_or_recover(&self.changes);
         let cleared = match track_ids {
             Some(ids) => {
                 let mut count = 0;
