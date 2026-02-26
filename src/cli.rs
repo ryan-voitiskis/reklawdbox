@@ -539,14 +539,19 @@ fn expand_paths(paths: &[String]) -> Vec<PathBuf> {
     for p in paths {
         let path = PathBuf::from(p);
         if path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&path) {
-                let mut files: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| p.is_file() && is_audio_file(p))
-                    .collect();
-                files.sort();
-                result.extend(files);
+            match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut files: Vec<PathBuf> = entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file() && is_audio_file(p))
+                        .collect();
+                    files.sort();
+                    result.extend(files);
+                }
+                Err(e) => {
+                    eprintln!("Warning: skipping unreadable directory {p}: {e}");
+                }
             }
         } else {
             result.push(path);
