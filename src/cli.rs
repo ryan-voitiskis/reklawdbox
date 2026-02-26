@@ -220,7 +220,7 @@ fn cache_status_for_track(
     essentia_available: bool,
 ) -> Result<(bool, bool), rusqlite::Error> {
     let has_stratum = if skip_cached {
-        has_fresh_cache_entry(store_conn, cache_probe, "stratum-dsp")?
+        has_fresh_cache_entry(store_conn, cache_probe, audio::ANALYZER_STRATUM)?
     } else {
         false
     };
@@ -228,7 +228,7 @@ fn cache_status_for_track(
     let has_essentia = if !essentia_available {
         true
     } else if skip_cached {
-        has_fresh_cache_entry(store_conn, cache_probe, "essentia")?
+        has_fresh_cache_entry(store_conn, cache_probe, audio::ANALYZER_ESSENTIA)?
     } else {
         false
     };
@@ -443,7 +443,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             store::set_audio_analysis(
                 &store_conn,
                 &file_path,
-                "stratum-dsp",
+                audio::ANALYZER_STRATUM,
                 file_size,
                 file_mtime,
                 &result.analyzer_version,
@@ -466,7 +466,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                         store::set_audio_analysis(
                             &store_conn,
                             &file_path,
-                            "essentia",
+                            audio::ANALYZER_ESSENTIA,
                             file_size,
                             file_mtime,
                             essentia_version,
@@ -497,7 +497,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                         store::set_audio_analysis(
                             &store_conn,
                             &file_path,
-                            "essentia",
+                            audio::ANALYZER_ESSENTIA,
                             file_size,
                             file_mtime,
                             essentia_version,

@@ -30,6 +30,11 @@ pub struct StratumResult {
 /// Audio file extensions accepted by all directory scanners.
 pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["flac", "wav", "mp3", "m4a", "aac", "aiff"];
 
+/// Canonical analyzer name for stratum-dsp (used as DB cache key).
+pub const ANALYZER_STRATUM: &str = "stratum-dsp";
+/// Canonical analyzer name for Essentia (used as DB cache key).
+pub const ANALYZER_ESSENTIA: &str = "essentia";
+
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
 
 const ESSENTIA_SCRIPT: &str = r#"
