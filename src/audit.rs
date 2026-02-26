@@ -103,6 +103,76 @@ pub enum SafetyTier {
 }
 
 // ---------------------------------------------------------------------------
+// Audit status & resolution
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AuditStatus {
+    Open,
+    Resolved,
+    Accepted,
+    Deferred,
+}
+
+impl AuditStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+            Self::Accepted => "accepted",
+            Self::Deferred => "deferred",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "open" => Some(Self::Open),
+            "resolved" => Some(Self::Resolved),
+            "accepted" => Some(Self::Accepted),
+            "deferred" => Some(Self::Deferred),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Resolution {
+    AcceptedAsIs,
+    WontFix,
+    Deferred,
+    Fixed,
+}
+
+impl Resolution {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AcceptedAsIs => "accepted_as_is",
+            Self::WontFix => "wont_fix",
+            Self::Deferred => "deferred",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "accepted_as_is" => Some(Self::AcceptedAsIs),
+            "wont_fix" => Some(Self::WontFix),
+            "deferred" => Some(Self::Deferred),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+
+    pub fn status(&self) -> AuditStatus {
+        match self {
+            Self::AcceptedAsIs | Self::WontFix => AuditStatus::Accepted,
+            Self::Deferred => AuditStatus::Deferred,
+            Self::Fixed => AuditStatus::Resolved,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Track context
 // ---------------------------------------------------------------------------
 
@@ -1006,12 +1076,12 @@ pub fn scan(
     let mut total_deferred = 0i64;
 
     for (_, status, count) in &summary.by_type_status {
-        match status.as_str() {
-            "open" => total_open += count,
-            "resolved" => total_resolved += count,
-            "accepted" => total_accepted += count,
-            "deferred" => total_deferred += count,
-            _ => {}
+        match AuditStatus::from_str(status) {
+            Some(AuditStatus::Open) => total_open += count,
+            Some(AuditStatus::Resolved) => total_resolved += count,
+            Some(AuditStatus::Accepted) => total_accepted += count,
+            Some(AuditStatus::Deferred) => total_deferred += count,
+            None => {}
         }
     }
 
@@ -1091,14 +1161,16 @@ pub fn resolve_issues(
     resolution: &str,
     note: Option<&str>,
 ) -> Result<usize, String> {
-    let valid = ["accepted_as_is", "wont_fix", "deferred"];
-    if !valid.contains(&resolution) {
-        return Err(format!(
-            "Invalid resolution \"{resolution}\". Must be one of: {valid:?}"
-        ));
-    }
+    let res = Resolution::from_str(resolution)
+        .filter(|r| !matches!(r, Resolution::Fixed))
+        .ok_or_else(|| {
+            format!(
+                "Invalid resolution \"{resolution}\". Must be one of: \
+                 accepted_as_is, wont_fix, deferred"
+            )
+        })?;
     let now = now_iso();
-    store::resolve_audit_issues(conn, ids, resolution, note, &now)
+    store::resolve_audit_issues(conn, ids, res, note, &now)
         .map_err(|e| format!("DB error: {e}"))
 }
 
@@ -1131,12 +1203,12 @@ pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, Stri
             .entry(issue_type.clone())
             .or_default()
             .insert(status.clone(), *count);
-        match status.as_str() {
-            "open" => total_open += count,
-            "resolved" => total_resolved += count,
-            "accepted" => total_accepted += count,
-            "deferred" => total_deferred += count,
-            _ => {}
+        match AuditStatus::from_str(status) {
+            Some(AuditStatus::Open) => total_open += count,
+            Some(AuditStatus::Resolved) => total_resolved += count,
+            Some(AuditStatus::Accepted) => total_accepted += count,
+            Some(AuditStatus::Deferred) => total_deferred += count,
+            None => {}
         }
     }
 

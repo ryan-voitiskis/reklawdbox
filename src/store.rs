@@ -504,23 +504,19 @@ pub fn get_audit_issue_by_id(
 pub fn resolve_audit_issues(
     conn: &Connection,
     ids: &[i64],
-    resolution: &str,
+    resolution: crate::audit::Resolution,
     note: Option<&str>,
     resolved_at: &str,
 ) -> Result<usize, rusqlite::Error> {
-    let status = match resolution {
-        "accepted_as_is" => "accepted",
-        "wont_fix" => "accepted",
-        "deferred" => "deferred",
-        _ => "resolved",
-    };
+    let status = resolution.status().as_str();
+    let resolution_str = resolution.as_str();
     let mut count = 0usize;
     for id in ids {
         count += conn.execute(
             "UPDATE audit_issues
              SET status = ?1, resolution = ?2, note = COALESCE(?3, note), resolved_at = ?4
              WHERE id = ?5 AND status = 'open'",
-            params![status, resolution, note, resolved_at, id],
+            params![status, resolution_str, note, resolved_at, id],
         )?;
     }
     Ok(count)
@@ -1029,7 +1025,7 @@ mod tests {
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
         // Simulate user accepting
-        resolve_audit_issues(&conn, &[1], "accepted_as_is", None, "t2").unwrap();
+        resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, None, "t2").unwrap();
 
         // Re-scan upserts the same issue — should preserve accepted status
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t3").unwrap();
@@ -1084,7 +1080,7 @@ mod tests {
             .unwrap();
 
         let count =
-            resolve_audit_issues(&conn, &[1], "accepted_as_is", Some("intentional"), "t2")
+            resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, Some("intentional"), "t2")
                 .unwrap();
         assert_eq!(count, 1);
 
@@ -1107,7 +1103,7 @@ mod tests {
         upsert_audit_issue(&conn, "/music/a.flac", "EMPTY_ARTIST", None, "open", "t1").unwrap();
         upsert_audit_issue(&conn, "/music/b.wav", "WAV_TAG3_MISSING", None, "open", "t1")
             .unwrap();
-        resolve_audit_issues(&conn, &[1], "accepted_as_is", None, "t2").unwrap();
+        resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, None, "t2").unwrap();
 
         // Filter by status
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
