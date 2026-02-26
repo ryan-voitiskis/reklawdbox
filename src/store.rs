@@ -101,14 +101,6 @@ pub struct CachedEnrichment {
     pub created_at: String,
 }
 
-fn touch_cached_enrichment(entry: &CachedEnrichment) {
-    let _ = (
-        entry.provider.as_str(),
-        entry.query_artist.as_str(),
-        entry.query_title.as_str(),
-    );
-}
-
 pub fn get_enrichment(
     conn: &Connection,
     provider: &str,
@@ -131,10 +123,7 @@ pub fn get_enrichment(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => {
-            touch_cached_enrichment(&entry);
-            Ok(Some(entry))
-        }
+        Some(Ok(entry)) => Ok(Some(entry)),
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -168,15 +157,6 @@ pub struct CachedAudioAnalysis {
     pub created_at: String,
 }
 
-fn touch_cached_audio_analysis(entry: &CachedAudioAnalysis) {
-    let _ = (
-        entry.file_path.as_str(),
-        entry.analyzer.as_str(),
-        entry.analysis_version.as_str(),
-        entry.created_at.as_str(),
-    );
-}
-
 pub fn get_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -199,10 +179,7 @@ pub fn get_audio_analysis(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => {
-            touch_cached_audio_analysis(&entry);
-            Ok(Some(entry))
-        }
+        Some(Ok(entry)) => Ok(Some(entry)),
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
@@ -235,14 +212,6 @@ pub struct BrokerDiscogsSession {
     pub updated_at: String,
 }
 
-fn touch_broker_discogs_session(entry: &BrokerDiscogsSession) {
-    let _ = (
-        entry.broker_url.as_str(),
-        entry.created_at.as_str(),
-        entry.updated_at.as_str(),
-    );
-}
-
 pub fn get_broker_discogs_session(
     conn: &Connection,
     broker_url: &str,
@@ -262,10 +231,7 @@ pub fn get_broker_discogs_session(
         })
     })?;
     match rows.next() {
-        Some(Ok(entry)) => {
-            touch_broker_discogs_session(&entry);
-            Ok(Some(entry))
-        }
+        Some(Ok(entry)) => Ok(Some(entry)),
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
