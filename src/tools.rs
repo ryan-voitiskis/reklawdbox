@@ -1384,7 +1384,7 @@ impl ReklawdboxServer {
                         artist: t.artist,
                         current_genre: gc.name.clone(),
                         suggested_genre: Some(canonical.to_string()),
-                        confidence: "alias".to_string(),
+                        confidence: crate::types::Confidence::Alias,
                     });
                 }
             } else if genre::is_known_genre(&gc.name) {
@@ -1402,7 +1402,7 @@ impl ReklawdboxServer {
                         artist: t.artist,
                         current_genre: gc.name.clone(),
                         suggested_genre: None,
-                        confidence: "unknown".to_string(),
+                        confidence: crate::types::Confidence::Unknown,
                     });
                 }
             }
