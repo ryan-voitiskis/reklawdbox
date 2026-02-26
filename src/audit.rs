@@ -138,6 +138,27 @@ impl AuditStatus {
     }
 }
 
+struct StatusCounts {
+    open: i64,
+    resolved: i64,
+    accepted: i64,
+    deferred: i64,
+}
+
+fn aggregate_status_counts(summary: &store::AuditSummary) -> StatusCounts {
+    let mut counts = StatusCounts { open: 0, resolved: 0, accepted: 0, deferred: 0 };
+    for (_, status, count) in &summary.by_type_status {
+        match AuditStatus::from_str(status) {
+            Some(AuditStatus::Open) => counts.open += count,
+            Some(AuditStatus::Resolved) => counts.resolved += count,
+            Some(AuditStatus::Accepted) => counts.accepted += count,
+            Some(AuditStatus::Deferred) => counts.deferred += count,
+            None => {}
+        }
+    }
+    counts
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resolution {
     AcceptedAsIs,
@@ -1083,20 +1104,7 @@ pub fn scan(
     let summary = store::get_audit_summary(conn, &scope)
         .map_err(|e| format!("DB error getting summary: {e}"))?;
 
-    let mut total_open = 0i64;
-    let mut total_resolved = 0i64;
-    let mut total_accepted = 0i64;
-    let mut total_deferred = 0i64;
-
-    for (_, status, count) in &summary.by_type_status {
-        match AuditStatus::from_str(status) {
-            Some(AuditStatus::Open) => total_open += count,
-            Some(AuditStatus::Resolved) => total_resolved += count,
-            Some(AuditStatus::Accepted) => total_accepted += count,
-            Some(AuditStatus::Deferred) => total_deferred += count,
-            None => {}
-        }
-    }
+    let counts = aggregate_status_counts(&summary);
 
     let skipped_names: Vec<String> = skip_issue_types.iter().map(|t| t.to_string()).collect();
 
@@ -1108,10 +1116,10 @@ pub fn scan(
         skipped_issue_types: skipped_names,
         new_issues,
         auto_resolved,
-        total_open,
-        total_resolved,
-        total_accepted,
-        total_deferred,
+        total_open: counts.open,
+        total_resolved: counts.resolved,
+        total_accepted: counts.accepted,
+        total_deferred: counts.deferred,
         warnings,
     })
 }
@@ -1206,32 +1214,22 @@ pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, Stri
         .map_err(|e| format!("DB error: {e}"))?;
 
     let mut by_type: HashMap<String, HashMap<String, i64>> = HashMap::new();
-    let mut total_open = 0i64;
-    let mut total_resolved = 0i64;
-    let mut total_accepted = 0i64;
-    let mut total_deferred = 0i64;
-
     for (issue_type, status, count) in &summary.by_type_status {
         by_type
             .entry(issue_type.clone())
             .or_default()
             .insert(status.clone(), *count);
-        match AuditStatus::from_str(status) {
-            Some(AuditStatus::Open) => total_open += count,
-            Some(AuditStatus::Resolved) => total_resolved += count,
-            Some(AuditStatus::Accepted) => total_accepted += count,
-            Some(AuditStatus::Deferred) => total_deferred += count,
-            None => {}
-        }
     }
+
+    let counts = aggregate_status_counts(&summary);
 
     Ok(SummaryReport {
         scope,
         by_type,
-        total_open,
-        total_resolved,
-        total_accepted,
-        total_deferred,
+        total_open: counts.open,
+        total_resolved: counts.resolved,
+        total_accepted: counts.accepted,
+        total_deferred: counts.deferred,
     })
 }
 
