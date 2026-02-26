@@ -40,7 +40,6 @@ pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
 }
 
 fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS enrichment_cache (
             provider TEXT NOT NULL,
@@ -67,36 +66,29 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             expires_at INTEGER NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS audit_files (
+            path         TEXT PRIMARY KEY,
+            last_audited TEXT NOT NULL,
+            file_mtime   TEXT NOT NULL,
+            file_size    INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS audit_issues (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT NOT NULL REFERENCES audit_files(path) ON DELETE CASCADE ON UPDATE CASCADE,
+            issue_type  TEXT NOT NULL,
+            detail      TEXT,
+            status      TEXT NOT NULL DEFAULT 'open',
+            resolution  TEXT,
+            note        TEXT,
+            created_at  TEXT NOT NULL,
+            resolved_at TEXT,
+            UNIQUE(path, issue_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_issues_status ON audit_issues(status);
+        CREATE INDEX IF NOT EXISTS idx_audit_issues_path ON audit_issues(path);
+        PRAGMA user_version = 3;",
     )?;
-    if version < 3 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS audit_files (
-                path         TEXT PRIMARY KEY,
-                last_audited TEXT NOT NULL,
-                file_mtime   TEXT NOT NULL,
-                file_size    INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS audit_issues (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                path        TEXT NOT NULL REFERENCES audit_files(path) ON DELETE CASCADE ON UPDATE CASCADE,
-                issue_type  TEXT NOT NULL,
-                detail      TEXT,
-                status      TEXT NOT NULL DEFAULT 'open',
-                resolution  TEXT,
-                note        TEXT,
-                created_at  TEXT NOT NULL,
-                resolved_at TEXT,
-                UNIQUE(path, issue_type)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_audit_issues_status ON audit_issues(status);
-            CREATE INDEX IF NOT EXISTS idx_audit_issues_path ON audit_issues(path);
-
-            PRAGMA user_version = 3;",
-        )?;
-    }
     Ok(())
 }
 
@@ -752,6 +744,8 @@ mod tests {
         assert!(tables.contains(&"enrichment_cache".to_string()));
         assert!(tables.contains(&"audio_analysis_cache".to_string()));
         assert!(tables.contains(&"broker_discogs_session".to_string()));
+        assert!(tables.contains(&"audit_files".to_string()));
+        assert!(tables.contains(&"audit_issues".to_string()));
     }
 
     #[test]
