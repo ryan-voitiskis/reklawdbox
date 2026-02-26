@@ -23,6 +23,7 @@ stratum-dsp = "=1.0.0"
 symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "aac"] }
 lofty = "0.23"
 tokio = { version = "1", features = ["full"] }
+unicode-casefold = "0.2"
 
 [dev-dependencies]
 rmcp = { version = "0.15", features = ["client", "transport-io"] }

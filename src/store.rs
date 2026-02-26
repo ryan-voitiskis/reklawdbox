@@ -601,32 +601,51 @@ pub fn delete_missing_audit_files(
     scope: &str,
     existing_paths: &std::collections::HashSet<String>,
 ) -> Result<usize, rusqlite::Error> {
+    const BATCH_SIZE: usize = 500;
     let pattern = format!("{}%", escape_like(scope));
-    let mut stmt = conn.prepare(
-        "SELECT path FROM audit_files WHERE path LIKE ?1 ESCAPE '\\'",
-    )?;
-    let db_paths: Vec<String> = stmt
-        .query_map(params![pattern], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-
-    let to_delete: Vec<&String> = db_paths
-        .iter()
-        .filter(|p| !existing_paths.contains(p.as_str()))
-        .collect();
-
     let mut count = 0usize;
-    for batch in to_delete.chunks(500) {
-        let placeholders: String = (1..=batch.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!("DELETE FROM audit_files WHERE path IN ({placeholders})");
-        let mut del_stmt = conn.prepare(&sql)?;
-        for (i, path) in batch.iter().enumerate() {
-            del_stmt.raw_bind_parameter(i + 1, path.as_str())?;
+    let mut last_path = String::new();
+
+    loop {
+        let mut stmt = conn.prepare(
+            "SELECT path
+             FROM audit_files
+             WHERE path LIKE ?1 ESCAPE '\\' AND path > ?2
+             ORDER BY path
+             LIMIT ?3",
+        )?;
+        let batch_paths: Vec<String> = stmt
+            .query_map(params![&pattern, &last_path, BATCH_SIZE as i64], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        if batch_paths.is_empty() {
+            break;
         }
-        count += del_stmt.raw_execute()?;
+
+        let to_delete: Vec<&str> = batch_paths
+            .iter()
+            .filter(|p| !existing_paths.contains(p.as_str()))
+            .map(|p| p.as_str())
+            .collect();
+
+        if !to_delete.is_empty() {
+            let placeholders: String = (1..=to_delete.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("DELETE FROM audit_files WHERE path IN ({placeholders})");
+            let mut del_stmt = conn.prepare(&sql)?;
+            for (i, path) in to_delete.iter().enumerate() {
+                del_stmt.raw_bind_parameter(i + 1, *path)?;
+            }
+            count += del_stmt.raw_execute()?;
+        }
+
+        last_path = batch_paths
+            .last()
+            .expect("batch_paths non-empty when loop continues")
+            .clone();
     }
+
     Ok(count)
 }
 
@@ -1156,6 +1175,43 @@ mod tests {
         let files = get_audit_files_in_scope(&conn, "/music/").unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/music/a.flac");
+    }
+
+    #[test]
+    fn test_audit_delete_missing_files_keyset_batches() {
+        let (_dir, conn) = open_temp_store();
+
+        for i in 0..1205 {
+            let path = format!("/music/{i:04}.flac");
+            upsert_audit_file(&conn, &path, "t", "m", i).unwrap();
+        }
+
+        let existing: std::collections::HashSet<String> = [
+            "/music/0000.flac".to_string(),
+            "/music/0600.flac".to_string(),
+            "/music/1204.flac".to_string(),
+        ]
+        .into_iter()
+        .collect();
+
+        let count = delete_missing_audit_files(&conn, "/music/", &existing).unwrap();
+        assert_eq!(count, 1202);
+
+        let mut remaining = get_audit_files_in_scope(&conn, "/music/")
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect::<Vec<_>>();
+        remaining.sort();
+
+        assert_eq!(
+            remaining,
+            vec![
+                "/music/0000.flac".to_string(),
+                "/music/0600.flac".to_string(),
+                "/music/1204.flac".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 use serde::Serialize;
+use unicode_casefold::UnicodeCaseFold;
 
 use crate::store;
 use crate::tags::{self, FileReadResult};
@@ -388,6 +389,10 @@ fn is_wav(result: &FileReadResult) -> bool {
     matches!(result, FileReadResult::Wav { .. })
 }
 
+fn casefold_text(s: &str) -> String {
+    s.case_fold().collect()
+}
+
 pub fn check_tags(
     path: &Path,
     read_result: &FileReadResult,
@@ -457,13 +462,10 @@ pub fn check_tags(
         ) {
             let artist_trimmed = artist.trim();
             if !artist_trimmed.is_empty() {
-                let title_lower = title.to_lowercase();
-                let artist_lower = artist_trimmed.to_lowercase();
-                let prefix_lower = format!("{artist_lower} - ");
-                if title_lower.starts_with(&prefix_lower) {
-                    // Find " - " in the original title for a safe slice boundary
-                    // (avoids byte-length mismatch from case folding on Unicode).
-                    if let Some(sep_pos) = title.find(" - ") {
+                let artist_folded = casefold_text(artist_trimmed);
+                for (sep_pos, _) in title.match_indices(" - ") {
+                    let candidate_artist = &title[..sep_pos];
+                    if casefold_text(candidate_artist) == artist_folded {
                         let clean_title = title[sep_pos + 3..].to_string();
                         issues.push(DetectedIssue {
                             issue_type: IssueType::ArtistInTitle,
@@ -476,6 +478,7 @@ pub fn check_tags(
                                 .to_string(),
                             ),
                         });
+                        break;
                     }
                 }
             }
@@ -650,8 +653,8 @@ pub fn check_filename(
         let mut drifts = Vec::new();
 
         if let (Some(fn_artist), Some(t_artist)) = (&parsed.artist, &tag_artist) {
-            let fn_a = fn_artist.trim().to_lowercase();
-            let t_a = t_artist.trim().to_lowercase();
+            let fn_a = casefold_text(fn_artist.trim());
+            let t_a = casefold_text(t_artist.trim());
             if !fn_a.is_empty() && !t_a.is_empty() && fn_a != t_a {
                 drifts.push(serde_json::json!({
                     "field": "artist",
@@ -663,11 +666,9 @@ pub fn check_filename(
 
         if let (Some(fn_title), Some(t_title)) = (&parsed.title, &tag_title) {
             // Strip (Original Mix) from filename title for comparison
-            let fn_t = fn_title
-                .replace(" (Original Mix)", "")
-                .trim()
-                .to_lowercase();
-            let t_t = t_title.trim().to_lowercase();
+            let fn_t_clean = fn_title.replace(" (Original Mix)", "");
+            let fn_t = casefold_text(fn_t_clean.trim());
+            let t_t = casefold_text(t_title.trim());
             if !fn_t.is_empty() && !t_t.is_empty() && fn_t != t_t {
                 drifts.push(serde_json::json!({
                     "field": "title",
@@ -722,6 +723,7 @@ pub fn enforce_trailing_slash(scope: &str) -> String {
 struct WalkResult {
     files: Vec<std::path::PathBuf>,
     warnings: Vec<String>,
+    had_errors: bool,
 }
 
 fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
@@ -731,6 +733,7 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
 
     let mut files = Vec::new();
     let mut warnings = Vec::new();
+    let mut had_errors = false;
     let mut dirs = vec![scope.to_path_buf()];
 
     while let Some(dir) = dirs.pop() {
@@ -738,6 +741,7 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
             Ok(e) => e,
             Err(e) => {
                 warnings.push(format!("Cannot read {}: {e}", dir.display()));
+                had_errors = true;
                 continue;
             }
         };
@@ -747,22 +751,33 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
                 Ok(e) => e,
                 Err(e) => {
                     warnings.push(format!("Dir entry error in {}: {e}", dir.display()));
+                    had_errors = true;
                     continue;
                 }
             };
-            let path = entry.path();
+
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    warnings.push(format!("Cannot read entry type in {}: {e}", dir.display()));
+                    had_errors = true;
+                    continue;
+                }
+            };
 
             // Skip symlinks
-            if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            if file_type.is_symlink() {
                 continue;
             }
 
-            if path.is_dir() {
+            let path = entry.path();
+
+            if file_type.is_dir() {
                 dirs.push(path);
                 continue;
             }
 
-            if !path.is_file() {
+            if !file_type.is_file() {
                 continue;
             }
 
@@ -777,7 +792,11 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
     }
 
     files.sort();
-    Ok(WalkResult { files, warnings })
+    Ok(WalkResult {
+        files,
+        warnings,
+        had_errors,
+    })
 }
 
 fn file_mtime_iso(metadata: &std::fs::Metadata) -> String {
@@ -796,6 +815,25 @@ fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+fn delete_missing_files_if_walk_complete(
+    conn: &Connection,
+    scope: &str,
+    disk_path_set: &HashSet<String>,
+    walk_had_errors: bool,
+    warnings: &mut Vec<String>,
+) -> Result<usize, String> {
+    if walk_had_errors {
+        warnings.push(
+            "Skipped missing-file cleanup because filesystem walk had read errors; existing audit rows were preserved."
+                .to_string(),
+        );
+        Ok(0)
+    } else {
+        store::delete_missing_audit_files(conn, scope, disk_path_set)
+            .map_err(|e| format!("DB error deleting missing files: {e}"))
+    }
+}
+
 pub fn scan(
     conn: &Connection,
     scope: &str,
@@ -810,8 +848,11 @@ pub fn scan(
 
     // 1. Walk filesystem
     let walk_result = walk_audio_files(scope_path)?;
-    let disk_files = walk_result.files;
-    let mut warnings = walk_result.warnings;
+    let WalkResult {
+        files: disk_files,
+        mut warnings,
+        had_errors: walk_had_errors,
+    } = walk_result;
     let files_in_scope = disk_files.len();
 
     // 2. Load existing audit_files for this scope
@@ -829,8 +870,13 @@ pub fn scan(
         .collect();
 
     // 3. Delete missing files
-    let missing_from_disk = store::delete_missing_audit_files(conn, &scope, &disk_path_set)
-        .map_err(|e| format!("DB error deleting missing files: {e}"))?;
+    let missing_from_disk = delete_missing_files_if_walk_complete(
+        conn,
+        &scope,
+        &disk_path_set,
+        walk_had_errors,
+        &mut warnings,
+    )?;
 
     let mut scanned = 0usize;
     let mut skipped_unchanged = 0usize;
@@ -1480,6 +1526,34 @@ mod tests {
             .any(|i| i.issue_type == IssueType::FilenameTagDrift));
     }
 
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_artist() {
+        let result = make_single(&[("artist", "SS"), ("title", "Track")]);
+        let issues = check_filename(
+            Path::new("/music/play/ß - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(!issues
+            .iter()
+            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_title() {
+        let result = make_single(&[("artist", "Artist"), ("title", "STRASSE")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Straße.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(!issues
+            .iter()
+            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+    }
+
     // -- normalize_dir_name --
 
     #[test]
@@ -1594,6 +1668,51 @@ mod tests {
         assert_eq!(detail["new_title"], "The Track");
     }
 
+    #[test]
+    fn check_tags_artist_in_title_uses_unicode_casefold() {
+        let tags = make_tags(&[("artist", "ß"), ("title", "SS - Track")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == IssueType::ArtistInTitle));
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_artist_contains_separator() {
+        let tags = make_tags(&[("artist", "AC - DC"), ("title", "AC - DC - Thunderstruck")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect artist in title");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "Thunderstruck");
+    }
+
     // Finding 7: Empty scope rejected
     #[test]
     fn scan_rejects_empty_scope() {
@@ -1638,5 +1757,76 @@ mod tests {
         let issues = check_filename(p, &result, &AuditContext::AlbumTrack, &HashSet::new());
         assert!(!issues.iter().any(|i| i.issue_type == IssueType::MissingYearInDir),
             "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix");
+    }
+
+    #[test]
+    fn skip_missing_cleanup_when_walk_has_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("internal.sqlite3");
+        let conn = store::open(db_path.to_str().unwrap()).unwrap();
+
+        store::upsert_audit_file(&conn, "/music/a.flac", "t1", "m1", 100).unwrap();
+
+        let disk_path_set: HashSet<String> = HashSet::new();
+        let mut warnings = Vec::new();
+        let removed = delete_missing_files_if_walk_complete(
+            &conn,
+            "/music/",
+            &disk_path_set,
+            true,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 0);
+        let files = store::get_audit_files_in_scope(&conn, "/music/").unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("Skipped missing-file cleanup")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_skips_missing_cleanup_when_walk_hits_unreadable_subdir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("internal.sqlite3");
+        let conn = store::open(db_path.to_str().unwrap()).unwrap();
+
+        let ok_file = dir.path().join("ok.flac");
+        std::fs::write(&ok_file, b"not-audio").unwrap();
+
+        let blocked_dir = dir.path().join("blocked");
+        std::fs::create_dir(&blocked_dir).unwrap();
+        let blocked_file = blocked_dir.join("hidden.flac");
+        std::fs::write(&blocked_file, b"not-audio").unwrap();
+
+        let ok_path = ok_file.to_str().unwrap();
+        let blocked_path = blocked_file.to_str().unwrap();
+        store::upsert_audit_file(&conn, ok_path, "t1", "m1", 1).unwrap();
+        store::upsert_audit_file(&conn, blocked_path, "t1", "m1", 1).unwrap();
+
+        let original_perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        let mut no_access = original_perms.clone();
+        no_access.set_mode(0o000);
+        std::fs::set_permissions(&blocked_dir, no_access).unwrap();
+
+        let scan_result = scan(&conn, dir.path().to_str().unwrap(), false, &HashSet::new());
+
+        std::fs::set_permissions(&blocked_dir, original_perms).unwrap();
+
+        let summary = scan_result.expect("scan should continue with warnings");
+        assert_eq!(summary.missing_from_disk, 0);
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("Cannot read")));
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("Skipped missing-file cleanup")));
+        assert!(store::get_audit_file(&conn, blocked_path).unwrap().is_some());
     }
 }
