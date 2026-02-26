@@ -1,3 +1,5 @@
+use std::fmt;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +96,28 @@ pub struct NormalizationSuggestion {
     pub current_genre: String,
     pub suggested_genre: Option<String>,
     pub confidence: String, // "alias" | "unknown" | "canonical"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Discogs,
+    Beatport,
+}
+
+impl Provider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Discogs => "discogs",
+            Self::Beatport => "beatport",
+        }
+    }
+}
+
+impl fmt::Display for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Map Rekordbox integer file type to human-readable kind string.

@@ -910,7 +910,7 @@ pub struct EnrichTracksParams {
     #[schemars(description = "Max tracks to enrich (default 50)")]
     pub max_tracks: Option<u32>,
     #[schemars(description = "Providers to use: 'discogs', 'beatport' (default ['discogs'])")]
-    pub providers: Option<Vec<String>>,
+    pub providers: Option<Vec<crate::types::Provider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
     #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
@@ -1830,16 +1830,9 @@ impl ReklawdboxServer {
         let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
         let skip_cached = p.skip_cached.unwrap_or(true);
         let force_refresh = p.force_refresh.unwrap_or(false);
-        let providers: Vec<String> = p.providers.unwrap_or_else(|| vec!["discogs".to_string()]);
-
-        for prov in &providers {
-            if prov != "discogs" && prov != "beatport" {
-                return Err(McpError::invalid_params(
-                    format!("unknown provider '{prov}', valid: discogs, beatport"),
-                    None,
-                ));
-            }
-        }
+        let providers = p
+            .providers
+            .unwrap_or_else(|| vec![crate::types::Provider::Discogs]);
 
         // Resolve tracks using priority: track_ids > playlist_id > search filters
         let tracks = {
@@ -1872,17 +1865,22 @@ impl ReklawdboxServer {
             for provider in &providers {
                 if skip_cached && !force_refresh {
                     let store = self.internal_conn()?;
-                    if store::get_enrichment(&store, provider, &norm_artist, &norm_title)
-                        .map_err(|e| err(format!("Cache read error: {e}")))?
-                        .is_some()
+                    if store::get_enrichment(
+                        &store,
+                        provider.as_str(),
+                        &norm_artist,
+                        &norm_title,
+                    )
+                    .map_err(|e| err(format!("Cache read error: {e}")))?
+                    .is_some()
                     {
                         cached += 1;
                         continue;
                     }
                 }
 
-                match provider.as_str() {
-                    "discogs" => {
+                match provider {
+                    crate::types::Provider::Discogs => {
                         if let Some(auth_err) = discogs_auth_error.clone() {
                             failed.push(serde_json::json!({
                                 "track_id": track.id,
@@ -1910,7 +1908,7 @@ impl ReklawdboxServer {
                                 let store = self.internal_conn()?;
                                 store::set_enrichment(
                                     &store,
-                                    provider,
+                                    provider.as_str(),
                                     &norm_artist,
                                     &norm_title,
                                     Some(quality),
@@ -1923,7 +1921,7 @@ impl ReklawdboxServer {
                                 let store = self.internal_conn()?;
                                 store::set_enrichment(
                                     &store,
-                                    provider,
+                                    provider.as_str(),
                                     &norm_artist,
                                     &norm_title,
                                     Some("none"),
@@ -1945,13 +1943,13 @@ impl ReklawdboxServer {
                                     "track_id": track.id,
                                     "artist": track.artist,
                                     "title": track.title,
-                                    "provider": provider,
+                                    "provider": provider.as_str(),
                                     "error": error_message,
                                 }));
                             }
                         }
                     }
-                    "beatport" => {
+                    crate::types::Provider::Beatport => {
                         match beatport::lookup(&self.state.http, &track.artist, &track.title).await
                         {
                             Ok(Some(r)) => {
@@ -1960,7 +1958,7 @@ impl ReklawdboxServer {
                                 let store = self.internal_conn()?;
                                 store::set_enrichment(
                                     &store,
-                                    provider,
+                                    provider.as_str(),
                                     &norm_artist,
                                     &norm_title,
                                     Some("exact"),
@@ -1973,7 +1971,7 @@ impl ReklawdboxServer {
                                 let store = self.internal_conn()?;
                                 store::set_enrichment(
                                     &store,
-                                    provider,
+                                    provider.as_str(),
                                     &norm_artist,
                                     &norm_title,
                                     Some("none"),
@@ -1987,13 +1985,12 @@ impl ReklawdboxServer {
                                     "track_id": track.id,
                                     "artist": track.artist,
                                     "title": track.title,
-                                    "provider": provider,
+                                    "provider": provider.as_str(),
                                     "error": e,
                                 }));
                             }
                         }
                     }
-                    _ => unreachable!(),
                 }
             }
         }
@@ -6162,26 +6159,15 @@ mod tests {
         assert_has_provenance(&payload);
     }
 
-    #[tokio::test]
-    async fn enrich_tracks_invalid_provider_returns_error() {
-        let server = ReklawdboxServer::new(None);
-
-        let err = server
-            .enrich_tracks(Parameters(EnrichTracksParams {
-                filters: SearchFilterParams::default(),
-                track_ids: None,
-                playlist_id: None,
-                max_tracks: Some(1),
-                providers: Some(vec!["spotify".to_string()]),
-                skip_cached: Some(true),
-                force_refresh: Some(false),
-            }))
-            .await
-            .expect_err("invalid provider should fail validation");
-
+    #[test]
+    fn enrich_tracks_invalid_provider_rejected_by_serde() {
+        let json = serde_json::json!({
+            "providers": ["spotify"],
+        });
+        let result = serde_json::from_value::<EnrichTracksParams>(json);
         assert!(
-            format!("{err}").contains("unknown provider 'spotify'"),
-            "error should mention invalid provider, got: {err}"
+            result.is_err(),
+            "serde should reject unknown provider variant"
         );
     }
 
@@ -6450,7 +6436,7 @@ mod tests {
             ]),
             playlist_id: None,
             max_tracks: Some(10),
-            providers: Some(vec!["discogs".to_string()]),
+            providers: Some(vec![crate::types::Provider::Discogs]),
             skip_cached: Some(true),
             force_refresh: Some(false),
         };
@@ -6482,7 +6468,7 @@ mod tests {
                 ]),
                 playlist_id: None,
                 max_tracks: Some(10),
-                providers: Some(vec!["discogs".to_string()]),
+                providers: Some(vec![crate::types::Provider::Discogs]),
                 skip_cached: Some(true),
                 force_refresh: Some(false),
             }))
@@ -6555,7 +6541,7 @@ mod tests {
                 track_ids: Some(vec!["cached-track-1".to_string()]),
                 playlist_id: None,
                 max_tracks: Some(1),
-                providers: Some(vec!["discogs".to_string(), "beatport".to_string()]),
+                providers: Some(vec![crate::types::Provider::Discogs, crate::types::Provider::Beatport]),
                 skip_cached: Some(true),
                 force_refresh: Some(false),
             }))
@@ -7017,7 +7003,7 @@ mod tests {
                 track_ids: Some(vec![track.id.clone()]),
                 playlist_id: None,
                 max_tracks: Some(1),
-                providers: Some(vec!["beatport".to_string()]),
+                providers: Some(vec![crate::types::Provider::Beatport]),
                 skip_cached: Some(false),
                 force_refresh: Some(true),
             }))
