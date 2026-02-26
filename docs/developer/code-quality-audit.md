@@ -156,8 +156,8 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M7 | ~~Inconsistent whitespace: `genre::canonical_casing` trims, `color::canonical_casing` doesn't~~ ✅ Resolved — `color::canonical_casing` now trims | |
 | M8 | ~~Inconsistent normalization: Discogs strips punctuation, Beatport preserves it~~ Accepted — reflects API data differences; forcing consistency risks false positives | |
 | M9 | ~~Inconsistent matching: Discogs uses `contains`, Beatport uses exact equality~~ Accepted — structural API difference (release titles vs separate fields) | |
-| M10 | `color_code == 0` means "no color" — black (`0x000000`) unrepresentable | `xml.rs:126`, `changes.rs:293` |
-| M11 | Rekordbox XML attribute names differ from struct fields (`Name`/`title`, `Tonality`/`key`) | `xml.rs:80-106` |
+| M10 | ~~`color_code == 0` means "no color" — black (`0x000000`) unrepresentable~~ Accepted — Rekordbox format constraint; black is unused in practice | |
+| M11 | ~~Rekordbox XML attribute names differ from struct fields (`Name`/`title`, `Tonality`/`key`)~~ Accepted — Rekordbox XML format; mapping is explicit and complete in `xml.rs` | |
 
 #### Error Handling & Silent Failures
 
@@ -215,19 +215,17 @@ Minor issues. Documented for completeness.
 
 ---
 
-### Context-Dependent (Partially Confirmed)
+### Context-Dependent (Partially Confirmed) — All Accepted
 
-These are technically present but mitigated by other code paths today. Worth
-monitoring because the mitigation is in a different module — an agent modifying
-one side could break the contract.
+All items confirmed mitigated by existing code paths. Accepted as-is.
 
 | ID | Issue | Mitigation | Risk if mitigation changes |
 |----|-------|-----------|--------------------------|
-| P1 | Unknown resolution coerces to `"resolved"` in store layer | Tool layer validates first (`audit.rs:1094`) | Direct store calls bypass validation |
-| P2 | Duplicate track IDs overwrite in XML mapping | `write_xml` deduplicates first | Direct `generate_xml_with_playlists` calls don't |
-| P3 | Hard-coded CLI/server dispatch string list | Currently aligned with declared commands | Adding CLI command without updating `main.rs:29` |
-| P4 | Raw string date comparisons in SQL | Safe if ISO-8601 format invariant holds | User-supplied dates could violate |
-| P5 | `mtime` fallbacks use epoch 0 | Only risky if `modified()` fails frequently | Platform-specific edge cases |
+| P1 | ~~Unknown resolution coerces to `"resolved"` in store layer~~ Accepted — tool layer validates first; direct store calls are internal only | |
+| P2 | ~~Duplicate track IDs overwrite in XML mapping~~ Accepted — `write_xml` deduplicates; no public API bypasses this | |
+| P3 | ~~Hard-coded CLI/server dispatch string list~~ Accepted — currently aligned; low-frequency change | |
+| P4 | ~~Raw string date comparisons in SQL~~ Accepted — ISO-8601 invariant holds; dates come from Rekordbox DB | |
+| P5 | ~~`mtime` fallbacks use epoch 0~~ Accepted — only triggers on exotic `modified()` failures | |
 
 ---
 
@@ -246,12 +244,11 @@ Fully resolved.
 
 **Affected findings**: ~~C2~~, ~~H1~~, ~~H2~~, ~~H4~~, ~~H3~~, ~~M1~~, ~~M2~~, ~~M3~~, ~~M4~~, ~~M5~~
 
-### 3. Cross-module implicit contracts
+### 3. ~~Cross-module implicit contracts~~ ✅ Resolved
 
-Color `0 = unset` (M10), XML attribute names vs struct fields (M11). Modifying
-one side of these contracts gives no signal about the other.
+Remaining items (M10, M11) accepted as Rekordbox format constraints.
 
-**Affected findings**: ~~H6~~, ~~H7~~, ~~H8~~, ~~H10~~, M10, M11
+**Affected findings**: ~~H6~~, ~~H7~~, ~~H8~~, ~~H10~~, ~~M10~~, ~~M11~~
 
 ### 4. ~~Monolith file~~ ✅ Resolved
 
