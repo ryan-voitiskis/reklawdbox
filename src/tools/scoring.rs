@@ -709,10 +709,23 @@ pub(super) fn composite_score(
     }
 }
 
+// BPM proxy normalization (typical club tempo range)
+const BPM_PROXY_FLOOR: f64 = 95.0;
+const BPM_PROXY_RANGE: f64 = 50.0; // 145 - 95
+
+// Essentia descriptor normalization bounds
+const DANCEABILITY_MAX: f64 = 3.0;
+const LOUDNESS_FLOOR_LUFS: f64 = -30.0;
+const LOUDNESS_RANGE_LUFS: f64 = 30.0;
+const ONSET_RATE_MAX: f64 = 10.0;
+
+// Composite energy weights
+const ENERGY_W_DANCE: f64 = 0.4;
+const ENERGY_W_LOUDNESS: f64 = 0.3;
+const ENERGY_W_ONSET: f64 = 0.3;
+
 pub(super) fn compute_track_energy(essentia: Option<&crate::audio::EssentiaOutput>, bpm: f64) -> f64 {
-    // Fallback proxy when Essentia descriptors are unavailable.
-    // This maps typical club tempos (~95-145 BPM) across the full 0-1 range.
-    let bpm_proxy = ((bpm - 95.0) / 50.0).clamp(0.0, 1.0);
+    let bpm_proxy = ((bpm - BPM_PROXY_FLOOR) / BPM_PROXY_RANGE).clamp(0.0, 1.0);
     let Some(essentia) = essentia else {
         return bpm_proxy;
     };
@@ -723,10 +736,10 @@ pub(super) fn compute_track_energy(essentia: Option<&crate::audio::EssentiaOutpu
 
     match (danceability, loudness_integrated, onset_rate) {
         (Some(dance), Some(loudness), Some(onset)) => {
-            let normalized_dance = (dance / 3.0).clamp(0.0, 1.0);
-            let normalized_loudness = ((loudness + 30.0) / 30.0).clamp(0.0, 1.0);
-            let onset_rate_normalized = (onset / 10.0).clamp(0.0, 1.0);
-            ((0.4 * normalized_dance) + (0.3 * normalized_loudness) + (0.3 * onset_rate_normalized))
+            let normalized_dance = (dance / DANCEABILITY_MAX).clamp(0.0, 1.0);
+            let normalized_loudness = ((loudness - LOUDNESS_FLOOR_LUFS) / LOUDNESS_RANGE_LUFS).clamp(0.0, 1.0);
+            let onset_rate_normalized = (onset / ONSET_RATE_MAX).clamp(0.0, 1.0);
+            ((ENERGY_W_DANCE * normalized_dance) + (ENERGY_W_LOUDNESS * normalized_loudness) + (ENERGY_W_ONSET * onset_rate_normalized))
                 .clamp(0.0, 1.0)
         }
         _ => bpm_proxy,
