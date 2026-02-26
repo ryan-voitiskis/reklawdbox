@@ -251,7 +251,7 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
     if track_name.is_empty() {
         return false;
     }
-    let title_match = track_name.contains(&norm_title) || norm_title.contains(&track_name);
+    let title_match = track_name.contains(&norm_title);
 
     artist_match && title_match
 }
@@ -370,7 +370,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_matches_when_search_title_contains_track_title() {
+    fn test_parse_no_match_when_search_title_is_longer_than_track_name() {
+        // "Archangel (Remastered)" does NOT contain "Archangel" as a Beatport
+        // track_name — only the forward direction matches (track_name must
+        // contain the search title, not vice versa).
         let html = build_html_with_tracks(serde_json::json!([
             {
                 "track_id": 3,
@@ -382,9 +385,8 @@ mod tests {
             }
         ]));
         let result = parse_beatport_html(&html, "Burial", "Archangel (Remastered)")
-            .unwrap()
-            .expect("expected a beatport match");
-        assert_eq!(result.track_name, "Archangel");
+            .unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
