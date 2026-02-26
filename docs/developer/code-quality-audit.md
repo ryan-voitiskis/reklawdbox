@@ -152,7 +152,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 
 | ID | Issue | Files |
 |----|-------|-------|
-| M6 | `normalize()` in `discogs.rs` used universally (28+ call sites in tools.rs) | `discogs.rs:151` |
+| M6 | ~~`normalize()` in `discogs.rs` used universally (28+ call sites in tools.rs)~~ ✅ Resolved — `normalize()` moved to `src/normalize.rs` shared module | |
 | M7 | ~~Inconsistent whitespace: `genre::canonical_casing` trims, `color::canonical_casing` doesn't~~ ✅ Resolved — `color::canonical_casing` now trims | |
 | M8 | Inconsistent normalization: Discogs strips punctuation, Beatport preserves it | `discogs.rs:151`, `beatport.rs:195` |
 | M9 | Inconsistent matching: Discogs uses `contains`, Beatport uses exact equality | `discogs.rs:583`, `beatport.rs:207` |
@@ -165,7 +165,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 |----|-------|-------|
 | M12 | ~~Reopened audit issues keep stale `resolution`/`resolved_at`/`note`~~ ✅ Resolved — ON CONFLICT clears stale fields | |
 | M13 | ~~`get_tracks_by_ids` doesn't preserve caller order, deduplicates~~ ✅ Resolved — returns tracks in caller order with dedup | |
-| M14 | Dry-run tag diff can claim RIFF changes that write path will skip | `tags.rs:864,874,748` |
+| M14 | ~~Dry-run tag diff can claim RIFF changes that write path will skip~~ ✅ Resolved — RIFF-only dry-run skips non-RIFF fields | |
 | M15 | Beatport title matching: permissive bidirectional substring, false-positive prone | `beatport.rs:220` |
 | M16 | Discogs short artist names (<3 chars) auto-match first result | `discogs.rs:580,547` |
 | M17 | ~~Audio decode tolerates frame errors with only stderr logging~~ ✅ Resolved — single summary line after decode loop | |
@@ -200,18 +200,18 @@ Minor issues. Documented for completeness.
 | L1 | ~~Manual SQL `BEGIN`/`COMMIT` with `?` exits risks partial transactions~~ ✅ Resolved — `unchecked_transaction()` with auto-rollback | |
 | L2 | Unreadable directories in CLI expansion silently ignored | `cli.rs:546` |
 | L3 | Malformed broker URL treated as missing config | `discogs.rs:24` |
-| L4 | Legacy Discogs HTTP errors drop response-body diagnostics | `discogs.rs:530` |
-| L5 | Issue detail JSON parse failure silently dropped | `audit.rs:1057` |
-| L6 | Poisoned mutex silently recovered in staged changes | `changes.rs:20` |
+| L4 | ~~Legacy Discogs HTTP errors drop response-body diagnostics~~ ✅ Resolved — truncated body snippet included in error | |
+| L5 | ~~Issue detail JSON parse failure silently dropped~~ ✅ Resolved — parse errors logged via eprintln | |
+| L6 | ~~Poisoned mutex silently recovered in staged changes~~ ✅ Resolved — `lock_or_recover()` helper with eprintln | |
 | L7 | ~~`file_type_to_kind` catch-all `_ => "Audio File"`~~ ✅ Resolved — `FileKind` enum with `Unknown(i32)` variant | |
-| L8 | Hardcoded Rekordbox version `"7.2.10"` in XML | `xml.rs:146-148` |
-| L9 | Hardcoded User-Agent with Chrome 91 (2021) in Beatport scraper | `beatport.rs:4-5` |
+| L8 | ~~Hardcoded Rekordbox version `"7.2.10"` in XML~~ ✅ Resolved — `REKORDBOX_VERSION` constant | |
+| L9 | ~~Hardcoded User-Agent with Chrome 91 (2021) in Beatport scraper~~ ✅ Resolved — updated to Chrome 131 macOS | |
 | L10 | Double-negative CLI flag `--no-skip-cached` | `cli.rs:68` |
 | L11 | `SAMPLER_PATH_PREFIX` hardcoded to `/Users/vz/...` | `db.rs:110` |
 | L12 | Backup script discovery is cwd-relative | `tools.rs:1541-1558` |
 | L13 | ~~`stars_to_rating(6)` silently returns 255; `rating_to_stars(300)` returns 0~~ ✅ Resolved — out-of-range values saturate to 5 stars | |
 | L14 | ~~No-op `touch_cached_*` functions (dead scaffolding)~~ ✅ Resolved — dead functions removed | |
-| L15 | No-op writes still trigger file rewrites in tags | `tags.rs:768` |
+| L15 | ~~No-op writes still trigger file rewrites in tags~~ ✅ Resolved — current value compared before setting `any_changes` | |
 
 ---
 
@@ -266,7 +266,7 @@ Multiple sites return `Ok(None)` or `Ok(0)` where an error occurred. This is
 particularly dangerous for agents because there's no signal that something
 went wrong — the agent assumes success and moves on.
 
-**Affected findings**: ~~H11~~, ~~M12~~, M15, M16, ~~M17~~, ~~M18~~, ~~M19~~, L3-L6
+**Affected findings**: ~~H11~~, ~~M12~~, M15, M16, ~~M17~~, ~~M18~~, ~~M19~~, L3, ~~L4~~, ~~L5~~, ~~L6~~
 
 ---
 
