@@ -144,16 +144,16 @@ Notable issues. Manageable with awareness but easy to get wrong.
 |----|-------|-------|
 | M1 | ~~Duplicate `escape_like`~~ ✅ Resolved — `store.rs` now imports `crate::db::escape_like` | |
 | M2 | ~~Duplicate `urlencoding`~~ ✅ Resolved — `beatport.rs` now imports `crate::discogs::urlencoding` | |
-| M3 | Essentia storage code duplicated in two `cli.rs` branches | `cli.rs:461-475`, `cli.rs:492-507` |
+| M3 | ~~Essentia storage code duplicated in two `cli.rs` branches~~ ✅ Resolved — `run_and_cache_essentia()` helper | |
 | M4 | Status aggregation duplicated between `scan()` and `get_summary()` | `audit.rs:1009`, `audit.rs:1134` |
-| M5 | Disc-subdir detection duplicated | `audit.rs:167`, `audit.rs:199` |
+| M5 | ~~Disc-subdir detection duplicated~~ ✅ Resolved — `is_disc_subdir()` helper | |
 
 #### Module Boundaries & Coupling
 
 | ID | Issue | Files |
 |----|-------|-------|
 | M6 | `normalize()` in `discogs.rs` used universally (28+ call sites in tools.rs) | `discogs.rs:151` |
-| M7 | Inconsistent whitespace: `genre::canonical_casing` trims, `color::canonical_casing` doesn't | `genre.rs:57`, `color.rs:23` |
+| M7 | ~~Inconsistent whitespace: `genre::canonical_casing` trims, `color::canonical_casing` doesn't~~ ✅ Resolved — `color::canonical_casing` now trims | |
 | M8 | Inconsistent normalization: Discogs strips punctuation, Beatport preserves it | `discogs.rs:151`, `beatport.rs:195` |
 | M9 | Inconsistent matching: Discogs uses `contains`, Beatport uses exact equality | `discogs.rs:583`, `beatport.rs:207` |
 | M10 | `color_code == 0` means "no color" — black (`0x000000`) unrepresentable | `xml.rs:126`, `changes.rs:293` |
@@ -163,7 +163,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 
 | ID | Issue | Files |
 |----|-------|-------|
-| M12 | Reopened audit issues keep stale `resolution`/`resolved_at`/`note` | `store.rs:429,432,534` |
+| M12 | ~~Reopened audit issues keep stale `resolution`/`resolved_at`/`note`~~ ✅ Resolved — ON CONFLICT clears stale fields | |
 | M13 | `get_tracks_by_ids` doesn't preserve caller order, deduplicates | `db.rs:522,532` |
 | M14 | Dry-run tag diff can claim RIFF changes that write path will skip | `tags.rs:864,874,748` |
 | M15 | Beatport title matching: permissive bidirectional substring, false-positive prone | `beatport.rs:220` |
@@ -171,7 +171,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M17 | Audio decode tolerates frame errors with only stderr logging | `audio.rs:342,357` |
 | M18 | Corrupt cache JSON becomes `null` while response still says "cache hit" | `tools.rs:1734,1740` |
 | M19 | `DJPlayCount` dual-type parse failures collapse to 0 | `db.rs:63-70` |
-| M20 | `TECH_SPEC_PATTERNS` lists `[FLAC]`/`[flac]` but misses mixed-case | `audit.rs:116-121` |
+| M20 | ~~`TECH_SPEC_PATTERNS` lists `[FLAC]`/`[flac]` but misses mixed-case~~ ✅ Resolved — case-insensitive matching | |
 | M21 | `date` field in `check_tags` not in `tags::ALL_FIELDS` — no-op for non-WAV | `audit.rs:448` |
 | M22 | Corpus manifest path is cwd-relative, creating non-local behavior | `corpus.rs:9,180` |
 
@@ -187,7 +187,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M28 | Migration logic assumes `user_version` implies audit tables exist | `store.rs:85,755` |
 | M29 | All errors in `audio.rs`, `tags.rs`, `beatport.rs` are `Result<_, String>` | Multiple |
 | M30 | `serde(untagged)` enums in `tags.rs` make deser errors opaque | `tags.rs:117-217` |
-| M31 | Analyzer name strings (`"stratum-dsp"`, `"essentia"`) used as DB keys with no constant | `cli.rs:223,231,446,470` |
+| M31 | ~~Analyzer name strings (`"stratum-dsp"`, `"essentia"`) used as DB keys with no constant~~ ✅ Resolved — `ANALYZER_STRATUM`/`ANALYZER_ESSENTIA` constants | |
 
 ---
 
@@ -235,17 +235,16 @@ one side could break the contract.
 
 ### 1. String-typed closed sets instead of enums
 
-Largely resolved. Remaining: analyzer name strings (M31), field diff names
-(still `String` for JSON compat but produced via `EditableField::as_str()`).
+Largely resolved. Remaining: field diff names (still `String` for JSON compat
+but produced via `EditableField::as_str()`).
 
-**Affected findings**: ~~C1~~, ~~C4~~, ~~H5~~, ~~H8~~, ~~H12~~, M31
+**Affected findings**: ~~C1~~, ~~C4~~, ~~H5~~, ~~H8~~, ~~H12~~, ~~M31~~
 
 ### 2. Copy-paste with subtle variation
 
-Largely resolved. Remaining: status aggregation (M4), disc-subdir detection
-(M5), Essentia storage in CLI (M3).
+Largely resolved. Remaining: status aggregation (M4).
 
-**Affected findings**: ~~C2~~, ~~H1~~, ~~H2~~, ~~H4~~, ~~H3~~, ~~M1~~, ~~M2~~, M3-M5
+**Affected findings**: ~~C2~~, ~~H1~~, ~~H2~~, ~~H4~~, ~~H3~~, ~~M1~~, ~~M2~~, ~~M3~~, M4, ~~M5~~
 
 ### 3. Cross-module implicit contracts
 
@@ -267,7 +266,7 @@ Multiple sites return `Ok(None)` or `Ok(0)` where an error occurred. This is
 particularly dangerous for agents because there's no signal that something
 went wrong — the agent assumes success and moves on.
 
-**Affected findings**: ~~H11~~, M12, M15-M19, L3-L6
+**Affected findings**: ~~H11~~, ~~M12~~, M15-M19, L3-L6
 
 ---
 
