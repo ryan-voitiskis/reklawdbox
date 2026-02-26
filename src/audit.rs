@@ -190,20 +190,30 @@ fn is_disc_subdir(name: &str) -> bool {
     name.starts_with("CD") || name.starts_with("Disc") || name.starts_with("disc")
 }
 
-/// Regex-like patterns for tech specs in directory names.
+/// Lowercase patterns for tech specs in directory names.
+/// Matching is always done against the lowercased input.
 const TECH_SPEC_PATTERNS: &[&str] = &[
-    "[FLAC]", "[WAV]", "[MP3]", "[AIFF]", "[AAC]",
     "[flac]", "[wav]", "[mp3]", "[aiff]", "[aac]",
     "24-96", "24-48", "24-44", "16-44", "16-48",
     "24bit", "16bit",
 ];
 
 /// Strip tech-spec brackets and bitrate specs from a directory name for
-/// pattern matching.
+/// pattern matching. Matching is case-insensitive but non-pattern text
+/// preserves its original casing.
 fn normalize_dir_name(name: &str) -> String {
     let mut result = name.to_string();
     for pat in TECH_SPEC_PATTERNS {
-        result = result.replace(pat, "");
+        // Find the pattern in the lowercased string, then remove the
+        // corresponding byte range from the original to preserve casing.
+        loop {
+            let lower = result.to_ascii_lowercase();
+            if let Some(pos) = lower.find(pat) {
+                result.replace_range(pos..pos + pat.len(), "");
+            } else {
+                break;
+            }
+        }
     }
     // Collapse multiple spaces into one
     while result.contains("  ") {
@@ -645,9 +655,10 @@ pub fn check_filename(
     // TECH_SPECS_IN_DIR
     if !skip.contains(&IssueType::TechSpecsInDir) {
         if let Some((_, dir_name)) = effective_album_dir_name(path) {
+            let dir_lower = dir_name.to_ascii_lowercase();
             let has_tech_specs = TECH_SPEC_PATTERNS
                 .iter()
-                .any(|pat| dir_name.contains(pat));
+                .any(|pat| dir_lower.contains(pat));
             if has_tech_specs {
                 let clean = normalize_dir_name(dir_name);
                 issues.push(DetectedIssue {
