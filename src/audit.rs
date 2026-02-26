@@ -546,10 +546,9 @@ pub fn check_tags(
             });
         }
 
-        if !skip.contains(&IssueType::MissingYear)
-            && tag_is_empty(read_result, "year")
-            && tag_is_empty(read_result, "date")
-        {
+        // "date" is not in tags::ALL_FIELDS and is never populated for non-WAV files,
+        // so checking it was a no-op. Fire MissingYear based on "year" alone.
+        if !skip.contains(&IssueType::MissingYear) && tag_is_empty(read_result, "year") {
             issues.push(DetectedIssue {
                 issue_type: IssueType::MissingYear,
                 detail: None,
@@ -1698,10 +1697,11 @@ mod tests {
         tags
     }
 
-    // Finding 1: MISSING_YEAR requires both year and date empty
+    // M21: MISSING_YEAR fires when "year" is empty, regardless of "date"
+    // ("date" is not in tags::ALL_FIELDS and was a no-op check)
     #[test]
-    fn check_tags_missing_year_requires_both_empty() {
-        // If year is empty but date is set, should NOT flag MISSING_YEAR
+    fn check_tags_missing_year_ignores_date_field() {
+        // Even if "date" is set, missing "year" should flag MISSING_YEAR
         let tags = make_tags(&[("artist", "A"), ("title", "T"), ("album", "Alb"), ("track", "1"), ("date", "2024")]);
         let result = FileReadResult::Single {
             path: "/music/Artist/Album (2024)/01 A - T.flac".to_string(),
@@ -1711,7 +1711,7 @@ mod tests {
             cover_art: None,
         };
         let issues = check_tags(Path::new("/x"), &result, &AuditContext::AlbumTrack, &HashSet::new());
-        assert!(!issues.iter().any(|i| i.issue_type == IssueType::MissingYear));
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::MissingYear));
     }
 
     // Finding 2: Multi-byte UTF-8 in filename doesn't panic
