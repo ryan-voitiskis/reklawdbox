@@ -154,8 +154,8 @@ Notable issues. Manageable with awareness but easy to get wrong.
 |----|-------|-------|
 | M6 | ~~`normalize()` in `discogs.rs` used universally (28+ call sites in tools.rs)~~ ✅ Resolved — `normalize()` moved to `src/normalize.rs` shared module | |
 | M7 | ~~Inconsistent whitespace: `genre::canonical_casing` trims, `color::canonical_casing` doesn't~~ ✅ Resolved — `color::canonical_casing` now trims | |
-| M8 | Inconsistent normalization: Discogs strips punctuation, Beatport preserves it | `discogs.rs:151`, `beatport.rs:195` |
-| M9 | Inconsistent matching: Discogs uses `contains`, Beatport uses exact equality | `discogs.rs:583`, `beatport.rs:207` |
+| M8 | ~~Inconsistent normalization: Discogs strips punctuation, Beatport preserves it~~ Accepted — reflects API data differences; forcing consistency risks false positives | |
+| M9 | ~~Inconsistent matching: Discogs uses `contains`, Beatport uses exact equality~~ Accepted — structural API difference (release titles vs separate fields) | |
 | M10 | `color_code == 0` means "no color" — black (`0x000000`) unrepresentable | `xml.rs:126`, `changes.rs:293` |
 | M11 | Rekordbox XML attribute names differ from struct fields (`Name`/`title`, `Tonality`/`key`) | `xml.rs:80-106` |
 
@@ -166,14 +166,14 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M12 | ~~Reopened audit issues keep stale `resolution`/`resolved_at`/`note`~~ ✅ Resolved — ON CONFLICT clears stale fields | |
 | M13 | ~~`get_tracks_by_ids` doesn't preserve caller order, deduplicates~~ ✅ Resolved — returns tracks in caller order with dedup | |
 | M14 | ~~Dry-run tag diff can claim RIFF changes that write path will skip~~ ✅ Resolved — RIFF-only dry-run skips non-RIFF fields | |
-| M15 | Beatport title matching: permissive bidirectional substring, false-positive prone | `beatport.rs:220` |
-| M16 | Discogs short artist names (<3 chars) auto-match first result | `discogs.rs:580,547` |
+| M15 | ~~Beatport title matching: permissive bidirectional substring, false-positive prone~~ ✅ Resolved — reverse substring removed; only forward direction (track contains search title) | |
+| M16 | ~~Discogs short artist names (<3 chars) auto-match first result~~ Accepted — deliberate permissiveness for short DJ monikers; very few real artists affected | |
 | M17 | ~~Audio decode tolerates frame errors with only stderr logging~~ ✅ Resolved — single summary line after decode loop | |
 | M18 | ~~Corrupt cache JSON becomes `null` while response still says "cache hit"~~ ✅ Resolved — parse errors surfaced in output JSON | |
 | M19 | ~~`DJPlayCount` dual-type parse failures collapse to 0~~ ✅ Resolved — logs non-empty parse failures via eprintln | |
 | M20 | ~~`TECH_SPEC_PATTERNS` lists `[FLAC]`/`[flac]` but misses mixed-case~~ ✅ Resolved — case-insensitive matching | |
 | M21 | ~~`date` field in `check_tags` not in `tags::ALL_FIELDS` — no-op for non-WAV~~ ✅ Resolved — removed no-op `date` check | |
-| M22 | Corpus manifest path is cwd-relative, creating non-local behavior | `corpus.rs:9,180` |
+| M22 | ~~Corpus manifest path is cwd-relative, creating non-local behavior~~ ✅ Resolved — `REKLAWDBOX_CORPUS_PATH` env var override | |
 
 #### Type Safety
 
@@ -182,7 +182,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M23 | ~~`Track` struct is flat primitives with no newtypes (`rating: u8`, `file_type: i32`)~~ ✅ Partially resolved — `FileKind` enum replaces `file_type`/`file_type_name` | |
 | M24 | ~~Priority weights returned as anonymous 6-tuple~~ ✅ Resolved — `PriorityWeights` named struct | |
 | M25 | ~~Energy computation uses undocumented magic numbers~~ ✅ Resolved — named constants extracted | |
-| M26 | `write_track` two-phase attribute writing (main write + conditional appends + close) | `xml.rs:75-131` |
+| M26 | ~~`write_track` two-phase attribute writing (main write + conditional appends + close)~~ N/A — standard pattern for optional XML attributes, not a defect | |
 | M27 | ~~Migration mixes unconditional `CREATE TABLE IF NOT EXISTS` with version-gated blocks~~ ✅ Resolved — all DDL unconditional | |
 | M28 | ~~Migration logic assumes `user_version` implies audit tables exist~~ ✅ Resolved — version gate removed | |
 | M29 | ~~All errors in `audio.rs`, `tags.rs`, `beatport.rs` are `Result<_, String>`~~ ✅ Resolved — `AudioError`, `TagError`, `BeatportError` enums | |
@@ -198,17 +198,17 @@ Minor issues. Documented for completeness.
 | ID | Issue | Files |
 |----|-------|-------|
 | L1 | ~~Manual SQL `BEGIN`/`COMMIT` with `?` exits risks partial transactions~~ ✅ Resolved — `unchecked_transaction()` with auto-rollback | |
-| L2 | Unreadable directories in CLI expansion silently ignored | `cli.rs:546` |
-| L3 | Malformed broker URL treated as missing config | `discogs.rs:24` |
+| L2 | ~~Unreadable directories in CLI expansion silently ignored~~ ✅ Resolved — eprintln warning on unreadable directory | |
+| L3 | ~~Malformed broker URL treated as missing config~~ ✅ Resolved — `BrokerConfigResult` enum distinguishes NotConfigured from InvalidUrl | |
 | L4 | ~~Legacy Discogs HTTP errors drop response-body diagnostics~~ ✅ Resolved — truncated body snippet included in error | |
 | L5 | ~~Issue detail JSON parse failure silently dropped~~ ✅ Resolved — parse errors logged via eprintln | |
 | L6 | ~~Poisoned mutex silently recovered in staged changes~~ ✅ Resolved — `lock_or_recover()` helper with eprintln | |
 | L7 | ~~`file_type_to_kind` catch-all `_ => "Audio File"`~~ ✅ Resolved — `FileKind` enum with `Unknown(i32)` variant | |
 | L8 | ~~Hardcoded Rekordbox version `"7.2.10"` in XML~~ ✅ Resolved — `REKORDBOX_VERSION` constant | |
 | L9 | ~~Hardcoded User-Agent with Chrome 91 (2021) in Beatport scraper~~ ✅ Resolved — updated to Chrome 131 macOS | |
-| L10 | Double-negative CLI flag `--no-skip-cached` | `cli.rs:68` |
-| L11 | `SAMPLER_PATH_PREFIX` hardcoded to `/Users/vz/...` | `db.rs:110` |
-| L12 | Backup script discovery is cwd-relative | `tools.rs:1541-1558` |
+| L10 | ~~Double-negative CLI flag `--no-skip-cached`~~ Accepted — minor UX nit; not worth a breaking CLI change | |
+| L11 | ~~`SAMPLER_PATH_PREFIX` hardcoded to `/Users/vz/...`~~ ✅ Resolved — deleted; callers use portable `SAMPLER_PATH_FRAGMENT` | |
+| L12 | ~~Backup script discovery is cwd-relative~~ ✅ Resolved — `REKLAWDBOX_BACKUP_SCRIPT` env var override | |
 | L13 | ~~`stars_to_rating(6)` silently returns 255; `rating_to_stars(300)` returns 0~~ ✅ Resolved — out-of-range values saturate to 5 stars | |
 | L14 | ~~No-op `touch_cached_*` functions (dead scaffolding)~~ ✅ Resolved — dead functions removed | |
 | L15 | ~~No-op writes still trigger file rewrites in tags~~ ✅ Resolved — current value compared before setting `any_changes` | |
@@ -260,13 +260,13 @@ one side of these contracts gives no signal about the other.
 
 **Affected findings**: ~~C3~~
 
-### 5. Silent error swallowing
+### 5. ~~Silent error swallowing~~ ✅ Resolved
 
-Multiple sites return `Ok(None)` or `Ok(0)` where an error occurred. This is
-particularly dangerous for agents because there's no signal that something
-went wrong — the agent assumes success and moves on.
+All silent-swallowing sites addressed: errors logged, parse failures surfaced,
+broker config distinguished from invalid URL. M16 accepted (intentional
+permissiveness for short DJ names).
 
-**Affected findings**: ~~H11~~, ~~M12~~, M15, M16, ~~M17~~, ~~M18~~, ~~M19~~, L3, ~~L4~~, ~~L5~~, ~~L6~~
+**Affected findings**: ~~H11~~, ~~M12~~, ~~M15~~, ~~M16~~, ~~M17~~, ~~M18~~, ~~M19~~, ~~L3~~, ~~L4~~, ~~L5~~, ~~L6~~
 
 ---
 

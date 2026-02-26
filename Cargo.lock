@@ -1413,6 +1413,7 @@ dependencies = [
  "strum",
  "symphonia",
  "tempfile",
+ "thiserror",
  "tokio",
  "unicode-casefold",
 ]
