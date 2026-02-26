@@ -733,16 +733,14 @@ impl ReklawdboxServer {
         &self,
         params: Parameters<ClearChangesParams>,
     ) -> Result<CallToolResult, McpError> {
-        const VALID_FIELDS: &[&str] = &["genre", "comments", "rating", "color"];
-
         if let Some(ref fields) = params.0.fields {
             for f in fields {
-                if !VALID_FIELDS.contains(&f.as_str()) {
+                if crate::types::EditableField::from_str(f.as_str()).is_none() {
                     return Err(McpError::invalid_params(
                         format!(
                             "unknown field '{}'. Valid fields: {}",
                             f,
-                            VALID_FIELDS.join(", ")
+                            crate::types::EditableField::all_names_csv()
                         ),
                         None,
                     ));

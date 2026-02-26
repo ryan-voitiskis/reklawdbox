@@ -50,6 +50,42 @@ pub struct TrackChange {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EditableField {
+    Genre,
+    Comments,
+    Rating,
+    Color,
+}
+
+impl EditableField {
+    pub const ALL: &[Self] = &[Self::Genre, Self::Comments, Self::Rating, Self::Color];
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Genre => "genre",
+            Self::Comments => "comments",
+            Self::Rating => "rating",
+            Self::Color => "color",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "genre" => Some(Self::Genre),
+            "comments" => Some(Self::Comments),
+            "rating" => Some(Self::Rating),
+            "color" => Some(Self::Color),
+            _ => None,
+        }
+    }
+
+    /// Comma-separated list of all field names (for error messages and descriptions).
+    pub fn all_names_csv() -> String {
+        Self::ALL.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FieldDiff {
     pub field: String,
@@ -211,5 +247,25 @@ mod tests {
         assert_eq!(rating_to_stars(229), 4);
         assert_eq!(rating_to_stars(230), 5);
         assert_eq!(rating_to_stars(255), 5);
+    }
+
+    #[test]
+    fn editable_field_count_matches_track_change() {
+        let json = serde_json::to_value(TrackChange {
+            track_id: "x".into(),
+            genre: None,
+            comments: None,
+            rating: None,
+            color: None,
+        })
+        .unwrap();
+        let field_count = json.as_object().unwrap().len() - 1; // minus track_id
+        assert_eq!(
+            field_count,
+            EditableField::ALL.len(),
+            "TrackChange has {field_count} editable fields but EditableField has {} variants. \
+             Update EditableField when adding fields.",
+            EditableField::ALL.len(),
+        );
     }
 }

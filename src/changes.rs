@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::color;
-use crate::types::{FieldDiff, Track, TrackChange, TrackDiff};
+use crate::types::{EditableField, FieldDiff, Track, TrackChange, TrackDiff};
 
 pub struct ChangeManager {
     changes: Mutex<HashMap<String, TrackChange>>,
@@ -178,20 +178,20 @@ impl ChangeManager {
             if let Some(entry) = map.get_mut(id) {
                 let mut touched = false;
                 for field in fields {
-                    match field.as_str() {
-                        "genre" if entry.genre.is_some() => {
+                    match EditableField::from_str(field.as_str()) {
+                        Some(EditableField::Genre) if entry.genre.is_some() => {
                             entry.genre = None;
                             touched = true;
                         }
-                        "comments" if entry.comments.is_some() => {
+                        Some(EditableField::Comments) if entry.comments.is_some() => {
                             entry.comments = None;
                             touched = true;
                         }
-                        "rating" if entry.rating.is_some() => {
+                        Some(EditableField::Rating) if entry.rating.is_some() => {
                             entry.rating = None;
                             touched = true;
                         }
-                        "color" if entry.color.is_some() => {
+                        Some(EditableField::Color) if entry.color.is_some() => {
                             entry.color = None;
                             touched = true;
                         }
