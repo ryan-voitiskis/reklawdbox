@@ -197,7 +197,7 @@ Minor issues. Documented for completeness.
 
 | ID | Issue | Files |
 |----|-------|-------|
-| L1 | Manual SQL `BEGIN`/`COMMIT` with `?` exits risks partial transactions | `audit.rs:891,996` |
+| L1 | ~~Manual SQL `BEGIN`/`COMMIT` with `?` exits risks partial transactions~~ ✅ Resolved — `unchecked_transaction()` with auto-rollback | |
 | L2 | Unreadable directories in CLI expansion silently ignored | `cli.rs:546` |
 | L3 | Malformed broker URL treated as missing config | `discogs.rs:24` |
 | L4 | Legacy Discogs HTTP errors drop response-body diagnostics | `discogs.rs:530` |
@@ -209,8 +209,8 @@ Minor issues. Documented for completeness.
 | L10 | Double-negative CLI flag `--no-skip-cached` | `cli.rs:68` |
 | L11 | `SAMPLER_PATH_PREFIX` hardcoded to `/Users/vz/...` | `db.rs:110` |
 | L12 | Backup script discovery is cwd-relative | `tools.rs:1541-1558` |
-| L13 | `stars_to_rating(6)` silently returns 255; `rating_to_stars(300)` returns 0 | `types.rs:112-135` |
-| L14 | No-op `touch_cached_*` functions (dead scaffolding) | `store.rs:125,192,259` |
+| L13 | ~~`stars_to_rating(6)` silently returns 255; `rating_to_stars(300)` returns 0~~ ✅ Resolved — out-of-range values saturate to 5 stars | |
+| L14 | ~~No-op `touch_cached_*` functions (dead scaffolding)~~ ✅ Resolved — dead functions removed | |
 | L15 | No-op writes still trigger file rewrites in tags | `tags.rs:768` |
 
 ---
