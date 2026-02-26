@@ -186,7 +186,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M27 | ~~Migration mixes unconditional `CREATE TABLE IF NOT EXISTS` with version-gated blocks~~ ✅ Resolved — all DDL unconditional | |
 | M28 | ~~Migration logic assumes `user_version` implies audit tables exist~~ ✅ Resolved — version gate removed | |
 | M29 | ~~All errors in `audio.rs`, `tags.rs`, `beatport.rs` are `Result<_, String>`~~ ✅ Resolved — `AudioError`, `TagError`, `BeatportError` enums | |
-| M30 | `serde(untagged)` enums in `tags.rs` make deser errors opaque | `tags.rs:117-217` |
+| M30 | ~~`serde(untagged)` enums in `tags.rs` make deser errors opaque~~ N/A — these enums are serialize-only (no `Deserialize` derive); untagged deser errors cannot occur at runtime | |
 | M31 | ~~Analyzer name strings (`"stratum-dsp"`, `"essentia"`) used as DB keys with no constant~~ ✅ Resolved — `ANALYZER_STRATUM`/`ANALYZER_ESSENTIA` constants | |
 
 ---
