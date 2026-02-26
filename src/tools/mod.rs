@@ -675,13 +675,10 @@ impl ReklawdboxServer {
                 return Err(err(format!("DB error: {e}")));
             }
         };
-        let mut tracks_by_id: HashMap<String, crate::types::Track> = current_tracks
-            .into_iter()
-            .map(|track| (track.id.clone(), track))
-            .collect();
+        let found_ids: HashSet<&str> = current_tracks.iter().map(|t| t.id.as_str()).collect();
         let missing_ids: Vec<String> = ids
             .iter()
-            .filter(|id| !tracks_by_id.contains_key(id.as_str()))
+            .filter(|id| !found_ids.contains(id.as_str()))
             .cloned()
             .collect();
         if !missing_ids.is_empty() {
@@ -691,10 +688,7 @@ impl ReklawdboxServer {
                 missing_ids.join(", ")
             )));
         }
-        let ordered_tracks: Vec<crate::types::Track> = ids
-            .iter()
-            .filter_map(|id| tracks_by_id.remove(id))
-            .collect();
+        let ordered_tracks = current_tracks;
         let modified_tracks = self
             .state
             .changes
