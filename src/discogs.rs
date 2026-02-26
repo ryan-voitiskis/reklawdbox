@@ -523,7 +523,10 @@ async fn lookup_inner_legacy(
     }
 
     if !resp.status().is_success() {
-        return Err(format!("Discogs HTTP {}", resp.status()));
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet = if body.len() > 200 { &body[..200] } else { &body };
+        return Err(format!("Discogs HTTP {status}: {snippet}"));
     }
 
     let data: SearchResponse = resp
