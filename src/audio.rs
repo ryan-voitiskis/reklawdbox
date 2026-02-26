@@ -218,7 +218,27 @@ features["analyzer_version"] = essentia.__version__
 json.dump(features, sys.stdout)
 "#;
 
-fn parse_essentia_stdout(stdout: &[u8]) -> Result<serde_json::Value, String> {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EssentiaOutput {
+    pub analyzer_version: String,
+    pub danceability: Option<f64>,
+    pub loudness_integrated: Option<f64>,
+    pub loudness_range: Option<f64>,
+    pub dynamic_complexity: Option<f64>,
+    pub average_loudness: Option<f64>,
+    pub bpm_essentia: Option<f64>,
+    pub onset_rate: Option<f64>,
+    pub rhythm_regularity: Option<f64>,
+    pub spectral_centroid_mean: Option<f64>,
+    pub dissonance_mean: Option<f64>,
+    pub intensity_mean: Option<f64>,
+    pub intensity_var: Option<f64>,
+    pub mfcc_mean: Option<Vec<f64>>,
+    pub spectral_contrast_mean: Option<Vec<f64>>,
+}
+
+fn parse_essentia_stdout(stdout: &[u8]) -> Result<EssentiaOutput, String> {
     let text = std::str::from_utf8(stdout)
         .map_err(|e| format!("Essentia stdout was not valid UTF-8: {e}"))?;
     let trimmed = text.trim();
@@ -231,7 +251,7 @@ fn parse_essentia_stdout(stdout: &[u8]) -> Result<serde_json::Value, String> {
 pub async fn run_essentia(
     python_path: &str,
     audio_path: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<EssentiaOutput, String> {
     let mut command = Command::new(python_path);
     command.args(["-c", ESSENTIA_SCRIPT, audio_path]);
     command.kill_on_drop(true);
@@ -591,8 +611,8 @@ mod tests {
         let parsed =
             parse_essentia_stdout(b"\n  {\"danceability\": 0.82, \"analyzer_version\": \"2.1\"}\n")
                 .expect("valid JSON with whitespace should parse");
-        assert_eq!(parsed["danceability"], 0.82);
-        assert_eq!(parsed["analyzer_version"], "2.1");
+        assert_eq!(parsed.danceability, Some(0.82));
+        assert_eq!(parsed.analyzer_version, "2.1");
     }
 
     #[test]
@@ -793,45 +813,37 @@ def column_stack(cols):
         .await
         .expect("run_essentia should succeed with fake modules");
 
-        assert_eq!(result["analyzer_version"], "2.1-test");
-        assert!((result["danceability"].as_f64().unwrap() - 2.46).abs() < 1e-6);
-        assert!((result["loudness_integrated"].as_f64().unwrap() - (-14.5)).abs() < 1e-6);
-        assert!((result["loudness_range"].as_f64().unwrap() - 4.2).abs() < 1e-6);
-        assert!((result["onset_rate"].as_f64().unwrap() - 5.6).abs() < 1e-6);
+        assert_eq!(result.analyzer_version, "2.1-test");
+        assert!((result.danceability.unwrap() - 2.46).abs() < 1e-6);
+        assert!((result.loudness_integrated.unwrap() - (-14.5)).abs() < 1e-6);
+        assert!((result.loudness_range.unwrap() - 4.2).abs() < 1e-6);
+        assert!((result.onset_rate.unwrap() - 5.6).abs() < 1e-6);
         assert!(
-            result["rhythm_regularity"].as_f64().unwrap() > 0.0,
+            result.rhythm_regularity.unwrap() > 0.0,
             "rhythm_regularity should be computed from beat loudness ratios"
         );
 
         // Frame-based features
-        let mfcc = result["mfcc_mean"]
-            .as_array()
-            .expect("mfcc_mean should be an array");
+        let mfcc = result.mfcc_mean.as_ref().expect("mfcc_mean should be present");
         assert_eq!(mfcc.len(), 13, "mfcc_mean should have 13 coefficients");
 
-        let contrast = result["spectral_contrast_mean"]
-            .as_array()
-            .expect("spectral_contrast_mean should be an array");
+        let contrast = result.spectral_contrast_mean.as_ref().expect("spectral_contrast_mean should be present");
         assert_eq!(
             contrast.len(),
             6,
             "spectral_contrast_mean should have 6 bands"
         );
 
-        let dissonance = result["dissonance_mean"]
-            .as_f64()
-            .expect("dissonance_mean should be a float");
+        let dissonance = result.dissonance_mean.expect("dissonance_mean should be present");
         assert!(
             dissonance > 0.0 && dissonance < 1.0,
             "dissonance should be in (0, 1), got {dissonance}"
         );
 
-        let intensity = result["intensity_mean"]
-            .as_f64()
-            .expect("intensity_mean should be a float");
+        let intensity = result.intensity_mean.expect("intensity_mean should be present");
         assert!(intensity > 0.0, "intensity_mean should be positive");
         assert!(
-            result["intensity_var"].as_f64().is_some(),
+            result.intensity_var.is_some(),
             "intensity_var should be present"
         );
     }

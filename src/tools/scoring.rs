@@ -276,9 +276,9 @@ pub(super) fn build_track_profile(
     let stratum_json = store::get_audio_analysis(store_conn, &cache_key, "stratum-dsp")
         .map_err(|e| format!("stratum cache read error: {e}"))?
         .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
-    let essentia_json = store::get_audio_analysis(store_conn, &cache_key, "essentia")
+    let essentia_data = store::get_audio_analysis(store_conn, &cache_key, "essentia")
         .map_err(|e| format!("essentia cache read error: {e}"))?
-        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
+        .and_then(|cached| serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok());
 
     let bpm = stratum_json
         .as_ref()
@@ -300,19 +300,10 @@ pub(super) fn build_track_profile(
             _ => track.key.clone(),
         });
 
-    let energy = compute_track_energy(essentia_json.as_ref(), bpm);
-    let brightness = essentia_json
-        .as_ref()
-        .and_then(|v| v.get("spectral_centroid_mean"))
-        .and_then(serde_json::Value::as_f64);
-    let rhythm_regularity = essentia_json
-        .as_ref()
-        .and_then(|v| v.get("rhythm_regularity"))
-        .and_then(serde_json::Value::as_f64);
-    let loudness_range = essentia_json
-        .as_ref()
-        .and_then(|v| v.get("loudness_range"))
-        .and_then(serde_json::Value::as_f64);
+    let energy = compute_track_energy(essentia_data.as_ref(), bpm);
+    let brightness = essentia_data.as_ref().and_then(|e| e.spectral_centroid_mean);
+    let rhythm_regularity = essentia_data.as_ref().and_then(|e| e.rhythm_regularity);
+    let loudness_range = essentia_data.as_ref().and_then(|e| e.loudness_range);
     let canonical_genre = canonicalize_genre(&track.genre);
     let genre_family = canonical_genre
         .as_deref()
@@ -709,23 +700,17 @@ pub(super) fn composite_score(
     }
 }
 
-pub(super) fn compute_track_energy(essentia_json: Option<&serde_json::Value>, bpm: f64) -> f64 {
+pub(super) fn compute_track_energy(essentia: Option<&crate::audio::EssentiaOutput>, bpm: f64) -> f64 {
     // Fallback proxy when Essentia descriptors are unavailable.
     // This maps typical club tempos (~95-145 BPM) across the full 0-1 range.
     let bpm_proxy = ((bpm - 95.0) / 50.0).clamp(0.0, 1.0);
-    let Some(essentia_json) = essentia_json else {
+    let Some(essentia) = essentia else {
         return bpm_proxy;
     };
 
-    let danceability = essentia_json
-        .get("danceability")
-        .and_then(serde_json::Value::as_f64);
-    let loudness_integrated = essentia_json
-        .get("loudness_integrated")
-        .and_then(serde_json::Value::as_f64);
-    let onset_rate = essentia_json
-        .get("onset_rate")
-        .and_then(serde_json::Value::as_f64);
+    let danceability = essentia.danceability;
+    let loudness_integrated = essentia.loudness_integrated;
+    let onset_rate = essentia.onset_rate;
 
     match (danceability, loudness_integrated, onset_rate) {
         (Some(dance), Some(loudness), Some(onset)) => {

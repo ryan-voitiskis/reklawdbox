@@ -459,11 +459,10 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             if *needs_essentia && let Some(ref python) = essentia_python {
                 match audio::run_essentia(python, &file_path).await {
                     Ok(essentia_result) => {
-                        let essentia_json = essentia_result.to_string();
-                        let essentia_version = essentia_result
-                            .get("analyzer_version")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
+                        let essentia_version = &essentia_result.analyzer_version;
+                        let essentia_version = if essentia_version.is_empty() { "unknown" } else { essentia_version };
+                        let essentia_json = serde_json::to_string(&essentia_result)
+                            .unwrap_or_default();
                         store::set_audio_analysis(
                             &store_conn,
                             &file_path,
@@ -491,11 +490,10 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                 let elapsed_start = Instant::now();
                 match audio::run_essentia(python, &file_path).await {
                     Ok(essentia_result) => {
-                        let essentia_json = essentia_result.to_string();
-                        let essentia_version = essentia_result
-                            .get("analyzer_version")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
+                        let essentia_version = &essentia_result.analyzer_version;
+                        let essentia_version = if essentia_version.is_empty() { "unknown" } else { essentia_version };
+                        let essentia_json = serde_json::to_string(&essentia_result)
+                            .unwrap_or_default();
                         store::set_audio_analysis(
                             &store_conn,
                             &file_path,

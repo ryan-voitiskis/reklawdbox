@@ -1256,10 +1256,7 @@ impl ReklawdboxServer {
             if essentia.is_none() {
                 match audio::run_essentia(python_path, &file_path).await {
                     Ok(features) => {
-                        let analysis_version = features
-                            .get("analyzer_version")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("unknown");
+                        let analysis_version = if features.analyzer_version.is_empty() { "unknown" } else { &features.analyzer_version };
                         let features_json =
                             serde_json::to_string(&features).map_err(|e| err(format!("{e}")))?;
                         {
@@ -1275,7 +1272,7 @@ impl ReklawdboxServer {
                             )
                             .map_err(|e| err(format!("Cache write error: {e}")))?;
                         }
-                        essentia = Some(features);
+                        essentia = Some(serde_json::to_value(&features).map_err(|e| err(format!("{e}")))?);
                         essentia_cache_hit = Some(false);
                     }
                     Err(e) => {
@@ -1550,10 +1547,7 @@ impl ReklawdboxServer {
 
                 match audio::run_essentia(python_path, &row.file_path).await {
                     Ok(features) => {
-                        let analysis_version = features
-                            .get("analyzer_version")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("unknown");
+                        let analysis_version = if features.analyzer_version.is_empty() { "unknown" } else { &features.analyzer_version };
                         let features_json =
                             serde_json::to_string(&features).map_err(|e| err(format!("{e}")))?;
                         {
@@ -1569,7 +1563,7 @@ impl ReklawdboxServer {
                             )
                             .map_err(|e| err(format!("Cache write error: {e}")))?;
                         }
-                        row.essentia = Some(features);
+                        row.essentia = Some(serde_json::to_value(&features).map_err(|e| err(format!("{e}")))?);
                         row.essentia_cache_hit = Some(false);
                         essentia_analyzed += 1;
                     }
@@ -2758,8 +2752,10 @@ pub(crate) fn resolve_single_track(
 
     let stratum_json = stratum_cache
         .and_then(|sc| serde_json::from_str::<serde_json::Value>(&sc.features_json).ok());
-    let essentia_json = essentia_cache
-        .and_then(|ec| serde_json::from_str::<serde_json::Value>(&ec.features_json).ok());
+    let essentia_data = essentia_cache
+        .and_then(|ec| serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json).ok());
+    let essentia_json = essentia_data.as_ref()
+        .and_then(|e| serde_json::to_value(e).ok());
 
     let (bpm_agreement, key_agreement) = if let Some(ref sj) = stratum_json {
         let stratum_bpm = sj.get("bpm").and_then(|v| v.as_f64());
