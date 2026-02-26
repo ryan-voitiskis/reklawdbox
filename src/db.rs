@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, OpenFlags, params};
 
 use crate::types::{
-    GenreCount, KeyCount, LibraryStats, Playlist, Track, file_type_to_kind, rating_to_stars,
+    FileKind, GenreCount, KeyCount, LibraryStats, Playlist, Track, rating_to_stars,
 };
 
 /// The universal Rekordbox 6/7 SQLCipher key (publicly known, same for all installations).
@@ -100,8 +100,7 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
         play_count,
         bit_rate: row.get("BitRate")?,
         sample_rate: row.get("SampleRate")?,
-        file_type: file_type_raw,
-        file_type_name: file_type_to_kind(file_type_raw).to_string(),
+        file_kind: FileKind::from_raw(file_type_raw),
         date_added: row.get::<_, String>("DateAdded")?.trim().to_string(),
         position: None,
     })
@@ -869,7 +868,7 @@ mod tests {
         assert_eq!(track.comments, "iconic garage vocal");
         assert_eq!(track.label, "Hyperdub");
         assert_eq!(track.year, 2007);
-        assert_eq!(track.file_type_name, "FLAC File");
+        assert_eq!(track.file_kind, FileKind::Flac);
         assert_eq!(track.position, None);
     }
 
@@ -922,8 +921,7 @@ mod tests {
         assert_eq!(tracks[1].title, "R.I.P.");
         assert_eq!(tracks[1].position, Some(2));
 
-        // file_type_name should be populated
-        assert_eq!(tracks[0].file_type_name, "FLAC File");
+        assert_eq!(tracks[0].file_kind, FileKind::Flac);
     }
 
     #[test]

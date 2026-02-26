@@ -75,7 +75,7 @@ pub fn path_to_location(file_path: &str) -> String {
 fn write_track(out: &mut String, track: &Track, track_id: usize) {
     let rating = crate::types::stars_to_rating(track.rating);
     let location = path_to_location(&track.file_path);
-    let kind = crate::types::file_type_to_kind(track.file_type);
+    let kind = track.file_kind.as_kind_str();
 
     write!(
         out,
@@ -243,8 +243,7 @@ mod tests {
             play_count: 12,
             bit_rate: 1411,
             sample_rate: 44100,
-            file_type: 5,
-            file_type_name: "FLAC File".to_string(),
+            file_kind: crate::types::FileKind::Flac,
             date_added: "2023-01-15".to_string(),
             position: None,
         }

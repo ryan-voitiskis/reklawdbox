@@ -3,6 +3,88 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Audio file format as identified by Rekordbox's integer file-type code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileKind {
+    Mp3,
+    M4a,
+    Flac,
+    Wav,
+    Aiff,
+    Unknown(i32),
+}
+
+impl FileKind {
+    /// Convert from Rekordbox integer file type code.
+    pub fn from_raw(raw: i32) -> Self {
+        match raw {
+            1 => Self::Mp3,
+            4 => Self::M4a,
+            5 => Self::Flac,
+            11 => Self::Wav,
+            12 => Self::Aiff,
+            _ => Self::Unknown(raw),
+        }
+    }
+
+    /// Rekordbox integer file type code (for XML export).
+    pub fn to_raw(self) -> i32 {
+        match self {
+            Self::Mp3 => 1,
+            Self::M4a => 4,
+            Self::Flac => 5,
+            Self::Wav => 11,
+            Self::Aiff => 12,
+            Self::Unknown(raw) => raw,
+        }
+    }
+
+    /// Human-readable kind string matching Rekordbox XML `Kind` attribute.
+    pub fn as_kind_str(&self) -> &'static str {
+        match self {
+            Self::Mp3 => "MP3 File",
+            Self::M4a => "M4A File",
+            Self::Flac => "FLAC File",
+            Self::Wav => "WAV File",
+            Self::Aiff => "AIFF File",
+            Self::Unknown(_) => "Audio File",
+        }
+    }
+}
+
+impl Serialize for FileKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_kind_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "MP3 File" => Self::Mp3,
+            "M4A File" => Self::M4a,
+            "FLAC File" => Self::Flac,
+            "WAV File" => Self::Wav,
+            "AIFF File" => Self::Aiff,
+            _ => Self::Unknown(0),
+        })
+    }
+}
+
+impl JsonSchema for FileKind {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("FileKind")
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "enum": ["MP3 File", "M4A File", "FLAC File", "WAV File", "AIFF File", "Audio File"]
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Track {
     pub id: String,
@@ -24,8 +106,8 @@ pub struct Track {
     pub play_count: i32,
     pub bit_rate: i32,
     pub sample_rate: i32,
-    pub file_type: i32,
-    pub file_type_name: String,
+    #[serde(rename = "file_type_name")]
+    pub file_kind: FileKind,
     pub date_added: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
@@ -164,18 +246,6 @@ impl fmt::Display for Provider {
     }
 }
 
-/// Map Rekordbox integer file type to human-readable kind string.
-pub fn file_type_to_kind(file_type: i32) -> &'static str {
-    match file_type {
-        1 => "MP3 File",
-        4 => "M4A File",
-        5 => "FLAC File",
-        11 => "WAV File",
-        12 => "AIFF File",
-        _ => "Audio File",
-    }
-}
-
 /// Convert 0-5 star rating to Rekordbox DB/XML encoding (0/51/102/153/204/255).
 pub fn stars_to_rating(stars: u8) -> u16 {
     match stars {
@@ -247,6 +317,51 @@ mod tests {
         assert_eq!(rating_to_stars(229), 4);
         assert_eq!(rating_to_stars(230), 5);
         assert_eq!(rating_to_stars(255), 5);
+    }
+
+    #[test]
+    fn file_kind_raw_roundtrip() {
+        for kind in [
+            FileKind::Mp3,
+            FileKind::M4a,
+            FileKind::Flac,
+            FileKind::Wav,
+            FileKind::Aiff,
+        ] {
+            assert_eq!(
+                FileKind::from_raw(kind.to_raw()),
+                kind,
+                "roundtrip failed for {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_kind_unknown_preserves_raw() {
+        let kind = FileKind::Unknown(99);
+        assert_eq!(kind.to_raw(), 99);
+        assert_eq!(kind.as_kind_str(), "Audio File");
+    }
+
+    #[test]
+    fn file_kind_serializes_as_kind_str() {
+        let json = serde_json::to_value(FileKind::Flac).unwrap();
+        assert_eq!(json, serde_json::Value::String("FLAC File".to_string()));
+
+        let json = serde_json::to_value(FileKind::Unknown(42)).unwrap();
+        assert_eq!(json, serde_json::Value::String("Audio File".to_string()));
+    }
+
+    #[test]
+    fn file_kind_deserializes_from_kind_str() {
+        let kind: FileKind = serde_json::from_value(serde_json::json!("FLAC File")).unwrap();
+        assert_eq!(kind, FileKind::Flac);
+
+        let kind: FileKind = serde_json::from_value(serde_json::json!("MP3 File")).unwrap();
+        assert_eq!(kind, FileKind::Mp3);
+
+        let kind: FileKind = serde_json::from_value(serde_json::json!("Ogg File")).unwrap();
+        assert_eq!(kind, FileKind::Unknown(0));
     }
 
     #[test]

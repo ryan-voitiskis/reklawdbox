@@ -2426,8 +2426,7 @@
             play_count: 5,
             bit_rate: 1411,
             sample_rate: 44100,
-            file_type: 5,
-            file_type_name: "FLAC File".to_string(),
+            file_kind: crate::types::FileKind::Flac,
             date_added: "2023-01-15".to_string(),
             position: None,
         }

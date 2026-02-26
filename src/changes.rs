@@ -303,6 +303,7 @@ fn apply_changes_with_map(tracks: &[Track], map: &HashMap<String, TrackChange>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::FileKind;
 
     fn make_track(id: &str, genre: &str, rating: u8) -> Track {
         Track {
@@ -325,8 +326,7 @@ mod tests {
             play_count: 0,
             bit_rate: 1411,
             sample_rate: 44100,
-            file_type: 5,
-            file_type_name: "FLAC File".to_string(),
+            file_kind: FileKind::Flac,
             date_added: "2023-01-01".to_string(),
             position: None,
         }
