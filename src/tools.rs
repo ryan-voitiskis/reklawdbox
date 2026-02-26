@@ -1826,29 +1826,24 @@ impl ReklawdboxServer {
         params: Parameters<EnrichTracksParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let default_max = p.track_ids.as_ref().map_or(50, |ids| ids.len() as u32);
-        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
         let skip_cached = p.skip_cached.unwrap_or(true);
         let force_refresh = p.force_refresh.unwrap_or(false);
         let providers = p
             .providers
             .unwrap_or_else(|| vec![crate::types::Provider::Discogs]);
 
-        // Resolve tracks using priority: track_ids > playlist_id > search filters
         let tracks = {
             let conn = self.conn()?;
-            if let Some(ref ids) = p.track_ids {
-                db::get_tracks_by_ids(&conn, ids).map_err(|e| err(format!("DB error: {e}")))?
-            } else if let Some(ref playlist_id) = p.playlist_id {
-                db::get_playlist_tracks(&conn, playlist_id, Some(max_tracks as u32))
-                    .map_err(|e| err(format!("DB error: {e}")))?
-            } else {
-                let search = p.filters.into_search_params(true, Some(max_tracks as u32), None);
-                db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
-            }
+            resolve_tracks(
+                &conn,
+                p.track_ids.as_deref(),
+                p.playlist_id.as_deref(),
+                p.filters,
+                p.max_tracks,
+                &ResolveTracksOpts { default_max: Some(50), cap: Some(200), exclude_samplers: false },
+            )?
         };
 
-        let tracks: Vec<_> = tracks.into_iter().take(max_tracks).collect();
         let total_tracks = tracks.len();
         let total = total_tracks.saturating_mul(providers.len());
 
@@ -2175,24 +2170,20 @@ impl ReklawdboxServer {
         params: Parameters<AnalyzeAudioBatchParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let default_max = p.track_ids.as_ref().map_or(20, |ids| ids.len() as u32);
-        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
         let skip_cached = p.skip_cached.unwrap_or(true);
 
         let tracks = {
             let conn = self.conn()?;
-            if let Some(ref ids) = p.track_ids {
-                db::get_tracks_by_ids(&conn, ids).map_err(|e| err(format!("DB error: {e}")))?
-            } else if let Some(ref playlist_id) = p.playlist_id {
-                db::get_playlist_tracks(&conn, playlist_id, Some(max_tracks as u32))
-                    .map_err(|e| err(format!("DB error: {e}")))?
-            } else {
-                let search = p.filters.into_search_params(true, Some(max_tracks as u32), None);
-                db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
-            }
+            resolve_tracks(
+                &conn,
+                p.track_ids.as_deref(),
+                p.playlist_id.as_deref(),
+                p.filters,
+                p.max_tracks,
+                &ResolveTracksOpts { default_max: Some(20), cap: Some(200), exclude_samplers: false },
+            )?
         };
 
-        let tracks: Vec<_> = tracks.into_iter().take(max_tracks).collect();
         let total = tracks.len();
 
         struct BatchTrackAnalysis {
@@ -2980,23 +2971,18 @@ impl ReklawdboxServer {
         params: Parameters<ResolveTracksDataParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let default_max = p.track_ids.as_ref().map_or(50, |ids| ids.len() as u32);
-        let max_tracks = p.max_tracks.unwrap_or(default_max).min(200) as usize;
 
         let tracks = {
             let conn = self.conn()?;
-            if let Some(ref ids) = p.track_ids {
-                db::get_tracks_by_ids(&conn, ids).map_err(|e| err(format!("DB error: {e}")))?
-            } else if let Some(ref playlist_id) = p.playlist_id {
-                db::get_playlist_tracks(&conn, playlist_id, Some(max_tracks as u32))
-                    .map_err(|e| err(format!("DB error: {e}")))?
-            } else {
-                let search = p.filters.into_search_params(true, Some(max_tracks as u32), None);
-                db::search_tracks(&conn, &search).map_err(|e| err(format!("DB error: {e}")))?
-            }
+            resolve_tracks(
+                &conn,
+                p.track_ids.as_deref(),
+                p.playlist_id.as_deref(),
+                p.filters,
+                p.max_tracks,
+                &ResolveTracksOpts { default_max: Some(50), cap: Some(200), exclude_samplers: false },
+            )?
         };
-
-        let tracks: Vec<_> = tracks.into_iter().take(max_tracks).collect();
 
         let essentia_installed = self.essentia_python_path().is_some();
         let mut results = Vec::with_capacity(tracks.len());
@@ -3060,31 +3046,14 @@ impl ReklawdboxServer {
                 .map_err(|e| err(format!("DB error: {e}")))?
                 .max(0) as usize;
 
-            let tracks = if let Some(ref ids) = p.track_ids {
-                let mut selected = db::get_tracks_by_ids(&conn, ids)
-                    .map_err(|e| err(format!("DB error: {e}")))?
-                    .into_iter()
-                    .filter(|track| !track.file_path.starts_with(db::SAMPLER_PATH_PREFIX))
-                    .collect::<Vec<_>>();
-                if let Some(max_tracks) = p.max_tracks {
-                    selected.truncate(max_tracks as usize);
-                }
-                selected
-            } else if let Some(ref playlist_id) = p.playlist_id {
-                let mut selected = db::get_playlist_tracks_unbounded(&conn, playlist_id, None)
-                    .map_err(|e| err(format!("DB error: {e}")))?
-                    .into_iter()
-                    .filter(|track| !track.file_path.starts_with(db::SAMPLER_PATH_PREFIX))
-                    .collect::<Vec<_>>();
-                if let Some(max_tracks) = p.max_tracks {
-                    selected.truncate(max_tracks as usize);
-                }
-                selected
-            } else {
-                let search = p.filters.into_search_params(true, p.max_tracks, None);
-                db::search_tracks_unbounded(&conn, &search)
-                    .map_err(|e| err(format!("DB error: {e}")))?
-            };
+            let tracks = resolve_tracks(
+                &conn,
+                p.track_ids.as_deref(),
+                p.playlist_id.as_deref(),
+                p.filters,
+                p.max_tracks,
+                &ResolveTracksOpts { default_max: None, cap: None, exclude_samplers: true },
+            )?;
 
             (total_tracks, tracks)
         };
@@ -3689,6 +3658,86 @@ fn scan_audio_directory(
 
     files.sort();
     Ok(files)
+}
+
+struct ResolveTracksOpts {
+    /// Default max_tracks when track_ids are absent and max_tracks param is None.
+    /// When track_ids IS present and this is Some, defaults to ids.len().
+    /// None = no auto-default (used by cache_coverage).
+    default_max: Option<u32>,
+    /// Hard cap on effective max. Some(200) for bounded tools, None for unbounded.
+    cap: Option<u32>,
+    /// Post-filter to exclude sampler tracks (used by cache_coverage).
+    exclude_samplers: bool,
+}
+
+/// Resolve tracks using priority: track_ids > playlist_id > search filters.
+///
+/// Shared by `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
+fn resolve_tracks(
+    conn: &Connection,
+    track_ids: Option<&[String]>,
+    playlist_id: Option<&str>,
+    filters: SearchFilterParams,
+    max_tracks_param: Option<u32>,
+    opts: &ResolveTracksOpts,
+) -> Result<Vec<crate::types::Track>, McpError> {
+    let effective_max: Option<usize> = match opts.default_max {
+        Some(default_when_no_ids) => {
+            let default = track_ids.map_or(default_when_no_ids, |ids| ids.len() as u32);
+            let mut max = max_tracks_param.unwrap_or(default);
+            if let Some(cap) = opts.cap {
+                max = max.min(cap);
+            }
+            Some(max as usize)
+        }
+        None => max_tracks_param.map(|m| {
+            if let Some(cap) = opts.cap {
+                m.min(cap) as usize
+            } else {
+                m as usize
+            }
+        }),
+    };
+
+    let bounded = opts.cap.is_some();
+
+    let tracks = if let Some(ids) = track_ids {
+        db::get_tracks_by_ids(conn, ids).map_err(|e| err(format!("DB error: {e}")))?
+    } else if let Some(pid) = playlist_id {
+        let db_limit = if bounded { effective_max.map(|m| m as u32) } else { None };
+        if bounded {
+            db::get_playlist_tracks(conn, pid, db_limit)
+                .map_err(|e| err(format!("DB error: {e}")))?
+        } else {
+            db::get_playlist_tracks_unbounded(conn, pid, db_limit)
+                .map_err(|e| err(format!("DB error: {e}")))?
+        }
+    } else {
+        let limit = effective_max.map(|m| m as u32);
+        let search = filters.into_search_params(true, limit, None);
+        if bounded {
+            db::search_tracks(conn, &search).map_err(|e| err(format!("DB error: {e}")))?
+        } else {
+            db::search_tracks_unbounded(conn, &search)
+                .map_err(|e| err(format!("DB error: {e}")))?
+        }
+    };
+
+    let mut tracks: Vec<_> = if opts.exclude_samplers {
+        tracks
+            .into_iter()
+            .filter(|t| !t.file_path.starts_with(db::SAMPLER_PATH_PREFIX))
+            .collect()
+    } else {
+        tracks
+    };
+
+    if let Some(max) = effective_max {
+        tracks.truncate(max);
+    }
+
+    Ok(tracks)
 }
 
 fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String {
