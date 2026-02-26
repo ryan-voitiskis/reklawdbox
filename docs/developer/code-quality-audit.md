@@ -145,7 +145,7 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M1 | ~~Duplicate `escape_like`~~ ✅ Resolved — `store.rs` now imports `crate::db::escape_like` | |
 | M2 | ~~Duplicate `urlencoding`~~ ✅ Resolved — `beatport.rs` now imports `crate::discogs::urlencoding` | |
 | M3 | ~~Essentia storage code duplicated in two `cli.rs` branches~~ ✅ Resolved — `run_and_cache_essentia()` helper | |
-| M4 | Status aggregation duplicated between `scan()` and `get_summary()` | `audit.rs:1009`, `audit.rs:1134` |
+| M4 | ~~Status aggregation duplicated between `scan()` and `get_summary()`~~ ✅ Resolved — `aggregate_status_counts()` helper | |
 | M5 | ~~Disc-subdir detection duplicated~~ ✅ Resolved — `is_disc_subdir()` helper | |
 
 #### Module Boundaries & Coupling
@@ -169,10 +169,10 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | M15 | Beatport title matching: permissive bidirectional substring, false-positive prone | `beatport.rs:220` |
 | M16 | Discogs short artist names (<3 chars) auto-match first result | `discogs.rs:580,547` |
 | M17 | Audio decode tolerates frame errors with only stderr logging | `audio.rs:342,357` |
-| M18 | Corrupt cache JSON becomes `null` while response still says "cache hit" | `tools.rs:1734,1740` |
+| M18 | ~~Corrupt cache JSON becomes `null` while response still says "cache hit"~~ ✅ Resolved — parse errors surfaced in output JSON | |
 | M19 | `DJPlayCount` dual-type parse failures collapse to 0 | `db.rs:63-70` |
 | M20 | ~~`TECH_SPEC_PATTERNS` lists `[FLAC]`/`[flac]` but misses mixed-case~~ ✅ Resolved — case-insensitive matching | |
-| M21 | `date` field in `check_tags` not in `tags::ALL_FIELDS` — no-op for non-WAV | `audit.rs:448` |
+| M21 | ~~`date` field in `check_tags` not in `tags::ALL_FIELDS` — no-op for non-WAV~~ ✅ Resolved — removed no-op `date` check | |
 | M22 | Corpus manifest path is cwd-relative, creating non-local behavior | `corpus.rs:9,180` |
 
 #### Type Safety
@@ -180,8 +180,8 @@ Notable issues. Manageable with awareness but easy to get wrong.
 | ID | Issue | Files |
 |----|-------|-------|
 | M23 | `Track` struct is flat primitives with no newtypes (`rating: u8`, `file_type: i32`) | `types.rs:4-30` |
-| M24 | Priority weights returned as anonymous 6-tuple | `tools.rs:4564-4571` |
-| M25 | Energy computation uses undocumented magic numbers | `tools.rs:4605-4633` |
+| M24 | ~~Priority weights returned as anonymous 6-tuple~~ ✅ Resolved — `PriorityWeights` named struct | |
+| M25 | ~~Energy computation uses undocumented magic numbers~~ ✅ Resolved — named constants extracted | |
 | M26 | `write_track` two-phase attribute writing (main write + conditional appends + close) | `xml.rs:75-131` |
 | M27 | Migration mixes unconditional `CREATE TABLE IF NOT EXISTS` with version-gated blocks | `store.rs:55-113` |
 | M28 | Migration logic assumes `user_version` implies audit tables exist | `store.rs:85,755` |
@@ -242,9 +242,9 @@ but produced via `EditableField::as_str()`).
 
 ### 2. Copy-paste with subtle variation
 
-Largely resolved. Remaining: status aggregation (M4).
+Fully resolved.
 
-**Affected findings**: ~~C2~~, ~~H1~~, ~~H2~~, ~~H4~~, ~~H3~~, ~~M1~~, ~~M2~~, ~~M3~~, M4, ~~M5~~
+**Affected findings**: ~~C2~~, ~~H1~~, ~~H2~~, ~~H4~~, ~~H3~~, ~~M1~~, ~~M2~~, ~~M3~~, ~~M4~~, ~~M5~~
 
 ### 3. Cross-module implicit contracts
 
@@ -266,7 +266,7 @@ Multiple sites return `Ok(None)` or `Ok(0)` where an error occurred. This is
 particularly dangerous for agents because there's no signal that something
 went wrong — the agent assumes success and moves on.
 
-**Affected findings**: ~~H11~~, ~~M12~~, M15-M19, L3-L6
+**Affected findings**: ~~H11~~, ~~M12~~, M15-M17, ~~M18~~, M19, L3-L6
 
 ---
 
