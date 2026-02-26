@@ -185,6 +185,11 @@ pub enum AuditContext {
     LooseTrack,
 }
 
+/// Check if a directory name represents a disc subdirectory (CD1, Disc 1, etc.).
+fn is_disc_subdir(name: &str) -> bool {
+    name.starts_with("CD") || name.starts_with("Disc") || name.starts_with("disc")
+}
+
 /// Regex-like patterns for tech specs in directory names.
 const TECH_SPEC_PATTERNS: &[&str] = &[
     "[FLAC]", "[WAV]", "[MP3]", "[AIFF]", "[AAC]",
@@ -237,10 +242,7 @@ pub fn classify_track_context(path: &Path) -> AuditContext {
     };
 
     // Check for disc subdirectories (CD1, CD2, Disc 1, etc.)
-    let effective_dir_name = if dir_name.starts_with("CD")
-        || dir_name.starts_with("Disc")
-        || dir_name.starts_with("disc")
-    {
+    let effective_dir_name = if is_disc_subdir(dir_name) {
         // Go up one more level for the album dir
         match parent.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
             Some(n) => n,
@@ -269,10 +271,7 @@ fn effective_album_dir_name(path: &Path) -> Option<(&Path, &str)> {
     let parent = path.parent()?;
     let dir_name = parent.file_name().and_then(|n| n.to_str())?;
 
-    if dir_name.starts_with("CD")
-        || dir_name.starts_with("Disc")
-        || dir_name.starts_with("disc")
-    {
+    if is_disc_subdir(dir_name) {
         let album_dir = parent.parent()?;
         let album_name = album_dir.file_name().and_then(|n| n.to_str())?;
         Some((album_dir, album_name))
