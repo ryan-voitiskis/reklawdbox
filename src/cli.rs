@@ -288,6 +288,32 @@ fn mark_track_outcome(analyzed: &mut u32, failed: &mut u32, success: bool) {
     }
 }
 
+async fn run_and_cache_essentia(
+    store_conn: &rusqlite::Connection,
+    python: &str,
+    file_path: &str,
+    file_size: i64,
+    file_mtime: i64,
+) -> Result<(), String> {
+    let result = audio::run_essentia(python, file_path).await?;
+    let version = if result.analyzer_version.is_empty() {
+        "unknown"
+    } else {
+        &result.analyzer_version
+    };
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    store::set_audio_analysis(
+        store_conn,
+        file_path,
+        audio::ANALYZER_ESSENTIA,
+        file_size,
+        file_mtime,
+        version,
+        &json,
+    )
+    .map_err(|e| format!("Cache write error: {e}"))
+}
+
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli {
@@ -457,23 +483,8 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
 
             let mut track_success = true;
             if *needs_essentia && let Some(ref python) = essentia_python {
-                match audio::run_essentia(python, &file_path).await {
-                    Ok(essentia_result) => {
-                        let essentia_version = &essentia_result.analyzer_version;
-                        let essentia_version = if essentia_version.is_empty() { "unknown" } else { essentia_version };
-                        let essentia_json = serde_json::to_string(&essentia_result)
-                            .unwrap_or_default();
-                        store::set_audio_analysis(
-                            &store_conn,
-                            &file_path,
-                            audio::ANALYZER_ESSENTIA,
-                            file_size,
-                            file_mtime,
-                            essentia_version,
-                            &essentia_json,
-                        )?;
-                        eprint!(" +essentia");
-                    }
+                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
+                    Ok(()) => eprint!(" +essentia"),
                     Err(e) => {
                         eprint!(" (essentia failed: {e})");
                         track_success = false;
@@ -488,21 +499,8 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             // Only needs essentia (stratum already cached)
             if let Some(ref python) = essentia_python {
                 let elapsed_start = Instant::now();
-                match audio::run_essentia(python, &file_path).await {
-                    Ok(essentia_result) => {
-                        let essentia_version = &essentia_result.analyzer_version;
-                        let essentia_version = if essentia_version.is_empty() { "unknown" } else { essentia_version };
-                        let essentia_json = serde_json::to_string(&essentia_result)
-                            .unwrap_or_default();
-                        store::set_audio_analysis(
-                            &store_conn,
-                            &file_path,
-                            audio::ANALYZER_ESSENTIA,
-                            file_size,
-                            file_mtime,
-                            essentia_version,
-                            &essentia_json,
-                        )?;
+                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
+                    Ok(()) => {
                         let elapsed = elapsed_start.elapsed().as_secs_f64();
                         eprintln!("[{idx}/{pending}] {label} ... +essentia ({elapsed:.1}s)");
                         mark_track_outcome(&mut analyzed, &mut failed, true);
