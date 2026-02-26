@@ -295,7 +295,9 @@ impl ReklawdboxServer {
             return result;
         }
 
-        beatport::lookup(&self.state.http, artist, title).await
+        beatport::lookup(&self.state.http, artist, title)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -1118,7 +1120,7 @@ impl ReklawdboxServer {
                                     "artist": track.artist,
                                     "title": track.title,
                                     "provider": provider.as_str(),
-                                    "error": e,
+                                    "error": e.to_string(),
                                 }));
                             }
                         }

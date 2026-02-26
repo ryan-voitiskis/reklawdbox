@@ -6,9 +6,26 @@ use crate::discogs::urlencoding;
 const BEATPORT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
     (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+#[derive(Debug, thiserror::Error)]
+pub enum BeatportError {
+    /// Non-success HTTP response.
+    #[error("Beatport {kind} HTTP {status}{}", .retry_after.as_ref().filter(|r| !r.is_empty()).map(|r| format!(" (Retry-After: {r})")).unwrap_or_default())]
+    Http {
+        status: reqwest::StatusCode,
+        retry_after: Option<String>,
+        kind: String,
+    },
+    /// Network / request failures.
+    #[error("{0}")]
+    Request(#[from] reqwest::Error),
+    /// HTML/JSON extraction failures.
+    #[error("{0}")]
+    Parse(String),
+}
+
 enum HttpStatusHandling {
     NoMatch,
-    Error(String),
+    Error(BeatportError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +41,7 @@ pub async fn lookup(
     client: &Client,
     artist: &str,
     title: &str,
-) -> Result<Option<BeatportResult>, String> {
+) -> Result<Option<BeatportResult>, BeatportError> {
     // Rate limit
     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
@@ -45,8 +62,7 @@ pub async fn lookup(
         .header("Cache-Control", "no-cache")
         .header("Pragma", "no-cache")
         .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+        .await?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -57,14 +73,11 @@ pub async fn lookup(
             .map(str::to_string);
         return match classify_http_status(status, retry_after.as_deref()) {
             HttpStatusHandling::NoMatch => Ok(None),
-            HttpStatusHandling::Error(msg) => Err(msg),
+            HttpStatusHandling::Error(e) => Err(e),
         };
     }
 
-    let html = resp
-        .text()
-        .await
-        .map_err(|e| format!("read body failed: {e}"))?;
+    let html = resp.text().await?;
 
     parse_beatport_html(&html, artist, title)
 }
@@ -92,12 +105,15 @@ fn classify_http_status(
     HttpStatusHandling::Error(http_status_error(status, retry_after, "unexpected"))
 }
 
-fn http_status_error(status: reqwest::StatusCode, retry_after: Option<&str>, kind: &str) -> String {
-    match retry_after {
-        Some(delay) if !delay.is_empty() => {
-            format!("Beatport {kind} HTTP {status} (Retry-After: {delay})")
-        }
-        _ => format!("Beatport {kind} HTTP {status}"),
+fn http_status_error(
+    status: reqwest::StatusCode,
+    retry_after: Option<&str>,
+    kind: &str,
+) -> BeatportError {
+    BeatportError::Http {
+        status,
+        retry_after: retry_after.filter(|r| !r.is_empty()).map(str::to_string),
+        kind: kind.to_string(),
     }
 }
 
@@ -106,24 +122,40 @@ fn parse_beatport_html(
     html: &str,
     artist: &str,
     title: &str,
-) -> Result<Option<BeatportResult>, String> {
+) -> Result<Option<BeatportResult>, BeatportError> {
     let json_str = match extract_next_data_json(html) {
         Some(v) => v,
-        None => return Err("Beatport HTML missing __NEXT_DATA__ script tag".to_string()),
+        None => {
+            return Err(BeatportError::Parse(
+                "Beatport HTML missing __NEXT_DATA__ script tag".to_string(),
+            ))
+        }
     };
     let next_data: serde_json::Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
-        Err(e) => return Err(format!("Beatport __NEXT_DATA__ JSON malformed: {e}")),
+        Err(e) => {
+            return Err(BeatportError::Parse(format!(
+                "Beatport __NEXT_DATA__ JSON malformed: {e}"
+            )))
+        }
     };
 
     // Search every dehydrated query entry for track arrays.
     let queries = match next_data.pointer("/props/pageProps/dehydratedState/queries") {
         Some(v) => v,
-        None => return Err("Beatport JSON missing dehydratedState/queries path".to_string()),
+        None => {
+            return Err(BeatportError::Parse(
+                "Beatport JSON missing dehydratedState/queries path".to_string(),
+            ))
+        }
     };
     let queries = match queries.as_array() {
         Some(arr) => arr,
-        None => return Err("Beatport queries field is not an array".to_string()),
+        None => {
+            return Err(BeatportError::Parse(
+                "Beatport queries field is not an array".to_string(),
+            ))
+        }
     };
 
     for query in queries {
@@ -260,7 +292,10 @@ mod tests {
     fn test_parse_no_next_data() {
         let html = "<html><body>No data here</body></html>";
         let err = parse_beatport_html(html, "Burial", "Archangel").expect_err("should fail on missing __NEXT_DATA__");
-        assert!(err.contains("__NEXT_DATA__"), "error should mention __NEXT_DATA__, got: {err}");
+        assert!(
+            matches!(&err, BeatportError::Parse(msg) if msg.contains("__NEXT_DATA__")),
+            "error should be Parse mentioning __NEXT_DATA__, got: {err}"
+        );
     }
 
     #[test]
@@ -291,7 +326,10 @@ mod tests {
     fn test_parse_returns_err_for_invalid_json() {
         let html = r#"<html><head><script id="__NEXT_DATA__" type="application/json">{invalid json}</script></head><body></body></html>"#;
         let err = parse_beatport_html(html, "Burial", "Archangel").expect_err("should fail on malformed JSON");
-        assert!(err.contains("malformed"), "error should mention malformed, got: {err}");
+        assert!(
+            matches!(&err, BeatportError::Parse(msg) if msg.contains("malformed")),
+            "error should be Parse mentioning malformed, got: {err}"
+        );
     }
 
     #[test]
@@ -449,9 +487,10 @@ mod tests {
     #[test]
     fn test_classify_http_status_429_includes_retry_after_and_retryable_context() {
         let result = classify_http_status(reqwest::StatusCode::TOO_MANY_REQUESTS, Some("30"));
-        let HttpStatusHandling::Error(msg) = result else {
+        let HttpStatusHandling::Error(err) = result else {
             panic!("429 should be treated as retryable error");
         };
+        let msg = err.to_string();
         assert!(msg.contains("429 Too Many Requests"));
         assert!(msg.contains("transient/retryable"));
         assert!(msg.contains("Retry-After: 30"));
@@ -460,9 +499,10 @@ mod tests {
     #[test]
     fn test_classify_http_status_5xx_is_retryable_error() {
         let result = classify_http_status(reqwest::StatusCode::BAD_GATEWAY, None);
-        let HttpStatusHandling::Error(msg) = result else {
+        let HttpStatusHandling::Error(err) = result else {
             panic!("5xx should be treated as retryable error");
         };
+        let msg = err.to_string();
         assert!(msg.contains("502 Bad Gateway"));
         assert!(msg.contains("transient/retryable"));
     }
@@ -470,9 +510,10 @@ mod tests {
     #[test]
     fn test_classify_http_status_other_4xx_is_client_error() {
         let result = classify_http_status(reqwest::StatusCode::FORBIDDEN, None);
-        let HttpStatusHandling::Error(msg) = result else {
+        let HttpStatusHandling::Error(err) = result else {
             panic!("4xx (other than 404) should be treated as client error");
         };
+        let msg = err.to_string();
         assert!(msg.contains("403 Forbidden"));
         assert!(msg.contains("client"));
     }
