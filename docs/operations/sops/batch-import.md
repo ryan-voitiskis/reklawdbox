@@ -6,19 +6,7 @@ Process newly acquired music (downloaded albums, loose tracks, zips) into an org
 
 ## Rekordbox Import Readiness
 
-<!-- dprint-ignore -->
-| Field | FLAC | WAV | MP3 |
-|-------|------|-----|-----|
-| Artist | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
-| Title | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
-| Album | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
-| Year | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
-| Track | Vorbis Comment | RIFF INFO (tag 3) | ID3v2 (tag 2) |
-| Cover art | Embedded (auto) | **Not imported** | Embedded (auto) |
-
-**WAV critical:** Rekordbox reads **only** RIFF INFO (tag 3) from WAV files. ID3v2 (tag 2) is ignored. Both must be written — tag 2 for general compatibility, tag 3 for Rekordbox.
-
-**WAV cover art:** Rekordbox cannot import cover art from WAV files. Embed in tag 2 for other apps, but note WAV tracks need manual cover art in Rekordbox after import.
+See [conventions.md § Rekordbox import readiness](../conventions.md#rekordbox-import-readiness) for the full format-specific tag mapping table, WAV dual-tag rule, and WAV cover art limitation.
 
 ## Constraints
 
@@ -34,82 +22,17 @@ Process newly acquired music (downloaded albums, loose tracks, zips) into an org
 <!-- dprint-ignore -->
 | Tool | Purpose | Install |
 |------|---------|---------|
-| `kid3-cli` | Tag writing, file renaming, cover art embedding | `brew install kid3` |
-| `exiftool` | Tag reading as JSON | `brew install exiftool` |
-| `reklawdbox` MCP | Discogs/Beatport metadata lookups | This project |
+| `reklawdbox` MCP | Tag reading/writing (`read_file_tags`, `write_file_tags`), Discogs/Beatport lookups | This project |
+| `kid3-cli` | File renaming from tags, cover art embedding | `brew install kid3` |
 | `unzip` | Extract zip archives | Pre-installed on macOS |
 
-`lookup_discogs` and `lookup_beatport` are MCP tool calls, not shell commands.
+`lookup_discogs`, `lookup_beatport`, `read_file_tags`, and `write_file_tags` are MCP tool calls, not shell commands.
 
 **Shell note:** Claude Code does not persist shell state between tool calls. All shell snippets below use literal paths — substitute the actual path for each invocation.
 
 ## Convention Reference
 
-### Target structure
-
-**Single artist albums:**
-
-```
-destination/
-└── Artist Name/
-    └── Album Name (Year)/
-        ├── 01 Artist Name - Track Title.flac
-        └── cover.jpg
-```
-
-**Various Artists compilations:**
-
-```
-destination/
-└── Various Artists/
-    └── Label Name/
-        └── Album Name (Year)/
-            ├── 01 Artist A - Track Title.flac
-            └── cover.jpg
-```
-
-**Loose tracks (play directories only):**
-
-```
-destination/
-├── Artist Name - Track Title.wav
-└── cover_Artist Name - Track Title.jpg
-```
-
-### File naming
-
-- **Album tracks:** `NN Artist Name - Track Title.ext` (zero-padded, `-` separator)
-- **Loose tracks:** `Artist Name - Track Title.ext` (no track number)
-
-### Required tags
-
-<!-- dprint-ignore -->
-| Tag | Album tracks | Loose tracks |
-|-----|-------------|-------------|
-| Artist | Required | Required |
-| Title | Required | Required |
-| Track | Required | Not needed |
-| Album | Required | Optional |
-| Date/Year | Required | Optional |
-| Publisher | Recommended (required for VA) | Optional |
-| AlbumArtist | Required for VA | Not needed |
-
-### Album directory naming
-
-- Format: `Album Name (Year)/`
-- No artist name in album directory
-- Remove: `[FLAC]`, `[WAV]`, `24-96`, usernames, catalog numbers
-- Preserve: `(Deluxe Edition)`, `Vol. 1`, `(Remastered)`
-- Replace `/` with `-`, `:` with `-`
-
-### Album type classification
-
-<!-- dprint-ignore -->
-| Pattern | Type | Directory structure |
-|---------|------|-------------------|
-| All tracks same artist | Single Artist | `Artist/Album (Year)/` |
-| Different artists per track | VA Compilation | `Various Artists/Label/Album (Year)/` |
-| Multiple named artists (A & B) | Collaboration | `Various Artists/Label/Album (Year)/` |
+See [conventions.md](../conventions.md) for directory structure, file naming, required tags, album directory naming, and album type classification.
 
 ---
 
@@ -173,10 +96,12 @@ For each album subdirectory, follow these steps in order.
 
 ```sh
 ls -la "/path/to/batch/Album Directory/"
+```
 
-cd "/path/to/batch/Album Directory"
-exiftool -j -ext flac -ext wav -ext mp3 \
-         -Artist -Title -Album -Year -TrackNumber -Publisher .
+Read tags for all files in the directory:
+
+```
+read_file_tags(paths=["/path/to/batch/Album Directory/"])
 ```
 
 Note: current filename pattern, which tags are present, whether cover art exists.
@@ -219,33 +144,19 @@ Never use lookup results for genre.
 
 ### Step 5: Write tags
 
-**Album-wide tags** (FLAC/MP3):
+Use `write_file_tags` for all tag writes. It handles WAV dual-tagging automatically.
 
-```sh
-cd "/path/to/album"
-kid3-cli -c "select all" -c "tag 2" \
-         -c "set album 'Album Name'" \
-         -c "set date YEAR" \
-         -c "set publisher 'Label Name'" \
-         -c "set album artist 'Artist Name'" \
-         -c "save" .
+**Album-wide + per-track tags:**
+
 ```
-
-**Album-wide tags** (WAV — both tag 2 and tag 3):
-
-```sh
-kid3-cli -c "select all" \
-         -c "tag 2" \
-         -c "set album 'Album Name'" \
-         -c "set date YEAR" \
-         -c "set publisher 'Label Name'" \
-         -c "set album artist 'Artist Name'" \
-         -c "tag 3" \
-         -c "set album 'Album Name'" \
-         -c "set date YEAR" \
-         -c "set publisher 'Label Name'" \
-         -c "set album artist 'Artist Name'" \
-         -c "save" .
+write_file_tags(writes=[
+  {path: "/path/to/album/01 original.flac", tags: {
+    artist: "Track Artist", title: "Track Title", track: 1,
+    album: "Album Name", year: "YEAR", publisher: "Label Name",
+    album_artist: "Artist Name"
+  }},
+  ...
+])
 ```
 
 **Per-track tags** — parse from filenames. Common incoming patterns:
@@ -258,23 +169,10 @@ kid3-cli -c "select all" \
 | `NN Title.wav` | Track N: [AlbumArtist] - Title |
 | `NN. Title.wav` | Track N: [AlbumArtist] - Title |
 
-For each track (FLAC/MP3):
-
-```sh
-kid3-cli -c "select 'original-filename.flac'" -c "tag 2" \
-         -c "set artist 'Track Artist'" \
-         -c "set title 'Track Title'" \
-         -c "set track number N" \
-         -c "save" .
-```
-
-For WAV, write the same fields to both tag 2 and tag 3.
-
 ### Step 6: Verify tags
 
-```sh
-exiftool -j -ext flac -ext wav -ext mp3 \
-         -Artist -Title -Album -Year -TrackNumber .
+```
+read_file_tags(paths=["/path/to/album/"])
 ```
 
 Confirm every file has: Artist, Title, Track, Album, Year.
@@ -344,7 +242,10 @@ rmdir "/path/to/batch/Old Dir"
 
 ```sh
 ls -la "/path/to/dest/Artist Name/Album Name (Year)/"
-kid3-cli -c "get" "/path/to/dest/Artist Name/Album Name (Year)/01 Artist - Track.ext"
+```
+
+```
+read_file_tags(paths=["/path/to/dest/Artist Name/Album Name (Year)/01 Artist - Track.ext"])
 ```
 
 Confirm: files in correct location, `NN Artist - Title.ext` format, all tags present, VA has label subdirectory, cover art embedded.
@@ -373,23 +274,20 @@ Expected format: `Artist Name - Track Title.ext`. If unparseable, ask user.
 
 For each loose track, read existing tags:
 
-```sh
-kid3-cli -c "get" "/path/to/batch/Artist - Title.wav"
+```
+read_file_tags(paths=["/path/to/batch/Artist - Title.wav"])
 ```
 
 If tags are missing, look up with `lookup_discogs(...)` / `lookup_beatport(...)`.
 
-Write minimum tags (FLAC/MP3):
+Write minimum tags (WAV dual-tagging handled automatically):
 
-```sh
-kid3-cli -c "select 'Artist - Title.flac'" -c "tag 2" \
-         -c "set artist 'Artist Name'" \
-         -c "set title 'Track Title'" \
-         -c "set publisher 'Label Name'" \
-         -c "save" "/path/to/batch"
 ```
-
-For WAV, write same fields to both tag 2 and tag 3.
+write_file_tags(writes=[{
+  path: "/path/to/batch/Artist - Title.wav",
+  tags: {artist: "Artist Name", title: "Track Title", publisher: "Label Name"}
+}])
+```
 
 ### Step 3: Embed cover art (if available)
 
@@ -403,12 +301,7 @@ If an album has disc subdirectories (`CD1/`, `CD2/`, `Disc 1/`, etc.):
 
 - Track numbers restart at 01 per disc
 - Cover art at album root (not in disc folders)
-- Set Disc Number tag on each track:
-  ```sh
-  cd "/path/to/album/CD1"
-  kid3-cli -c "select all" -c "tag 2" -c "set disc number 1" -c "save" .
-  # For WAV, also: -c "tag 3" -c "set disc number 1"
-  ```
+- Set Disc Number tag on each track via `write_file_tags` (WAV dual-tagging handled automatically)
 - Album-wide tags (album, year, publisher) go on all tracks across all discs
 
 ---

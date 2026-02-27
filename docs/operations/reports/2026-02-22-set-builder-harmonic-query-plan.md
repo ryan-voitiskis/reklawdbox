@@ -44,20 +44,19 @@ Planned adaptation for DJ transition ranking:
 
 1. Rekordbox metadata query path (SQLCipher `master.db`):
    - `src/db.rs`
-   - Current query entrypoints are metadata-first (`search_tracks`, `get_playlist_tracks`, `get_tracks_by_ids`).
+   - Current query entrypoints: `search_tracks`, `get_playlist_tracks` (MCP tools); `get_tracks_by_ids` (internal `src/db.rs` function, not an MCP tool).
 2. Cached signals store (`internal.sqlite3`):
    - `src/store.rs`
    - Tables: `audio_analysis_cache`, `enrichment_cache`, `broker_discogs_session`.
 3. Set builder and scorer:
-   - `build_set` and `score_transition` in `src/tools.rs`
-   - Track profile assembly reads cache per track (`build_track_profile`).
-4. Current limitation:
-   - Candidate selection is metadata-first, then scoring over provided IDs.
-   - There is no first-class transition-query API that directly returns next-track candidates using transposition-aware harmonic logic.
+   - `build_set` and `score_transition` registered in `src/tools/mod.rs`, scoring logic in `src/tools/scoring.rs`
+   - Track profile assembly reads cache per track (`build_track_profile` in `src/tools/scoring.rs`).
+4. Transition query:
+   - `query_transition_candidates` implemented in `src/tools/mod.rs` + `src/tools/sequencing_handlers.rs`.
 
-## Required Design Change: Transition Query Primitive
+## Design Change: Transition Query Primitive (Implemented)
 
-Introduce a transition-focused query surface (tool/API), conceptually:
+The transition-focused query tool is now implemented:
 
 `query_transition_candidates(from_track_id, context) -> ranked candidates`
 

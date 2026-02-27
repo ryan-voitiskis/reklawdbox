@@ -128,19 +128,24 @@ pyrekordbox hardcodes an obfuscated blob and decodes it via:
 
 The resulting key starts with `402fd...` (this is used as a validity check).
 
-### Accessing from TypeScript/Node.js
+### Accessing from Rust (reklawdbox)
 
-Options for reading the encrypted DB:
+reklawdbox uses `rusqlite` with the `bundled-sqlcipher` feature for read-only access:
 
-1. **`@journeyapps/sqlcipher`** — SQLCipher-compatible SQLite binding for Node.js
-2. **`better-sqlite3`** compiled with SQLCipher support
-3. **Decrypt-then-read** — Use SQLCipher to create an unencrypted copy:
-   ```sql
-   PRAGMA key = '<hex_key>';
-   ATTACH DATABASE 'decrypted.db' AS plaintext KEY '';
-   SELECT sqlcipher_export('plaintext');
-   DETACH DATABASE plaintext;
-   ```
+```rust
+// Open with SQLCipher pragmas
+let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+conn.pragma_update(None, "key", &key)?;
+```
+
+For other languages, SQLCipher bindings exist for Node.js (`@journeyapps/sqlcipher`), Python (`sqlcipher3`), etc. You can also decrypt to a plain SQLite copy:
+
+```sql
+PRAGMA key = '<hex_key>';
+ATTACH DATABASE 'decrypted.db' AS plaintext KEY '';
+SELECT sqlcipher_export('plaintext');
+DETACH DATABASE plaintext;
+```
 
 ### Unencrypted Databases
 
@@ -597,10 +602,9 @@ each byte from offset 18 with `(XOR_MASK[i % 19] + len_entries) & 0xFF`.
 ### Genre Strategy for reklawdbox
 
 The `Genre` field is free text — Rekordbox has no predefined genre list.
-This means we can set any genre string we want. Recommendations:
+reklawdbox uses a flat canonical taxonomy (e.g., "Deep House", "Techno", "Minimal") defined in `src/genre.rs`. Genre classification follows the [genre classification SOP](../operations/sops/genre-classification.md).
 
-- Use consistent, hierarchical genre names (e.g., "House / Deep House")
-- The `Comments` field is excellent for additional tags that don't fit genre
+- `Comments` field is excellent for additional tags that don't fit genre
 - `Grouping` can serve as a secondary classification
 - `Color` can encode broad genre families visually (e.g., Green=House, Blue=Techno)
 - `Rating` can encode energy or quality
@@ -633,13 +637,12 @@ GitHub: https://github.com/dylanljones/pyrekordbox
 
 ### Relevance to reklawdbox
 
-We will **not** build on pyrekordbox directly (it's Python), but we learn from it:
+reklawdbox does not depend on pyrekordbox (different language), but pyrekordbox served as the primary reference for:
 
-1. The decryption key and process (replicate in Node.js if we go the DB route)
+1. The decryption key and PRAGMA sequence (replicated in Rust via `rusqlite` + `bundled-sqlcipher`)
 2. The complete database schema (34 tables, all column types)
 3. The ANLZ binary format (if we ever need to parse waveforms/phrases)
-4. The XML Track class API design (good model for our TypeScript types)
-5. The gotchas (USN management, foreign key constraints, Rekordbox must be closed)
+4. The gotchas (USN management, foreign key constraints, Rekordbox must be closed)
 
 ---
 
@@ -669,9 +672,9 @@ We will **not** build on pyrekordbox directly (it's Python), but we learn from i
 |------|----------|-------------|-----|
 | **rekordbox-mcp** | Python | MCP server for RB database (read-only, uses pyrekordbox) | [GitHub](https://github.com/davehenke/rekordbox-mcp) |
 
-> **Note**: rekordbox-mcp by Dave Henke is directly relevant — it exposes track search, playlist ops,
-> and library stats via MCP using FastMCP 2.0 + pyrekordbox. Read-only for safety. Our MCP server
-> could follow a similar pattern but in TypeScript, and add write capabilities via XML.
+> **Note**: rekordbox-mcp by Dave Henke is a Python-based alternative using FastMCP 2.0 + pyrekordbox.
+> reklawdbox takes a similar approach (read-only DB access, MCP tools) but is implemented in Rust
+> and adds write capabilities via XML export.
 
 ### Commercial Tools
 
@@ -727,15 +730,14 @@ for the future but not actionable for us yet.
 
 ### File Paths
 
-13. **Windows → macOS migration** — your library has legacy `E:/audio/` and `C:/Users/moey/` paths in `networkAnalyze6.db`. The main DB should have updated paths
-14. **Artwork paths** — stored as hashed UUIDs, not human-readable
-15. **ANLZ paths** — similarly hashed, referenced by `AnalysisDataPath` in DjmdContent
+18. **Artwork paths** — stored as hashed UUIDs, not human-readable
+19. **ANLZ paths** — similarly hashed, referenced by `AnalysisDataPath` in DjmdContent
 
 ### General
 
-16. **No official API** — everything we do is reverse-engineered or uses the XML interchange format
-17. **Updates can break things** — Pioneer changed the key storage in v6.6.5 and could change the DB schema
-18. **Backup before everything** — this cannot be overstated
+20. **No official API** — everything we do is reverse-engineered or uses the XML interchange format
+21. **Updates can break things** — Pioneer changed the key storage in v6.6.5 and could change the DB schema
+22. **Backup before everything** — this cannot be overstated
 
 ---
 

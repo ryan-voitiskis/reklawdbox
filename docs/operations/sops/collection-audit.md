@@ -108,26 +108,24 @@ Present the triage summary to the user:
 
 ---
 
-## Step 3: Auto-Fix Safe Issues
+## Step 3: Fix Safe Issues
 
-### 3a: Preview
+### 3a: Apply tag fixes
 
-```
-audit_state(auto_fix, issue_ids=[...], dry_run=true)
-```
-
-Present the preview to the user. The response shows exactly what will change:
-- Tag copies (WAV tag 3)
-- Title rewrites (artist-in-title stripping)
-- Renames (with import-status check results)
-- Any skipped imported files or refused review-tier issues
-
-### 3b: Execute
-
-After user approval:
+For safe-tier issues (`WAV_TAG3_MISSING`, `WAV_TAG_DRIFT`, `ARTIST_IN_TITLE`), apply fixes directly via `write_file_tags`:
 
 ```
-audit_state(auto_fix, issue_ids=[...], dry_run=false)
+write_file_tags(writes=[{path: "/path/to/file.wav", tags: {artist: "Fixed Artist", title: "Fixed Title"}}])
+```
+
+Present the planned writes to the user for approval before executing.
+
+### 3b: Resolve fixed issues
+
+After applying fixes, mark the issues as resolved:
+
+```
+audit_state(resolve_issues, issue_ids=[...], resolution="fixed")
 ```
 
 ### 3c: Verify
@@ -138,7 +136,7 @@ Re-scan the scope to confirm fixes:
 audit_state(scan, scope="/path/to/scope/")
 ```
 
-The scan detects changed files (new mtime from tag writes, new paths from renames) and re-checks them. Previously open issues that are now fixed auto-resolve with resolution "fixed".
+The scan detects changed files (new mtime from tag writes, new paths from renames) and re-checks them.
 
 ---
 
@@ -221,10 +219,10 @@ Review the summary. If `total_open` > 0, return to Step 2 for remaining issues o
 ## Step 6: Final Report
 
 ```
-audit_state(export_report, scope="/path/to/scope/")
+audit_state(get_summary, scope="/path/to/scope/")
 ```
 
-Present a summary to the user: scope, files scanned, pass rate, fixes applied by type, remaining deferred/accepted items, and recommended next steps (Rekordbox import for new files, genre classification SOP for ungenred tracks).
+Present the summary to the user: scope, files scanned, pass rate, fixes applied by type, remaining deferred/accepted items, and recommended next steps (Rekordbox import for new files, genre classification SOP for ungenred tracks).
 
 ---
 

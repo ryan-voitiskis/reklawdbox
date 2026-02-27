@@ -384,10 +384,10 @@ Use these discriminators:
 - `dynamic_complexity`: higher favors more dynamic genres.
 - BPM plausibility versus each genre's typical range.
   Common tie-breaks:
-- Deep House vs Tech House: Deep House tends darker/sparser; Tech House tends brighter/busier.
-- Techno vs Trance: Trance usually sits higher BPM and often higher danceability.
-- House vs Garage: Garage tends lower rhythm regularity and higher dynamic complexity.
-- Techno vs Electro: Electro often has lower regularity and sparser onset patterns.
+  - Deep House vs Tech House: Deep House tends darker/sparser; Tech House tends brighter/busier.
+  - Techno vs Trance: Trance usually sits higher BPM and often higher danceability.
+  - House vs Garage: Garage tends lower rhythm regularity and higher dynamic complexity.
+  - Techno vs Electro: Electro often has lower regularity and sparser onset patterns.
   If audio clearly favors one option, set `suggested_genre` to that option with **low** confidence and note "audio-assisted tie-break."
   If audio remains ambiguous, keep **insufficient** and present both options.
 
@@ -467,7 +467,7 @@ Present key mismatches in a separate section of the conflict report (Step 4), no
 
 ## Tool Contract: `cache_coverage`
 
-Implementation reference: `src/tools.rs` (`cache_coverage` tool + coverage tests).
+Implementation reference: `src/tools/mod.rs` (tool registration), `src/tools/resolve_handlers.rs` (handler).
 
 ### Purpose
 

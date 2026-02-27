@@ -13,6 +13,8 @@ modifications. This document covers usage, restore procedures, and what's protec
 
 ## Quick Reference
 
+Run all commands from the project root (`reklawdbox/`).
+
 ```bash
 # Full backup (~1GB compressed) — databases + analysis + artwork
 ./scripts/backup.sh
