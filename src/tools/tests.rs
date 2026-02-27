@@ -80,7 +80,7 @@
         result
     }
 
-    const GOLDEN_GENRES_FIXTURE_PATH: &str = "tests/fixtures/golden_genres.json";
+    const GOLDEN_GENRES_FIXTURE_PATH: &str = "src/tools/fixtures/golden_genres.json";
 
     #[derive(Debug, Deserialize)]
     struct GoldenGenreFixtureEntry {
