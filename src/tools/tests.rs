@@ -3492,6 +3492,94 @@
         assert!(bpm_pct > 1.0 && bpm_pct < 2.0, "122→123.5 is ~1.23%; got {bpm_pct}");
     }
 
+    #[tokio::test]
+    async fn score_transition_balanced_default_penalizes_clash() {
+        // 8A → 2A is a Clash (key score 0.1, below Balanced threshold 0.45)
+        // With harmonic_style: None, the handler defaults to Balanced and applies 0.5x penalty
+        let db_conn = create_single_track_test_db("clash-from", "/tmp/clash-from.flac");
+        db_conn
+            .execute(
+                "INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Bbm')",
+                [],
+            )
+            .expect("second key should insert");
+        db_conn
+            .execute(
+                "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, 'Clash Track', 'a1', 'al1', 'g1', 'k2', 'c1', 'l1', '',
+                    12200, 153, 'clash test', 2025, 260, ?2, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+                params!["clash-to", "/tmp/clash-to.flac"],
+            )
+            .expect("second track should insert");
+
+        let store_dir = tempfile::tempdir().expect("temp store dir should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let store_conn = store::open(
+            store_path.to_str().expect("temp store path should be UTF-8"),
+        )
+        .expect("temp internal store should open");
+
+        // Both tracks at 122 BPM to isolate key scoring; from=8A, to=2A (clash)
+        store::set_audio_analysis(
+            &store_conn, "/tmp/clash-from.flac", "stratum-dsp", 1, 1, "stratum-dsp-1.0.0",
+            r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
+        ).expect("from stratum should seed");
+        store::set_audio_analysis(
+            &store_conn, "/tmp/clash-to.flac", "stratum-dsp", 1, 1, "stratum-dsp-1.0.0",
+            r#"{"bpm":122.0,"key":"Bbm","key_camelot":"2A"}"#,
+        ).expect("to stratum should seed");
+
+        let server =
+            create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+        // With harmonic_style: None → Balanced default → penalty on Clash
+        let penalized = server
+            .score_transition(Parameters(ScoreTransitionParams {
+                from_track_id: "clash-from".to_string(),
+                to_track_id: "clash-to".to_string(),
+                energy_phase: Some(EnergyPhase::Build),
+                priority: Some(SetPriority::Balanced),
+                master_tempo: None,
+                harmonic_style: None,
+            }))
+            .await
+            .expect("score_transition should succeed");
+        let penalized_payload = extract_json(&penalized);
+
+        // Explicitly pass Adventurous → no penalty on Clash at Build phase (threshold 0.1)
+        let unpenalized = server
+            .score_transition(Parameters(ScoreTransitionParams {
+                from_track_id: "clash-from".to_string(),
+                to_track_id: "clash-to".to_string(),
+                energy_phase: Some(EnergyPhase::Build),
+                priority: Some(SetPriority::Balanced),
+                master_tempo: None,
+                harmonic_style: Some(HarmonicStyle::Adventurous),
+            }))
+            .await
+            .expect("score_transition should succeed");
+        let unpenalized_payload = extract_json(&unpenalized);
+
+        // Key score should be 0.1 (Clash) in both cases
+        assert_eq!(penalized_payload["scores"]["key"]["value"], 0.1);
+        assert_eq!(unpenalized_payload["scores"]["key"]["value"], 0.1);
+
+        // Balanced default should halve the composite vs Adventurous
+        let penalized_composite = penalized_payload["scores"]["composite"].as_f64().unwrap();
+        let unpenalized_composite = unpenalized_payload["scores"]["composite"].as_f64().unwrap();
+        let expected = unpenalized_composite * 0.5;
+        assert!(
+            (penalized_composite - expected).abs() < 0.01,
+            "Balanced default should halve composite for Clash; got {penalized_composite} vs expected {expected}"
+        );
+    }
+
     // ==================== serde/schema contract tests for #[serde(flatten)] ====================
 
     /// Verify that flat JSON (as sent by MCP) deserializes correctly into all
