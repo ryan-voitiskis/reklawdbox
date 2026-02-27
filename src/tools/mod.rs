@@ -1732,12 +1732,14 @@ impl ReklawdboxServer {
             (from, to)
         };
 
+        let master_tempo = p.master_tempo.unwrap_or(true);
         let scores = score_transition_profiles(
             &from_profile,
             &to_profile,
             p.energy_phase,
             p.energy_phase,
             priority,
+            master_tempo,
         );
 
         let result = serde_json::json!({
@@ -1859,6 +1861,7 @@ impl ReklawdboxServer {
             p.start_track_id.as_deref(),
         );
 
+        let master_tempo = p.master_tempo.unwrap_or(true);
         let mut candidates = Vec::with_capacity(effective_candidates);
         for candidate_index in 0..effective_candidates {
             let start_track_id = start_tracks[candidate_index % start_tracks.len()].clone();
@@ -1869,6 +1872,7 @@ impl ReklawdboxServer {
                 &phases,
                 priority,
                 candidate_index,
+                master_tempo,
             );
 
             let tracks_json: Vec<serde_json::Value> = plan

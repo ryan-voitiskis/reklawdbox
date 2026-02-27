@@ -44,11 +44,13 @@ pub(super) struct TransitionScores {
     pub(super) brightness: AxisScore,
     pub(super) rhythm: AxisScore,
     pub(super) composite: f64,
+    pub(super) effective_to_key: Option<String>,
+    pub(super) pitch_shift_semitones: i32,
 }
 
 impl TransitionScores {
     pub(super) fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "key": { "value": round_score(self.key.value), "label": self.key.label },
             "bpm": { "value": round_score(self.bpm.value), "label": self.bpm.label },
             "energy": { "value": round_score(self.energy.value), "label": self.energy.label },
@@ -56,7 +58,14 @@ impl TransitionScores {
             "brightness": { "value": round_score(self.brightness.value), "label": self.brightness.label },
             "rhythm": { "value": round_score(self.rhythm.value), "label": self.rhythm.label },
             "composite": round_score(self.composite),
-        })
+        });
+        if let Some(ref ek) = self.effective_to_key {
+            json["effective_to_key"] = serde_json::json!(ek);
+        }
+        if self.pitch_shift_semitones != 0 {
+            json["pitch_shift_semitones"] = serde_json::json!(self.pitch_shift_semitones);
+        }
+        json
     }
 }
 
@@ -182,6 +191,7 @@ pub(super) fn build_candidate_plan(
     phases: &[EnergyPhase],
     priority: SetPriority,
     variation_index: usize,
+    master_tempo: bool,
 ) -> CandidatePlan {
     let mut ordered_ids = vec![start_track_id.to_string()];
     let mut transitions = Vec::new();
@@ -213,6 +223,7 @@ pub(super) fn build_candidate_plan(
                             from_phase,
                             to_phase,
                             priority,
+                            master_tempo,
                         ),
                     )
                 })
@@ -330,8 +341,29 @@ pub(super) fn score_transition_profiles(
     from_phase: Option<EnergyPhase>,
     to_phase: Option<EnergyPhase>,
     priority: SetPriority,
+    master_tempo: bool,
 ) -> TransitionScores {
-    let key = score_key_axis(from.camelot_key, to.camelot_key);
+    // When master_tempo is off, pitch-shifting changes the effective key.
+    // Calculate the semitone shift implied by the BPM difference.
+    let (effective_to_key, pitch_shift_semitones) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
+        let shift = (12.0 * (from.bpm / to.bpm).log2()).round() as i32;
+        if shift != 0 {
+            let transposed = to.camelot_key.map(|k| transpose_camelot_key(k, shift));
+            (transposed.map(format_camelot), shift)
+        } else {
+            (None, 0)
+        }
+    } else {
+        (None, 0)
+    };
+
+    let scoring_to_key = if let Some(ref ek) = effective_to_key {
+        parse_camelot_key(ek)
+    } else {
+        to.camelot_key
+    };
+
+    let key = score_key_axis(from.camelot_key, scoring_to_key);
     let bpm = score_bpm_axis(from.bpm, to.bpm);
     let energy = score_energy_axis(
         from.energy,
@@ -376,6 +408,8 @@ pub(super) fn score_transition_profiles(
         brightness,
         rhythm,
         composite,
+        effective_to_key,
+        pitch_shift_semitones,
     }
 }
 
@@ -877,6 +911,19 @@ fn normalize_key_root(root: &str) -> Option<String> {
 
 pub(super) fn format_camelot(key: CamelotKey) -> String {
     format!("{}{}", key.number, key.letter)
+}
+
+/// Transpose a Camelot key by the given number of semitones.
+/// +1 semitone = +7 Camelot positions mod 12 (circle of fifths).
+/// Letter (A/B) is unchanged.
+pub(super) fn transpose_camelot_key(key: CamelotKey, semitones: i32) -> CamelotKey {
+    // Each semitone = +7 positions on the Camelot wheel (mod 12)
+    let steps = ((semitones % 12) * 7).rem_euclid(12);
+    let new_number = ((key.number as i32 - 1 + steps) % 12 + 1) as u8;
+    CamelotKey {
+        number: new_number,
+        letter: key.letter,
+    }
 }
 
 /// Map a genre/style string through the taxonomy.

@@ -447,6 +447,7 @@
                 )),
                 start_track_id: None,
                 candidates: Some(3),
+                master_tempo: None,
             }))
             .await
             .expect("build_set should succeed for fixture pool");
@@ -553,6 +554,7 @@
                 ])),
                 start_track_id: None,
                 candidates: Some(2),
+                master_tempo: None,
             }))
             .await
             .expect("build_set should succeed for single-track pool");
@@ -628,6 +630,7 @@
                 energy_curve: Some(EnergyCurveInput::Preset(EnergyCurvePreset::Flat)),
                 start_track_id: None,
                 candidates: Some(2),
+                master_tempo: None,
             }))
             .await
             .expect("build_set should succeed when all tracks share the same key");
@@ -675,6 +678,7 @@
                 )),
                 start_track_id: None,
                 candidates: Some(1),
+                master_tempo: None,
             }))
             .await
             .expect("build_set should succeed when pool is smaller than target");
@@ -2925,6 +2929,100 @@
     }
 
     #[test]
+    fn transpose_camelot_key_circle_of_fifths() {
+        // +1 semitone = +7 positions on Camelot wheel
+        // 8A + 1 semi → (8-1+7)%12+1 = 14%12+1 = 3 → 3A
+        let k8a = parse_camelot_key("8A").unwrap();
+        let up1 = transpose_camelot_key(k8a, 1);
+        assert_eq!(format_camelot(up1), "3A");
+
+        // Full octave (+12 semitones) = identity
+        let full = transpose_camelot_key(k8a, 12);
+        assert_eq!(format_camelot(full), "8A");
+
+        // -1 semitone from 8A → (8-1 + (-1*7)%12=5) → (7+5)%12=0 → 12 → but let's compute:
+        // steps = ((-1 % 12) * 7).rem_euclid(12) = (-7).rem_euclid(12) = 5
+        // (8-1+5)%12+1 = 12%12+1 = 1 → 1A
+        let down1 = transpose_camelot_key(k8a, -1);
+        assert_eq!(format_camelot(down1), "1A");
+
+        // Round-trip: +1 then -1
+        let round_trip = transpose_camelot_key(up1, -1);
+        assert_eq!(format_camelot(round_trip), "8A");
+
+        // Letter is preserved
+        let k5b = parse_camelot_key("5B").unwrap();
+        let up2 = transpose_camelot_key(k5b, 2);
+        assert!(
+            format_camelot(up2).ends_with('B'),
+            "letter should be preserved through transposition"
+        );
+    }
+
+    #[test]
+    fn master_tempo_off_changes_key_scoring() {
+        let from = TrackProfile {
+            track: crate::types::Track {
+                id: "mt-from".to_string(),
+                title: "MT From".to_string(),
+                artist: "Test".to_string(),
+                album: String::new(),
+                genre: "House".to_string(),
+                key: "Am".to_string(),
+                bpm: 128.0,
+                rating: 0,
+                comments: String::new(),
+                color: String::new(),
+                color_code: 0,
+                label: String::new(),
+                remixer: String::new(),
+                year: 0,
+                length: 300,
+                file_path: "/tmp/mt-from.flac".to_string(),
+                play_count: 0,
+                bit_rate: 1411,
+                sample_rate: 44100,
+                file_kind: crate::types::FileKind::Flac,
+                date_added: String::new(),
+                position: None,
+            },
+            camelot_key: parse_camelot_key("8A"),
+            key_display: "8A".to_string(),
+            bpm: 128.0,
+            energy: 0.6,
+            brightness: None,
+            rhythm_regularity: None,
+            loudness_range: None,
+            canonical_genre: Some("House".to_string()),
+            genre_family: GenreFamily::House,
+        };
+
+        // to track at 135 BPM → when played at 128, pitch drops.
+        // shift = round(12 * log2(128/135)) = round(12 * -0.0758) = round(-0.91) = -1
+        // So effective key of to-track shifts -1 semitone from its natural key
+        let mut to = from.clone();
+        to.track.id = "mt-to".to_string();
+        to.bpm = 135.0;
+        to.camelot_key = parse_camelot_key("8A"); // same key naturally
+
+        // With master_tempo ON: same key → perfect (1.0)
+        let scores_mt_on = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, true);
+        assert_eq!(scores_mt_on.key.value, 1.0, "master_tempo on: same key should be perfect");
+        assert_eq!(scores_mt_on.pitch_shift_semitones, 0);
+        assert!(scores_mt_on.effective_to_key.is_none());
+
+        // With master_tempo OFF: pitch shift changes effective key
+        let scores_mt_off = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, false);
+        assert_ne!(scores_mt_off.pitch_shift_semitones, 0, "BPM diff should cause pitch shift");
+        assert!(scores_mt_off.effective_to_key.is_some(), "effective key should be set");
+        // The key score should differ from the master_tempo ON case
+        assert_ne!(
+            scores_mt_off.key.value, scores_mt_on.key.value,
+            "master_tempo off should change key scoring when BPM differs"
+        );
+    }
+
+    #[test]
     fn composite_scoring_changes_by_priority_axis() {
         let approx = |left: f64, right: f64| (left - right).abs() < 1e-9;
 
@@ -3108,6 +3206,7 @@
                 to_track_id: "to-track".to_string(),
                 energy_phase: Some(EnergyPhase::Build),
                 priority: Some(SetPriority::Balanced),
+                master_tempo: None,
             }))
             .await
             .expect("score_transition should succeed");

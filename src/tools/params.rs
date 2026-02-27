@@ -289,6 +289,10 @@ pub struct BuildSetParams {
     pub start_track_id: Option<String>,
     #[schemars(description = "Number of set candidates to generate (default 2, max 3)")]
     pub candidates: Option<u8>,
+    #[schemars(
+        description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
+    )]
+    pub master_tempo: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -301,6 +305,10 @@ pub struct ScoreTransitionParams {
     pub energy_phase: Option<EnergyPhase>,
     #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
     pub priority: Option<SetPriority>,
+    #[schemars(
+        description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
+    )]
+    pub master_tempo: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
