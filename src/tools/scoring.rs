@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use super::params::{EnergyPhase, EnergyCurveInput, EnergyCurvePreset, SetPriority};
+use super::params::{EnergyPhase, EnergyCurveInput, EnergyCurvePreset, HarmonicStyle, SetPriority};
 use super::resolve_file_path;
 use crate::genre;
 use crate::store;
@@ -184,6 +184,7 @@ pub(super) fn select_start_track_ids(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_candidate_plan(
     profiles_by_id: &HashMap<String, TrackProfile>,
     start_track_id: &str,
@@ -192,6 +193,7 @@ pub(super) fn build_candidate_plan(
     priority: SetPriority,
     variation_index: usize,
     master_tempo: bool,
+    harmonic_style: Option<HarmonicStyle>,
 ) -> CandidatePlan {
     let mut ordered_ids = vec![start_track_id.to_string()];
     let mut transitions = Vec::new();
@@ -224,6 +226,7 @@ pub(super) fn build_candidate_plan(
                             to_phase,
                             priority,
                             master_tempo,
+                            harmonic_style,
                         ),
                     )
                 })
@@ -342,6 +345,7 @@ pub(super) fn score_transition_profiles(
     to_phase: Option<EnergyPhase>,
     priority: SetPriority,
     master_tempo: bool,
+    harmonic_style: Option<HarmonicStyle>,
 ) -> TransitionScores {
     // When master_tempo is off, pitch-shifting changes the effective key.
     // Calculate the semitone shift implied by the BPM difference.
@@ -382,7 +386,7 @@ pub(super) fn score_transition_profiles(
     let rhythm = score_rhythm_axis(from.rhythm_regularity, to.rhythm_regularity);
     let brightness_available = from.brightness.is_some() && to.brightness.is_some();
     let rhythm_available = from.rhythm_regularity.is_some() && to.rhythm_regularity.is_some();
-    let composite = composite_score(
+    let mut composite = composite_score(
         key.value,
         bpm.value,
         energy.value,
@@ -399,6 +403,15 @@ pub(super) fn score_transition_profiles(
         },
         priority,
     );
+
+    // Harmonic style modulation gate: penalize transitions where key score
+    // falls below the minimum threshold for the current phase × style.
+    if let Some(style) = harmonic_style {
+        let min_key = harmonic_style_min_key(style, to_phase);
+        if key.value < min_key {
+            composite *= 0.5;
+        }
+    }
 
     TransitionScores {
         key,
@@ -697,6 +710,17 @@ fn score_rhythm_axis(from_regularity: Option<f64>, to_regularity: Option<f64>) -
             value: 0.2,
             label: format!("Groove clash (delta {:.2})", delta),
         }
+    }
+}
+
+fn harmonic_style_min_key(style: HarmonicStyle, phase: Option<EnergyPhase>) -> f64 {
+    match style {
+        HarmonicStyle::Conservative => 0.8,
+        HarmonicStyle::Balanced => 0.45,
+        HarmonicStyle::Adventurous => match phase {
+            Some(EnergyPhase::Warmup) | Some(EnergyPhase::Release) => 0.45,
+            Some(EnergyPhase::Build) | Some(EnergyPhase::Peak) | None => 0.1,
+        },
     }
 }
 

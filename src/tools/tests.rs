@@ -448,6 +448,7 @@
                 start_track_id: None,
                 candidates: Some(3),
                 master_tempo: None,
+                harmonic_style: None,
             }))
             .await
             .expect("build_set should succeed for fixture pool");
@@ -555,6 +556,7 @@
                 start_track_id: None,
                 candidates: Some(2),
                 master_tempo: None,
+                harmonic_style: None,
             }))
             .await
             .expect("build_set should succeed for single-track pool");
@@ -631,6 +633,7 @@
                 start_track_id: None,
                 candidates: Some(2),
                 master_tempo: None,
+                harmonic_style: None,
             }))
             .await
             .expect("build_set should succeed when all tracks share the same key");
@@ -679,6 +682,7 @@
                 start_track_id: None,
                 candidates: Some(1),
                 master_tempo: None,
+                harmonic_style: None,
             }))
             .await
             .expect("build_set should succeed when pool is smaller than target");
@@ -3006,19 +3010,115 @@
         to.camelot_key = parse_camelot_key("8A"); // same key naturally
 
         // With master_tempo ON: same key → perfect (1.0)
-        let scores_mt_on = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, true);
+        let scores_mt_on = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, true, None);
         assert_eq!(scores_mt_on.key.value, 1.0, "master_tempo on: same key should be perfect");
         assert_eq!(scores_mt_on.pitch_shift_semitones, 0);
         assert!(scores_mt_on.effective_to_key.is_none());
 
         // With master_tempo OFF: pitch shift changes effective key
-        let scores_mt_off = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, false);
+        let scores_mt_off = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, false, None);
         assert_ne!(scores_mt_off.pitch_shift_semitones, 0, "BPM diff should cause pitch shift");
         assert!(scores_mt_off.effective_to_key.is_some(), "effective key should be set");
         // The key score should differ from the master_tempo ON case
         assert_ne!(
             scores_mt_off.key.value, scores_mt_on.key.value,
             "master_tempo off should change key scoring when BPM differs"
+        );
+    }
+
+    fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) -> TrackProfile {
+        TrackProfile {
+            track: crate::types::Track {
+                id: id.to_string(),
+                title: id.to_string(),
+                artist: "Test".to_string(),
+                album: String::new(),
+                genre: genre.to_string(),
+                key: key.to_string(),
+                bpm,
+                rating: 0,
+                comments: String::new(),
+                color: String::new(),
+                color_code: 0,
+                label: String::new(),
+                remixer: String::new(),
+                year: 0,
+                length: 300,
+                file_path: format!("/tmp/{id}.flac"),
+                play_count: 0,
+                bit_rate: 1411,
+                sample_rate: 44100,
+                file_kind: crate::types::FileKind::Flac,
+                date_added: String::new(),
+                position: None,
+            },
+            camelot_key: parse_camelot_key(key),
+            key_display: key.to_string(),
+            bpm,
+            energy,
+            brightness: None,
+            rhythm_regularity: None,
+            loudness_range: None,
+            canonical_genre: Some(genre.to_string()),
+            genre_family: genre_family_for(genre),
+        }
+    }
+
+    #[test]
+    fn harmonic_style_modulation_gate() {
+        // Two tracks where key score = 0.55 (energy diagonal: 8A → 9B)
+        let from = make_test_profile("hs-from", "8A", 128.0, 0.7, "House");
+        let to = make_test_profile("hs-to", "9B", 128.0, 0.7, "House");
+
+        // Conservative + peak phase + key=0.55 (< 0.8 threshold) → penalty
+        let conservative = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Conservative),
+        );
+
+        // Same without harmonic_style → no penalty (baseline)
+        let baseline = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, None,
+        );
+
+        assert!(
+            conservative.composite < baseline.composite,
+            "conservative should penalize key=0.55 at peak phase"
+        );
+        // Penalty is 0.5x
+        let expected = baseline.composite * 0.5;
+        assert!(
+            (conservative.composite - expected).abs() < 1e-9,
+            "conservative penalty should be 0.5x; got {} vs expected {}",
+            conservative.composite, expected
+        );
+
+        // Adventurous + peak phase + key=0.55 → no penalty (threshold is 0.1)
+        let adventurous = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Adventurous),
+        );
+        assert_eq!(
+            adventurous.composite, baseline.composite,
+            "adventurous should not penalize key=0.55 at peak phase"
+        );
+
+        // Balanced + build phase + key=0.45 (Extended: 8A→10A) → threshold is 0.45, exactly at threshold
+        let from2 = make_test_profile("hs-from2", "8A", 128.0, 0.5, "House");
+        let to2 = make_test_profile("hs-to2", "10A", 128.0, 0.6, "House");
+        let balanced_build = score_transition_profiles(
+            &from2, &to2, Some(EnergyPhase::Build), Some(EnergyPhase::Build),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Balanced),
+        );
+        let baseline_build = score_transition_profiles(
+            &from2, &to2, Some(EnergyPhase::Build), Some(EnergyPhase::Build),
+            SetPriority::Balanced, true, None,
+        );
+        // key=0.45, threshold=0.45 → NOT below threshold → no penalty
+        assert_eq!(
+            balanced_build.composite, baseline_build.composite,
+            "balanced should not penalize key=0.45 at build phase (exactly at threshold)"
         );
     }
 
@@ -3207,6 +3307,7 @@
                 energy_phase: Some(EnergyPhase::Build),
                 priority: Some(SetPriority::Balanced),
                 master_tempo: None,
+                harmonic_style: None,
             }))
             .await
             .expect("score_transition should succeed");

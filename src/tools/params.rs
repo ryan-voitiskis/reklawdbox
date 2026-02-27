@@ -249,6 +249,14 @@ pub enum SetPriority {
     Genre,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarmonicStyle {
+    Conservative,
+    Balanced,
+    Adventurous,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EnergyPhase {
@@ -293,6 +301,10 @@ pub struct BuildSetParams {
         description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
     )]
     pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Harmonic mixing style: conservative (strict key matching), balanced (default), adventurous (creative key clashes allowed)."
+    )]
+    pub harmonic_style: Option<HarmonicStyle>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -309,6 +321,10 @@ pub struct ScoreTransitionParams {
         description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
     )]
     pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Harmonic mixing style: conservative (strict key matching), balanced (default), adventurous (creative key clashes allowed)."
+    )]
+    pub harmonic_style: Option<HarmonicStyle>,
 }
 
 // ---------------------------------------------------------------------------
