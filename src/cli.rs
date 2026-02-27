@@ -246,12 +246,12 @@ fn handle_decode_result(
     match decode_result {
         Ok(Ok(value)) => Some(value),
         Ok(Err(e)) => {
-            eprintln!("[{track_index}/{pending}] FAIL {label}: Decode error: {e}");
+            tracing::error!("[{track_index}/{pending}] FAIL {label}: Decode error: {e}");
             *failed += 1;
             None
         }
         Err(e) => {
-            eprintln!("[{track_index}/{pending}] FAIL {label}: Decode task failed: {e}");
+            tracing::error!("[{track_index}/{pending}] FAIL {label}: Decode task failed: {e}");
             *failed += 1;
             None
         }
@@ -268,12 +268,12 @@ fn handle_analysis_result(
     match analysis_result {
         Ok(Ok(result)) => Some(result),
         Ok(Err(e)) => {
-            eprintln!("[{idx}/{pending}] FAIL {label}: Analysis error: {e}");
+            tracing::error!("[{idx}/{pending}] FAIL {label}: Analysis error: {e}");
             *failed += 1;
             None
         }
         Err(e) => {
-            eprintln!("[{idx}/{pending}] FAIL {label}: Analysis task failed: {e}");
+            tracing::error!("[{idx}/{pending}] FAIL {label}: Analysis task failed: {e}");
             *failed += 1;
             None
         }
@@ -345,7 +345,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
         tools::probe_essentia_python_path()
     };
 
-    eprintln!(
+    tracing::info!(
         "Essentia: {}",
         if args.stratum_only {
             "skipped (--stratum-only)".to_string()
@@ -379,7 +379,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
     let tracks = db::search_tracks_unbounded(&conn, &params)?;
 
     if tracks.is_empty() {
-        eprintln!("No tracks match the given filters.");
+        tracing::info!("No tracks match the given filters.");
         return Ok(());
     }
 
@@ -406,10 +406,10 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
 
     let total = tracks.len();
     let pending = to_analyze.len();
-    eprintln!("Scanning {total} tracks ({cached_count} cached, {pending} to analyze)\n");
+    tracing::info!("Scanning {total} tracks ({cached_count} cached, {pending} to analyze)");
 
     if to_analyze.is_empty() {
-        eprintln!("All tracks already cached. Nothing to do.");
+        tracing::info!("All tracks already cached. Nothing to do.");
         return Ok(());
     }
 
@@ -425,7 +425,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
         let file_path = match audio::resolve_audio_path(&track.file_path) {
             Ok(p) => p,
             Err(_) => {
-                eprintln!("[{idx}/{pending}] SKIP {label}: File not found");
+                tracing::warn!("[{idx}/{pending}] SKIP {label}: File not found");
                 failed += 1;
                 continue;
             }
@@ -435,7 +435,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
         let metadata = match std::fs::metadata(&file_path) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("[{idx}/{pending}] SKIP {label}: Cannot stat file: {e}");
+                tracing::warn!("[{idx}/{pending}] SKIP {label}: Cannot stat file: {e}");
                 failed += 1;
                 continue;
             }
@@ -478,24 +478,23 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                 &features_json,
             )?;
 
-            eprint!(
-                "[{idx}/{pending}] {label} ... BPM={:.1} Key={}",
-                result.bpm, result.key_camelot,
-            );
-
             let mut track_success = true;
+            let mut essentia_status = String::new();
             if *needs_essentia && let Some(ref python) = essentia_python {
                 match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
-                    Ok(()) => eprint!(" +essentia"),
+                    Ok(()) => essentia_status = " +essentia".to_string(),
                     Err(e) => {
-                        eprint!(" (essentia failed: {e})");
+                        essentia_status = format!(" (essentia failed: {e})");
                         track_success = false;
                     }
                 }
             }
 
             let elapsed = track_start.elapsed().as_secs_f64();
-            eprintln!(" ({elapsed:.1}s)");
+            tracing::info!(
+                "[{idx}/{pending}] {label} ... BPM={:.1} Key={}{essentia_status} ({elapsed:.1}s)",
+                result.bpm, result.key_camelot,
+            );
             mark_track_outcome(&mut analyzed, &mut failed, track_success);
         } else if *needs_essentia {
             // Only needs essentia (stratum already cached)
@@ -504,11 +503,11 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                 match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
                     Ok(()) => {
                         let elapsed = elapsed_start.elapsed().as_secs_f64();
-                        eprintln!("[{idx}/{pending}] {label} ... +essentia ({elapsed:.1}s)");
+                        tracing::info!("[{idx}/{pending}] {label} ... +essentia ({elapsed:.1}s)");
                         mark_track_outcome(&mut analyzed, &mut failed, true);
                     }
                     Err(e) => {
-                        eprintln!("[{idx}/{pending}] FAIL {label}: Essentia error: {e}");
+                        tracing::error!("[{idx}/{pending}] FAIL {label}: Essentia error: {e}");
                         mark_track_outcome(&mut analyzed, &mut failed, false);
                     }
                 }
@@ -519,7 +518,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
     let total_time = batch_start.elapsed();
     let mins = total_time.as_secs() / 60;
     let secs = total_time.as_secs() % 60;
-    eprintln!("\nDone: {analyzed} analyzed, {failed} failed ({mins}m {secs}s)");
+    tracing::info!("Done: {analyzed} analyzed, {failed} failed ({mins}m {secs}s)");
 
     Ok(())
 }
@@ -550,7 +549,7 @@ fn expand_paths(paths: &[String]) -> Vec<PathBuf> {
                     result.extend(files);
                 }
                 Err(e) => {
-                    eprintln!("Warning: skipping unreadable directory {p}: {e}");
+                    tracing::warn!("Skipping unreadable directory {p}: {e}");
                 }
             }
         } else {
@@ -573,7 +572,7 @@ fn print_tags_human(result: &tags::FileReadResult) {
             tags,
             cover_art,
         } => {
-            eprintln!("=== {} ({}) ===", path, format.to_uppercase());
+            tracing::info!("=== {} ({}) ===", path, format.to_uppercase());
             println!("{}:", tag_type);
             print_tag_map(tags, 2);
             if let Some(art) = cover_art {
@@ -588,7 +587,7 @@ fn print_tags_human(result: &tags::FileReadResult) {
             tag3_missing,
             cover_art,
         } => {
-            eprintln!("=== {} ({}) ===", path, format.to_uppercase());
+            tracing::info!("=== {} ({}) ===", path, format.to_uppercase());
             println!("ID3v2:");
             print_tag_map(id3v2, 2);
             println!();
@@ -602,8 +601,8 @@ fn print_tags_human(result: &tags::FileReadResult) {
             }
         }
         tags::FileReadResult::Error { path, error } => {
-            eprintln!("=== {} ===", path);
-            eprintln!("Error: {}", error);
+            tracing::error!("=== {} ===", path);
+            tracing::error!("Error: {}", error);
         }
     }
 }
@@ -722,8 +721,8 @@ fn parse_wav_targets(
                 }
             }
             if !invalid.is_empty() {
-                eprintln!(
-                    "Warning: unknown WAV target(s): {}",
+                tracing::warn!(
+                    "Unknown WAV target(s): {}",
                     invalid.join(", ")
                 );
             }
@@ -749,7 +748,7 @@ fn print_write_human(result: &tags::FileWriteResult) {
             wav_targets,
             ..
         } => {
-            eprintln!("=== {} ===", path);
+            tracing::info!("=== {} ===", path);
             if !fields_written.is_empty() {
                 println!("Written: {}", fields_written.join(", "));
             }
@@ -764,8 +763,8 @@ fn print_write_human(result: &tags::FileWriteResult) {
             }
         }
         tags::FileWriteResult::Error { path, error, .. } => {
-            eprintln!("=== {} ===", path);
-            eprintln!("Error: {}", error);
+            tracing::error!("=== {} ===", path);
+            tracing::error!("Error: {}", error);
         }
     }
 }
@@ -778,7 +777,7 @@ fn print_dry_run_human(result: &tags::FileDryRunResult) {
             wav_targets,
             ..
         } => {
-            eprintln!("=== {} (dry run) ===", path);
+            tracing::info!("=== {} (dry run) ===", path);
             if changes.is_empty() {
                 println!("No changes.");
                 return;
@@ -795,8 +794,8 @@ fn print_dry_run_human(result: &tags::FileDryRunResult) {
             }
         }
         tags::FileDryRunResult::Error { path, error, .. } => {
-            eprintln!("=== {} ===", path);
-            eprintln!("Error: {}", error);
+            tracing::error!("=== {} ===", path);
+            tracing::error!("Error: {}", error);
         }
     }
 }
@@ -869,7 +868,7 @@ fn run_extract_art(args: ExtractArtArgs) -> Result<(), Box<dyn std::error::Error
             }
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            tracing::error!("Error: {}", e);
             std::process::exit(1);
         }
     }
@@ -901,7 +900,7 @@ fn run_embed_art(args: EmbedArtArgs) -> Result<(), Box<dyn std::error::Error>> {
                     println!("Embedded cover art into {}", path);
                 }
                 tags::FileEmbedResult::Error { path, error, .. } => {
-                    eprintln!("Error ({}): {}", path, error);
+                    tracing::error!("Error ({}): {}", path, error);
                 }
             }
         }

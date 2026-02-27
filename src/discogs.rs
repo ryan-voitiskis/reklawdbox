@@ -533,7 +533,7 @@ async fn lookup_inner_legacy(
         if is_retry {
             return Err("rate limited after retry".into());
         }
-        eprintln!("[reklawdbox] Discogs rate limited, waiting 30s...");
+        tracing::warn!("Discogs rate limited, waiting 30s...");
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         return Box::pin(lookup_inner_legacy(client, artist, title, album, true)).await;
     }

@@ -25,6 +25,8 @@ symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "aac"] }
 thiserror = "2"
 lofty = "0.23"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-casefold = "0.2"
 
 [dev-dependencies]

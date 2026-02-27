@@ -10,6 +10,8 @@
     use serde::Deserialize;
     use tempfile::TempDir;
 
+    use crate::genre;
+
     fn extract_json(result: &CallToolResult) -> serde_json::Value {
         let text = result
             .content

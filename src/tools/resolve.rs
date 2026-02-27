@@ -2,8 +2,7 @@ use rusqlite::Connection;
 
 use rmcp::ErrorData as McpError;
 
-use super::mcp_internal_error;
-use super::params::{ResolveTracksDataParams, SearchFilterParams};
+use super::*;
 use crate::db;
 
 pub(super) struct ResolveTracksOpts {

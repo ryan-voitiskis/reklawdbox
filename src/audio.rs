@@ -404,7 +404,7 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), AudioError> {
     }
 
     if decode_warning_count > 0 {
-        eprintln!("[audio] {path}: {decode_warning_count} decode warnings (frames skipped)");
+        tracing::debug!("{path}: {decode_warning_count} decode warnings (frames skipped)");
     }
 
     if all_samples.is_empty() {

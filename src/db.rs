@@ -68,8 +68,8 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
                 Ok(n) => n,
                 Err(_) => {
                     if !raw.is_empty() {
-                        eprintln!(
-                            "[db] DJPlayCount parse failed for value {raw:?}, defaulting to 0"
+                        tracing::debug!(
+                            "DJPlayCount parse failed for value {raw:?}, defaulting to 0"
                         );
                     }
                     0

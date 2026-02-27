@@ -1139,7 +1139,7 @@ fn store_issue_to_record(issue: store::AuditIssue) -> IssueRecord {
         match serde_json::from_str(d) {
             Ok(v) => Some(v),
             Err(e) => {
-                eprintln!("[audit] issue {}: detail JSON parse failed: {e}", issue.id);
+                tracing::warn!("issue {}: detail JSON parse failed: {e}", issue.id);
                 None
             }
         }

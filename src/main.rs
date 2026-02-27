@@ -37,8 +37,14 @@ where
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if should_run_cli(std::env::args()) {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
         cli::main().await
     } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
         let server = tools::ReklawdboxServer::new(db::resolve_db_path());
         let service = server.serve(stdio()).await?;
         service.waiting().await?;
