@@ -134,6 +134,9 @@ pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String
     if let Some(path) = &params.filters.path {
         filters.push(format!("path ~= \"{path}\""));
     }
+    if let Some(prefix) = &params.filters.path_prefix {
+        filters.push(format!("path_prefix = \"{prefix}\""));
+    }
     if let Some(added_after) = &params.filters.added_after {
         filters.push(format!("added_after = \"{added_after}\""));
     }

@@ -139,6 +139,7 @@ pub struct SearchParams {
     pub has_genre: Option<bool>,
     pub label: Option<String>,
     pub path: Option<String>,
+    pub path_prefix: Option<String>,
     pub added_after: Option<String>,
     pub added_before: Option<String>,
     pub exclude_samples: bool,
@@ -218,6 +219,12 @@ fn apply_search_filters(
         let idx = bind_values.len() + 1;
         sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
         bind_values.push(Box::new(format!("%{}%", escape_like(path))));
+    }
+
+    if let Some(ref prefix) = params.path_prefix {
+        let idx = bind_values.len() + 1;
+        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
     }
 
     if let Some(ref added_after) = params.added_after {
@@ -852,6 +859,81 @@ mod tests {
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2); // Archangel + R.I.P.
+    }
+
+    #[test]
+    fn test_search_by_path_substring() {
+        let conn = create_test_db();
+        // Substring: "Burial" matches t1 and t2 (anywhere in path)
+        let params = SearchParams {
+            path: Some("Burial".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert!(tracks.iter().all(|t| t.file_path.contains("Burial")));
+    }
+
+    #[test]
+    fn test_search_by_path_prefix() {
+        let conn = create_test_db();
+        // Prefix: scopes to /Users/vz/Music/Burial/ — matches t1 and t2
+        let params = SearchParams {
+            path_prefix: Some("/Users/vz/Music/Burial/".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert!(tracks
+            .iter()
+            .all(|t| t.file_path.starts_with("/Users/vz/Music/Burial/")));
+    }
+
+    #[test]
+    fn test_path_prefix_excludes_substring_matches() {
+        let conn = create_test_db();
+        // "Music" appears in all paths as a substring but none start with it.
+        let params = SearchParams {
+            path_prefix: Some("Music".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 0);
+
+        // Same term with substring match finds all 6 tracks.
+        let params = SearchParams {
+            path: Some("Music".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 6);
+    }
+
+    #[test]
+    fn test_path_prefix_scopes_to_user_root() {
+        let conn = create_test_db();
+        // /Users/vz/ matches t1-t5 but not t6 (/Users/alice/)
+        let params = SearchParams {
+            path_prefix: Some("/Users/vz/".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 5);
+        assert!(tracks
+            .iter()
+            .all(|t| t.file_path.starts_with("/Users/vz/")));
+    }
+
+    #[test]
+    fn test_path_prefix_escapes_like_chars() {
+        let conn = create_test_db();
+        // A prefix containing LIKE wildcards should be escaped, not interpreted.
+        let params = SearchParams {
+            path_prefix: Some("/Users/%/Music".to_string()),
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        assert_eq!(tracks.len(), 0); // literal "%" doesn't appear in any path
     }
 
     #[test]

@@ -26,8 +26,12 @@ pub struct SearchFilterParams {
     pub has_genre: Option<bool>,
     #[schemars(description = "Filter by label name (partial match)")]
     pub label: Option<String>,
-    #[schemars(description = "Filter by file path/folder (partial match)")]
+    #[schemars(description = "Filter by file path/folder (substring match)")]
     pub path: Option<String>,
+    #[schemars(
+        description = "Filter to tracks whose file path starts with this prefix (directory scoping)"
+    )]
+    pub path_prefix: Option<String>,
     #[schemars(
         description = "Only tracks added on or after this date (ISO date, e.g. '2026-01-01')"
     )]
@@ -57,6 +61,7 @@ impl SearchFilterParams {
             has_genre: self.has_genre,
             label: self.label,
             path: self.path,
+            path_prefix: self.path_prefix,
             added_after: self.added_after,
             added_before: self.added_before,
             exclude_samples,

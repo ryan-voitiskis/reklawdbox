@@ -514,6 +514,7 @@ mod tests {
             has_genre: None,
             label: None,
             path: None,
+            path_prefix: None,
             added_after: None,
             added_before: None,
             exclude_samples: false,

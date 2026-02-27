@@ -370,6 +370,7 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
         has_genre: None,
         label: args.label,
         path: args.path,
+        path_prefix: None,
         added_after: args.added_after,
         added_before: args.added_before,
         exclude_samples: true,
