@@ -306,9 +306,9 @@ pub struct BuildSetParams {
     )]
     pub harmonic_style: Option<HarmonicStyle>,
     #[schemars(
-        description = "Maximum BPM drift from start track (default 15.0). Penalizes candidates that wander too far from the opening BPM."
+        description = "Maximum BPM drift from start track as a percentage (default 6.0). The last track may deviate up to this percentage from the opening BPM; intermediate tracks get a proportional fraction."
     )]
-    pub bpm_drift_limit: Option<f64>,
+    pub bpm_drift_pct: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

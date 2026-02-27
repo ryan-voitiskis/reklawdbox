@@ -1768,7 +1768,7 @@ impl ReklawdboxServer {
         result["key_relation"] = serde_json::json!(scores.key_relation);
         result["bpm_adjustment_pct"] = serde_json::json!(round_score(scores.bpm_adjustment_pct));
         if let Some(ref ek) = scores.effective_to_key {
-            result["effective_key"] = serde_json::json!(ek);
+            result["effective_to_key"] = serde_json::json!(ek);
         }
         if scores.pitch_shift_semitones != 0 {
             result["pitch_shift_semitones"] = serde_json::json!(scores.pitch_shift_semitones);
@@ -1873,7 +1873,7 @@ impl ReklawdboxServer {
 
         let master_tempo = p.master_tempo.unwrap_or(true);
         let harmonic_style = p.harmonic_style;
-        let bpm_drift_limit = p.bpm_drift_limit.unwrap_or(15.0);
+        let bpm_drift_pct = p.bpm_drift_pct.unwrap_or(6.0);
         let mut candidates = Vec::with_capacity(effective_candidates);
         for candidate_index in 0..effective_candidates {
             let start_track_id = start_tracks[candidate_index % start_tracks.len()].clone();
@@ -1886,7 +1886,7 @@ impl ReklawdboxServer {
                 candidate_index,
                 master_tempo,
                 harmonic_style,
-                bpm_drift_limit,
+                bpm_drift_pct,
             );
 
             let tracks_json: Vec<serde_json::Value> = plan
@@ -1918,7 +1918,7 @@ impl ReklawdboxServer {
                     t["key_relation"] = serde_json::json!(transition.scores.key_relation);
                     t["bpm_adjustment_pct"] = serde_json::json!(round_score(transition.scores.bpm_adjustment_pct));
                     if let Some(ref ek) = transition.scores.effective_to_key {
-                        t["effective_key"] = serde_json::json!(ek);
+                        t["effective_to_key"] = serde_json::json!(ek);
                     }
                     if transition.scores.pitch_shift_semitones != 0 {
                         t["pitch_shift_semitones"] = serde_json::json!(transition.scores.pitch_shift_semitones);

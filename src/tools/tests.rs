@@ -449,7 +449,7 @@
                 candidates: Some(3),
                 master_tempo: None,
                 harmonic_style: None,
-                bpm_drift_limit: None,
+                bpm_drift_pct: None,
             }))
             .await
             .expect("build_set should succeed for fixture pool");
@@ -566,7 +566,7 @@
                 candidates: Some(2),
                 master_tempo: None,
                 harmonic_style: None,
-                bpm_drift_limit: None,
+                bpm_drift_pct: None,
             }))
             .await
             .expect("build_set should succeed for single-track pool");
@@ -644,7 +644,7 @@
                 candidates: Some(2),
                 master_tempo: None,
                 harmonic_style: None,
-                bpm_drift_limit: None,
+                bpm_drift_pct: None,
             }))
             .await
             .expect("build_set should succeed when all tracks share the same key");
@@ -694,7 +694,7 @@
                 candidates: Some(1),
                 master_tempo: None,
                 harmonic_style: None,
-                bpm_drift_limit: None,
+                bpm_drift_pct: None,
             }))
             .await
             .expect("build_set should succeed when pool is smaller than target");
@@ -3029,13 +3029,10 @@
 
         // With master_tempo OFF: pitch shift changes effective key
         let scores_mt_off = score_transition_profiles(&from, &to, None, None, SetPriority::Balanced, false, None, &ScoringContext::default());
-        assert_ne!(scores_mt_off.pitch_shift_semitones, 0, "BPM diff should cause pitch shift");
-        assert!(scores_mt_off.effective_to_key.is_some(), "effective key should be set");
-        // The key score should differ from the master_tempo ON case
-        assert_ne!(
-            scores_mt_off.key.value, scores_mt_on.key.value,
-            "master_tempo off should change key scoring when BPM differs"
-        );
+        assert_eq!(scores_mt_off.pitch_shift_semitones, -1, "128→135 BPM should yield -1 semitone shift");
+        assert_eq!(scores_mt_off.effective_to_key, Some("1A".to_string()), "8A shifted -1 semitone = 1A");
+        assert_eq!(scores_mt_off.key.value, 0.1, "8A→1A is a clash (score 0.1)");
+        assert_eq!(scores_mt_on.key.value, 1.0, "master_tempo on: same key is perfect (1.0)");
     }
 
     fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) -> TrackProfile {
@@ -3132,6 +3129,60 @@
             balanced_build.composite, baseline_build.composite,
             "balanced should not penalize key=0.45 at build phase (exactly at threshold)"
         );
+    }
+
+    #[test]
+    fn harmonic_style_adventurous_is_phase_dependent() {
+        // Clash pair: 8A → 2A gives key=0.1
+        let from = make_test_profile("adv-from", "8A", 128.0, 0.7, "House");
+        let to = make_test_profile("adv-to", "2A", 128.0, 0.7, "House");
+
+        // Adventurous at Peak: threshold=0.1, key=0.1 → NOT below → no penalty
+        let adv_peak = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Adventurous), &ScoringContext::default(),
+        );
+        let baseline_peak = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, None, &ScoringContext::default(),
+        );
+        assert_eq!(
+            adv_peak.composite, baseline_peak.composite,
+            "adventurous at peak should not penalize key=0.1 (threshold is 0.1)"
+        );
+
+        // Adventurous at Warmup: threshold=0.45, key=0.1 → below → penalty
+        let adv_warmup = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Warmup), Some(EnergyPhase::Warmup),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Adventurous), &ScoringContext::default(),
+        );
+        let baseline_warmup = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Warmup), Some(EnergyPhase::Warmup),
+            SetPriority::Balanced, true, None, &ScoringContext::default(),
+        );
+        assert!(
+            adv_warmup.composite < baseline_warmup.composite,
+            "adventurous at warmup should penalize key=0.1 (threshold is 0.45)"
+        );
+        let expected = baseline_warmup.composite * 0.5;
+        assert!(
+            (adv_warmup.composite - expected).abs() < 1e-9,
+            "penalty should be 0.5x; got {} vs expected {}",
+            adv_warmup.composite, expected
+        );
+
+        // Conservative is phase-independent: always 0.8 threshold
+        let cons_peak = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Conservative), &ScoringContext::default(),
+        );
+        let cons_warmup = score_transition_profiles(
+            &from, &to, Some(EnergyPhase::Warmup), Some(EnergyPhase::Warmup),
+            SetPriority::Balanced, true, Some(HarmonicStyle::Conservative), &ScoringContext::default(),
+        );
+        // Both should be penalized (key=0.1 < 0.8)
+        assert!(cons_peak.composite < baseline_peak.composite);
+        assert!(cons_warmup.composite < baseline_warmup.composite);
     }
 
     #[test]
@@ -3264,10 +3315,13 @@
     fn bpm_trajectory_drift_penalty() {
         use std::collections::HashMap;
 
-        // Pool: start at 128 BPM, candidates at 128, 130, 145
-        // With bpm_drift_limit=10.0 and target_tracks=4:
-        //   position 1: budget = 10.0 * (1/4) = 2.5 → 145 drifts 17 (>2.5) → penalized
-        //   position 1: budget = 2.5 → 130 drifts 2 (<=2.5) → no penalty
+        // Pool: start at 128 BPM, candidates at 130 (+1.56%) and 145 (+13.28%)
+        // With bpm_drift_pct=3.0 and target_tracks=3 (divisor = 2):
+        //   position 1: budget_pct = 3.0 * (1/2) = 1.5% → budget_bpm = 128 * 1.5% = 1.92
+        //   130 drifts 2 (>1.92) → penalized; 145 drifts 17 (>1.92) → penalized
+        // With bpm_drift_pct=6.0 and target_tracks=3 (divisor = 2):
+        //   position 1: budget_pct = 6.0 * (1/2) = 3.0% → budget_bpm = 128 * 3% = 3.84
+        //   130 drifts 2 (<=3.84) → no penalty; 145 drifts 17 (>3.84) → penalized
         let start = make_test_profile("bpm-start", "8A", 128.0, 0.7, "House");
         let close = make_test_profile("bpm-close", "8A", 130.0, 0.7, "House");
         let far = make_test_profile("bpm-far", "8A", 145.0, 0.7, "House");
@@ -3277,24 +3331,33 @@
         profiles.insert("bpm-close".to_string(), close);
         profiles.insert("bpm-far".to_string(), far);
 
-        // Tight limit: far track should be penalized
+        // 3% limit: both candidates penalized at position 1 (budget 1.92 BPM)
+        // but close (drift 2) is barely over while far (drift 17) is way over
+        // close still wins on composite even with penalty
         let tight = build_candidate_plan(
             &profiles, "bpm-start", 3,
             &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-            SetPriority::Harmonic, 0, true, None, 10.0,
+            SetPriority::Harmonic, 0, true, None, 3.0,
         );
-        // Close track (130) should be picked first since far (145) gets penalized
         assert_eq!(tight.ordered_ids[1], "bpm-close");
 
-        // Very generous limit: no penalty, both viable (close still wins on BPM axis)
+        // 6% limit (default): close (1.56%) within budget, far (13.28%) penalized
+        let moderate = build_candidate_plan(
+            &profiles, "bpm-start", 3,
+            &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+            SetPriority::Harmonic, 0, true, None, 6.0,
+        );
+        assert_eq!(moderate.ordered_ids[1], "bpm-close");
+        // Far still included (only penalized, not excluded)
+        assert!(moderate.ordered_ids.contains(&"bpm-far".to_string()));
+
+        // Very generous limit: no penalty for either
         let generous = build_candidate_plan(
             &profiles, "bpm-start", 3,
             &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-            SetPriority::Harmonic, 0, true, None, 200.0,
+            SetPriority::Harmonic, 0, true, None, 50.0,
         );
-        // With generous limit, close should still be first (better BPM score)
         assert_eq!(generous.ordered_ids[1], "bpm-close");
-        // But far should still be included
         assert!(generous.ordered_ids.contains(&"bpm-far".to_string()));
     }
 

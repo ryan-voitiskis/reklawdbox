@@ -52,7 +52,7 @@ pub(super) struct TransitionScores {
 
 impl TransitionScores {
     pub(super) fn to_json(&self) -> serde_json::Value {
-        let mut json = serde_json::json!({
+        serde_json::json!({
             "key": { "value": round_score(self.key.value), "label": self.key.label },
             "bpm": { "value": round_score(self.bpm.value), "label": self.bpm.label },
             "energy": { "value": round_score(self.energy.value), "label": self.energy.label },
@@ -60,16 +60,7 @@ impl TransitionScores {
             "brightness": { "value": round_score(self.brightness.value), "label": self.brightness.label },
             "rhythm": { "value": round_score(self.rhythm.value), "label": self.rhythm.label },
             "composite": round_score(self.composite),
-        });
-        json["key_relation"] = serde_json::json!(self.key_relation);
-        json["bpm_adjustment_pct"] = serde_json::json!(round_score(self.bpm_adjustment_pct));
-        if let Some(ref ek) = self.effective_to_key {
-            json["effective_to_key"] = serde_json::json!(ek);
-        }
-        if self.pitch_shift_semitones != 0 {
-            json["pitch_shift_semitones"] = serde_json::json!(self.pitch_shift_semitones);
-        }
-        json
+        })
     }
 }
 
@@ -203,7 +194,7 @@ pub(super) fn build_candidate_plan(
     variation_index: usize,
     master_tempo: bool,
     harmonic_style: Option<HarmonicStyle>,
-    bpm_drift_limit: f64,
+    bpm_drift_pct: f64,
 ) -> CandidatePlan {
     let mut ordered_ids = vec![start_track_id.to_string()];
     let mut transitions = Vec::new();
@@ -253,14 +244,16 @@ pub(super) fn build_candidate_plan(
             })
             .collect();
 
-        // BPM trajectory coherence penalty
+        // BPM trajectory coherence penalty (percentage-based)
         if start_bpm > 0.0 && target_tracks > 1 {
-            let position = ordered_ids.len(); // 1-indexed position of the candidate
-            let budget = bpm_drift_limit * (position as f64 / target_tracks as f64);
+            let position = ordered_ids.len(); // tracks already placed (progress through set)
+            let max_position = (target_tracks - 1) as f64;
+            let budget_pct = bpm_drift_pct * (position as f64 / max_position);
+            let budget_bpm = start_bpm * budget_pct / 100.0;
             for (candidate_id, scores) in &mut scored_next {
                 if let Some(candidate_profile) = profiles_by_id.get(candidate_id.as_str()) {
                     let drift = (candidate_profile.bpm - start_bpm).abs();
-                    if drift > budget {
+                    if drift > budget_bpm {
                         scores.composite *= 0.7;
                     }
                 }
@@ -677,7 +670,7 @@ pub(super) fn score_genre_axis(
         };
     };
 
-    let same_family = (from_genre.eq_ignore_ascii_case(to_genre))
+    let genre_compatible = (from_genre.eq_ignore_ascii_case(to_genre))
         || (from_family == to_family && from_family != GenreFamily::Other);
 
     let mut axis = if from_genre.eq_ignore_ascii_case(to_genre) {
@@ -698,10 +691,10 @@ pub(super) fn score_genre_axis(
     };
 
     // Genre stickiness: bonus for staying in the same family, penalty for early switch
-    if same_family && from_family != GenreFamily::Other && genre_run_length > 0 && genre_run_length < 5 {
+    if genre_compatible && from_family != GenreFamily::Other && genre_run_length > 0 && genre_run_length < 5 {
         axis.value = (axis.value + 0.1).min(1.0);
         axis.label.push_str(" + streak bonus");
-    } else if !same_family && genre_run_length > 0 && genre_run_length < 2 {
+    } else if !genre_compatible && genre_run_length > 0 && genre_run_length < 2 {
         axis.value = (axis.value - 0.1).max(0.0);
         axis.label.push_str(" + early switch penalty");
     }
