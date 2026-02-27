@@ -22,7 +22,7 @@ Use a manifest-first discovery flow:
 - Cache behavior: reuse the initialized index for all later retrievals in the same process to avoid repeated disk I/O/YAML parsing; never cache partial/failed initialization state.
 - Determinism: retrieval operates against the cached index and should return stable ordering for identical inputs.
 - Fallback on unavailable/malformed manifest: if `manifest.yaml` is missing, unreadable, or malformed, continue with best-effort guidance using the `Priority Consultation Order` below and XML reference anchors instead of hard failing.
-- Error signaling: expose manifest health in response metadata/provenance (for example `manifest_status: unavailable` or `manifest_status: malformed`) so callers can distinguish fallback responses.
+- Error signaling: expose manifest health in response metadata/provenance (for example `manifest_status: unavailable` or `manifest_status: empty`) so callers can distinguish fallback responses.
 
 ## Priority Consultation Order
 

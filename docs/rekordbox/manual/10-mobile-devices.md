@@ -4,7 +4,7 @@ title: "Using mobile devices to prepare for DJ performance"
 type: manual
 source:
   file: "rekordbox7.2.8_manual_EN.pdf"
-  pages: "58-60"
+  pages: "58-59"
   version: "7.2.8"
 topics: [cloud, connection, devices, export, interface, mobile]
 modes: [common, export]

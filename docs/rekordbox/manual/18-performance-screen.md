@@ -4,7 +4,7 @@ title: "PERFORMANCE mode"
 type: manual
 source:
   file: "rekordbox7.2.8_manual_EN.pdf"
-  pages: "121-140"
+  pages: "121-143"
   version: "7.2.8"
 topics: [beatgrid, cue-points, effects, hot-cue, interface, memory-cue, mixing, pads, performance, playback, sampler, sequencer, slicer, stems, waveform]
 modes: [performance]

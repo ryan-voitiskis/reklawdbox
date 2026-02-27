@@ -878,7 +878,7 @@ This means that in addition to the payment for the first month, a renewal period
 
 - For Professional plan users:
 
-You will not need to sign up to Dropbox separately, as unlimited Dropbox storage capacity is included in the plan price.
+You will not need to sign up to Dropbox separately, as up to 5TB of Dropbox storage capacity is included in the plan price.
 
 - For streaming services:
 

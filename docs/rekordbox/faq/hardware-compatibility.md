@@ -165,7 +165,7 @@ To use Cloud Analysis on DJ equipment, you must prepare the following environmen
 - rekordbox for Mac/Windows ver. 7.
 - Authentication device (USB storage device or SD memory card) *
 
-*Some DJ equipment allows [NFC login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
+*Some DJ equipment allows [NFC login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
 
 ---
 
@@ -179,10 +179,10 @@ You will need the following listed below:
 - Cloud Library Sync turned on.
 - A Dropbox account, logged in.
 
-Refer to the "rekordbox CloudDirectPlay Operation Guide" on the [Manuals](http://rekordbox.com/en/download/#manual) page for how to use rekordbox CloudDirectPlay.
+Refer to the "rekordbox CloudDirectPlay Operation Guide" on the [Manuals](https://rekordbox.com/en/download/#manual) page for how to use rekordbox CloudDirectPlay.
 
-*1 Some DJ equipment allows [NFC login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
-*2 With Core plan and Free plan (Hardware Unlock or owner registration), you can use Cloud Export for up to 1000 songs.
+*1 Some DJ equipment allows [NFC login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
+*2 With Core plan and Free plan, CloudDirectPlay is limited to up to 20 tracks in [Trial playlist - Cloud Library Sync]. With Hardware Unlock or owner registration, you can also use Cloud Export for up to 1000 songs.
 
 ---
 
@@ -466,7 +466,7 @@ GROOVE CIRCUIT can be controlled using the following DJ equipment.
 
 (As of October 2024)
 
-Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (Subscription to a [plan](https://rekordbox.com/en/plan) higher than Core plan is required for the MIDI LEARN function.)
+Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (The MIDI LEARN function requires a [Core plan subscription](https://rekordbox.com/en/support/faq/stems-7/#faq-q700019) or higher, or connection of [Hardware Unlock devices](https://rekordbox.com/en/support/faq/v7/#faq-q700001).)
 See ["MIDI LEARN Operation Guide"](https://rekordbox.com/en/download/#manual) for mapping methods using the MIDI LEARN function.
 
 ---

@@ -934,7 +934,7 @@ documents:
   - xml
   modes:
   - common
-  confidence: pending
+  confidence: verified
 - id: glossary
   title: Rekordbox Glossary (Bracketed Terms)
   type: reference

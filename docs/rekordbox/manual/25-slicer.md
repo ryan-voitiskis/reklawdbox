@@ -4,7 +4,7 @@ title: "Using a slicer"
 type: manual
 source:
   file: "rekordbox7.2.8_manual_EN.pdf"
-  pages: "197-200"
+  pages: "197-199"
   version: "7.2.8"
 topics: [beatgrid, pads, sampler, slicer]
 modes: [performance]
@@ -73,36 +73,6 @@ During the loop play of the pad, the normal playback with the original rhythm co
   When the playback position reaches the end of a slicing range, the playback position returns to the beginning of the same range.
 
   [Screenshot: Diagram showing slicer loop mode behavior with a waveform where sections 1-8 loop back to section 1 when reaching the end, indicated by a return arrow]
-
-# Extracting a section from a track (CAPTURE)
-
-You can extract a section from the loop play and slicer, and use it as a sampler.
-
-For the sampler, see "Using the sampler deck" (page 188).
-
-## To extract a section from loop playback (LOOP CAPTURE)
-
-For the loop play, see "Starting loop play" (page 157).
-
-1. Start the loop play from which you wish to extract a section.
-
-   [Screenshot: Waveform display showing a track in loop playback with the loop range highlighted]
-
-2. Click [<] on the right side of the enlarged waveform, and then click [capture icon].
-   The color of the loop range changes.
-
-   [Screenshot: Waveform display showing the loop range with changed color indicating capture mode is active]
-
-3. Drag and drop the loop range to the slot of the sampler deck.
-
-   [Screenshot: Full rekordbox screen showing a loop range being dragged from the waveform to a sampler slot in the sampler deck, with a dotted arrow indicating the drag path]
-
-   The range is ready to be used as a sampler.
-   The sampler is stored at [Capture] in [Sampler] of [Media Browser].
-
-**Note**
-
-- When the [Preferences] window > [Controller] category > [Sampler] tab > [SLOT] > [Do not overwrite the loaded Slot] is selected, you cannot drag and drop to a slot already loaded.
 
 ## Related Documents
 

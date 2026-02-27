@@ -4,7 +4,7 @@ title: "Menu list"
 type: manual
 source:
   file: "rekordbox7.2.8_manual_EN.pdf"
-  pages: "242-250"
+  pages: "245-250"
   version: "7.2.8"
 topics: [dvs, effects, interface, lighting, preferences, stems, video]
 modes: [export, performance]
@@ -13,63 +13,6 @@ last_verified: "2026-02-17"
 transcribed_by: agent
 verified_by: agent
 ---
-
-## [Others] (continued)
-
-<!-- dprint-ignore -->
-| Setting | Description |
-|---------|-------------|
-| [Spotify] | Select the audio format for the downloading file from Spotify. |
-| [SoundCloud] | Select the audio format for the downloading file from SoundCloud. |
-| [Beatport] | Select the audio format for the downloading file from Beatport. |
-| [Beatsource] | Select the audio format for the downloading file from Beatsource. |
-| [TIDAL] | Select the audio format for the downloading file from TIDAL. |
-| Automatic removal of auditioned tracks | Streaming music files that have been loaded onto the deck and auditioned only are deleted from [Collection] when rekordbox is closed. |
-| [Track Information] | The information of the tracks played on CDJ/XDJ can be hidden on the app connected with Pro DJ Link. |
-| [Inflyte] | Select the location where files downloaded from Inflyte will be saved. |
-
-## [DVS] (PERFORMANCE mode)
-
-Click the [Enable DVS Function] checkbox to enable the DVS function.
-Please refer to "rekordbox DVS setup guide" on the rekordbox website.
-
-## [Extensions] (PERFORMANCE mode)
-
-### [STEMS]
-
-Click the [Enable the STEMS Function] checkbox to enable the STEMS function.
--> See Using the STEMS function (page 207)
-
-<!-- dprint-ignore -->
-| Setting | Description |
-|---------|-------------|
-| [STEMS Mode] | You can choose to divide the track into either 3 Stems or 4 Stems. [3 Stems(VOCAL, INST, DRUMS)]: A track can be divided into the VOCAL, INST, and DRUMS Stems, to be played. [4 Stems(VOCAL, INST, BASS, DRUMS)]: A track can be divided into the VOCAL, INST, BASS, and DRUMS Stems, to be played. |
-| [STEMS Analysis Process] | You can choose to prioritize either the sound quality or the analysis time of the STEMS function. [Prioritize sound quality]: Improve the sound quality of the STEMS function. [Prioritize speed]: Shorten the analysis time for the STEMS function. |
-| [Layout] | Select the layout for ACTIVE STEM/STEM ISO/STEM FX. [Auto Layout]: Display suitable for your device [Custom Layout]: You can select from the 6 displays. [Do not display]: Hide the display. |
-| [STEM Waveform Display] | When enabled, the Stem that outputs audio is displayed. When disabled, the original waveform is always displayed. |
-| [ACTIVE STEM Setting] | [MUTE]: Select to output or mute for each part. [SOLO]: Select all part or just one part to output. When [Reset the MUTE/SOLO state while loading] is selected, the MUTE/SOLO state is reset while loading. |
-| [STEM Instant Doubles] | Set the deck for the Instant Doubles function. |
-| [Memory] | When [Increase the memory size of the analysis process] is selected, you can change the limit of the track length added from streaming. |
-| [Multi-thread] | When [Apply multi-thread to the analysis process] is not selected, the processing load is expected to be reduced because it is processed with a single thread, but the time for the analysis processing becomes longer. |
-
-Click the checkboxes of both [Enable the STEMS Function] and [Enable the GROOVE CIRCUIT Function] to enable the GROOVE CIRCUIT function.
--> See Using the GROOVE CIRCUIT function (page 210)
-
-<!-- dprint-ignore -->
-| Setting | Description |
-|---------|-------------|
-| [DRUM SWAP] | [Eject/Load Lock] When [Lock] is set, you cannot load into a DRUM SWAP SLOT that is currently playing. When [Display track titles on DRUM SWAP SLOT] is turned on, the track title is displayed on the DRUM SWAP SLOT. |
-| [DRUM CATPURE] | [DRUMS Stem]: Extract the DRUMS Stem from the track. [Original track]: Extract the entire audio of the original track. [Location of Files] Set the location for saving files extracted using DRUM CAPTURE. |
-
-### [Video]
-
-Click the [Enable Video Function] checkbox to enable the video function.
-Please refer to "rekordbox video operating guide" on the rekordbox website.
-
-### [Lighting]
-
-Click the [Enable Lighting Function] checkbox to enable the Lighting function.
-Please refer to "LIGHTING mode operating guide" on the rekordbox website.
 
 # Menu list
 

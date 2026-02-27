@@ -370,7 +370,7 @@ Select Spotify in Media Browser and load tracks from the track list to the deck.
 You can automatically log in to TIDAL by connecting a USB storage device or SD memory card created on rekordbox for CloudDirectPlay authentication to your DJ equipment and logging in to rekordbox CloudDirectPlay.
 
 Also, with some DJ equipment, you can automatically log in to TIDAL by logging into rekordbox CloudDirectPlay using a mobile device.
-Some DJ equipment allows [NFC login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](http://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
+Some DJ equipment allows [NFC login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
 
 - As of rekordbox ver. 7.0.6, login to TIDAL has been changed to a Single Sign On method.
   With the Single Sign On method, if you log in to TIDAL on rekordbox in advance, you do not need to enter your login account and password for TIDAL on the DJ equipment.

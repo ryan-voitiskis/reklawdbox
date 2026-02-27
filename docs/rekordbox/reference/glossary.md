@@ -1948,10 +1948,10 @@ Referenced in: `features/cloud-setup-guide.md`
 Definition (from corpus context): - On the [Preferences] window > [Extensions] category > [STEMS] tab > [DRUM CAPTURE], you can select [DRUMS Stem] or [Original track].
 Referenced in: `manual/28-stems.md`
 
-## [DRUM CATPURE]
+## [DRUM CAPTURE]
 
-Definition (from corpus context): | [DRUM CATPURE] | [DRUMS Stem]: Extract the DRUMS Stem from the track. [Original track]: Extract the entire audio of the original track. [Location of Files] Set the location fo...
-Referenced in: `manual/32-menu-list.md`
+Definition (from corpus context): | [DRUM CAPTURE] | [DRUMS Stem]: Extract the DRUMS Stem from the track. [Original track]: Extract the entire audio of the original track. [Location of Files] Set the location fo...
+Referenced in: `manual/31-preferences.md`
 
 ## [DRUM SWAP]
 
@@ -4420,7 +4420,7 @@ Referenced in: `guides/performance-mode-connection.md`
 
 ## [plan]
 
-Definition (from corpus context): Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (Subscription to a [plan](https://rekordbox.com/en/plan) higher than Core plan is r...
+Definition (from corpus context): Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (The MIDI LEARN function requires a [Core plan subscription](https://rekordbox.com/en/support/faq/stems-7/#faq-q700019) or higher, or connection of [Hardware Unlock devices](https://rekordbox.com/en/support/faq/v7/#faq-q700001).)
 Referenced in: `faq/hardware-compatibility.md`, `faq/stems-and-effects.md`
 
 ## [PLAN]

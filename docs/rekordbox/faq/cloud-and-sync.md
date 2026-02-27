@@ -53,7 +53,7 @@ You will need the following listed below:
 Refer to the "rekordbox CloudDirectPlay Operation Guide" on the [Manuals](https://rekordbox.com/en/download/#manual) page for how to use rekordbox CloudDirectPlay.
 
 *1 Some DJ equipment allows [NFC login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
-*2 With Core plan and Free plan (Hardware Unlock or owner registration), you can use Cloud Export for up to 1000 songs.
+*2 With Core plan and Free plan, CloudDirectPlay is limited to up to 20 tracks in [Trial playlist - Cloud Library Sync]. With Hardware Unlock or owner registration, you can also use Cloud Export for up to 1000 songs.
 
 ---
 

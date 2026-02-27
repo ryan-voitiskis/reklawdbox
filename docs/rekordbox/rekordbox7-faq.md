@@ -1239,7 +1239,7 @@ You will need the following listed below:
 Refer to the "rekordbox CloudDirectPlay Operation Guide" on the [Manuals](https://rekordbox.com/en/download/#manual) page for how to use rekordbox CloudDirectPlay.
 
 *1 Some DJ equipment allows [NFC login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100117) and [QR code login](https://rekordbox.com/en/support/faq/log-in-to-dj-equipment/#faq-q100118). Please refer to the respective FAQs for details.
-*2 With Core plan and Free plan (Hardware Unlock or owner registration), you can use Cloud Export for up to 1000 songs.
+*2 With Core plan and Free plan, CloudDirectPlay is limited to up to 20 tracks in [Trial playlist - Cloud Library Sync]. With Hardware Unlock or owner registration, you can also use Cloud Export for up to 1000 songs.
 
 ---
 
@@ -1772,7 +1772,7 @@ GROOVE CIRCUIT can be controlled using the following DJ equipment.
 
 (As of October 2024)
 
-Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (Subscription to a [plan](https://rekordbox.com/en/plan) higher than Core plan is required for the MIDI LEARN function.)
+Each function can be used through mapping with the MIDI LEARN function on other DJ equipment. (The MIDI LEARN function requires a [Core plan subscription](https://rekordbox.com/en/support/faq/stems-7/#faq-q700019) or higher, or connection of [Hardware Unlock devices](https://rekordbox.com/en/support/faq/v7/#faq-q700001).)
 See ["MIDI LEARN Operation Guide"](https://rekordbox.com/en/download/#manual) for mapping methods using the MIDI LEARN function.
 
 ---
@@ -1794,11 +1794,10 @@ If you've already moved a track to a Dropbox folder, you can return it to the pr
 
 DRUM SWAP SLOT plays audio from the beginning so the silent part is played as well.
 
-If there is no sound at the beginning of the audio, you can remove the silent part using DAW software or EDIT mode (*) which is available in plans higher than Creative Plan. (Silent parts will be added at the beginning of audio for certain file formats such as MP3. Use the audio by removing the silent part and saving them in formats such as WAV, AIFF, etc.)
+If there is no sound at the beginning of the audio, you can remove the silent part using DAW software or EDIT mode (*). In the Free or Core plan, you can use only the track edit function. Rendering edited tracks as audio files requires the Creative or Professional plan. (Silent parts will be added at the beginning of audio for certain file formats such as MP3. Use the audio by removing the silent part and saving them in formats such as WAV, AIFF, etc.)
 
 *See "[EDIT mode operation guide](https://rekordbox.com/en/download/#manual)" for how to use the EDIT function.
 
-The EDIT function is available on subscriptions higher than Creative Plan.
 See [here](https://rekordbox.com/en/plan/) for details on plan.
 
 ---
@@ -3127,7 +3126,7 @@ You can't choose the billing date. After your 30-day free trial ends, you'll be 
 
 - For Professional plan users:
 
-You will not need to sign up to Dropbox separately, as unlimited Dropbox storage capacity is included in the plan price.
+You will not need to sign up to Dropbox separately, as up to 5TB of Dropbox storage capacity is included in the plan price.
 
 - For streaming services:
 

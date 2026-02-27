@@ -241,7 +241,7 @@ You can display a list of recommended tracks among the tracks loaded on the deck
 
    **Note**
 
-   - When using [Streaming Radar], the search targets are the tracks from steaming services, so you cannot select the search target.
+   - When using [Streaming Radar], the search targets are the tracks from streaming services, so you cannot select the search target.
 
 3. [Rank]
    Ranks in order of recommendation.
@@ -282,7 +282,7 @@ Click the Track Suggestion subpanel button to display the Track Suggestion Subpa
 
    **Note**
 
-   - When using [Streaming Radar], the search targets are the tracks from steaming services, so you cannot select the search target.
+   - When using [Streaming Radar], the search targets are the tracks from streaming services, so you cannot select the search target.
 
 3. Tracks to select
    [LIST]: Display recommended tracks for the selected track in the track list.

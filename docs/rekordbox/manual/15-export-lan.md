@@ -22,7 +22,7 @@ If you connect a computer to a DJ player by a LAN cable or wireless LAN, you can
 - You can use various rekordbox track-selecting features (e.g. track browsing) during your DJ performance.
 - On rekordbox, you can check the play histories of DJ players (page 102). A play history by PRO DJ LINK is created in the year's folder as [LINK HISTORY yyyy-mm-dd].
 
-When your computer is connected to a PRO DJ LINK-compatible DJ mixer by a LAN cable, you can monitor tracks in rekordbox through headphones connected to the DJ mixer. (page 110))
+When your computer is connected to a PRO DJ LINK-compatible DJ mixer by a LAN cable, you can monitor tracks in rekordbox through headphones connected to the DJ mixer. (page 110)
 
 ## Establishing the link
 

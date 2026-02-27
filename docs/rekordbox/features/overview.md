@@ -460,7 +460,7 @@ Perfect if you want to start managing your music and try DJing for free.
 
 **Cloud Music Management:**
 
-- NEW: Sync up to 1,000 tracks to the cloud with owner registration or Hardware Unlock
+- NEW: Cloud Library Sync supports up to 20 tracks in [Trial playlist - Cloud Library Sync] for Free/Core plans; Cloud Export supports up to 1,000 songs with owner registration or Hardware Unlock.
 
 **Advanced Track Analysis:**
 

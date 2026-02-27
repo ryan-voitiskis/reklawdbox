@@ -4,7 +4,7 @@ title: "Preparing for DJ performance"
 type: manual
 source:
   file: "rekordbox7.2.8_manual_EN.pdf"
-  pages: "140-149"
+  pages: "144-149"
   version: "7.2.8"
 topics: [browsing, devices, equipment, export, link, mixing, recording, sequencer, waveform]
 modes: [performance]
@@ -12,102 +12,6 @@ confidence: verified
 last_verified: "2026-02-17"
 transcribed_by: agent
 verified_by: agent
----
-
-# PERFORMANCE mode
-
-11. Adjust BPM for playback of the sampler.
-    Click [-]/[+] to change the BPM.
-
-### Sequencer panel
-
-When displaying the sampler deck, the sequencer panel is also displayed.
-For details on operation, see "Using a sequencer" (page 193).
-
-[Screenshot: Sequencer panel showing record, play, save, pattern selection, beat counter, mute, erase controls and metronome]
-
-1. Record the sampler sequence.
-2. Play the sampler sequence.
-3. Save the recorded sampler sequence.
-4. Indicate how the sequence is saved. (Sequence slot)
-   A sequence name in white indicates that the sequence is saved. A grayed out sequence name indicates that the sequence is not saved. A grayed out sequence name with a red circle indicates that the sequence is temporarily recorded.
-   Up to eight sequences can be saved.
-5. Change the sequence length.
-6. Indicates sequence length and beats. (Beat Counter)
-   During recording or playback of a sequence, a marker moves to indicate the playback position.
-7. Mute the sampler sequence per sampler slot. ([Sequence MUTE mode])
-8. Delete the sampler sequence per sampler slot. ([Sequence ERASE mode])
-9. Turn the metronome sound on/off.
-   Metronome sound starts with the playback track, synchronized with the beat grid.
-10. Change the metronome volume to one of three levels.
-
-## Mixer panel
-
-Click the mixer icon in the global section (page 123).
-For details on operation, see "Using the mixer function" (page 167).
-
-[Screenshot: Mixer panel showing two channel strips with TRIM, HIGH/MID/LOW EQ knobs, CUE buttons, and channel faders]
-
-1. The sound of the respective channels before passing through the channel faders is indicated. (Channel level indicator)
-2. Adjust the audio input level for each channel.
-   Click to change the controller.
-3. Adjust the volume of each frequency band.
-   Click to change the value to [0].
-4. Monitor the clicked channel through your headphones.
-5. Adjusts the audio level for each channel. (Channel fader)
-   The audio is output according to the characteristics of the curve selected on the [Preferences] window > [Controller] category > [Mixer] tab > [CROSSFADER Curve].
-
-[Screenshot: Mixer panel lower section showing headphone controls, MIX/LEVEL knob, crossfader assigns, and crossfader]
-
-6. Adjust the monitor volume of the channel for which the [CUE] button is clicked, and the sound of the [MASTER] channel.
-7. Adjust the volume level of the headphones.
-8. Assign the channel output to either the left or right of the crossfader. (Crossfader assign)
-9. Audio is output from the crossfader according to the characteristics of the curve selected on the [Preferences] window > [Controller] category > [Mixer] tab > [CROSSFADER Curve]. (Crossfader)
-
-## Recording panel
-
-Click the recording icon in the global section (page 123).
-Depending on your subscription plan and DJ equipment connected to your computer, this function may not be available.
-For details on operation, see "Recording" (page 173).
-
-[Screenshot: Recording panel showing Master Out source selector, recording level knob, level meter, record button, and elapsed/remaining time display showing 00:00:17 / 02:59:43]
-
-1. Select a recording source.
-2. Adjust the recording level.
-3. The recording level is indicated.
-4. Start/Stop recording.
-5. The recording elapsed time and remaining time for continuous recording are displayed.
-
-## Enlarged waveform panel
-
-When selecting [2 Deck Horizontal] in the global section.
-
-[Screenshot: Enlarged waveform panel showing two horizontal waveforms with markers and cue points]
-
-[Screenshot: Three icon sets showing zoom controls (RST/zoom in/zoom out), match/capture controls, and beat count display controls]
-
-1. Switch the icon.
-2. Change a zoom ratio of the enlarged waveform.
-   - [RST]: Reset the zoom ratio.
-3. Hide the icons.
-4. Set two tracks in Players 1 and 2 as a good match combination.
-5. Extract a section of a track. (CAPTURE) (page 200)
-6. Extract the DRUMS Stem from a section of a track. (DRUM CAPTURE) (page 214)
-7. When a memory cue or Hot Cue is set, a marker at each point is displayed.
-8. The current playback position and beats to the memory cue are displayed. (Beat count)
-   Open the [Preferences] window > [View] category > [Display Type] tab > [Beat Count Display], and select [Current Position (Bars)], [Count to the next MEMORY CUE (Bars)], or [Count to the next MEMORY CUE (Beats)].
-
-## Browser panel
-
-See "Browser panel" (page 79) of "EXPORT mode".
-
-### Split screen
-
-Click the split screen icon at the bottom right of the screen. Another browser panel is displayed. More tracks can be displayed in the list, which helps with your DJ performance.
-
-- Click the switch icon at the bottom right of the screen to switch the active window.
-- Select a track in the split screen, and click a deck at the top of the screen. The track then is loaded to the deck.
-
 ---
 
 # Preparing for DJ performance

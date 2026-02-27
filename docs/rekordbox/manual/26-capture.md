@@ -27,7 +27,7 @@ For the loop play, see "Starting loop play" (page 157).
 
    [Screenshot: Enlarged waveform showing a loop range highlighted in the upper and lower waveform display]
 
-2. Click [<] on the right side of the enlarged waveform, and then click [X].
+2. Click [<] on the right side of the enlarged waveform, and then click [capture icon].
    The color of the loop range changes.
 
    [Screenshot: Enlarged waveform with the loop range color changed, indicating capture mode is active]
@@ -54,7 +54,7 @@ For the slicer, see "Using a slicer" (page 197).
 
    [Screenshot: Enlarged waveform with slicer sections displayed as colored segments across the waveform]
 
-2. Click [<] on the right side of the enlarged waveform, and then click [X].
+2. Click [<] on the right side of the enlarged waveform, and then click [capture icon].
    The color of the slicer changes.
 
    [Screenshot: Enlarged waveform with the slicer color changed, indicating capture mode is active]
@@ -76,7 +76,7 @@ For the slicer, see "Using a slicer" (page 197).
 
    [Screenshot: Enlarged waveform with slicer sections displayed as colored segments]
 
-2. Click [<] on the right side of the enlarged waveform, and then click [X].
+2. Click [<] on the right side of the enlarged waveform, and then click [capture icon].
    The color of the slicer changes.
 
    [Screenshot: Enlarged waveform with the slicer color changed, indicating capture mode is active]

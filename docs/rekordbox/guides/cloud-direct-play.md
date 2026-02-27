@@ -45,7 +45,7 @@ To use CloudDirectPlay, install the latest version of rekordbox.
 
 ### Subscription
 
-CloudDirectPlay is available with any plan including with Free Plan. For details about plans, refer to the Plan page on rekordbox.com.
+CloudDirectPlay is available with any plan including with Free Plan. Free and Core plans can use up to 20 tracks in the [Trial playlist - Cloud Library Sync]. For details about plans, refer to the Plan page on rekordbox.com.
 rekordbox.com/en/plan/
 
 ### Cloud storage service
@@ -208,7 +208,7 @@ The login screen will appear.
 
 To use CloudDirectPlay on DJ equipment, connect the PRO DJ LINK network to the Internet and use the device authenticated on rekordbox or mobile device. For the authenticated device, see "About an authenticated device for CloudDirectPlay" (page 8). For the mobile device, see "Using CloudDirectPlay" (page 13).
 For CloudDirectPlay compatible DJ equipment, refer to the FAQ.
-rekordbox.com/en/support/faq/clouddirect-7/#faq-q600150
+rekordbox.com/en/support/faq/clouddirect-7/#faq-q700150
 The illustrations and operating procedures in this chapter are examples of the CDJ-3000X.
 
 ### Wireless LAN (Wi-Fi) connection
@@ -333,7 +333,7 @@ You can upload with rekordbox for Mac/Windows or rekordbox for iOS/Android.
 When cloud storage is undergoing maintenance or experiencing problems, music files cannot be loaded. Try again when the cloud storage is back online.
 You can check the status of these issues on the cloud storage service websites below.
 https://status.dropbox.com/
-https://www.google.com
+https://www.google.co.jp/appsstatus/dashboard/
 
 ### The USB storage device or SD memory card does not have enough space.
 
