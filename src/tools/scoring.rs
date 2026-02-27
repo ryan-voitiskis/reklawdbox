@@ -199,6 +199,7 @@ pub(super) fn build_candidate_plan(
     variation_index: usize,
     master_tempo: bool,
     harmonic_style: Option<HarmonicStyle>,
+    bpm_drift_limit: f64,
 ) -> CandidatePlan {
     let mut ordered_ids = vec![start_track_id.to_string()];
     let mut transitions = Vec::new();
@@ -207,6 +208,11 @@ pub(super) fn build_candidate_plan(
 
     // Track genre run length for stickiness scoring
     let mut genre_run_length: u32 = 0;
+    // Track start BPM for trajectory drift penalty
+    let start_bpm = profiles_by_id
+        .get(start_track_id)
+        .map(|p| p.bpm)
+        .unwrap_or(0.0);
 
     while ordered_ids.len() < target_tracks && !remaining.is_empty() {
         let Some(from_track_id) = ordered_ids.last() else {
@@ -242,6 +248,20 @@ pub(super) fn build_candidate_plan(
                 })
             })
             .collect();
+
+        // BPM trajectory coherence penalty
+        if start_bpm > 0.0 && target_tracks > 1 {
+            let position = ordered_ids.len(); // 1-indexed position of the candidate
+            let budget = bpm_drift_limit * (position as f64 / target_tracks as f64);
+            for (candidate_id, scores) in &mut scored_next {
+                if let Some(candidate_profile) = profiles_by_id.get(candidate_id.as_str()) {
+                    let drift = (candidate_profile.bpm - start_bpm).abs();
+                    if drift > budget {
+                        scores.composite *= 0.7;
+                    }
+                }
+            }
+        }
 
         scored_next.sort_by(|left, right| {
             right

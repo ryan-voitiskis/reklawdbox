@@ -305,6 +305,10 @@ pub struct BuildSetParams {
         description = "Harmonic mixing style: conservative (strict key matching), balanced (default), adventurous (creative key clashes allowed)."
     )]
     pub harmonic_style: Option<HarmonicStyle>,
+    #[schemars(
+        description = "Maximum BPM drift from start track (default 15.0). Penalizes candidates that wander too far from the opening BPM."
+    )]
+    pub bpm_drift_limit: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

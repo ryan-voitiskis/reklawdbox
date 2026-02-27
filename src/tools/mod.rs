@@ -1865,6 +1865,7 @@ impl ReklawdboxServer {
 
         let master_tempo = p.master_tempo.unwrap_or(true);
         let harmonic_style = p.harmonic_style;
+        let bpm_drift_limit = p.bpm_drift_limit.unwrap_or(15.0);
         let mut candidates = Vec::with_capacity(effective_candidates);
         for candidate_index in 0..effective_candidates {
             let start_track_id = start_tracks[candidate_index % start_tracks.len()].clone();
@@ -1877,6 +1878,7 @@ impl ReklawdboxServer {
                 candidate_index,
                 master_tempo,
                 harmonic_style,
+                bpm_drift_limit,
             );
 
             let tracks_json: Vec<serde_json::Value> = plan

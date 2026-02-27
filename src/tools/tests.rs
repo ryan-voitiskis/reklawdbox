@@ -449,6 +449,7 @@
                 candidates: Some(3),
                 master_tempo: None,
                 harmonic_style: None,
+                bpm_drift_limit: None,
             }))
             .await
             .expect("build_set should succeed for fixture pool");
@@ -557,6 +558,7 @@
                 candidates: Some(2),
                 master_tempo: None,
                 harmonic_style: None,
+                bpm_drift_limit: None,
             }))
             .await
             .expect("build_set should succeed for single-track pool");
@@ -634,6 +636,7 @@
                 candidates: Some(2),
                 master_tempo: None,
                 harmonic_style: None,
+                bpm_drift_limit: None,
             }))
             .await
             .expect("build_set should succeed when all tracks share the same key");
@@ -683,6 +686,7 @@
                 candidates: Some(1),
                 master_tempo: None,
                 harmonic_style: None,
+                bpm_drift_limit: None,
             }))
             .await
             .expect("build_set should succeed when pool is smaller than target");
@@ -3246,6 +3250,44 @@
         );
         assert_eq!(first.value, 0.7);
         assert!(!first.label.contains("streak bonus"));
+    }
+
+    #[test]
+    fn bpm_trajectory_drift_penalty() {
+        use std::collections::HashMap;
+
+        // Pool: start at 128 BPM, candidates at 128, 130, 145
+        // With bpm_drift_limit=10.0 and target_tracks=4:
+        //   position 1: budget = 10.0 * (1/4) = 2.5 → 145 drifts 17 (>2.5) → penalized
+        //   position 1: budget = 2.5 → 130 drifts 2 (<=2.5) → no penalty
+        let start = make_test_profile("bpm-start", "8A", 128.0, 0.7, "House");
+        let close = make_test_profile("bpm-close", "8A", 130.0, 0.7, "House");
+        let far = make_test_profile("bpm-far", "8A", 145.0, 0.7, "House");
+
+        let mut profiles: HashMap<String, TrackProfile> = HashMap::new();
+        profiles.insert("bpm-start".to_string(), start);
+        profiles.insert("bpm-close".to_string(), close);
+        profiles.insert("bpm-far".to_string(), far);
+
+        // Tight limit: far track should be penalized
+        let tight = build_candidate_plan(
+            &profiles, "bpm-start", 3,
+            &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+            SetPriority::Harmonic, 0, true, None, 10.0,
+        );
+        // Close track (130) should be picked first since far (145) gets penalized
+        assert_eq!(tight.ordered_ids[1], "bpm-close");
+
+        // Very generous limit: no penalty, both viable (close still wins on BPM axis)
+        let generous = build_candidate_plan(
+            &profiles, "bpm-start", 3,
+            &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+            SetPriority::Harmonic, 0, true, None, 200.0,
+        );
+        // With generous limit, close should still be first (better BPM score)
+        assert_eq!(generous.ordered_ids[1], "bpm-close");
+        // But far should still be included
+        assert!(generous.ordered_ids.contains(&"bpm-far".to_string()));
     }
 
     #[test]
