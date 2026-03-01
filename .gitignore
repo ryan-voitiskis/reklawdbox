@@ -6,6 +6,8 @@
 .claude/worktrees/
 *.log
 *.db
+*.db-wal
+*.db-shm
 
 # Rust
 /target
