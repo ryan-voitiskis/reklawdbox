@@ -1084,15 +1084,12 @@ pub fn scan(
                         }
                         _ => None,
                     };
-                    if let Some(imported) = is_imported {
-                        if let Some(ref detail) = issue.detail {
-                            if let Ok(mut obj) =
-                                serde_json::from_str::<serde_json::Value>(detail)
-                            {
-                                obj["imported"] = serde_json::Value::Bool(imported);
-                                issue.detail = Some(obj.to_string());
-                            }
-                        }
+                    if let (Some(imported), Some(detail)) = (is_imported, &issue.detail)
+                        && let Ok(mut obj) =
+                            serde_json::from_str::<serde_json::Value>(detail)
+                    {
+                        obj["imported"] = serde_json::Value::Bool(imported);
+                        issue.detail = Some(obj.to_string());
                     }
                 }
             }
@@ -1180,14 +1177,14 @@ pub fn scan(
                 }
                 _ => continue,
             };
-            if let Some(detail_str) = detail {
-                if let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail_str) {
-                    obj["imported"] = serde_json::Value::Bool(is_imported);
-                    let updated = obj.to_string();
-                    if updated != *detail_str {
-                        store::update_audit_issue_detail(conn, *id, &updated)
-                            .map_err(|e| format!("DB error updating import annotation: {e}"))?;
-                    }
+            if let Some(detail_str) = detail
+                && let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail_str)
+            {
+                obj["imported"] = serde_json::Value::Bool(is_imported);
+                let updated = obj.to_string();
+                if updated != *detail_str {
+                    store::update_audit_issue_detail(conn, *id, &updated)
+                        .map_err(|e| format!("DB error updating import annotation: {e}"))?;
                 }
             }
         }

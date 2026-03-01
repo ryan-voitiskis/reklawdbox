@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::db::escape_like;
 
+/// (id, path, issue_type, detail)
+pub type AuditIssueRow = (i64, String, String, Option<String>);
+
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -647,7 +650,7 @@ pub fn get_open_issues_by_types(
     conn: &Connection,
     scope: &str,
     issue_types: &[&str],
-) -> Result<Vec<(i64, String, String, Option<String>)>, rusqlite::Error> {
+) -> Result<Vec<AuditIssueRow>, rusqlite::Error> {
     if issue_types.is_empty() {
         return Ok(Vec::new());
     }
