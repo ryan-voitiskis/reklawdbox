@@ -6,7 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use rusqlite::Connection;
 use serde::Serialize;
 use unicode_casefold::UnicodeCaseFold;
@@ -213,35 +215,43 @@ fn is_disc_subdir(name: &str) -> bool {
     name.starts_with("CD") || name.starts_with("Disc") || name.starts_with("disc")
 }
 
-/// Lowercase patterns for tech specs in directory names.
-/// Matching is always done against the lowercased input.
-const TECH_SPEC_PATTERNS: &[&str] = &[
-    "[flac]", "[wav]", "[mp3]", "[aiff]", "[aac]", "24-96", "24-48", "24-44", "16-44", "16-48",
-    "24bit", "16bit",
-];
+/// Compiled regex matching tech-spec fragments in directory names:
+/// format names (bracketed or bare), bit-depth/sample-rate combos with
+/// optional fractional kHz and units, and standalone bit-depth labels.
+static TECH_SPEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)",
+        r"\[(?:flac|wav|mp3|aiff|aac|alac)\]",                   // [FLAC], [WAV], …
+        r"|\b(?:flac|wav|mp3|aiff|aac|alac)\b",                  // bare FLAC, wav, …
+        r"|\b(?:16|24|32)\s?-\s?\d{2,3}(?:\.\d+)?\s*(?:khz|hz)?", // 24-44.1kHz
+        r"|\b(?:16|24|32)\s?bit",                                 // 24bit, 16 bit
+        r"|\d{2,3}(?:\.\d+)?\s*(?:khz|hz)",                      // 44.1kHz, 96kHz
+    ))
+    .expect("TECH_SPEC_RE must compile")
+});
 
-/// Strip tech-spec brackets and bitrate specs from a directory name for
-/// pattern matching. Matching is case-insensitive but non-pattern text
-/// preserves its original casing.
+/// Regex for orphaned delimiters left after tech-spec stripping.
+/// Matches `()`, `[]`, and variants containing only whitespace, hyphens, or
+/// dots — residue left when the contents were entirely tech-spec fragments.
+static ORPHAN_DELIM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\([\s\-.]*\)|\[[\s\-.]*\]").expect("ORPHAN_DELIM_RE must compile")
+});
+
+/// Strip tech-spec fragments from a directory name for pattern matching.
+/// Matching is case-insensitive but non-pattern text preserves its original
+/// casing.
 fn normalize_dir_name(name: &str) -> String {
-    let mut result = name.to_string();
-    for pat in TECH_SPEC_PATTERNS {
-        // Find the pattern in the lowercased string, then remove the
-        // corresponding byte range from the original to preserve casing.
-        loop {
-            let lower = result.to_ascii_lowercase();
-            if let Some(pos) = lower.find(pat) {
-                result.replace_range(pos..pos + pat.len(), "");
-            } else {
-                break;
-            }
-        }
-    }
-    // Collapse multiple spaces into one
-    while result.contains("  ") {
-        result = result.replace("  ", " ");
-    }
-    result.trim().to_string()
+    let result = TECH_SPEC_RE.replace_all(name, "");
+    let result = ORPHAN_DELIM_RE.replace_all(&result, "");
+    let result = result
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let result = result
+        .trim()
+        .trim_matches(|c: char| c == '-' || c == '.')
+        .trim();
+    result.to_string()
 }
 
 /// Check if a directory name has a year suffix like `(2024)`.
@@ -686,8 +696,7 @@ pub fn check_filename(
     if !skip.contains(&IssueType::TechSpecsInDir)
         && let Some((_, dir_name)) = effective_album_dir_name(path)
     {
-        let dir_lower = dir_name.to_ascii_lowercase();
-        let has_tech_specs = TECH_SPEC_PATTERNS.iter().any(|pat| dir_lower.contains(pat));
+        let has_tech_specs = TECH_SPEC_RE.is_match(dir_name);
         if has_tech_specs {
             let clean = normalize_dir_name(dir_name);
             issues.push(DetectedIssue {
@@ -1760,8 +1769,42 @@ mod tests {
 
     #[test]
     fn normalize_strips_tech_specs() {
+        // Existing cases
         assert_eq!(normalize_dir_name("Album [FLAC] (2024)"), "Album (2024)");
         assert_eq!(normalize_dir_name("Album [WAV] 24-96"), "Album");
+        // Issue #15: fractional kHz suffix left `.1` fragment
+        assert_eq!(
+            normalize_dir_name("Good Lies(Electronic) [2023] 24-44.1"),
+            "Good Lies(Electronic) [2023]"
+        );
+        // Issue #15: bare format + units left `(-44.1kHz)` fragment
+        assert_eq!(normalize_dir_name("FLAC (16bit-44.1kHz)"), "");
+        // Bare format name without brackets
+        assert_eq!(normalize_dir_name("Album FLAC"), "Album");
+        // Standalone bit-depth with space
+        assert_eq!(normalize_dir_name("Album 24 bit"), "Album");
+        // Sample rate with kHz unit
+        assert_eq!(normalize_dir_name("Album 16-48kHz"), "Album");
+    }
+
+    #[test]
+    fn normalize_no_false_positives() {
+        // Years in parens must NOT be stripped
+        assert_eq!(normalize_dir_name("Album Name (2024)"), "Album Name (2024)");
+        assert_eq!(normalize_dir_name("Album (2016)"), "Album (2016)");
+        // Non-tech-spec parenthesized text must NOT be stripped
+        assert_eq!(normalize_dir_name("Album (Deluxe)"), "Album (Deluxe)");
+        // Bare number that happens to be 16/24/32 but not followed by bit/- pattern
+        assert_eq!(normalize_dir_name("Track 24"), "Track 24");
+        assert_eq!(normalize_dir_name("Studio 32"), "Studio 32");
+        // Two-digit numbers that are NOT 16/24/32 followed by dash should not match
+        assert_eq!(normalize_dir_name("Album 20-20"), "Album 20-20");
+        // "24" embedded in longer number should not match
+        assert_eq!(normalize_dir_name("Track 2400"), "Track 2400");
+        assert_eq!(normalize_dir_name("Track 124"), "Track 124");
+        // Artist/album name containing "wav" as substring should NOT match
+        assert_eq!(normalize_dir_name("Brainwave Sessions"), "Brainwave Sessions");
+        assert_eq!(normalize_dir_name("New Wave Compilation"), "New Wave Compilation");
     }
 
     // -- IssueType round-trip --
