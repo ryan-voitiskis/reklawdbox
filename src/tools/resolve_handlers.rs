@@ -169,27 +169,58 @@ pub(super) fn handle_cache_coverage(
     let mut no_data_at_all = 0usize;
 
     {
-        let store = server.cache_store_conn()?;
-        for track in &tracks {
-            let norm_artist = crate::normalize::normalize_for_matching(&track.artist);
-            let norm_title = crate::normalize::normalize_for_matching(&track.title);
-            let audio_cache_key =
-                resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
+        // Pre-compute normalized keys for each track.
+        let track_keys: Vec<(String, String, String)> = tracks
+            .iter()
+            .map(|t| {
+                let norm_artist = crate::normalize::normalize_for_matching(&t.artist);
+                let norm_title = crate::normalize::normalize_for_matching(&t.title);
+                let audio_key =
+                    resolve_file_path(&t.file_path).unwrap_or_else(|_| t.file_path.clone());
+                (norm_artist, norm_title, audio_key)
+            })
+            .collect();
 
-            let has_discogs = store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                .is_some();
-            let has_beatport = store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                .is_some();
-            let has_stratum =
-                store::get_audio_analysis(&store, &audio_cache_key, audio::ANALYZER_STRATUM)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                    .is_some();
-            let has_essentia =
-                store::get_audio_analysis(&store, &audio_cache_key, audio::ANALYZER_ESSENTIA)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                    .is_some();
+        // Deduplicate artists for enrichment batch queries.
+        let unique_artists: Vec<&str> = {
+            let mut seen = std::collections::HashSet::new();
+            track_keys
+                .iter()
+                .filter_map(|(a, _, _)| if seen.insert(a.as_str()) { Some(a.as_str()) } else { None })
+                .collect()
+        };
+
+        // Deduplicate file paths for audio analysis batch query.
+        let unique_paths: Vec<&str> = {
+            let mut seen = std::collections::HashSet::new();
+            track_keys
+                .iter()
+                .filter_map(|(_, _, p)| if seen.insert(p.as_str()) { Some(p.as_str()) } else { None })
+                .collect()
+        };
+
+        let store = server.cache_store_conn()?;
+
+        let discogs_set = store::batch_enrichment_existence(&store, "discogs", &unique_artists)
+            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        let beatport_set = store::batch_enrichment_existence(&store, "beatport", &unique_artists)
+            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        let audio_set = store::batch_audio_analysis_existence(&store, &unique_paths)
+            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+
+        // Build borrowed-key sets to avoid per-track clones during counting.
+        let discogs_ref: std::collections::HashSet<(&str, &str)> =
+            discogs_set.iter().map(|(a, t)| (a.as_str(), t.as_str())).collect();
+        let beatport_ref: std::collections::HashSet<(&str, &str)> =
+            beatport_set.iter().map(|(a, t)| (a.as_str(), t.as_str())).collect();
+        let audio_ref: std::collections::HashSet<(&str, &str)> =
+            audio_set.iter().map(|(p, a)| (p.as_str(), a.as_str())).collect();
+
+        for (norm_artist, norm_title, audio_key) in &track_keys {
+            let has_discogs = discogs_ref.contains(&(norm_artist.as_str(), norm_title.as_str()));
+            let has_beatport = beatport_ref.contains(&(norm_artist.as_str(), norm_title.as_str()));
+            let has_stratum = audio_ref.contains(&(audio_key.as_str(), audio::ANALYZER_STRATUM));
+            let has_essentia = audio_ref.contains(&(audio_key.as_str(), audio::ANALYZER_ESSENTIA));
 
             if has_stratum {
                 stratum_cached += 1;

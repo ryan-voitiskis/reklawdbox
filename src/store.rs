@@ -1,4 +1,5 @@
 use rusqlite::{Connection, OpenFlags, ffi, params};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::db::escape_like;
@@ -130,6 +131,44 @@ pub fn get_enrichment(
     }
 }
 
+/// Batch existence check for enrichment cache entries.
+/// Returns `(query_artist, query_title)` pairs present for the given provider.
+/// Over-fetches by artist (all titles for matched artists), so the caller
+/// filters via `HashSet::contains`.
+pub fn batch_enrichment_existence(
+    conn: &Connection,
+    provider: &str,
+    artists: &[&str],
+) -> Result<HashSet<(String, String)>, rusqlite::Error> {
+    if artists.is_empty() {
+        return Ok(HashSet::new());
+    }
+    // Reserve 1 bind var for provider, rest for the IN list.
+    const MAX_IN_VARS: usize = 899;
+    let mut result = HashSet::new();
+    for chunk in artists.chunks(MAX_IN_VARS) {
+        let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT query_artist, query_title FROM enrichment_cache \
+             WHERE provider = ?1 AND query_artist IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk.len() + 1);
+        bind_values.push(&provider);
+        for artist in chunk {
+            bind_values.push(artist);
+        }
+        let rows = stmt.query_map(bind_values.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            result.insert(row?);
+        }
+    }
+    Ok(result)
+}
+
 pub fn set_enrichment(
     conn: &Connection,
     provider: &str,
@@ -185,6 +224,39 @@ pub fn get_audio_analysis(
         Some(Err(e)) => Err(e),
         None => Ok(None),
     }
+}
+
+/// Batch existence check for audio analysis cache entries.
+/// Returns `(file_path, analyzer)` pairs present in the cache.
+pub fn batch_audio_analysis_existence(
+    conn: &Connection,
+    file_paths: &[&str],
+) -> Result<HashSet<(String, String)>, rusqlite::Error> {
+    if file_paths.is_empty() {
+        return Ok(HashSet::new());
+    }
+    const MAX_BIND_VARS: usize = 900;
+    let mut result = HashSet::new();
+    for chunk in file_paths.chunks(MAX_BIND_VARS) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT file_path, analyzer FROM audio_analysis_cache \
+             WHERE file_path IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let bind_values: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt.query_map(bind_values.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            result.insert(row?);
+        }
+    }
+    Ok(result)
 }
 
 pub fn set_audio_analysis(
@@ -1369,5 +1441,86 @@ mod tests {
         let files = get_audit_files_in_scope(&conn, "/music/100%_done/").unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/music/100%_done/track.flac");
+    }
+
+    #[test]
+    fn test_batch_enrichment_existence() {
+        let (_dir, conn) = open_temp_store();
+        set_enrichment(&conn, "discogs", "artist_a", "title_1", Some("exact"), Some("{}")).unwrap();
+        set_enrichment(&conn, "discogs", "artist_a", "title_2", Some("exact"), Some("{}")).unwrap();
+        set_enrichment(&conn, "beatport", "artist_b", "title_3", None, Some("{}")).unwrap();
+
+        // Discogs: artist_a has two titles
+        let discogs = batch_enrichment_existence(&conn, "discogs", &["artist_a", "artist_b"]).unwrap();
+        assert!(discogs.contains(&("artist_a".to_string(), "title_1".to_string())));
+        assert!(discogs.contains(&("artist_a".to_string(), "title_2".to_string())));
+        // artist_b has no discogs entry
+        assert!(!discogs.contains(&("artist_b".to_string(), "title_3".to_string())));
+
+        // Beatport: artist_b has one title
+        let beatport = batch_enrichment_existence(&conn, "beatport", &["artist_a", "artist_b"]).unwrap();
+        assert!(beatport.contains(&("artist_b".to_string(), "title_3".to_string())));
+        assert!(!beatport.contains(&("artist_a".to_string(), "title_1".to_string())));
+
+        // Empty input
+        let empty = batch_enrichment_existence(&conn, "discogs", &[]).unwrap();
+        assert!(empty.is_empty());
+
+        // Unknown artist
+        let unknown = batch_enrichment_existence(&conn, "discogs", &["nobody"]).unwrap();
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_batch_audio_analysis_existence() {
+        let (_dir, conn) = open_temp_store();
+        set_audio_analysis(&conn, "/music/a.flac", "stratum-dsp", 100, 1000, "1.0", "{}").unwrap();
+        set_audio_analysis(&conn, "/music/a.flac", "essentia", 100, 1000, "1.0", "{}").unwrap();
+        set_audio_analysis(&conn, "/music/b.flac", "stratum-dsp", 200, 2000, "1.0", "{}").unwrap();
+
+        let result = batch_audio_analysis_existence(&conn, &["/music/a.flac", "/music/b.flac", "/music/c.flac"]).unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&("/music/a.flac".to_string(), "stratum-dsp".to_string())));
+        assert!(result.contains(&("/music/a.flac".to_string(), "essentia".to_string())));
+        assert!(result.contains(&("/music/b.flac".to_string(), "stratum-dsp".to_string())));
+        // c.flac not cached
+        assert!(!result.contains(&("/music/c.flac".to_string(), "stratum-dsp".to_string())));
+
+        // Empty input
+        let empty = batch_audio_analysis_existence(&conn, &[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_batch_audio_analysis_existence_chunking() {
+        let (_dir, conn) = open_temp_store();
+        let paths: Vec<String> = (0..1000).map(|i| format!("/music/track_{i}.flac")).collect();
+        for p in &paths {
+            set_audio_analysis(&conn, p, "stratum-dsp", 100, 1000, "1.0", "{}").unwrap();
+        }
+
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        let result = batch_audio_analysis_existence(&conn, &path_refs).unwrap();
+        assert_eq!(result.len(), 1000);
+        for p in &paths {
+            assert!(result.contains(&(p.clone(), "stratum-dsp".to_string())));
+        }
+    }
+
+    #[test]
+    fn test_batch_enrichment_existence_chunking() {
+        let (_dir, conn) = open_temp_store();
+        // Seed 1000 artists to exercise multi-chunk path (chunk size = 899).
+        let artists: Vec<String> = (0..1000).map(|i| format!("artist_{i}")).collect();
+        for a in &artists {
+            set_enrichment(&conn, "discogs", a, "title", Some("exact"), Some("{}")).unwrap();
+        }
+
+        let artist_refs: Vec<&str> = artists.iter().map(|s| s.as_str()).collect();
+        let result = batch_enrichment_existence(&conn, "discogs", &artist_refs).unwrap();
+        assert_eq!(result.len(), 1000);
+        for a in &artists {
+            assert!(result.contains(&(a.clone(), "title".to_string())));
+        }
     }
 }
