@@ -376,3 +376,27 @@ pub(super) fn handle_clear_changes(
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }
+
+pub(super) fn handle_clear_caches(
+    server: &ReklawdboxServer,
+) -> Result<CallToolResult, McpError> {
+    let conn = server.cache_store_conn()?;
+    let result =
+        crate::store::clear_caches(&conn).map_err(|e| mcp_internal_error(format!("{e}")))?;
+
+    let staged = server.state.changes.clear(None).0;
+
+    let json = serde_json::json!({
+        "cleared": {
+            "enrichment_cache": result.enrichment,
+            "audio_analysis_cache": result.audio_analysis,
+            "audit_issues": result.audit_issues,
+            "audit_files": result.audit_files,
+            "staged_changes": staged,
+        },
+        "preserved": ["broker_discogs_session"],
+    });
+    let text = serde_json::to_string_pretty(&json)
+        .map_err(|e| mcp_internal_error(format!("{e}")))?;
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}

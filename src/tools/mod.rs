@@ -248,6 +248,13 @@ impl ReklawdboxServer {
     }
 
     #[tool(
+        description = "Clear all caches (enrichment, audio analysis, audit state) and staged changes. Preserves Discogs broker session. Use this to reset to a clean slate before a fresh test run."
+    )]
+    async fn clear_caches(&self) -> Result<CallToolResult, McpError> {
+        handle_clear_caches(self)
+    }
+
+    #[tool(
         description = "Look up a track on Discogs for genre/style enrichment. Returns an object payload with lookup data plus cache metadata (`cache_hit`, optional `cached_at`). On no match, `result` is null. Results are cached. Pass track_id to auto-fill artist/title/album from the library."
     )]
     async fn lookup_discogs(
