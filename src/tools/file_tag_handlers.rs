@@ -153,6 +153,7 @@ pub(super) async fn handle_write_file_tags(
             wav_targets: e
                 .wav_targets
                 .unwrap_or_else(|| vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo]),
+            comment_mode: e.comment_mode.unwrap_or_default(),
         })
         .collect();
 

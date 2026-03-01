@@ -450,6 +450,11 @@ pub(super) struct WriteFileTagsEntry {
         description = "WAV only: which tag layers to write (default: both). Values: \"id3v2\", \"riff_info\""
     )]
     pub wav_targets: Option<Vec<tags::WavTarget>>,
+
+    #[schemars(
+        description = "How to merge the comment field with any existing value: replace (default), prepend, append. Uses ' | ' as separator."
+    )]
+    pub comment_mode: Option<tags::CommentMode>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

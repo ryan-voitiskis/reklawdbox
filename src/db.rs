@@ -573,6 +573,25 @@ pub fn default_db_path() -> Option<String> {
     }
 }
 
+/// Return the set of `FolderPath` values from `djmdContent` under a scope prefix.
+/// Only non-deleted rows (`rb_local_deleted = 0`) are included.
+pub fn paths_imported_in_scope(
+    conn: &Connection,
+    scope: &str,
+) -> Result<HashSet<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT FolderPath FROM djmdContent \
+         WHERE rb_local_deleted = 0 AND FolderPath LIKE ?1 ESCAPE '\\'",
+    )?;
+    let like_pattern = format!("{}%", escape_like(scope));
+    let rows = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
+    let mut set = HashSet::new();
+    for row in rows {
+        set.insert(row?);
+    }
+    Ok(set)
+}
+
 pub fn resolve_db_path() -> Option<String> {
     if let Ok(path) = std::env::var("REKORDBOX_DB_PATH")
         && std::path::Path::new(&path).exists()

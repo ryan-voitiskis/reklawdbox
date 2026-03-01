@@ -422,7 +422,8 @@ impl ReklawdboxServer {
         &self,
         params: Parameters<AuditOperation>,
     ) -> Result<CallToolResult, McpError> {
-        handle_audit_state(self.cache_store_path(), params.0).await
+        let rb_db_path = self.state.db_path.clone().or_else(db::resolve_db_path);
+        handle_audit_state(self.cache_store_path(), rb_db_path, params.0).await
     }
 }
 

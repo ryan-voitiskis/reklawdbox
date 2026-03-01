@@ -642,6 +642,58 @@ pub fn get_audit_summary(conn: &Connection, scope: &str) -> Result<AuditSummary,
     Ok(AuditSummary { by_type_status })
 }
 
+/// Query open audit issues of specific types in scope, returning (id, path, issue_type, detail).
+pub fn get_open_issues_by_types(
+    conn: &Connection,
+    scope: &str,
+    issue_types: &[&str],
+) -> Result<Vec<(i64, String, String, Option<String>)>, rusqlite::Error> {
+    if issue_types.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pattern = format!("{}%", escape_like(scope));
+    let placeholders: Vec<String> = (0..issue_types.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect();
+    let sql = format!(
+        "SELECT id, path, issue_type, detail FROM audit_issues \
+         WHERE path LIKE ?1 ESCAPE '\\' AND status = 'open' \
+         AND issue_type IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_idx = 1;
+    stmt.raw_bind_parameter(param_idx, &pattern)?;
+    for it in issue_types {
+        param_idx += 1;
+        stmt.raw_bind_parameter(param_idx, *it)?;
+    }
+    let mut results = Vec::new();
+    let mut rows = stmt.raw_query();
+    while let Some(row) = rows.next()? {
+        results.push((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+        ));
+    }
+    Ok(results)
+}
+
+/// Update the detail JSON of an audit issue by ID.
+pub fn update_audit_issue_detail(
+    conn: &Connection,
+    id: i64,
+    detail: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE audit_issues SET detail = ?1 WHERE id = ?2",
+        params![detail, id],
+    )?;
+    Ok(())
+}
+
 pub fn delete_missing_audit_files(
     conn: &Connection,
     scope: &str,

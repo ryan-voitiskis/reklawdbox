@@ -954,6 +954,7 @@ pub fn scan(
     scope: &str,
     revalidate: bool,
     skip_issue_types: &HashSet<IssueType>,
+    rekordbox_imported: Option<&HashSet<String>>,
 ) -> Result<ScanSummary, String> {
     let scope = enforce_trailing_slash(scope);
     if scope == "/" {
@@ -993,6 +994,20 @@ pub fn scan(
     let mut skipped_unchanged = 0usize;
     let mut new_issues: HashMap<String, usize> = HashMap::new();
     let mut auto_resolved: HashMap<String, usize> = HashMap::new();
+
+    // Pre-compute directory-level imported set for TechSpecsInDir annotation
+    let imported_dirs: HashSet<String> = rekordbox_imported
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| {
+                    std::path::Path::new(p)
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // 4. Process files in batches (transaction auto-rolls-back on early exit)
     let mut batch_count = 0usize;
@@ -1053,6 +1068,35 @@ pub fn scan(
                 ));
             }
 
+            // Annotate rename-type issues with Rekordbox import status
+            if let Some(imported_set) = rekordbox_imported {
+                for issue in &mut detected {
+                    let is_imported = match issue.issue_type {
+                        IssueType::OriginalMixSuffix => {
+                            Some(imported_set.contains(&path_str))
+                        }
+                        IssueType::TechSpecsInDir => {
+                            let parent_dir = file_path
+                                .parent()
+                                .map(|d| d.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            Some(imported_dirs.contains(&parent_dir))
+                        }
+                        _ => None,
+                    };
+                    if let Some(imported) = is_imported {
+                        if let Some(ref detail) = issue.detail {
+                            if let Ok(mut obj) =
+                                serde_json::from_str::<serde_json::Value>(detail)
+                            {
+                                obj["imported"] = serde_json::Value::Bool(imported);
+                                issue.detail = Some(obj.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
             // Upsert audit_file
             store::upsert_audit_file(&tx, &path_str, &now, &mtime, size)
                 .map_err(|e| format!("DB error upserting file: {e}"))?;
@@ -1111,6 +1155,43 @@ pub fn scan(
     // Commit final batch
     tx.commit()
         .map_err(|e| format!("DB error committing final batch: {e}"))?;
+
+    // 4b. Refresh import annotations on ALL open rename-type issues in scope.
+    // This catches issues that were skipped (unchanged files) but whose Rekordbox
+    // import status may have changed since the last scan.
+    if let Some(imported_set) = rekordbox_imported {
+        let rename_types = [
+            IssueType::OriginalMixSuffix.as_str(),
+            IssueType::TechSpecsInDir.as_str(),
+        ];
+        let issues = store::get_open_issues_by_types(conn, &scope, &rename_types)
+            .map_err(|e| format!("DB error querying issues for import refresh: {e}"))?;
+        for (id, path, issue_type, detail) in &issues {
+            let is_imported = match issue_type.as_str() {
+                t if t == IssueType::OriginalMixSuffix.as_str() => {
+                    imported_set.contains(path)
+                }
+                t if t == IssueType::TechSpecsInDir.as_str() => {
+                    let parent_dir = std::path::Path::new(path)
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    imported_dirs.contains(&parent_dir)
+                }
+                _ => continue,
+            };
+            if let Some(detail_str) = detail {
+                if let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail_str) {
+                    obj["imported"] = serde_json::Value::Bool(is_imported);
+                    let updated = obj.to_string();
+                    if updated != *detail_str {
+                        store::update_audit_issue_detail(conn, *id, &updated)
+                            .map_err(|e| format!("DB error updating import annotation: {e}"))?;
+                    }
+                }
+            }
+        }
+    }
 
     // 5. Build summary from DB
     let summary = store::get_audit_summary(conn, &scope)
@@ -1958,7 +2039,7 @@ mod tests {
         no_access.set_mode(0o000);
         std::fs::set_permissions(&blocked_dir, no_access).unwrap();
 
-        let scan_result = scan(&conn, dir.path().to_str().unwrap(), false, &HashSet::new());
+        let scan_result = scan(&conn, dir.path().to_str().unwrap(), false, &HashSet::new(), None);
 
         std::fs::set_permissions(&blocked_dir, original_perms).unwrap();
 

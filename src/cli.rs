@@ -827,6 +827,7 @@ fn run_write_tags(args: WriteTagsArgs) -> Result<(), Box<dyn std::error::Error>>
         path: PathBuf::from(&args.path),
         tags: tag_map,
         wav_targets,
+        comment_mode: tags::CommentMode::default(),
     };
 
     let had_errors;

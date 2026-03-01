@@ -5,10 +5,12 @@ use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::audit;
+use crate::db;
 use crate::store;
 
 pub(super) async fn handle_audit_state(
     store_path: String,
+    rekordbox_db_path: Option<String>,
     params: AuditOperation,
 ) -> Result<CallToolResult, McpError> {
     match params {
@@ -27,7 +29,27 @@ pub(super) async fn handle_audit_state(
             let summary = tokio::task::spawn_blocking(move || {
                 let conn = store::open(&store_path)
                     .map_err(|e| format!("Failed to open internal store: {e}"))?;
-                audit::scan(&conn, &path_prefix, revalidate, &skip)
+
+                // Try to load Rekordbox imported paths for annotation
+                let imported = rekordbox_db_path.and_then(|db_path| {
+                    match db::open(&db_path) {
+                        Ok(rb_conn) => {
+                            match db::paths_imported_in_scope(&rb_conn, &path_prefix) {
+                                Ok(set) => Some(set),
+                                Err(e) => {
+                                    tracing::warn!("Failed to query imported paths: {e}");
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to open Rekordbox DB for audit: {e}");
+                            None
+                        }
+                    }
+                });
+
+                audit::scan(&conn, &path_prefix, revalidate, &skip, imported.as_ref())
             })
             .await
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?

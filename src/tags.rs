@@ -14,6 +14,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -166,12 +167,45 @@ pub struct CoverArtMeta {
     pub size_bytes: usize,
 }
 
+/// How to merge the `comment` field with an existing value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentMode {
+    /// Overwrite existing comment (default).
+    #[default]
+    Replace,
+    /// Prepend new text before existing comment, separated by ` | `.
+    Prepend,
+    /// Append new text after existing comment, separated by ` | `.
+    Append,
+}
+
+const COMMENT_SEPARATOR: &str = " | ";
+
+/// Merge a new comment value with an optional existing value.
+pub fn merge_comment(new: &str, existing: Option<&str>, mode: CommentMode) -> String {
+    match mode {
+        CommentMode::Replace => new.to_string(),
+        CommentMode::Prepend => match existing {
+            Some(ex) if !ex.is_empty() => format!("{new}{COMMENT_SEPARATOR}{ex}"),
+            _ => new.to_string(),
+        },
+        CommentMode::Append => match existing {
+            Some(ex) if !ex.is_empty() => format!("{ex}{COMMENT_SEPARATOR}{new}"),
+            _ => new.to_string(),
+        },
+    }
+}
+
 /// A single write entry.
 pub struct WriteEntry {
     pub path: PathBuf,
     pub tags: HashMap<String, Option<String>>,
     /// WAV only — which tag layers to write. Default: both.
     pub wav_targets: Vec<WavTarget>,
+    /// How to handle the `comment` field if it already has a value.
+    pub comment_mode: CommentMode,
 }
 
 /// Result of writing a single file.
@@ -659,6 +693,26 @@ pub fn write_file_tags(entry: &WriteEntry) -> FileWriteResult {
     }
 }
 
+/// Generate a temp path in the same directory as the original for atomic rename.
+/// Format: `.{stem}.rklw-{pid}-{ms}.{ext}`
+fn atomic_temp_path(original: &Path) -> PathBuf {
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = original
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("tmp");
+    let pid = std::process::id();
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let filename = format!(".{stem}.rklw-{pid}-{ms}.{ext}");
+    original.with_file_name(filename)
+}
+
 fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError> {
     let path = &entry.path;
     let path_str = path.display().to_string();
@@ -686,23 +740,58 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
     let mut fields_written = Vec::new();
     let mut fields_deleted = Vec::new();
 
-    if is_wav {
-        // Write each WAV tag layer separately
-        for target in &wav_targets {
-            let tag_type = match target {
-                WavTarget::Id3v2 => TagType::Id3v2,
-                WavTarget::RiffInfo => TagType::RiffInfo,
-            };
+    if is_wav && wav_targets.len() > 1 {
+        // Atomic dual-layer WAV write: copy → write both layers → rename.
+        // Prevents split-state files from partial failures.
+        let temp_path = atomic_temp_path(path);
+        fs::copy(path, &temp_path).map_err(|e| {
+            TagError::Io(format!("Failed to create temp copy: {e}"))
+        })?;
 
-            write_tag_layer(
-                path,
-                tag_type,
-                &entry.tags,
-                *target == WavTarget::RiffInfo,
-                &mut fields_written,
-                &mut fields_deleted,
-            )?;
+        let result = (|| -> Result<(), TagError> {
+            for target in &wav_targets {
+                let tag_type = match target {
+                    WavTarget::Id3v2 => TagType::Id3v2,
+                    WavTarget::RiffInfo => TagType::RiffInfo,
+                };
+                write_tag_layer(
+                    &temp_path,
+                    tag_type,
+                    &entry.tags,
+                    *target == WavTarget::RiffInfo,
+                    entry.comment_mode,
+                    &mut fields_written,
+                    &mut fields_deleted,
+                )?;
+            }
+            Ok(())
+        })();
+
+        if let Err(e) = result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e);
         }
+
+        fs::rename(&temp_path, path).map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            TagError::Io(format!("Failed to atomically replace file: {e}"))
+        })?;
+    } else if is_wav {
+        // Single-target WAV — direct write, no atomicity concern
+        let target = &wav_targets[0];
+        let tag_type = match target {
+            WavTarget::Id3v2 => TagType::Id3v2,
+            WavTarget::RiffInfo => TagType::RiffInfo,
+        };
+        write_tag_layer(
+            path,
+            tag_type,
+            &entry.tags,
+            *target == WavTarget::RiffInfo,
+            entry.comment_mode,
+            &mut fields_written,
+            &mut fields_deleted,
+        )?;
     } else {
         // Single tag layer — use primary tag type
         let tag_type = file_type.primary_tag_type();
@@ -711,6 +800,7 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
             tag_type,
             &entry.tags,
             false,
+            entry.comment_mode,
             &mut fields_written,
             &mut fields_deleted,
         )?;
@@ -755,6 +845,7 @@ fn write_tag_layer(
     tag_type: TagType,
     tags: &HashMap<String, Option<String>>,
     riff_info_layer: bool,
+    comment_mode: CommentMode,
     fields_written: &mut Vec<String>,
     fields_deleted: &mut Vec<String>,
 ) -> Result<(), TagError> {
@@ -810,7 +901,13 @@ fn write_tag_layer(
             fields_deleted.push(field.clone());
             any_changes = true;
         } else {
-            let new_value = value.as_ref().unwrap();
+            let raw_value = value.as_ref().unwrap();
+            // Apply comment merge logic when writing the comment field
+            let new_value = if field == "comment" && comment_mode != CommentMode::Replace {
+                merge_comment(raw_value, current_value.as_deref(), comment_mode)
+            } else {
+                raw_value.clone()
+            };
             // Skip if value is unchanged
             if current_value.as_deref() == Some(new_value.as_str()) {
                 continue;
@@ -918,7 +1015,13 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
         let effective_new: Option<String> = match new_value {
             None => None,
             Some(v) if v.is_empty() => None,
-            Some(v) => Some(v.clone()),
+            Some(v) => {
+                if field == "comment" && entry.comment_mode != CommentMode::Replace {
+                    Some(merge_comment(v, old_value.as_deref(), entry.comment_mode))
+                } else {
+                    Some(v.clone())
+                }
+            }
         };
 
         // Only include in diff if there's an actual change
@@ -1315,6 +1418,7 @@ mod tests {
                 ("remixer".to_string(), Some("Someone".to_string())),
             ]),
             wav_targets: vec![WavTarget::RiffInfo],
+            comment_mode: CommentMode::default(),
         };
 
         let result = write_file_tags_dry_run(&entry);
@@ -1339,5 +1443,41 @@ mod tests {
                 panic!("dry-run should succeed, got error: {error}");
             }
         }
+    }
+
+    #[test]
+    fn merge_comment_replace() {
+        assert_eq!(
+            merge_comment("new", Some("old"), CommentMode::Replace),
+            "new"
+        );
+    }
+
+    #[test]
+    fn merge_comment_prepend() {
+        assert_eq!(
+            merge_comment("new", Some("old"), CommentMode::Prepend),
+            "new | old"
+        );
+    }
+
+    #[test]
+    fn merge_comment_append() {
+        assert_eq!(
+            merge_comment("new", Some("old"), CommentMode::Append),
+            "old | new"
+        );
+    }
+
+    #[test]
+    fn merge_comment_prepend_empty_existing() {
+        assert_eq!(merge_comment("new", Some(""), CommentMode::Prepend), "new");
+        assert_eq!(merge_comment("new", None, CommentMode::Prepend), "new");
+    }
+
+    #[test]
+    fn merge_comment_append_empty_existing() {
+        assert_eq!(merge_comment("new", Some(""), CommentMode::Append), "new");
+        assert_eq!(merge_comment("new", None, CommentMode::Append), "new");
     }
 }
