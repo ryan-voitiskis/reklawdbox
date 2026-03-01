@@ -12,8 +12,8 @@ Detect and fix naming/tagging convention violations in a music collection. Follo
 - **Stop on ambiguity.** If the correct fix isn't clear, flag for user review — never guess.
 - **Verify after fixing.** Re-scan after every fix batch.
 - **Never delete audio files.** Renaming and tag editing only.
-- **WAV dual-tag rule.** `write_file_tags` handles this automatically (default `wav_targets: ["id3v2", "riff_info"]`).
-- **Rekordbox path awareness.** Before any rename, the audit engine checks Rekordbox import status. Imported files are **never renamed** — Rekordbox cannot update paths via XML import (creates duplicates). The user must manually relocate via Rekordbox after any external rename.
+- **WAV dual-tag rule.** `write_file_tags` handles this automatically (default `wav_targets: ["id3v2", "riff_info"]`). WAV tag layers are written sequentially, not atomically — if a write fails partway through, the file may have inconsistent tags across layers. If a WAV write reports an error, treat the file's tag state as unknown and re-verify with `read_file_tags` before retrying.
+- **Rekordbox path awareness.** Before any rename, **manually check** whether the file is imported in Rekordbox (e.g., `search_tracks` by path). Imported files must **never be renamed** — Rekordbox cannot update paths via XML import (creates duplicates). The user must manually relocate via Rekordbox after any external rename. The audit engine does not enforce this automatically.
 
 ## Prerequisites
 
@@ -120,23 +120,15 @@ write_file_tags(writes=[{path: "/path/to/file.wav", tags: {artist: "Fixed Artist
 
 Present the planned writes to the user for approval before executing.
 
-### 3b: Resolve fixed issues
+### 3b: Verify fixes via re-scan
 
-After applying fixes, mark the issues as resolved:
-
-```
-audit_state(resolve_issues, issue_ids=[...], resolution="fixed")
-```
-
-### 3c: Verify
-
-Re-scan the scope to confirm fixes:
+After applying fixes, re-scan the scope. The scan automatically detects changed files (new mtime) and marks resolved issues as `fixed`:
 
 ```
 audit_state(scan, scope="/path/to/scope/")
 ```
 
-The scan detects changed files (new mtime from tag writes, new paths from renames) and re-checks them.
+Do **not** manually resolve with `resolution="fixed"` — that value is reserved for auto-resolution by the scan engine and will be rejected at runtime. To manually resolve issues the user wants to skip, use `accepted_as_is`, `wont_fix`, or `deferred`.
 
 ---
 
@@ -152,7 +144,7 @@ For `EMPTY_ARTIST`, `EMPTY_TITLE`, `MISSING_TRACK_NUM`, `MISSING_ALBUM`, `MISSIN
    ```
    audit_state(query_issues, scope="/path/to/scope/", status="open", issue_type="EMPTY_ARTIST")
    ```
-2. For each issue, the `detail` JSON includes the suggested fix (parsed from filename/directory). Present to user:
+2. For each issue, check the `detail` field — it may be `null` for empty/missing-tag issues. When `detail` is absent, infer the fix yourself from the filename and parent directory structure. Present to user:
    > "File `01 Unknown - Track.wav` has empty artist. Filename suggests: `Unknown`. Accept?"
 3. If user approves, apply via `write_file_tags`:
    ```
@@ -192,7 +184,9 @@ For `GENRE_SET` (if not skipped):
 3. Apply:
    - Keep: `audit_state(resolve_issues, issue_ids=[...], resolution="accepted_as_is")`
    - Clear: `write_file_tags(writes=[{path: "...", tags: {genre: null}}])`
-   - Migrate: `write_file_tags(writes=[{path: "...", tags: {comment: "Genre: Deep House", genre: null}}])`
+   - Migrate: First read the existing `comment` value via `read_file_tags`. If non-empty, **prepend** the genre to preserve it (e.g., `"Genre: Deep House | <existing comment>"`). Then write:
+     `write_file_tags(writes=[{path: "...", tags: {comment: "Genre: Deep House | <existing>", genre: null}}])`
+     If the existing comment is empty, write the genre string directly. **Never blindly overwrite** — `write_file_tags` replaces the field value, it does not append.
 
 ### 4d: No-tag files
 
