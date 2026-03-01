@@ -1228,7 +1228,7 @@ mod tests {
         assert_eq!(open[0].issue_type, "GENRE_SET");
     }
 
-    // Finding 8: LIKE wildcards in path are escaped
+    // Verify SQL LIKE wildcards in scope paths are escaped and matched literally.
     #[test]
     fn test_audit_files_in_scope_escapes_like_wildcards() {
         let (_dir, conn) = open_temp_store();

@@ -1263,10 +1263,9 @@ mod tests {
 
     #[test]
     fn dry_run_riff_only_excludes_unsupported_fields() {
-        // Create a minimal WAV file with ID3v2 tags for testing.
-        // Since we can't easily create a real WAV here, test the filtering
-        // logic directly: a RIFF-only entry with non-RIFF fields should
-        // produce no changes for those fields.
+        // Create a minimal valid WAV file for testing.
+        // It has no real tag payload; this test validates RIFF-only dry-run
+        // field filtering for unsupported fields.
         let dir = tempfile::tempdir().unwrap();
         let wav_path = dir.path().join("test.wav");
 

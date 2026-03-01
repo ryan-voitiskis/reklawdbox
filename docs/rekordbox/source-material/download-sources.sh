@@ -1,6 +1,6 @@
 #!/bin/bash
-# Download all official rekordbox 7 PDF documentation
-# Run from: docs/rekordbox/source-material/
+# Download official rekordbox PDF documentation (7.x plus related legacy guides).
+# Can be run from any directory; the script changes to its own folder.
 
 set -euo pipefail
 cd "$(dirname "$0")"

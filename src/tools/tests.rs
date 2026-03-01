@@ -2625,15 +2625,12 @@
         assert_eq!(dh["mapping_type"], "exact");
         assert_eq!(dh["maps_to"], "Deep House");
 
-        // Garage House — alias mapping
+        // Garage House — unknown mapping
         let gh = dsm
             .iter()
             .find(|m| m["style"] == "Garage House")
             .expect("Garage House mapping");
-        // "Garage House" is not in the alias map, so it should be unknown
-        // Let's check: normalize_genre("Garage House") — it's not in alias_map
-        // Actually: "gospel house" -> "House" is in the alias map but not "garage house"
-        // So Garage House should be unknown
+        // "Garage House" is not canonical and not in the alias map.
         assert_eq!(gh["mapping_type"], "unknown");
         assert!(gh["maps_to"].is_null());
 
@@ -3500,7 +3497,7 @@
         assert_eq!(payload["scores"]["rhythm"]["value"], 0.5);
         assert_eq!(payload["scores"]["composite"], 0.965);
 
-        // Enriched top-level fields (commit 7)
+        // Top-level transition metadata fields
         assert!(payload["key_relation"].is_string(), "key_relation should be present");
         assert!(payload["key_relation"].as_str().unwrap().contains("Camelot adjacent"));
         assert!(payload["bpm_adjustment_pct"].is_number(), "bpm_adjustment_pct should be present");

@@ -157,7 +157,7 @@ pub(super) async fn handle_write_file_tags(
         .collect();
 
     if dry_run {
-        // Dry-run: can be parallel since it only reads
+        // Dry-run is read-only; entries are currently processed sequentially.
         let mut results = Vec::with_capacity(entries.len());
         for entry in entries {
             let result = tokio::task::spawn_blocking(move || {

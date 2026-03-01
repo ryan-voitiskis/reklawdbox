@@ -465,7 +465,7 @@ pub struct DetectedIssue {
 // Convention checks — pure functions
 // ---------------------------------------------------------------------------
 
-/// Get the effective tag map (primary layer) from a FileReadResult.
+/// Get a field value from the primary tag layer in a FileReadResult (WAV uses ID3v2).
 fn get_tag_value(result: &FileReadResult, field: &str) -> Option<String> {
     match result {
         FileReadResult::Single { tags, .. } => tags.get(field).and_then(|v| v.clone()),
@@ -1786,13 +1786,11 @@ mod tests {
         assert_eq!(detail["new_title"], "Thunderstruck");
     }
 
-    // Finding 7: Empty scope rejected
+    // Regression: empty scope normalizes to "/" via enforce_trailing_slash.
     #[test]
     fn scan_rejects_empty_scope() {
         let result = enforce_trailing_slash("");
         assert_eq!(result, "/");
-        // The scan function should reject this — we can't actually call scan here
-        // without a real DB, so just verify enforce_trailing_slash behavior
     }
 
     // Finding 9: NN - Title parsing

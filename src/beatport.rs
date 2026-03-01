@@ -371,9 +371,8 @@ mod tests {
 
     #[test]
     fn test_parse_no_match_when_search_title_is_longer_than_track_name() {
-        // "Archangel (Remastered)" does NOT contain "Archangel" as a Beatport
-        // track_name — only the forward direction matches (track_name must
-        // contain the search title, not vice versa).
+        // A longer search title should not match a shorter track_name.
+        // Matching is one-way: track_name must contain the search title, not vice versa.
         let html = build_html_with_tracks(serde_json::json!([
             {
                 "track_id": 3,
