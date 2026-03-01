@@ -1,7 +1,4 @@
-import {
-  BERKELEY_MONO_FONT_DATA_URI,
-  CALLBACK_LOGO_DATA_URI,
-} from './branding'
+import { BERKELEY_MONO_FONT_DATA_URI, CALLBACK_LOGO_DATA_URI } from './branding'
 
 interface Env {
   DB: D1Database
@@ -93,8 +90,8 @@ class BrokerHttpError extends Error {
   readonly error: string
   readonly status: number
 
-  constructor(error: string, message: string, status: number,) {
-    super(message,)
+  constructor(error: string, message: string, status: number) {
+    super(message)
     this.name = 'BrokerHttpError'
     this.error = error
     this.status = status
@@ -102,31 +99,31 @@ class BrokerHttpError extends Error {
 }
 
 export default {
-  async fetch(request: Request, env: Env,): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     try {
-      const url = new URL(request.url,)
+      const url = new URL(request.url)
       const method = request.method.toUpperCase()
 
       if (url.pathname === '/v1/device/session/start' && method === 'POST') {
-        return await handleDeviceSessionStart(request, env, url,)
+        return await handleDeviceSessionStart(request, env, url)
       }
       if (url.pathname === '/v1/device/session/status' && method === 'GET') {
-        return await handleDeviceSessionStatus(request, env, url,)
+        return await handleDeviceSessionStatus(request, env, url)
       }
       if (url.pathname === '/v1/device/session/finalize' && method === 'POST') {
-        return await handleDeviceSessionFinalize(request, env,)
+        return await handleDeviceSessionFinalize(request, env)
       }
       if (url.pathname === '/v1/discogs/oauth/link' && method === 'GET') {
-        return await handleDiscogsOauthLink(env, url,)
+        return await handleDiscogsOauthLink(env, url)
       }
       if (url.pathname === '/v1/discogs/oauth/callback' && method === 'GET') {
-        return await handleDiscogsOauthCallback(env, url,)
+        return await handleDiscogsOauthCallback(env, url)
       }
       if (url.pathname === '/v1/discogs/proxy/search' && method === 'POST') {
-        return await handleDiscogsProxySearch(request, env,)
+        return await handleDiscogsProxySearch(request, env)
       }
       if (url.pathname === '/v1/health' && method === 'GET') {
-        return await handleHealth(env,)
+        return await handleHealth(env)
       }
 
       return json(
@@ -150,7 +147,7 @@ export default {
       return json(
         {
           error: 'internal_error',
-          message: asErrorMessage(err,),
+          message: asErrorMessage(err),
         },
         500,
       )
@@ -161,7 +158,7 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(pruneExpiredRows(env,),)
+    ctx.waitUntil(pruneExpiredRows(env))
   },
 }
 
@@ -170,11 +167,11 @@ async function handleDeviceSessionStart(
   env: Env,
   url: URL,
 ): Promise<Response> {
-  if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse(env,)
+  if (!isBrokerClientAuthorized(request, env)) {
+    return unauthorizedBrokerClientResponse(env)
   }
 
-  assertDiscogsOAuthEnv(env,)
+  assertDiscogsOAuthEnv(env)
 
   const now = nowSeconds()
   const pollIntervalSeconds = DEFAULT_POLL_INTERVAL_SECONDS
@@ -184,8 +181,8 @@ async function handleDeviceSessionStart(
   )
   const expiresAt = now + ttlSeconds
 
-  const deviceId = randomToken(20,)
-  const pendingToken = randomToken(24,)
+  const deviceId = randomToken(20)
+  const pendingToken = randomToken(24)
 
   await env.DB.prepare(
     `INSERT INTO device_sessions (
@@ -198,13 +195,13 @@ async function handleDeviceSessionStart(
       expires_at
     ) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6)`,
   )
-    .bind(deviceId, pendingToken, pollIntervalSeconds, now, now, expiresAt,)
+    .bind(deviceId, pendingToken, pollIntervalSeconds, now, now, expiresAt)
     .run()
 
-  const authBaseUrl = publicBaseUrl(env, url,)
+  const authBaseUrl = publicBaseUrl(env, url)
   const authUrl = `${authBaseUrl}/v1/discogs/oauth/link?device_id=${
-    encodeURIComponent(deviceId,)
-  }&pending_token=${encodeURIComponent(pendingToken,)}`
+    encodeURIComponent(deviceId)
+  }&pending_token=${encodeURIComponent(pendingToken)}`
 
   return json({
     device_id: deviceId,
@@ -212,7 +209,7 @@ async function handleDeviceSessionStart(
     auth_url: authUrl,
     poll_interval_seconds: pollIntervalSeconds,
     expires_at: expiresAt,
-  },)
+  })
 }
 
 async function handleDeviceSessionStatus(
@@ -220,12 +217,12 @@ async function handleDeviceSessionStatus(
   env: Env,
   url: URL,
 ): Promise<Response> {
-  if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse(env,)
+  if (!isBrokerClientAuthorized(request, env)) {
+    return unauthorizedBrokerClientResponse(env)
   }
 
-  const deviceId = url.searchParams.get('device_id',)?.trim()
-  const pendingToken = url.searchParams.get('pending_token',)?.trim()
+  const deviceId = url.searchParams.get('device_id')?.trim()
+  const pendingToken = url.searchParams.get('pending_token')?.trim()
   if (!deviceId || !pendingToken) {
     return json(
       {
@@ -236,9 +233,9 @@ async function handleDeviceSessionStatus(
     )
   }
 
-  let row = await getSessionByDeviceAndPending(env, deviceId, pendingToken,)
+  let row = await getSessionByDeviceAndPending(env, deviceId, pendingToken)
   if (!row) {
-    const latest = await getSessionByDevice(env, deviceId,)
+    const latest = await getSessionByDevice(env, deviceId)
     if (!latest) {
       return json(
         {
@@ -271,26 +268,26 @@ async function handleDeviceSessionStatus(
   let status = row.status
   if (now >= row.expires_at && status !== 'finalized') {
     status = 'expired'
-    await markSessionStatus(env, row.device_id, 'expired', now,)
+    await markSessionStatus(env, row.device_id, 'expired', now)
   }
 
   return json({
     status,
     expires_at: row.expires_at,
-  },)
+  })
 }
 
 async function handleDeviceSessionFinalize(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  if (!isBrokerClientAuthorized(request, env,)) {
-    return unauthorizedBrokerClientResponse(env,)
+  if (!isBrokerClientAuthorized(request, env)) {
+    return unauthorizedBrokerClientResponse(env)
   }
 
   const body = await parseJsonBody<
     { device_id?: string; pending_token?: string }
-  >(request,)
+  >(request)
   const deviceId = body.device_id?.trim()
   const pendingToken = body.pending_token?.trim()
 
@@ -304,9 +301,9 @@ async function handleDeviceSessionFinalize(
     )
   }
 
-  const row = await getSessionByDeviceAndPending(env, deviceId, pendingToken,)
+  const row = await getSessionByDeviceAndPending(env, deviceId, pendingToken)
   if (!row) {
-    const latest = await getSessionByDevice(env, deviceId,)
+    const latest = await getSessionByDevice(env, deviceId)
     if (!latest) {
       return json(
         {
@@ -326,7 +323,7 @@ async function handleDeviceSessionFinalize(
       return json({
         session_token: replay.sessionToken,
         expires_at: replay.sessionExpiresAt,
-      },)
+      })
     }
 
     return json(
@@ -340,7 +337,7 @@ async function handleDeviceSessionFinalize(
 
   const now = nowSeconds()
   if (now >= row.expires_at) {
-    await markSessionStatus(env, row.device_id, 'expired', now,)
+    await markSessionStatus(env, row.device_id, 'expired', now)
     return json(
       {
         error: 'expired',
@@ -351,12 +348,12 @@ async function handleDeviceSessionFinalize(
   }
 
   if (row.status === 'finalized') {
-    const replay = await finalizedReplayForPending(row, deviceId, pendingToken,)
+    const replay = await finalizedReplayForPending(row, deviceId, pendingToken)
     if (replay) {
       return json({
         session_token: replay.sessionToken,
         expires_at: replay.sessionExpiresAt,
-      },)
+      })
     }
 
     return json(
@@ -403,13 +400,13 @@ async function handleDeviceSessionFinalize(
       409,
     )
   }
-  const sessionTokenHash = await sha256Hex(sessionToken,)
+  const sessionTokenHash = await sha256Hex(sessionToken)
   const sessionTtl = envInt(
     env.SESSION_TOKEN_TTL_SECONDS,
     DEFAULT_BROKER_SESSION_TTL_SECONDS,
   )
   const sessionExpiresAt = now + sessionTtl
-  const nextPendingToken = randomToken(24,)
+  const nextPendingToken = randomToken(24)
 
   const finalizeResult = await env.DB.prepare(
     `UPDATE device_sessions
@@ -431,9 +428,9 @@ async function handleDeviceSessionFinalize(
     )
     .run()
 
-  const updated = Number(finalizeResult.meta.changes ?? 0,)
+  const updated = Number(finalizeResult.meta.changes ?? 0)
   if (updated !== 1) {
-    const latest = await getSessionByDevice(env, deviceId,)
+    const latest = await getSessionByDevice(env, deviceId)
     if (!latest) {
       return json(
         {
@@ -447,7 +444,7 @@ async function handleDeviceSessionFinalize(
     const currentNow = nowSeconds()
     if (latest.status === 'expired' || currentNow >= latest.expires_at) {
       if (latest.status !== 'expired') {
-        await markSessionStatus(env, latest.device_id, 'expired', currentNow,)
+        await markSessionStatus(env, latest.device_id, 'expired', currentNow)
       }
       return json(
         {
@@ -468,7 +465,7 @@ async function handleDeviceSessionFinalize(
         return json({
           session_token: replay.sessionToken,
           expires_at: replay.sessionExpiresAt,
-        },)
+        })
       }
 
       return json(
@@ -493,23 +490,23 @@ async function handleDeviceSessionFinalize(
   return json({
     session_token: sessionToken,
     expires_at: sessionExpiresAt,
-  },)
+  })
 }
 
-async function handleDiscogsOauthLink(env: Env, url: URL,): Promise<Response> {
-  assertDiscogsOAuthEnv(env,)
+async function handleDiscogsOauthLink(env: Env, url: URL): Promise<Response> {
+  assertDiscogsOAuthEnv(env)
 
-  const deviceId = url.searchParams.get('device_id',)?.trim()
-  const pendingToken = url.searchParams.get('pending_token',)?.trim()
+  const deviceId = url.searchParams.get('device_id')?.trim()
+  const pendingToken = url.searchParams.get('pending_token')?.trim()
   if (!deviceId || !pendingToken) {
-    return text('Missing device_id or pending_token', 400,)
+    return text('Missing device_id or pending_token', 400)
   }
 
-  let row = await getSessionByDeviceAndPending(env, deviceId, pendingToken,)
+  let row = await getSessionByDeviceAndPending(env, deviceId, pendingToken)
   if (!row) {
-    const latest = await getSessionByDevice(env, deviceId,)
+    const latest = await getSessionByDevice(env, deviceId)
     if (!latest) {
-      return text('Device session not found', 404,)
+      return text('Device session not found', 404)
     }
 
     const replay = await finalizedReplayForPending(
@@ -518,7 +515,7 @@ async function handleDiscogsOauthLink(env: Env, url: URL,): Promise<Response> {
       pendingToken,
     )
     if (!replay) {
-      return text('Device session not found', 404,)
+      return text('Device session not found', 404)
     }
 
     row = latest
@@ -526,8 +523,8 @@ async function handleDiscogsOauthLink(env: Env, url: URL,): Promise<Response> {
 
   const now = nowSeconds()
   if (now >= row.expires_at) {
-    await markSessionStatus(env, row.device_id, 'expired', now,)
-    return text('Device session expired. Restart auth from your client.', 410,)
+    await markSessionStatus(env, row.device_id, 'expired', now)
+    return text('Device session expired. Restart auth from your client.', 410)
   }
 
   if (row.status === 'finalized') {
@@ -540,12 +537,12 @@ async function handleDiscogsOauthLink(env: Env, url: URL,): Promise<Response> {
     )
   }
 
-  const callbackBase = publicBaseUrl(env, url,)
+  const callbackBase = publicBaseUrl(env, url)
   const callbackUrl = `${callbackBase}/v1/discogs/oauth/callback?device_id=${
-    encodeURIComponent(deviceId,)
-  }&pending_token=${encodeURIComponent(pendingToken,)}`
+    encodeURIComponent(deviceId)
+  }&pending_token=${encodeURIComponent(pendingToken)}`
 
-  const requestToken = await requestDiscogsRequestToken(env, callbackUrl,)
+  const requestToken = await requestDiscogsRequestToken(env, callbackUrl)
   await env.DB.prepare(
     `INSERT INTO oauth_request_tokens (
       oauth_token,
@@ -577,21 +574,21 @@ async function handleDiscogsOauthLink(env: Env, url: URL,): Promise<Response> {
     .run()
 
   const authorizeUrl = `https://www.discogs.com/oauth/authorize?oauth_token=${
-    encodeURIComponent(requestToken.oauthToken,)
+    encodeURIComponent(requestToken.oauthToken)
   }`
-  return Response.redirect(authorizeUrl, 302,)
+  return Response.redirect(authorizeUrl, 302)
 }
 
 async function handleDiscogsOauthCallback(
   env: Env,
   url: URL,
 ): Promise<Response> {
-  assertDiscogsOAuthEnv(env,)
+  assertDiscogsOAuthEnv(env)
 
-  const deviceId = url.searchParams.get('device_id',)?.trim()
-  const pendingToken = url.searchParams.get('pending_token',)?.trim()
-  const oauthToken = url.searchParams.get('oauth_token',)?.trim()
-  const oauthVerifier = url.searchParams.get('oauth_verifier',)?.trim()
+  const deviceId = url.searchParams.get('device_id')?.trim()
+  const pendingToken = url.searchParams.get('pending_token')?.trim()
+  const oauthToken = url.searchParams.get('oauth_token')?.trim()
+  const oauthVerifier = url.searchParams.get('oauth_verifier')?.trim()
 
   if (!deviceId || !pendingToken || !oauthToken || !oauthVerifier) {
     return html(
@@ -610,14 +607,14 @@ async function handleDiscogsOauthCallback(
   )
   if (!session) {
     return html(
-      oauthCallbackPage('Auth failed', 'Device session not found.',),
+      oauthCallbackPage('Auth failed', 'Device session not found.'),
       404,
     )
   }
 
   const now = nowSeconds()
   if (now >= session.expires_at) {
-    await markSessionStatus(env, session.device_id, 'expired', now,)
+    await markSessionStatus(env, session.device_id, 'expired', now)
     return html(
       oauthCallbackPage(
         'Auth expired',
@@ -632,7 +629,7 @@ async function handleDiscogsOauthCallback(
      FROM oauth_request_tokens
      WHERE oauth_token = ?1 AND device_id = ?2 AND pending_token = ?3 AND expires_at > ?4`,
   )
-    .bind(oauthToken, deviceId, pendingToken, now,)
+    .bind(oauthToken, deviceId, pendingToken, now)
     .first<{ oauth_token_secret: string }>()
 
   if (!temp) {
@@ -675,7 +672,7 @@ async function handleDiscogsOauthCallback(
   await env.DB.prepare(
     'DELETE FROM oauth_request_tokens WHERE oauth_token = ?1',
   )
-    .bind(oauthToken,)
+    .bind(oauthToken)
     .run()
 
   return html(
@@ -691,9 +688,9 @@ async function handleDiscogsProxySearch(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  assertDiscogsOAuthEnv(env,)
+  assertDiscogsOAuthEnv(env)
 
-  const sessionToken = bearerToken(request,)
+  const sessionToken = bearerToken(request)
   if (!sessionToken) {
     return json(
       {
@@ -704,7 +701,7 @@ async function handleDiscogsProxySearch(
     )
   }
 
-  const sessionTokenHash = await sha256Hex(sessionToken,)
+  const sessionTokenHash = await sha256Hex(sessionToken)
   const now = nowSeconds()
   const session = await env.DB.prepare(
     `SELECT *
@@ -714,7 +711,7 @@ async function handleDiscogsProxySearch(
        AND status = 'finalized'
      LIMIT 1`,
   )
-    .bind(sessionTokenHash, now,)
+    .bind(sessionTokenHash, now)
     .first<DeviceSessionRow>()
 
   if (
@@ -730,7 +727,7 @@ async function handleDiscogsProxySearch(
     )
   }
 
-  const body = await parseJsonBody<DiscogsSearchBody>(request,)
+  const body = await parseJsonBody<DiscogsSearchBody>(request)
   const artist = body.artist?.trim()
   const title = body.title?.trim()
   const album = body.album?.trim()
@@ -745,24 +742,24 @@ async function handleDiscogsProxySearch(
     )
   }
 
-  const cacheKey = `${normalize(artist,)}|${normalize(title,)}|${
-    normalize(album ?? '',)
+  const cacheKey = `${normalize(artist)}|${normalize(title)}|${
+    normalize(album ?? '')
   }`
   const cached = await env.DB.prepare(
     `SELECT response_json
      FROM discogs_search_cache
      WHERE cache_key = ?1 AND expires_at > ?2`,
   )
-    .bind(cacheKey, now,)
+    .bind(cacheKey, now)
     .first<{ response_json: string }>()
 
   if (cached?.response_json) {
-    const parsed = safeJsonParse<NormalizedProxyPayload>(cached.response_json,)
+    const parsed = safeJsonParse<NormalizedProxyPayload>(cached.response_json)
     if (parsed) {
       return json({
         ...parsed,
         cache_hit: true,
-      },)
+      })
     }
   }
 
@@ -772,7 +769,7 @@ async function handleDiscogsProxySearch(
     album,
     oauthToken: session.oauth_access_token,
     oauthTokenSecret: session.oauth_access_token_secret,
-  },)
+  })
 
   const cacheTtlSeconds = envInt(
     env.SEARCH_CACHE_TTL_SECONDS,
@@ -786,18 +783,18 @@ async function handleDiscogsProxySearch(
        cached_at = excluded.cached_at,
        expires_at = excluded.expires_at`,
   )
-    .bind(cacheKey, JSON.stringify(payload,), now, now + cacheTtlSeconds,)
+    .bind(cacheKey, JSON.stringify(payload), now, now + cacheTtlSeconds)
     .run()
 
-  return json(payload,)
+  return json(payload)
 }
 
-function handleHealth(env: Env,): Response {
-  const brokerClientAuth = brokerClientAuthHealth(env,)
+function handleHealth(env: Env): Response {
+  const brokerClientAuth = brokerClientAuthHealth(env)
   return json({
     status: brokerClientAuth.warning ? 'warning' : 'ok',
     broker_client_auth: brokerClientAuth,
-  },)
+  })
 }
 
 async function lookupDiscogsViaApi(
@@ -811,22 +808,22 @@ async function lookupDiscogsViaApi(
   },
 ): Promise<NormalizedProxyPayload> {
   const query = new URLSearchParams()
-  query.set('artist', params.artist,)
-  query.set('track', params.title,)
-  query.set('type', 'release',)
-  query.set('per_page', '15',)
+  query.set('artist', params.artist)
+  query.set('track', params.title)
+  query.set('type', 'release')
+  query.set('per_page', '15')
   if (params.album) {
-    query.set('release_title', params.album,)
+    query.set('release_title', params.album)
   }
 
   const doRequest = async (): Promise<Response> => {
-    await enforceDiscogsRateLimit(env,)
+    await enforceDiscogsRateLimit(env)
 
     const oauthParams: Record<string, string> = {
       oauth_consumer_key: env.DISCOGS_CONSUMER_KEY,
-      oauth_nonce: randomToken(16,),
+      oauth_nonce: randomToken(16),
       oauth_signature_method: 'PLAINTEXT',
-      oauth_timestamp: `${Math.floor(Date.now() / 1000,)}`,
+      oauth_timestamp: `${Math.floor(Date.now() / 1000)}`,
       oauth_token: params.oauthToken,
       oauth_version: '1.0',
       oauth_signature:
@@ -836,23 +833,23 @@ async function lookupDiscogsViaApi(
     return fetch(`${DISCOGS_BASE_URL}/database/search?${query.toString()}`, {
       method: 'GET',
       headers: {
-        Authorization: oauthHeader(oauthParams,),
+        Authorization: oauthHeader(oauthParams),
         'User-Agent': 'reklawdbox-broker/0.1',
       },
-    },)
+    })
   }
 
   let response = await doRequest()
   if (response.status === 429) {
     const retryAfterSeconds = parseRetryAfterSeconds(
-      response.headers.get('Retry-After',),
+      response.headers.get('Retry-After'),
     )
-    await delay((retryAfterSeconds ?? 30) * 1000,)
+    await delay((retryAfterSeconds ?? 30) * 1000)
     response = await doRequest()
   }
 
   if (!response.ok) {
-    throw new Error(`Discogs search failed: HTTP ${response.status}`,)
+    throw new Error(`Discogs search failed: HTTP ${response.status}`)
   }
 
   const data = (await response.json()) as DiscogsApiSearchResponse
@@ -865,30 +862,30 @@ async function lookupDiscogsViaApi(
     }
   }
 
-  const normArtist = normalize(params.artist,)
+  const normArtist = normalize(params.artist)
   if (!normArtist) {
     return {
-      result: toDiscogsResult(results[0], true,),
+      result: toDiscogsResult(results[0], true),
       match_quality: 'fuzzy',
       cache_hit: false,
     }
   }
 
-  const matched = results.find((entry,) => {
+  const matched = results.find((entry) => {
     const resultTitle = (entry.title ?? '').toLowerCase()
-    return resultTitle.includes(normArtist,)
-  },)
+    return resultTitle.includes(normArtist)
+  })
 
   if (matched) {
     return {
-      result: toDiscogsResult(matched, false,),
+      result: toDiscogsResult(matched, false),
       match_quality: 'exact',
       cache_hit: false,
     }
   }
 
   return {
-    result: toDiscogsResult(results[0], true,),
+    result: toDiscogsResult(results[0], true),
     match_quality: 'fuzzy',
     cache_hit: false,
   }
@@ -903,11 +900,11 @@ function toDiscogsResult(
   return {
     title: entry.title ?? '',
     year: `${entry.year ?? ''}`,
-    label: Array.isArray(entry.label,) && entry.label.length > 0
+    label: Array.isArray(entry.label) && entry.label.length > 0
       ? entry.label[0]
       : '',
-    genres: Array.isArray(entry.genre,) ? entry.genre : [],
-    styles: Array.isArray(entry.style,) ? entry.style : [],
+    genres: Array.isArray(entry.genre) ? entry.genre : [],
+    styles: Array.isArray(entry.style) ? entry.style : [],
     url,
     fuzzy_match: fuzzy,
   }
@@ -920,9 +917,9 @@ async function requestDiscogsRequestToken(
   const oauthParams: Record<string, string> = {
     oauth_callback: callbackUrl,
     oauth_consumer_key: env.DISCOGS_CONSUMER_KEY,
-    oauth_nonce: randomToken(16,),
+    oauth_nonce: randomToken(16),
     oauth_signature_method: 'PLAINTEXT',
-    oauth_timestamp: `${Math.floor(Date.now() / 1000,)}`,
+    oauth_timestamp: `${Math.floor(Date.now() / 1000)}`,
     oauth_version: '1.0',
     oauth_signature: `${env.DISCOGS_CONSUMER_SECRET}&`,
   }
@@ -930,26 +927,26 @@ async function requestDiscogsRequestToken(
   const response = await fetch(`${DISCOGS_BASE_URL}/oauth/request_token`, {
     method: 'POST',
     headers: {
-      Authorization: oauthHeader(oauthParams,),
+      Authorization: oauthHeader(oauthParams),
       'User-Agent': 'reklawdbox-broker/0.1',
     },
-  },)
+  })
 
   const body = await response.text()
   if (!response.ok) {
-    throw new Error(`Discogs request_token failed: HTTP ${response.status}`,)
+    throw new Error(`Discogs request_token failed: HTTP ${response.status}`)
   }
 
-  const params = new URLSearchParams(body,)
-  const oauthToken = params.get('oauth_token',) ?? ''
-  const oauthTokenSecret = params.get('oauth_token_secret',) ?? ''
+  const params = new URLSearchParams(body)
+  const oauthToken = params.get('oauth_token') ?? ''
+  const oauthTokenSecret = params.get('oauth_token_secret') ?? ''
   if (!oauthToken || !oauthTokenSecret) {
     throw new Error(
       'Discogs request_token response missing oauth_token fields',
     )
   }
 
-  return { oauthToken, oauthTokenSecret, }
+  return { oauthToken, oauthTokenSecret }
 }
 
 async function requestDiscogsAccessToken(
@@ -967,9 +964,9 @@ async function requestDiscogsAccessToken(
 > {
   const oauthParams: Record<string, string> = {
     oauth_consumer_key: env.DISCOGS_CONSUMER_KEY,
-    oauth_nonce: randomToken(16,),
+    oauth_nonce: randomToken(16),
     oauth_signature_method: 'PLAINTEXT',
-    oauth_timestamp: `${Math.floor(Date.now() / 1000,)}`,
+    oauth_timestamp: `${Math.floor(Date.now() / 1000)}`,
     oauth_token: oauthToken,
     oauth_verifier: oauthVerifier,
     oauth_version: '1.0',
@@ -979,24 +976,24 @@ async function requestDiscogsAccessToken(
   const response = await fetch(`${DISCOGS_BASE_URL}/oauth/access_token`, {
     method: 'POST',
     headers: {
-      Authorization: oauthHeader(oauthParams,),
+      Authorization: oauthHeader(oauthParams),
       'User-Agent': 'reklawdbox-broker/0.1',
     },
-  },)
+  })
 
   const body = await response.text()
   if (!response.ok) {
-    throw new Error(`Discogs access_token failed: HTTP ${response.status}`,)
+    throw new Error(`Discogs access_token failed: HTTP ${response.status}`)
   }
 
-  const params = new URLSearchParams(body,)
-  const accessToken = params.get('oauth_token',) ?? ''
-  const accessTokenSecret = params.get('oauth_token_secret',) ?? ''
-  const username = params.get('username',) ?? undefined
-  const userId = params.get('user_id',) ?? undefined
+  const params = new URLSearchParams(body)
+  const accessToken = params.get('oauth_token') ?? ''
+  const accessTokenSecret = params.get('oauth_token_secret') ?? ''
+  const username = params.get('username') ?? undefined
+  const userId = params.get('user_id') ?? undefined
 
   if (!accessToken || !accessTokenSecret) {
-    throw new Error('Discogs access_token response missing oauth_token fields',)
+    throw new Error('Discogs access_token response missing oauth_token fields')
   }
 
   return {
@@ -1029,7 +1026,7 @@ async function finalizedReplayForPending(
     return null
   }
 
-  const tokenHash = await sha256Hex(sessionToken,)
+  const tokenHash = await sha256Hex(sessionToken)
   if (tokenHash !== row.session_token_hash) {
     return null
   }
@@ -1051,7 +1048,7 @@ async function getSessionByDeviceAndPending(
      WHERE device_id = ?1 AND pending_token = ?2
      LIMIT 1`,
   )
-    .bind(deviceId, pendingToken,)
+    .bind(deviceId, pendingToken)
     .first<DeviceSessionRow>()
 }
 
@@ -1065,7 +1062,7 @@ async function getSessionByDevice(
      WHERE device_id = ?1
      LIMIT 1`,
   )
-    .bind(deviceId,)
+    .bind(deviceId)
     .first<DeviceSessionRow>()
 }
 
@@ -1081,11 +1078,11 @@ async function markSessionStatus(
          updated_at = ?2
      WHERE device_id = ?3`,
   )
-    .bind(status, updatedAt, deviceId,)
+    .bind(status, updatedAt, deviceId)
     .run()
 }
 
-async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
+async function enforceDiscogsRateLimit(env: Env): Promise<void> {
   const bucket = 'discogs-api-global'
   const minIntervalMs = envInt(
     env.DISCOGS_MIN_INTERVAL_MS,
@@ -1099,7 +1096,7 @@ async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
        FROM rate_limit_state
        WHERE bucket = ?1`,
     )
-      .bind(bucket,)
+      .bind(bucket)
       .first<{ last_request_at_ms: number }>()
 
     if (!row) {
@@ -1108,7 +1105,7 @@ async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
          VALUES (?1, ?2)
          ON CONFLICT(bucket) DO NOTHING`,
       )
-        .bind(bucket, nowMs,)
+        .bind(bucket, nowMs)
         .run()
 
       if ((insertResult.meta.changes ?? 0) === 1) {
@@ -1117,28 +1114,28 @@ async function enforceDiscogsRateLimit(env: Env,): Promise<void> {
       continue
     }
 
-    const lastRequestAtMs = Number(row.last_request_at_ms,)
-    const reservedAtMs = Math.max(lastRequestAtMs + minIntervalMs, nowMs,)
+    const lastRequestAtMs = Number(row.last_request_at_ms)
+    const reservedAtMs = Math.max(lastRequestAtMs + minIntervalMs, nowMs)
     const updateResult = await env.DB.prepare(
       `UPDATE rate_limit_state
        SET last_request_at_ms = ?1
        WHERE bucket = ?2
          AND last_request_at_ms = ?3`,
     )
-      .bind(reservedAtMs, bucket, lastRequestAtMs,)
+      .bind(reservedAtMs, bucket, lastRequestAtMs)
       .run()
 
     if ((updateResult.meta.changes ?? 0) === 1) {
       const waitMs = reservedAtMs - nowMs
       if (waitMs > 0) {
-        await delay(waitMs,)
+        await delay(waitMs)
       }
       return
     }
   }
 }
 
-async function pruneExpiredRows(env: Env,): Promise<void> {
+async function pruneExpiredRows(env: Env): Promise<void> {
   const now = nowSeconds()
 
   await env.DB.prepare(
@@ -1146,25 +1143,25 @@ async function pruneExpiredRows(env: Env,): Promise<void> {
      WHERE (status != 'finalized' AND expires_at <= ?1)
         OR (status = 'finalized' AND (session_expires_at IS NULL OR session_expires_at <= ?1))`,
   )
-    .bind(now,)
+    .bind(now)
     .run()
 
   await env.DB.prepare(
     `DELETE FROM oauth_request_tokens
      WHERE expires_at <= ?1`,
   )
-    .bind(now,)
+    .bind(now)
     .run()
 
   await env.DB.prepare(
     `DELETE FROM discogs_search_cache
      WHERE expires_at <= ?1`,
   )
-    .bind(now,)
+    .bind(now)
     .run()
 }
 
-function assertDiscogsOAuthEnv(env: Env,): void {
+function assertDiscogsOAuthEnv(env: Env): void {
   if (!env.DISCOGS_CONSUMER_KEY || !env.DISCOGS_CONSUMER_SECRET) {
     throw new Error(
       'DISCOGS_CONSUMER_KEY and DISCOGS_CONSUMER_SECRET must be set',
@@ -1172,28 +1169,28 @@ function assertDiscogsOAuthEnv(env: Env,): void {
   }
 }
 
-function publicBaseUrl(env: Env, requestUrl: URL,): string {
+function publicBaseUrl(env: Env, requestUrl: URL): string {
   return (env.BROKER_PUBLIC_BASE_URL
-    ?? `${requestUrl.protocol}//${requestUrl.host}`).replace(/\/$/, '',)
+    ?? `${requestUrl.protocol}//${requestUrl.host}`).replace(/\/$/, '')
 }
 
-function isBrokerClientAuthorized(request: Request, env: Env,): boolean {
-  if (isUnauthenticatedBrokerAllowed(env,)) {
+function isBrokerClientAuthorized(request: Request, env: Env): boolean {
+  if (isUnauthenticatedBrokerAllowed(env)) {
     return true
   }
 
   const expected = env.BROKER_CLIENT_TOKEN?.trim()
   if (expected) {
-    const provided = request.headers.get('x-reklawdbox-broker-token',)?.trim()
+    const provided = request.headers.get('x-reklawdbox-broker-token')?.trim()
     return provided === expected
   }
 
   return false
 }
 
-function unauthorizedBrokerClientResponse(env: Env,): Response {
+function unauthorizedBrokerClientResponse(env: Env): Response {
   if (
-    !env.BROKER_CLIENT_TOKEN?.trim() && !isUnauthenticatedBrokerAllowed(env,)
+    !env.BROKER_CLIENT_TOKEN?.trim() && !isUnauthenticatedBrokerAllowed(env)
   ) {
     return json(
       {
@@ -1214,13 +1211,13 @@ function unauthorizedBrokerClientResponse(env: Env,): Response {
   )
 }
 
-function isUnauthenticatedBrokerAllowed(env: Env,): boolean {
+function isUnauthenticatedBrokerAllowed(env: Env): boolean {
   return env.ALLOW_UNAUTHENTICATED_BROKER?.trim().toLowerCase() === 'true'
 }
 
-function brokerClientAuthHealth(env: Env,): BrokerClientAuthHealth {
-  const tokenConfigured = Boolean(env.BROKER_CLIENT_TOKEN?.trim(),)
-  const allowUnauthenticatedBroker = isUnauthenticatedBrokerAllowed(env,)
+function brokerClientAuthHealth(env: Env): BrokerClientAuthHealth {
+  const tokenConfigured = Boolean(env.BROKER_CLIENT_TOKEN?.trim())
+  const allowUnauthenticatedBroker = isUnauthenticatedBrokerAllowed(env)
   if (allowUnauthenticatedBroker) {
     return {
       mode: 'unauthenticated_dev_override',
@@ -1248,30 +1245,28 @@ function brokerClientAuthHealth(env: Env,): BrokerClientAuthHealth {
   }
 }
 
-function oauthHeader(params: Record<string, string>,): string {
-  const pairs = Object.entries(params,)
-    .map(([key, value,],) =>
-      `${percentEncode(key,)}="${percentEncode(value,)}"`
-    )
-    .join(', ',)
+function oauthHeader(params: Record<string, string>): string {
+  const pairs = Object.entries(params)
+    .map(([key, value]) => `${percentEncode(key)}="${percentEncode(value)}"`)
+    .join(', ')
   return `OAuth ${pairs}`
 }
 
-function percentEncode(value: string,): string {
-  return encodeURIComponent(value,)
-    .replace(/!/g, '%21',)
-    .replace(/\*/g, '%2A',)
-    .replace(/\(/g, '%28',)
-    .replace(/\)/g, '%29',)
-    .replace(/'/g, '%27',)
+function percentEncode(value: string): string {
+  return encodeURIComponent(value)
+    .replace(/!/g, '%21')
+    .replace(/\*/g, '%2A')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/'/g, '%27')
 }
 
-function normalize(input: string,): string {
+function normalize(input: string): string {
   return input
     .toLowerCase()
-    .split('',)
-    .filter((ch,) => /[\p{L}\p{N} ]/u.test(ch,))
-    .join('',)
+    .split('')
+    .filter((ch) => /[\p{L}\p{N} ]/u.test(ch))
+    .join('')
     .trim()
 }
 
@@ -1296,43 +1291,43 @@ async function deriveFinalizeSessionToken(
     row.oauth_access_token_secret,
     `broker-session:v1:extra:${message}`,
   )
-  return `${partA}${partB.slice(0, 32,)}`
+  return `${partA}${partB.slice(0, 32)}`
 }
 
-function randomToken(bytes: number,): string {
-  const arr = new Uint8Array(bytes,)
-  crypto.getRandomValues(arr,)
-  return Array.from(arr,)
-    .map((b,) => b.toString(16,).padStart(2, '0',))
-    .join('',)
+function randomToken(bytes: number): string {
+  const arr = new Uint8Array(bytes)
+  crypto.getRandomValues(arr)
+  return Array.from(arr)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
-async function sha256Hex(input: string,): Promise<string> {
-  const encoded = new TextEncoder().encode(input,)
-  const digest = await crypto.subtle.digest('SHA-256', encoded,)
-  const arr = Array.from(new Uint8Array(digest,),)
-  return arr.map((b,) => b.toString(16,).padStart(2, '0',)).join('',)
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', encoded)
+  const arr = Array.from(new Uint8Array(digest))
+  return arr.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function hmacSha256Hex(key: string, input: string,): Promise<string> {
+async function hmacSha256Hex(key: string, input: string): Promise<string> {
   const encoder = new TextEncoder()
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(key,),
-    { name: 'HMAC', hash: 'SHA-256', },
+    encoder.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
     false,
-    ['sign',],
+    ['sign'],
   )
   const digest = await crypto.subtle.sign(
     'HMAC',
     cryptoKey,
-    encoder.encode(input,),
+    encoder.encode(input),
   )
-  const arr = Array.from(new Uint8Array(digest,),)
-  return arr.map((b,) => b.toString(16,).padStart(2, '0',)).join('',)
+  const arr = Array.from(new Uint8Array(digest))
+  return arr.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function parseJsonBody<T,>(request: Request,): Promise<T> {
+async function parseJsonBody<T>(request: Request): Promise<T> {
   try {
     return (await request.json()) as T
   } catch {
@@ -1344,9 +1339,9 @@ async function parseJsonBody<T,>(request: Request,): Promise<T> {
   }
 }
 
-function bearerToken(request: Request,): string | null {
-  const auth = request.headers.get('authorization',) ?? ''
-  const [scheme, token,] = auth.split(/\s+/, 2,)
+function bearerToken(request: Request): string | null {
+  const auth = request.headers.get('authorization') ?? ''
+  const [scheme, token] = auth.split(/\s+/, 2)
   if (!scheme || !token || scheme.toLowerCase() !== 'bearer') {
     return null
   }
@@ -1354,59 +1349,59 @@ function bearerToken(request: Request,): string | null {
 }
 
 function nowSeconds(): number {
-  return Math.floor(Date.now() / 1000,)
+  return Math.floor(Date.now() / 1000)
 }
 
-function envInt(input: string | undefined, fallback: number,): number {
+function envInt(input: string | undefined, fallback: number): number {
   if (!input) {
     return fallback
   }
-  const parsed = Number.parseInt(input, 10,)
-  return Number.isFinite(parsed,) && parsed > 0 ? parsed : fallback
+  const parsed = Number.parseInt(input, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function parseRetryAfterSeconds(header: string | null,): number | null {
+function parseRetryAfterSeconds(header: string | null): number | null {
   if (!header) {
     return null
   }
-  const parsed = Number.parseInt(header, 10,)
-  if (Number.isFinite(parsed,) && parsed > 0) {
+  const parsed = Number.parseInt(header, 10)
+  if (Number.isFinite(parsed) && parsed > 0) {
     return parsed
   }
   return null
 }
 
-function safeJsonParse<T,>(input: string,): T | null {
+function safeJsonParse<T>(input: string): T | null {
   try {
-    return JSON.parse(input,) as T
+    return JSON.parse(input) as T
   } catch {
     return null
   }
 }
 
-function asErrorMessage(err: unknown,): string {
+function asErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     return err.message
   }
-  return String(err,)
+  return String(err)
 }
 
-function escapeHtml(input: string,): string {
+function escapeHtml(input: string): string {
   return input
-    .replaceAll('&', '&amp;',)
-    .replaceAll('<', '&lt;',)
-    .replaceAll('>', '&gt;',)
-    .replaceAll('"', '&quot;',)
-    .replaceAll("'", '&#39;',)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 }
 
-function oauthCallbackPage(title: string, message: string,): string {
+function oauthCallbackPage(title: string, message: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title,)} | reklawdbox</title>
+  <title>${escapeHtml(title)} | reklawdbox</title>
   <style>
     @font-face {
       font-family: 'BerkeleyMono';
@@ -1471,47 +1466,47 @@ function oauthCallbackPage(title: string, message: string,): string {
 <body>
   <main class="card">
     <img class="logo" src="${CALLBACK_LOGO_DATA_URI}" alt="reklawdbox" />
-    <h1>${escapeHtml(title,)}</h1>
-    <p>${message.split(/(?<=\.) /,).map(escapeHtml,).join('<br />',)}</p>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${message.split(/(?<=\.) /).map(escapeHtml).join('<br />')}</p>
     <div class="brand">reklawdbox</div>
   </main>
 </body>
 </html>`
 }
 
-function json(payload: unknown, status = 200,): Response {
-  return new Response(JSON.stringify(payload,), {
+function json(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
     status,
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
     },
-  },)
+  })
 }
 
-function text(payload: string, status = 200,): Response {
+function text(payload: string, status = 200): Response {
   return new Response(payload, {
     status,
     headers: {
       'content-type': 'text/plain; charset=utf-8',
       'cache-control': 'no-store',
     },
-  },)
+  })
 }
 
-function html(payload: string, status = 200,): Response {
+function html(payload: string, status = 200): Response {
   return new Response(payload, {
     status,
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
     },
-  },)
+  })
 }
 
-async function delay(ms: number,): Promise<void> {
+async function delay(ms: number): Promise<void> {
   if (ms <= 0) {
     return
   }
-  await new Promise((resolve,) => setTimeout(resolve, ms,))
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }

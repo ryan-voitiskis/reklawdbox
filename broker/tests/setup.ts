@@ -1,5 +1,5 @@
-import { applyD1Migrations, env, } from 'cloudflare:test'
-import { beforeEach, } from 'vitest'
+import { applyD1Migrations, env } from 'cloudflare:test'
+import { beforeEach } from 'vitest'
 
 declare module 'cloudflare:test' {
   interface ProvidedEnv {
@@ -15,5 +15,5 @@ declare module 'cloudflare:test' {
 }
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS as any,)
-},)
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS as any)
+})
