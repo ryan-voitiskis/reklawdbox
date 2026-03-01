@@ -48,9 +48,14 @@ pub(super) fn resolve_tracks(
     let bounded = opts.max_tracks_cap.is_some();
 
     let tracks = if let Some(ids) = track_ids {
-        db::get_tracks_by_ids(conn, ids).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+        db::get_tracks_by_ids(conn, ids)
+            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
     } else if let Some(pid) = playlist_id {
-        let db_limit = if bounded { effective_max.map(|m| m as u32) } else { None };
+        let db_limit = if bounded {
+            effective_max.map(|m| m as u32)
+        } else {
+            None
+        };
         if bounded {
             db::get_playlist_tracks(conn, pid, db_limit)
                 .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
@@ -62,7 +67,8 @@ pub(super) fn resolve_tracks(
         let limit = effective_max.map(|m| m as u32);
         let search = filters.into_search_params(true, limit, None);
         if bounded {
-            db::search_tracks(conn, &search).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            db::search_tracks(conn, &search)
+                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
         } else {
             db::search_tracks_unbounded(conn, &search)
                 .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?

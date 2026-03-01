@@ -259,7 +259,10 @@ fn handle_decode_result(
 }
 
 fn handle_analysis_result(
-    analysis_result: Result<Result<audio::StratumResult, audio::AudioError>, tokio::task::JoinError>,
+    analysis_result: Result<
+        Result<audio::StratumResult, audio::AudioError>,
+        tokio::task::JoinError,
+    >,
     idx: usize,
     pending: usize,
     label: &str,
@@ -459,8 +462,10 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
                     None => continue,
                 };
 
-            let analysis_result =
-                tokio::task::spawn_blocking(move || audio::analyze_with_stratum(&samples, sample_rate)).await;
+            let analysis_result = tokio::task::spawn_blocking(move || {
+                audio::analyze_with_stratum(&samples, sample_rate)
+            })
+            .await;
 
             let result =
                 match handle_analysis_result(analysis_result, idx, pending, &label, &mut failed) {
@@ -482,7 +487,9 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             let mut track_success = true;
             let mut essentia_status = String::new();
             if *needs_essentia && let Some(ref python) = essentia_python {
-                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
+                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime)
+                    .await
+                {
                     Ok(()) => essentia_status = " +essentia".to_string(),
                     Err(e) => {
                         essentia_status = format!(" (essentia failed: {e})");
@@ -494,14 +501,17 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
             let elapsed = track_start.elapsed().as_secs_f64();
             tracing::info!(
                 "[{idx}/{pending}] {label} ... BPM={:.1} Key={}{essentia_status} ({elapsed:.1}s)",
-                result.bpm, result.key_camelot,
+                result.bpm,
+                result.key_camelot,
             );
             mark_track_outcome(&mut analyzed, &mut failed, track_success);
         } else if *needs_essentia {
             // Only needs essentia (stratum already cached)
             if let Some(ref python) = essentia_python {
                 let elapsed_start = Instant::now();
-                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime).await {
+                match run_and_cache_essentia(&store_conn, python, &file_path, file_size, file_mtime)
+                    .await
+                {
                     Ok(()) => {
                         let elapsed = elapsed_start.elapsed().as_secs_f64();
                         tracing::info!("[{idx}/{pending}] {label} ... +essentia ({elapsed:.1}s)");
@@ -531,7 +541,9 @@ async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>
 fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|ext| crate::audio::AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .is_some_and(|ext| {
+            crate::audio::AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+        })
 }
 
 fn expand_paths(paths: &[String]) -> Vec<PathBuf> {
@@ -722,17 +734,12 @@ fn parse_wav_targets(
                 }
             }
             if !invalid.is_empty() {
-                tracing::warn!(
-                    "Unknown WAV target(s): {}",
-                    invalid.join(", ")
-                );
+                tracing::warn!("Unknown WAV target(s): {}", invalid.join(", "));
             }
             if valid.is_empty() {
-                return Err(
-                    "No valid WAV targets. Valid values: id3v2, riff_info"
-                        .to_string()
-                        .into(),
-                );
+                return Err("No valid WAV targets. Valid values: id3v2, riff_info"
+                    .to_string()
+                    .into());
             }
             Ok(valid)
         }

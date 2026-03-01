@@ -8,8 +8,8 @@
 mod tests {
     use std::collections::HashMap;
 
-    use crate::tools::scoring::*;
     use crate::tools::params::*;
+    use crate::tools::scoring::*;
 
     // -----------------------------------------------------------------------
     // Quality gate thresholds
@@ -91,7 +91,11 @@ mod tests {
     }
 
     fn compute_metrics(plan: &CandidatePlan, _phases: &[EnergyPhase]) -> EvalMetrics {
-        let composites: Vec<f64> = plan.transitions.iter().map(|t| t.scores.composite).collect();
+        let composites: Vec<f64> = plan
+            .transitions
+            .iter()
+            .map(|t| t.scores.composite)
+            .collect();
         let n = composites.len() as f64;
         if n < 1.0 {
             return EvalMetrics {
@@ -195,7 +199,9 @@ mod tests {
     fn eval_camelot_walk_greedy() {
         let pool = pool_camelot_walk();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             8,
         )
         .unwrap();
@@ -228,7 +234,9 @@ mod tests {
     fn eval_camelot_walk_beam() {
         let pool = pool_camelot_walk();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             8,
         )
         .unwrap();
@@ -244,7 +252,10 @@ mod tests {
             6.0,
             None,
         );
-        assert!(!plans.is_empty(), "beam search should produce at least one plan");
+        assert!(
+            !plans.is_empty(),
+            "beam search should produce at least one plan"
+        );
 
         // Best beam plan should pass quality gates
         let best = &plans[0];
@@ -270,9 +281,11 @@ mod tests {
     #[test]
     fn eval_adversarial_degrades_gracefully() {
         let pool = pool_adversarial();
-        let phases =
-            resolve_energy_curve(Some(&EnergyCurveInput::Preset(EnergyCurvePreset::FlatEnergy)), 6)
-                .unwrap();
+        let phases = resolve_energy_curve(
+            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::FlatEnergy)),
+            6,
+        )
+        .unwrap();
         let plan = build_candidate_plan(
             &pool,
             "adv1",
@@ -307,14 +320,86 @@ mod tests {
 
     fn pool_iso_key_bpm() -> HashMap<String, TrackProfile> {
         build_pool(vec![
-            synth_profile("iso1", "8A", 126.0, 0.30, "Deep House", Some(1800.0), Some(0.7), Some(6.0)),
-            synth_profile("iso2", "8A", 126.0, 0.40, "Deep House", Some(1900.0), Some(0.72), Some(7.0)),
-            synth_profile("iso3", "8A", 126.0, 0.55, "House", Some(2200.0), Some(0.65), Some(8.5)),
-            synth_profile("iso4", "8A", 126.0, 0.65, "House", Some(2500.0), Some(0.60), Some(9.0)),
-            synth_profile("iso5", "8A", 126.0, 0.75, "Tech House", Some(2800.0), Some(0.55), Some(10.0)),
-            synth_profile("iso6", "8A", 126.0, 0.70, "Tech House", Some(2600.0), Some(0.58), Some(8.0)),
-            synth_profile("iso7", "8A", 126.0, 0.50, "House", Some(2100.0), Some(0.68), Some(7.5)),
-            synth_profile("iso8", "8A", 126.0, 0.35, "Deep House", Some(1850.0), Some(0.71), Some(6.5)),
+            synth_profile(
+                "iso1",
+                "8A",
+                126.0,
+                0.30,
+                "Deep House",
+                Some(1800.0),
+                Some(0.7),
+                Some(6.0),
+            ),
+            synth_profile(
+                "iso2",
+                "8A",
+                126.0,
+                0.40,
+                "Deep House",
+                Some(1900.0),
+                Some(0.72),
+                Some(7.0),
+            ),
+            synth_profile(
+                "iso3",
+                "8A",
+                126.0,
+                0.55,
+                "House",
+                Some(2200.0),
+                Some(0.65),
+                Some(8.5),
+            ),
+            synth_profile(
+                "iso4",
+                "8A",
+                126.0,
+                0.65,
+                "House",
+                Some(2500.0),
+                Some(0.60),
+                Some(9.0),
+            ),
+            synth_profile(
+                "iso5",
+                "8A",
+                126.0,
+                0.75,
+                "Tech House",
+                Some(2800.0),
+                Some(0.55),
+                Some(10.0),
+            ),
+            synth_profile(
+                "iso6",
+                "8A",
+                126.0,
+                0.70,
+                "Tech House",
+                Some(2600.0),
+                Some(0.58),
+                Some(8.0),
+            ),
+            synth_profile(
+                "iso7",
+                "8A",
+                126.0,
+                0.50,
+                "House",
+                Some(2100.0),
+                Some(0.68),
+                Some(7.5),
+            ),
+            synth_profile(
+                "iso8",
+                "8A",
+                126.0,
+                0.35,
+                "Deep House",
+                Some(1850.0),
+                Some(0.71),
+                Some(6.5),
+            ),
         ])
     }
 
@@ -322,7 +407,9 @@ mod tests {
     fn eval_iso_key_bpm_differentiates_on_secondary_axes() {
         let pool = pool_iso_key_bpm();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             8,
         )
         .unwrap();
@@ -357,30 +444,210 @@ mod tests {
     fn pool_realistic_club() -> HashMap<String, TrackProfile> {
         build_pool(vec![
             // Deep House cluster (warmup)
-            synth_profile("rc01", "6A", 122.0, 0.30, "Deep House", Some(1600.0), Some(0.75), Some(5.0)),
-            synth_profile("rc02", "7A", 122.5, 0.35, "Deep House", Some(1700.0), Some(0.73), Some(5.5)),
-            synth_profile("rc03", "7A", 123.0, 0.38, "Deep House", Some(1750.0), Some(0.70), Some(6.0)),
-            synth_profile("rc04", "8A", 123.5, 0.42, "Deep House", Some(1800.0), Some(0.68), Some(6.5)),
+            synth_profile(
+                "rc01",
+                "6A",
+                122.0,
+                0.30,
+                "Deep House",
+                Some(1600.0),
+                Some(0.75),
+                Some(5.0),
+            ),
+            synth_profile(
+                "rc02",
+                "7A",
+                122.5,
+                0.35,
+                "Deep House",
+                Some(1700.0),
+                Some(0.73),
+                Some(5.5),
+            ),
+            synth_profile(
+                "rc03",
+                "7A",
+                123.0,
+                0.38,
+                "Deep House",
+                Some(1750.0),
+                Some(0.70),
+                Some(6.0),
+            ),
+            synth_profile(
+                "rc04",
+                "8A",
+                123.5,
+                0.42,
+                "Deep House",
+                Some(1800.0),
+                Some(0.68),
+                Some(6.5),
+            ),
             // House transition
-            synth_profile("rc05", "8A", 124.0, 0.48, "House", Some(2000.0), Some(0.65), Some(7.0)),
-            synth_profile("rc06", "9A", 124.5, 0.52, "House", Some(2100.0), Some(0.63), Some(7.5)),
-            synth_profile("rc07", "9A", 125.0, 0.55, "House", Some(2200.0), Some(0.60), Some(8.0)),
-            synth_profile("rc08", "10A", 125.5, 0.60, "House", Some(2300.0), Some(0.58), Some(8.5)),
+            synth_profile(
+                "rc05",
+                "8A",
+                124.0,
+                0.48,
+                "House",
+                Some(2000.0),
+                Some(0.65),
+                Some(7.0),
+            ),
+            synth_profile(
+                "rc06",
+                "9A",
+                124.5,
+                0.52,
+                "House",
+                Some(2100.0),
+                Some(0.63),
+                Some(7.5),
+            ),
+            synth_profile(
+                "rc07",
+                "9A",
+                125.0,
+                0.55,
+                "House",
+                Some(2200.0),
+                Some(0.60),
+                Some(8.0),
+            ),
+            synth_profile(
+                "rc08",
+                "10A",
+                125.5,
+                0.60,
+                "House",
+                Some(2300.0),
+                Some(0.58),
+                Some(8.5),
+            ),
             // Tech House build
-            synth_profile("rc09", "10A", 126.0, 0.63, "Tech House", Some(2400.0), Some(0.55), Some(9.0)),
-            synth_profile("rc10", "11A", 126.5, 0.67, "Tech House", Some(2500.0), Some(0.53), Some(9.5)),
-            synth_profile("rc11", "11A", 127.0, 0.70, "Tech House", Some(2600.0), Some(0.50), Some(10.0)),
-            synth_profile("rc12", "12A", 127.5, 0.75, "Tech House", Some(2700.0), Some(0.48), Some(10.5)),
+            synth_profile(
+                "rc09",
+                "10A",
+                126.0,
+                0.63,
+                "Tech House",
+                Some(2400.0),
+                Some(0.55),
+                Some(9.0),
+            ),
+            synth_profile(
+                "rc10",
+                "11A",
+                126.5,
+                0.67,
+                "Tech House",
+                Some(2500.0),
+                Some(0.53),
+                Some(9.5),
+            ),
+            synth_profile(
+                "rc11",
+                "11A",
+                127.0,
+                0.70,
+                "Tech House",
+                Some(2600.0),
+                Some(0.50),
+                Some(10.0),
+            ),
+            synth_profile(
+                "rc12",
+                "12A",
+                127.5,
+                0.75,
+                "Tech House",
+                Some(2700.0),
+                Some(0.48),
+                Some(10.5),
+            ),
             // Peak (Techno)
-            synth_profile("rc13", "12A", 128.0, 0.80, "Techno", Some(2800.0), Some(0.45), Some(11.0)),
-            synth_profile("rc14", "1A", 128.5, 0.82, "Techno", Some(2900.0), Some(0.43), Some(3.5)),
-            synth_profile("rc15", "1A", 129.0, 0.85, "Techno", Some(3000.0), Some(0.40), Some(3.0)),
-            synth_profile("rc16", "2A", 128.5, 0.80, "Techno", Some(2850.0), Some(0.42), Some(4.0)),
+            synth_profile(
+                "rc13",
+                "12A",
+                128.0,
+                0.80,
+                "Techno",
+                Some(2800.0),
+                Some(0.45),
+                Some(11.0),
+            ),
+            synth_profile(
+                "rc14",
+                "1A",
+                128.5,
+                0.82,
+                "Techno",
+                Some(2900.0),
+                Some(0.43),
+                Some(3.5),
+            ),
+            synth_profile(
+                "rc15",
+                "1A",
+                129.0,
+                0.85,
+                "Techno",
+                Some(3000.0),
+                Some(0.40),
+                Some(3.0),
+            ),
+            synth_profile(
+                "rc16",
+                "2A",
+                128.5,
+                0.80,
+                "Techno",
+                Some(2850.0),
+                Some(0.42),
+                Some(4.0),
+            ),
             // Release
-            synth_profile("rc17", "2A", 127.0, 0.65, "Tech House", Some(2500.0), Some(0.55), Some(8.0)),
-            synth_profile("rc18", "1A", 126.0, 0.55, "House", Some(2200.0), Some(0.60), Some(7.0)),
-            synth_profile("rc19", "12A", 125.0, 0.45, "House", Some(2000.0), Some(0.65), Some(6.0)),
-            synth_profile("rc20", "11A", 124.0, 0.35, "Deep House", Some(1800.0), Some(0.70), Some(5.5)),
+            synth_profile(
+                "rc17",
+                "2A",
+                127.0,
+                0.65,
+                "Tech House",
+                Some(2500.0),
+                Some(0.55),
+                Some(8.0),
+            ),
+            synth_profile(
+                "rc18",
+                "1A",
+                126.0,
+                0.55,
+                "House",
+                Some(2200.0),
+                Some(0.60),
+                Some(7.0),
+            ),
+            synth_profile(
+                "rc19",
+                "12A",
+                125.0,
+                0.45,
+                "House",
+                Some(2000.0),
+                Some(0.65),
+                Some(6.0),
+            ),
+            synth_profile(
+                "rc20",
+                "11A",
+                124.0,
+                0.35,
+                "Deep House",
+                Some(1800.0),
+                Some(0.70),
+                Some(5.5),
+            ),
         ])
     }
 
@@ -388,7 +655,9 @@ mod tests {
     fn eval_realistic_club_greedy() {
         let pool = pool_realistic_club();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             16,
         )
         .unwrap();
@@ -413,7 +682,9 @@ mod tests {
     fn eval_realistic_club_beam() {
         let pool = pool_realistic_club();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             16,
         )
         .unwrap();
@@ -444,7 +715,9 @@ mod tests {
     fn eval_beam_at_least_as_good_as_greedy() {
         let pool = pool_realistic_club();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             16,
         )
         .unwrap();
@@ -495,25 +768,49 @@ mod tests {
     fn eval_harmonic_priority_improves_key_scores() {
         let pool = pool_realistic_club();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             16,
         )
         .unwrap();
 
         let balanced = build_candidate_plan(
-            &pool, "rc01", 16, &phases, SequencingPriority::Balanced, 0,
-            true, Some(HarmonicMixingStyle::Balanced), 6.0, None,
+            &pool,
+            "rc01",
+            16,
+            &phases,
+            SequencingPriority::Balanced,
+            0,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            6.0,
+            None,
         );
         let harmonic = build_candidate_plan(
-            &pool, "rc01", 16, &phases, SequencingPriority::Harmonic, 0,
-            true, Some(HarmonicMixingStyle::Balanced), 6.0, None,
+            &pool,
+            "rc01",
+            16,
+            &phases,
+            SequencingPriority::Harmonic,
+            0,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            6.0,
+            None,
         );
 
-        let balanced_key_mean = balanced.transitions.iter()
-            .map(|t| t.scores.key.value).sum::<f64>()
+        let balanced_key_mean = balanced
+            .transitions
+            .iter()
+            .map(|t| t.scores.key.value)
+            .sum::<f64>()
             / balanced.transitions.len() as f64;
-        let harmonic_key_mean = harmonic.transitions.iter()
-            .map(|t| t.scores.key.value).sum::<f64>()
+        let harmonic_key_mean = harmonic
+            .transitions
+            .iter()
+            .map(|t| t.scores.key.value)
+            .sum::<f64>()
             / harmonic.transitions.len() as f64;
 
         assert!(
@@ -530,27 +827,56 @@ mod tests {
     fn eval_deterministic_output() {
         let pool = pool_camelot_walk();
         let phases = resolve_energy_curve(
-            Some(&EnergyCurveInput::Preset(EnergyCurvePreset::WarmupBuildPeakRelease)),
+            Some(&EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
             8,
         )
         .unwrap();
 
         let plan_a = build_candidate_plan(
-            &pool, "cw1", 8, &phases, SequencingPriority::Balanced, 0,
-            true, Some(HarmonicMixingStyle::Balanced), 6.0, None,
+            &pool,
+            "cw1",
+            8,
+            &phases,
+            SequencingPriority::Balanced,
+            0,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            6.0,
+            None,
         );
         let plan_b = build_candidate_plan(
-            &pool, "cw1", 8, &phases, SequencingPriority::Balanced, 0,
-            true, Some(HarmonicMixingStyle::Balanced), 6.0, None,
+            &pool,
+            "cw1",
+            8,
+            &phases,
+            SequencingPriority::Balanced,
+            0,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            6.0,
+            None,
         );
 
         assert_eq!(
             plan_a.ordered_ids, plan_b.ordered_ids,
             "same inputs must produce identical track ordering",
         );
-        let composites_a: Vec<f64> = plan_a.transitions.iter().map(|t| t.scores.composite).collect();
-        let composites_b: Vec<f64> = plan_b.transitions.iter().map(|t| t.scores.composite).collect();
-        assert_eq!(composites_a, composites_b, "same inputs must produce identical composites");
+        let composites_a: Vec<f64> = plan_a
+            .transitions
+            .iter()
+            .map(|t| t.scores.composite)
+            .collect();
+        let composites_b: Vec<f64> = plan_b
+            .transitions
+            .iter()
+            .map(|t| t.scores.composite)
+            .collect();
+        assert_eq!(
+            composites_a, composites_b,
+            "same inputs must produce identical composites"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -569,7 +895,8 @@ mod tests {
             assert!(
                 score.value <= prev_value + f64::EPSILON,
                 "BPM curve should be monotonically decreasing: at {pct}% got {} > prev {}",
-                score.value, prev_value,
+                score.value,
+                prev_value,
             );
             prev_value = score.value;
         }
@@ -581,20 +908,33 @@ mod tests {
         let to = simple_profile("pen-to", "2A", 128.0, 0.7, "House"); // Clash: key=0.1
 
         let conservative = score_transition_profiles(
-            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced, true, Some(HarmonicMixingStyle::Conservative),
-            &ScoringContext::default(), None,
+            &from,
+            &to,
+            Some(EnergyPhase::Peak),
+            Some(EnergyPhase::Peak),
+            SequencingPriority::Balanced,
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+            &ScoringContext::default(),
+            None,
         );
         let balanced = score_transition_profiles(
-            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced, true, Some(HarmonicMixingStyle::Balanced),
-            &ScoringContext::default(), None,
+            &from,
+            &to,
+            Some(EnergyPhase::Peak),
+            Some(EnergyPhase::Peak),
+            SequencingPriority::Balanced,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            &ScoringContext::default(),
+            None,
         );
 
         assert!(
             conservative.composite < balanced.composite,
             "conservative ({:.3}) should penalize harder than balanced ({:.3})",
-            conservative.composite, balanced.composite,
+            conservative.composite,
+            balanced.composite,
         );
     }
 
@@ -608,14 +948,24 @@ mod tests {
         let to = simple_profile("adj-to", "9A", 128.5, 0.55, "House");
 
         let scores = score_transition_profiles(
-            &from, &to, Some(EnergyPhase::Build), Some(EnergyPhase::Build),
-            SequencingPriority::Balanced, true, Some(HarmonicMixingStyle::Balanced),
-            &ScoringContext::default(), None,
+            &from,
+            &to,
+            Some(EnergyPhase::Build),
+            Some(EnergyPhase::Build),
+            SequencingPriority::Balanced,
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+            &ScoringContext::default(),
+            None,
         );
         assert!(
             scores.adjustments.is_empty(),
             "clean transition should have no adjustments, got {:?}",
-            scores.adjustments.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            scores
+                .adjustments
+                .iter()
+                .map(|a| a.kind)
+                .collect::<Vec<_>>(),
         );
     }
 
@@ -625,18 +975,31 @@ mod tests {
         let to = simple_profile("hg-to", "2A", 128.0, 0.7, "House"); // Clash
 
         let scores = score_transition_profiles(
-            &from, &to, Some(EnergyPhase::Peak), Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced, true, Some(HarmonicMixingStyle::Conservative),
-            &ScoringContext::default(), None,
+            &from,
+            &to,
+            Some(EnergyPhase::Peak),
+            Some(EnergyPhase::Peak),
+            SequencingPriority::Balanced,
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+            &ScoringContext::default(),
+            None,
         );
         assert!(
             scores.adjustments.iter().any(|a| a.kind == "harmonic_gate"),
             "clash with conservative should produce harmonic_gate adjustment",
         );
 
-        let adj = scores.adjustments.iter().find(|a| a.kind == "harmonic_gate").unwrap();
+        let adj = scores
+            .adjustments
+            .iter()
+            .find(|a| a.kind == "harmonic_gate")
+            .unwrap();
         assert!(adj.delta < 0.0, "harmonic_gate delta should be negative");
-        assert!(adj.composite_without > scores.composite, "composite_without should exceed final composite");
+        assert!(
+            adj.composite_without > scores.composite,
+            "composite_without should exceed final composite"
+        );
     }
 
     #[test]
@@ -646,9 +1009,17 @@ mod tests {
 
         // Run length > 0 and < 5, same family → streak bonus
         let scores = score_transition_profiles(
-            &from, &to, None, None,
-            SequencingPriority::Balanced, true, None,
-            &ScoringContext { genre_run_length: 2 }, None,
+            &from,
+            &to,
+            None,
+            None,
+            SequencingPriority::Balanced,
+            true,
+            None,
+            &ScoringContext {
+                genre_run_length: 2,
+            },
+            None,
         );
         assert!(
             scores.adjustments.iter().any(|a| a.kind == "genre_streak"),

@@ -37,7 +37,7 @@ Key relationships are evaluated on the Camelot wheel, where adjacent positions r
 | +2 same letter (6A to 8A)  | 0.5   | Acceptable   |
 | -2 same letter (6A to 4A)  | 0.5   | Acceptable   |
 | +1 other letter (6A to 7B) | 0.4   | Rough        |
-| Everything else             | 0.1   | Clash        |
+| Everything else            | 0.1   | Clash        |
 
 Camelot wraps at the boundary: 12A to 1A is +1 (adjacent), not +11.
 
@@ -49,13 +49,13 @@ The +1/-1 moves are the bread and butter of harmonic mixing. Same-number A/B shi
 
 BPM delta is the absolute difference in tempo between two tracks.
 
-| Delta     | Score | Label                      |
-| --------- | ----- | -------------------------- |
-| 0-2 BPM   | 1.0   | Seamless                   |
-| 2-4 BPM   | 0.8   | Comfortable pitch adjust   |
-| 4-6 BPM   | 0.5   | Noticeable                 |
-| 6-8 BPM   | 0.3   | Needs creative transition  |
-| > 8 BPM   | 0.1   | Likely jarring             |
+| Delta   | Score | Label                     |
+| ------- | ----- | ------------------------- |
+| 0-2 BPM | 1.0   | Seamless                  |
+| 2-4 BPM | 0.8   | Comfortable pitch adjust  |
+| 4-6 BPM | 0.5   | Noticeable                |
+| 6-8 BPM | 0.3   | Needs creative transition |
+| > 8 BPM | 0.1   | Likely jarring            |
 
 reklawdbox uses stratum-dsp analyzed BPM when available, which is more accurate than Rekordbox's built-in analysis. Falls back to Rekordbox metadata BPM if no stratum-dsp analysis is cached.
 
@@ -89,12 +89,12 @@ energy_proxy = clamp((bpm - 95) / 50, 0, 1)
 
 Energy scoring depends on where you are in the energy curve. The desired energy direction changes by phase:
 
-| Phase   | Desired direction       | Score if met | Score if wrong |
-| ------- | ----------------------- | ------------ | -------------- |
-| Warmup  | Stable or slight rise   | 1.0          | 0.5            |
-| Build   | Rising                  | 1.0          | 0.3            |
-| Peak    | High and stable         | 1.0          | 0.5            |
-| Release | Dropping                | 1.0          | 0.3            |
+| Phase   | Desired direction     | Score if met | Score if wrong |
+| ------- | --------------------- | ------------ | -------------- |
+| Warmup  | Stable or slight rise | 1.0          | 0.5            |
+| Build   | Rising                | 1.0          | 0.3            |
+| Peak    | High and stable       | 1.0          | 0.5            |
+| Release | Dropping              | 1.0          | 0.3            |
 
 ### Loudness-range bonuses
 
@@ -109,21 +109,21 @@ Additional bonuses apply at phase boundaries based on the destination track's `l
 
 Genres are grouped into families. Compatibility depends on whether two genres share the same family.
 
-| Relationship                | Score |
-| --------------------------- | ----- |
-| Same canonical genre        | 1.0   |
+| Relationship                 | Score |
+| ---------------------------- | ----- |
+| Same canonical genre         | 1.0   |
 | Related genres (same family) | 0.7   |
-| Different families          | 0.3   |
+| Different families           | 0.3   |
 
 ### Genre families
 
-| Family    | Genres                                                                         |
-| --------- | ------------------------------------------------------------------------------ |
+| Family    | Genres                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------- |
 | House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco |
-| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, Electro |
-| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, UK Bass, Grime, Bassline, Broken Beat |
-| Downtempo | Ambient, Downtempo, Dub, Dub Reggae, IDM, Experimental                        |
-| Other     | Hip Hop, Trance, Psytrance, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz |
+| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, Electro      |
+| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, UK Bass, Grime, Bassline, Broken Beat                          |
+| Downtempo | Ambient, Downtempo, Dub, Dub Reggae, IDM, Experimental                                                  |
+| Other     | Hip Hop, Trance, Psytrance, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                |
 
 Genres within the "Other" family do **not** receive the 0.7 related-genre bonus with each other. They score 0.3 against all other genres, including other "Other" entries.
 
@@ -135,12 +135,12 @@ Genre matching uses the canonical genre assigned by reklawdbox's classification 
 
 Brightness is derived from the spectral centroid frequency, measured in Hz. A higher spectral centroid means more high-frequency content — think bright, crispy hi-hats versus deep, muffled pads. Large jumps in brightness create timbral clashes that are especially noticeable in long blends.
 
-| Delta (Hz) | Score | Label                |
-| ---------- | ----- | -------------------- |
-| < 300      | 1.0   | Similar brightness   |
-| 300-800    | 0.7   | Noticeable shift     |
-| 800-1500   | 0.4   | Large timbral jump   |
-| > 1500     | 0.2   | Jarring              |
+| Delta (Hz) | Score | Label              |
+| ---------- | ----- | ------------------ |
+| < 300      | 1.0   | Similar brightness |
+| 300-800    | 0.7   | Noticeable shift   |
+| 800-1500   | 0.4   | Large timbral jump |
+| > 1500     | 0.2   | Jarring            |
 
 When brightness data is missing for either track, this axis scores 0.5 (neutral) and is excluded from the composite denominator so it does not penalize the overall score.
 
@@ -150,12 +150,12 @@ When brightness data is missing for either track, this axis scores 0.5 (neutral)
 
 Rhythm regularity measures how "on the grid" a track feels — a four-on-the-floor techno beat has high regularity, while a broken-beat track or live-drummer recording has low regularity. Delta is the absolute difference in regularity between two tracks.
 
-| Delta      | Score | Label             |
-| ---------- | ----- | ----------------- |
-| < 0.10     | 1.0   | Matching groove   |
-| 0.10-0.25  | 0.7   | Manageable shift  |
-| 0.25-0.50  | 0.4   | Challenging shift |
-| > 0.50     | 0.2   | Groove clash      |
+| Delta     | Score | Label             |
+| --------- | ----- | ----------------- |
+| < 0.10    | 1.0   | Matching groove   |
+| 0.10-0.25 | 0.7   | Manageable shift  |
+| 0.25-0.50 | 0.4   | Challenging shift |
+| > 0.50    | 0.2   | Groove clash      |
 
 When rhythm data is missing for either track, this axis scores 0.5 (neutral) and is excluded from the composite denominator.
 
@@ -175,12 +175,12 @@ Axes with missing data (brightness, rhythm) are excluded from both the numerator
 
 Four priority modes control how axes are weighted:
 
-| Priority   | Key  | BPM  | Energy | Genre | Brightness | Rhythm |
-| ---------- | ---- | ---- | ------ | ----- | ---------- | ------ |
-| Balanced   | 0.30 | 0.20 | 0.18   | 0.17  | 0.08       | 0.07   |
-| Harmonic   | 0.48 | 0.18 | 0.12   | 0.08  | 0.08       | 0.06   |
-| Energy     | 0.12 | 0.18 | 0.42   | 0.12  | 0.08       | 0.08   |
-| Genre      | 0.18 | 0.18 | 0.12   | 0.38  | 0.08       | 0.06   |
+| Priority | Key  | BPM  | Energy | Genre | Brightness | Rhythm |
+| -------- | ---- | ---- | ------ | ----- | ---------- | ------ |
+| Balanced | 0.30 | 0.20 | 0.18   | 0.17  | 0.08       | 0.07   |
+| Harmonic | 0.48 | 0.18 | 0.12   | 0.08  | 0.08       | 0.06   |
+| Energy   | 0.12 | 0.18 | 0.42   | 0.12  | 0.08       | 0.08   |
+| Genre    | 0.18 | 0.18 | 0.12   | 0.38  | 0.08       | 0.06   |
 
 - **Balanced** — general-purpose. Good default for most sets.
 - **Harmonic** — prioritizes key compatibility. Best for melodic genres where clashing keys are obvious.
@@ -191,13 +191,13 @@ Note that brightness and rhythm always have low weights (0.06-0.08) across all p
 
 ### Interpreting scores
 
-| Range     | Quality                                                    |
-| --------- | ---------------------------------------------------------- |
-| 0.85-1.0  | Excellent transition — mix with confidence                 |
-| 0.70-0.84 | Good transition — minor compromises on one or two axes     |
-| 0.50-0.69 | Acceptable — requires skill or creative mixing techniques  |
-| 0.30-0.49 | Difficult — likely noticeable to the audience               |
-| < 0.30    | Avoid unless intentionally jarring                          |
+| Range     | Quality                                                   |
+| --------- | --------------------------------------------------------- |
+| 0.85-1.0  | Excellent transition — mix with confidence                |
+| 0.70-0.84 | Good transition — minor compromises on one or two axes    |
+| 0.50-0.69 | Acceptable — requires skill or creative mixing techniques |
+| 0.30-0.49 | Difficult — likely noticeable to the audience             |
+| < 0.30    | Avoid unless intentionally jarring                        |
 
 These ranges are guidelines. A 0.65 score with a perfect key match and a genre clash plays differently than a 0.65 with mediocre scores across the board. Use `score_transition` to see the per-axis breakdown when a composite score surprises you.
 
@@ -207,10 +207,10 @@ These ranges are guidelines. A 0.65 score with a perfect key match and a genre c
 
 The scoring system degrades gracefully based on available data:
 
-| Data available                        | Axes used                                        |
-| ------------------------------------- | ------------------------------------------------ |
-| Rekordbox metadata only               | Key, BPM, genre                                  |
-| + stratum-dsp analysis                | Key, BPM (improved), energy (proxy), genre       |
-| + Essentia analysis                   | All six axes                                     |
+| Data available          | Axes used                                  |
+| ----------------------- | ------------------------------------------ |
+| Rekordbox metadata only | Key, BPM, genre                            |
+| + stratum-dsp analysis  | Key, BPM (improved), energy (proxy), genre |
+| + Essentia analysis     | All six axes                               |
 
 Run `analyze_audio_batch` on your tracks before building sets for the best scoring accuracy. Without Essentia, brightness and rhythm are excluded entirely, and energy falls back to the BPM-based proxy.

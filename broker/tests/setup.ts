@@ -1,5 +1,5 @@
-import { applyD1Migrations, env } from 'cloudflare:test'
-import { beforeEach } from 'vitest'
+import { applyD1Migrations, env, } from 'cloudflare:test'
+import { beforeEach, } from 'vitest'
 
 declare module 'cloudflare:test' {
   interface ProvidedEnv {

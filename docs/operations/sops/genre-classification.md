@@ -388,8 +388,8 @@ Use these discriminators:
   - Techno vs Trance: Trance usually sits higher BPM and often higher danceability.
   - House vs Garage: Garage tends lower rhythm regularity and higher dynamic complexity.
   - Techno vs Electro: Electro often has lower regularity and sparser onset patterns.
-  If audio clearly favors one option, set `suggested_genre` to that option with **low** confidence and note "audio-assisted tie-break."
-  If audio remains ambiguous, keep **insufficient** and present both options.
+    If audio clearly favors one option, set `suggested_genre` to that option with **low** confidence and note "audio-assisted tie-break."
+    If audio remains ambiguous, keep **insufficient** and present both options.
 
 10. **No enrichment data at all:** Both `discogs_genres` and `beatport_genre` are empty/null.
     → Fall through to Step C (audio-only).

@@ -33,6 +33,7 @@ field is the key insight — seeing `composite: 0.328, composite_without: 0.656`
 tells the agent "this transition would be decent if not for the key clash."
 
 **Why not alternatives:**
+
 - Per-axis `notes`: the two biggest penalties (harmonic gate, BPM drift) operate
   on the composite, not individual axes.
 - Prose `rationale`: harder for agent to parse programmatically.
@@ -65,16 +66,16 @@ fn score_bpm_pct(pct: f64) -> f64 {
 k = 0.019 was fitted to match the existing anchor points:
 
 | pct   | exp(-0.019 × pct²) | Old stepped |
-|-------|---------------------|-------------|
-| 0.0%  | 1.000               | 1.0         |
-| 0.5%  | 0.999               | 1.0         |
-| 1.0%  | 0.998               | 1.0         |
-| 1.5%  | 0.996               | 1.0         |
-| 2.0%  | 0.993               | 0.85        |
-| 3.0%  | 0.843               | 0.85        |
-| 5.0%  | 0.621               | 0.6         |
-| 8.0%  | 0.297               | 0.3         |
-| 12.0% | 0.064               | 0.1         |
+| ----- | ------------------ | ----------- |
+| 0.0%  | 1.000              | 1.0         |
+| 0.5%  | 0.999              | 1.0         |
+| 1.0%  | 0.998              | 1.0         |
+| 1.5%  | 0.996              | 1.0         |
+| 2.0%  | 0.993              | 0.85        |
+| 3.0%  | 0.843              | 0.85        |
+| 5.0%  | 0.621              | 0.6         |
+| 8.0%  | 0.297              | 0.3         |
+| 12.0% | 0.064              | 0.1         |
 
 **Why exponential over piecewise linear:** BPM matching perception is genuinely
 continuous. The exponential naturally scores near-1.0 below 1.5% (0.996)
@@ -87,6 +88,7 @@ diminishing returns" is the honest model.
 perceptually negligible difference. This distorts beam search ranking.
 
 Labels assigned by bracket for readability:
+
 - < 2% → Seamless
 - < 4% → Comfortable
 - < 6% → Noticeable
@@ -129,6 +131,7 @@ New file `src/tools/eval_scoring.rs` as a `#[cfg(test)]` module, following the
 reporting).
 
 **Synthetic pools (no DB required):**
+
 - `pool_camelot_walk` — 8 tracks forming a perfect Camelot walk (8A→9A→...→3A).
   Tests that the sequencer finds the optimal harmonic path.
 - `pool_adversarial` — 6 tracks with hostile distributions (random keys, spread
@@ -140,17 +143,18 @@ reporting).
 
 **Quality gate thresholds:**
 
-| Metric | Threshold | What it catches |
-|--------|-----------|-----------------|
-| Mean composite | ≥ 0.65 | Overall quality regression |
-| Min composite | ≥ 0.30 | Single terrible transition |
-| Composite variance | ≤ 0.08 | Consistency |
-| Harmonic coherence % | ≥ 50% | Key scoring changes |
-| Energy fidelity % | ≥ 40% | Phase requirement changes |
-| Max pitch adjustment | ≤ 8% | BPM threshold changes |
-| Determinism | = true | Tiebreaking bugs |
+| Metric               | Threshold | What it catches            |
+| -------------------- | --------- | -------------------------- |
+| Mean composite       | ≥ 0.65    | Overall quality regression |
+| Min composite        | ≥ 0.30    | Single terrible transition |
+| Composite variance   | ≤ 0.08    | Consistency                |
+| Harmonic coherence % | ≥ 50%     | Key scoring changes        |
+| Energy fidelity %    | ≥ 40%     | Phase requirement changes  |
+| Max pitch adjustment | ≤ 8%      | BPM threshold changes      |
+| Determinism          | = true    | Tiebreaking bugs           |
 
 **Additional tests:**
+
 - Beam search ≥ greedy quality (best beam mean composite ≥ greedy - 0.01)
 - Priority axis shift verification (Harmonic priority → better key scores)
 - Sensitivity smoke test (vary one constant, assert monotonic behavior)
@@ -178,20 +182,20 @@ starting track, and exclusions. It needs to also cover:
 **Add to "Ask the user" block:**
 
 ```
-  Master Tempo?        [on (default) / off — affects key transposition when pitching]
-  Harmonic style?      [conservative / balanced (default) / adventurous]
-  BPM drift tolerance? [default 6% — max BPM wander from opening track]
-  BPM trajectory?      [optional — e.g., "start 122, peak at 130" → bpm_range]
+Master Tempo?        [on (default) / off — affects key transposition when pitching]
+Harmonic style?      [conservative / balanced (default) / adventurous]
+BPM drift tolerance? [default 6% — max BPM wander from opening track]
+BPM trajectory?      [optional — e.g., "start 122, peak at 130" → bpm_range]
 ```
 
 **Add to defaults table:**
 
-| Parameter | Default |
-|-----------|---------|
-| Master Tempo | on |
-| Harmonic style | balanced |
-| BPM drift tolerance | 6% |
-| BPM trajectory | None (no trajectory planning) |
+| Parameter           | Default                       |
+| ------------------- | ----------------------------- |
+| Master Tempo        | on                            |
+| Harmonic style      | balanced                      |
+| BPM drift tolerance | 6%                            |
+| BPM trajectory      | None (no trajectory planning) |
 
 **Add explanatory notes:**
 
@@ -212,11 +216,12 @@ the interpreted constraints back to the user before proceeding to Step 2.
 
 **Add to "New tools needed" table:**
 
-| Tool | Purpose |
-|------|---------|
+| Tool                          | Purpose                                                                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `query_transition_candidates` | Rank pool tracks as transition candidates from a reference. Context-aware (BPM target, energy phase, harmonic style). |
 
 **Update Step 4 "suggest" operation** to call `query_transition_candidates` with:
+
 - `from_track_id` = track at position N-1
 - `pool_track_ids` = remaining pool (minus tracks already in set)
 - `energy_phase` = phase at position N
@@ -228,6 +233,7 @@ Then filter results to also score well against position N+1 (if exists).
 ### A3. Replace deprecated `candidates` with `beam_width`
 
 Update Step 3 tool call example and "How build_set works internally" section:
+
 - `beam_width=1`: greedy single-path (fast, good baseline)
 - `beam_width≥2`: beam search exploring N parallel paths, keeping top N by mean
   composite at each step, deduplicating identical sequences
@@ -245,6 +251,7 @@ Replace with the exponential curve documentation from B3.
 ### A5. Add Master Tempo and pitch shift documentation
 
 New section after Composite Score covering:
+
 - Pitch shift formula: `round(12 × log₂(target_bpm / native_bpm))`
 - Camelot transposition: each semitone = +7 positions mod 12, letter unchanged
 - Worked example
@@ -267,6 +274,7 @@ Full request/response documentation with all params and example JSON.
 ### A8. Document post-composite adjustments
 
 New section covering:
+
 - Harmonic gate (style-dependent: 0.1× Conservative, 0.5× Balanced/Adventurous)
 - BPM drift penalty (0.7× when exceeding position-proportional budget)
 - Genre stickiness (+0.1 streak bonus, -0.1 early switch penalty)

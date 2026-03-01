@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::MutexGuard;
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 use rusqlite::Connection;
 
 use super::*;
@@ -189,8 +189,8 @@ pub(super) fn handle_preview_changes(
     }
 
     let conn = server.rekordbox_conn()?;
-    let current_tracks =
-        db::get_tracks_by_ids(&conn, &ids).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+    let current_tracks = db::get_tracks_by_ids(&conn, &ids)
+        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
 
     let diffs = server.state.changes.preview(&current_tracks);
     if diffs.is_empty() {
@@ -218,8 +218,8 @@ pub(super) async fn handle_write_xml(
             "changes_applied": 0,
         });
         attach_corpus_provenance(&mut result, consult_xml_workflow_docs());
-        let json =
-            serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| mcp_internal_error(format!("{e}")))?;
         return Ok(CallToolResult::success(vec![Content::text(json)]));
     }
 
@@ -312,9 +312,10 @@ pub(super) async fn handle_write_xml(
         .collect();
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_path = params.output_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(format!("rekordbox-exports/reklawdbox-{timestamp}.xml"))
-    });
+    let output_path = params
+        .output_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(format!("rekordbox-exports/reklawdbox-{timestamp}.xml")));
 
     if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
         server.state.changes.restore(snapshot);
@@ -361,8 +362,8 @@ pub(super) fn handle_clear_changes(
             "remaining": remaining,
             "fields_cleared": fields,
         });
-        let json =
-            serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     } else {
         let (cleared, remaining) = changes.clear(params.track_ids);
@@ -370,8 +371,8 @@ pub(super) fn handle_clear_changes(
             "cleared": cleared,
             "remaining": remaining,
         });
-        let json =
-            serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }

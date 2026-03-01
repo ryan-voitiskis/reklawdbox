@@ -7,9 +7,9 @@ use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router
 use rusqlite::Connection;
 
 mod analysis;
-mod audit_handlers;
 mod audio_handlers;
 mod audio_scan;
+mod audit_handlers;
 mod batch;
 mod corpus_helpers;
 mod discogs_auth;
@@ -19,28 +19,28 @@ mod essentia;
 mod file_tag_handlers;
 mod library_handlers;
 mod params;
-mod resolve_handlers;
 mod resolve;
+mod resolve_handlers;
 mod scoring;
 mod sequencing_handlers;
 mod staging_handlers;
 
 use analysis::*;
-use audit_handlers::*;
 use audio_handlers::*;
 use audio_scan::*;
+use audit_handlers::*;
 use batch::*;
 use corpus_helpers::*;
 use discogs_auth::*;
 use enrich_handlers::*;
 use enrichment::*;
-use essentia::*;
 pub(crate) use essentia::probe_essentia_python_path;
+use essentia::*;
 use file_tag_handlers::*;
 use library_handlers::*;
 use params::*;
-use resolve_handlers::*;
 use resolve::*;
+use resolve_handlers::*;
 use scoring::*;
 use sequencing_handlers::*;
 use staging_handlers::*;
@@ -97,7 +97,9 @@ impl ReklawdboxServer {
         }
     }
 
-    pub(super) fn cache_store_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
+    pub(super) fn cache_store_conn(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
         let result = self.state.internal_db.get_or_init(|| {
             let path = std::env::var("CRATE_DIG_STORE_PATH")
                 .map(std::path::PathBuf::from)
@@ -186,7 +188,10 @@ impl ReklawdboxServer {
         handle_get_playlist_tracks(self.rekordbox_conn()?, params.0)
     }
 
-    #[tool(name = "read_library", description = "Get library summary: track count, genre distribution, stats")]
+    #[tool(
+        name = "read_library",
+        description = "Get library summary: track count, genre distribution, stats"
+    )]
     async fn get_library_summary(&self) -> Result<CallToolResult, McpError> {
         handle_get_library_summary(self.rekordbox_conn()?)
     }
@@ -383,9 +388,7 @@ impl ReklawdboxServer {
         handle_write_file_tags(params.0).await
     }
 
-    #[tool(
-        description = "Extract cover art from an audio file and save to disk."
-    )]
+    #[tool(description = "Extract cover art from an audio file and save to disk.")]
     async fn extract_cover_art(
         &self,
         params: Parameters<ExtractCoverArtParams>,
@@ -393,9 +396,7 @@ impl ReklawdboxServer {
         handle_extract_cover_art(params.0).await
     }
 
-    #[tool(
-        description = "Embed cover art into one or more audio files."
-    )]
+    #[tool(description = "Embed cover art into one or more audio files.")]
     async fn embed_cover_art(
         &self,
         params: Parameters<EmbedCoverArtParams>,

@@ -1,7 +1,7 @@
 use std::process::Stdio;
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::audio;
@@ -19,10 +19,7 @@ pub(super) async fn handle_analyze_track_audio(
         db::get_track(&conn, &params.track_id)
             .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
             .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("Track '{}' not found", params.track_id),
-                    None,
-                )
+                McpError::invalid_params(format!("Track '{}' not found", params.track_id), None)
             })?
     };
 
@@ -57,7 +54,9 @@ pub(super) async fn handle_analyze_track_audio(
             .map_err(|e| mcp_internal_error(format!("Cache parse error: {e}")))?;
         (val, true)
     } else {
-        let analysis = analyze_stratum(&file_path).await.map_err(mcp_internal_error)?;
+        let analysis = analyze_stratum(&file_path)
+            .await
+            .map_err(mcp_internal_error)?;
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
         let store = server.cache_store_conn()?;

@@ -1,5 +1,5 @@
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::audio;
@@ -16,10 +16,7 @@ pub(super) fn handle_resolve_track_data(
         db::get_track(&conn, &params.track_id)
             .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
             .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("Track '{}' not found", params.track_id),
-                    None,
-                )
+                McpError::invalid_params(format!("Track '{}' not found", params.track_id), None)
             })?
     };
 
@@ -30,12 +27,10 @@ pub(super) fn handle_resolve_track_data(
 
     let (discogs_cache, beatport_cache, stratum_cache, essentia_cache) = {
         let store = server.cache_store_conn()?;
-        let discogs_cache =
-            store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
-        let beatport_cache =
-            store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        let discogs_cache = store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
+            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        let beatport_cache = store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
+            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
         let audio_cache_key =
             resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
         let stratum_cache =
@@ -92,9 +87,8 @@ pub(super) fn handle_resolve_tracks_data(
 
         let (discogs_cache, beatport_cache, stratum_cache, essentia_cache) = {
             let store = server.cache_store_conn()?;
-            let discogs_cache =
-                store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+            let discogs_cache = store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
+                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
             let beatport_cache =
                 store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
                     .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
@@ -182,14 +176,12 @@ pub(super) fn handle_cache_coverage(
             let audio_cache_key =
                 resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
 
-            let has_discogs =
-                store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                    .is_some();
-            let has_beatport =
-                store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                    .is_some();
+            let has_discogs = store::get_enrichment(&store, "discogs", &norm_artist, &norm_title)
+                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                .is_some();
+            let has_beatport = store::get_enrichment(&store, "beatport", &norm_artist, &norm_title)
+                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                .is_some();
             let has_stratum =
                 store::get_audio_analysis(&store, &audio_cache_key, audio::ANALYZER_STRATUM)
                     .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
@@ -427,7 +419,9 @@ pub(crate) fn resolve_single_track(
 /// Parse a cached enrichment entry's response_json into a serde_json::Value.
 /// Returns None if cache entry is None or has no response_json.
 /// Injects match_quality and cached_at metadata into the returned object.
-fn parse_enrichment_cache(cache: Option<&store::EnrichmentCacheEntry>) -> Option<serde_json::Value> {
+fn parse_enrichment_cache(
+    cache: Option<&store::EnrichmentCacheEntry>,
+) -> Option<serde_json::Value> {
     cache.and_then(|c| {
         let mut val = c
             .response_json

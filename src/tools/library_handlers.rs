@@ -1,7 +1,7 @@
 use std::sync::MutexGuard;
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 use rusqlite::Connection;
 
 use super::*;
@@ -18,8 +18,8 @@ pub(super) fn handle_search_tracks(
         params.offset,
     );
     search.playlist = params.playlist;
-    let tracks =
-        db::search_tracks(&conn, &search).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+    let tracks = db::search_tracks(&conn, &search)
+        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
     let json =
         serde_json::to_string_pretty(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -29,8 +29,8 @@ pub(super) fn handle_get_track(
     conn: MutexGuard<'_, Connection>,
     params: GetTrackParams,
 ) -> Result<CallToolResult, McpError> {
-    let track =
-        db::get_track(&conn, &params.track_id).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+    let track = db::get_track(&conn, &params.track_id)
+        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
     match track {
         Some(t) => {
             let json =

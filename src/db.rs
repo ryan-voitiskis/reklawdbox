@@ -7,7 +7,8 @@ use crate::types::{
 };
 
 /// The universal Rekordbox 6/7 SQLCipher key (publicly known, same for all installations).
-const REKORDBOX_SQLCIPHER_KEY: &str = "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
+const REKORDBOX_SQLCIPHER_KEY: &str =
+    "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
 
 pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -281,7 +282,8 @@ fn search_tracks_with_limit_policy(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values.iter().map(|b| b.as_ref()).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+        bind_values.iter().map(|b| b.as_ref()).collect();
     let rows = stmt.query_map(bind_params.as_slice(), row_to_track)?;
     rows.collect()
 }
@@ -327,7 +329,10 @@ fn get_playlist_tracks_with_limit_policy(
         "\nFROM djmdContent c",
         ",\n    sp.TrackNo AS Position\nFROM djmdContent c",
     );
-    debug_assert_ne!(base_sql, TRACK_SELECT, "TRACK_SELECT Position injection failed");
+    debug_assert_ne!(
+        base_sql, TRACK_SELECT,
+        "TRACK_SELECT Position injection failed"
+    );
     let mut sql = format!(
         "{base_sql}
          INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
@@ -884,9 +889,11 @@ mod tests {
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 2);
-        assert!(tracks
-            .iter()
-            .all(|t| t.file_path.starts_with("/Users/vz/Music/Burial/")));
+        assert!(
+            tracks
+                .iter()
+                .all(|t| t.file_path.starts_with("/Users/vz/Music/Burial/"))
+        );
     }
 
     #[test]
@@ -919,9 +926,7 @@ mod tests {
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 5);
-        assert!(tracks
-            .iter()
-            .all(|t| t.file_path.starts_with("/Users/vz/")));
+        assert!(tracks.iter().all(|t| t.file_path.starts_with("/Users/vz/")));
     }
 
     #[test]
@@ -1286,9 +1291,7 @@ mod tests {
         // Find any tracks with non-ASCII characters
         let unicode_tracks: Vec<_> = all
             .iter()
-            .filter(|t| {
-                !t.title.is_ascii() || !t.artist.is_ascii()
-            })
+            .filter(|t| !t.title.is_ascii() || !t.artist.is_ascii())
             .collect();
 
         // Verify they survive serde round-trip

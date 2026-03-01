@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::db;
@@ -150,9 +150,9 @@ pub(super) async fn handle_write_file_tags(
         .map(|e| tags::WriteEntry {
             path: PathBuf::from(&e.path),
             tags: e.tags,
-            wav_targets: e.wav_targets.unwrap_or_else(|| {
-                vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo]
-            }),
+            wav_targets: e
+                .wav_targets
+                .unwrap_or_else(|| vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo]),
         })
         .collect();
 
@@ -160,11 +160,9 @@ pub(super) async fn handle_write_file_tags(
         // Dry-run is read-only; entries are currently processed sequentially.
         let mut results = Vec::with_capacity(entries.len());
         for entry in entries {
-            let result = tokio::task::spawn_blocking(move || {
-                tags::write_file_tags_dry_run(&entry)
-            })
-            .await
-            .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
+            let result = tokio::task::spawn_blocking(move || tags::write_file_tags_dry_run(&entry))
+                .await
+                .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
             results.push(result);
         }
 
@@ -202,9 +200,7 @@ pub(super) async fn handle_write_file_tags(
                 .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
 
             match &result {
-                tags::FileWriteResult::Ok {
-                    fields_written, ..
-                } => {
+                tags::FileWriteResult::Ok { fields_written, .. } => {
                     files_written += 1;
                     total_fields_written += fields_written.len();
                 }

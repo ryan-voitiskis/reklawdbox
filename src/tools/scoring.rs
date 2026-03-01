@@ -92,12 +92,15 @@ impl TransitionScores {
         });
         if !self.adjustments.is_empty() {
             json["adjustments"] = serde_json::json!(
-                self.adjustments.iter().map(|a| serde_json::json!({
-                    "kind": a.kind,
-                    "delta": round_to_3_decimals(a.delta),
-                    "composite_without": round_to_3_decimals(a.composite_without),
-                    "reason": a.reason,
-                })).collect::<Vec<_>>()
+                self.adjustments
+                    .iter()
+                    .map(|a| serde_json::json!({
+                        "kind": a.kind,
+                        "delta": round_to_3_decimals(a.delta),
+                        "composite_without": round_to_3_decimals(a.composite_without),
+                        "reason": a.reason,
+                    }))
+                    .collect::<Vec<_>>()
             );
         }
         json
@@ -586,17 +589,20 @@ pub(super) fn compute_bpm_trajectory(
                 if build_start_idx == build_end_idx {
                     (start_bpm + end_bpm) / 2.0
                 } else {
-                    let progress = (i - build_start_idx) as f64 / (build_end_idx - build_start_idx) as f64;
+                    let progress =
+                        (i - build_start_idx) as f64 / (build_end_idx - build_start_idx) as f64;
                     start_bpm + (end_bpm - start_bpm) * progress
                 }
             }
             EnergyPhase::Peak => end_bpm,
             EnergyPhase::Release => {
-                let (release_start_idx, release_end_idx) = (release_start.unwrap(), release_end.unwrap());
+                let (release_start_idx, release_end_idx) =
+                    (release_start.unwrap(), release_end.unwrap());
                 if release_start_idx == release_end_idx {
                     (end_bpm + start_bpm) / 2.0
                 } else {
-                    let progress = (i - release_start_idx) as f64 / (release_end_idx - release_start_idx) as f64;
+                    let progress = (i - release_start_idx) as f64
+                        / (release_end_idx - release_start_idx) as f64;
                     end_bpm + (start_bpm - end_bpm) * progress
                 }
             }
@@ -609,12 +615,18 @@ pub(super) fn build_track_profile(
     store_conn: &Connection,
 ) -> Result<TrackProfile, String> {
     let cache_key = resolve_file_path(&track.file_path).unwrap_or_else(|_| track.file_path.clone());
-    let stratum_json = store::get_audio_analysis(store_conn, &cache_key, crate::audio::ANALYZER_STRATUM)
-        .map_err(|e| format!("stratum cache read error: {e}"))?
-        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
-    let essentia_data = store::get_audio_analysis(store_conn, &cache_key, crate::audio::ANALYZER_ESSENTIA)
-        .map_err(|e| format!("essentia cache read error: {e}"))?
-        .and_then(|cached| serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok());
+    let stratum_json =
+        store::get_audio_analysis(store_conn, &cache_key, crate::audio::ANALYZER_STRATUM)
+            .map_err(|e| format!("stratum cache read error: {e}"))?
+            .and_then(|cached| {
+                serde_json::from_str::<serde_json::Value>(&cached.features_json).ok()
+            });
+    let essentia_data =
+        store::get_audio_analysis(store_conn, &cache_key, crate::audio::ANALYZER_ESSENTIA)
+            .map_err(|e| format!("essentia cache read error: {e}"))?
+            .and_then(|cached| {
+                serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok()
+            });
 
     let bpm = stratum_json
         .as_ref()
@@ -637,7 +649,9 @@ pub(super) fn build_track_profile(
         });
 
     let energy = compute_track_energy(essentia_data.as_ref(), bpm);
-    let brightness = essentia_data.as_ref().and_then(|e| e.spectral_centroid_mean);
+    let brightness = essentia_data
+        .as_ref()
+        .and_then(|e| e.spectral_centroid_mean);
     let rhythm_regularity = essentia_data.as_ref().and_then(|e| e.rhythm_regularity);
     let loudness_range = essentia_data.as_ref().and_then(|e| e.loudness_range);
     let canonical_genre = canonicalize_genre(&track.genre);
@@ -690,7 +704,8 @@ pub(super) fn score_transition_profiles(
             };
 
             let effective_from_key = if !master_tempo && from_shift != 0 {
-                from.camelot_key.map(|k| transpose_camelot_key(k, from_shift))
+                from.camelot_key
+                    .map(|k| transpose_camelot_key(k, from_shift))
             } else {
                 from.camelot_key
             };
@@ -709,7 +724,13 @@ pub(super) fn score_transition_profiles(
             // BPM axis scores how close the candidate's native BPM is to its target
             let bpm_score = score_bpm_axis(to_play_bpm, to.bpm);
 
-            (effective_to_key_display, to_shift, effective_from_key, effective_to_key, bpm_score)
+            (
+                effective_to_key_display,
+                to_shift,
+                effective_from_key,
+                effective_to_key,
+                bpm_score,
+            )
         } else {
             // Original master_tempo logic
             let (eff_to_key, shift) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
@@ -823,7 +844,8 @@ pub(super) fn score_transition_profiles(
                 kind: "sustained_peak",
                 delta,
                 composite_without: composite - delta,
-                reason: "Sustained peak with tight loudness range (+0.05 on energy axis)".to_string(),
+                reason: "Sustained peak with tight loudness range (+0.05 on energy axis)"
+                    .to_string(),
             });
         }
     }
@@ -1032,7 +1054,9 @@ pub(super) fn score_energy_axis(
             axis.value = (axis.value + 0.1).clamp(0.0, 1.0);
             axis.label.push_str(" + dynamic boundary boost");
         }
-        (Some(EnergyPhase::Peak), Some(loudness_range)) if !is_phase_boundary && loudness_range < 4.0 => {
+        (Some(EnergyPhase::Peak), Some(loudness_range))
+            if !is_phase_boundary && loudness_range < 4.0 =>
+        {
             axis.value = (axis.value + 0.05).clamp(0.0, 1.0);
             axis.label.push_str(" + sustained-peak consistency boost");
         }
@@ -1082,7 +1106,11 @@ pub(super) fn score_genre_axis(
     };
 
     // Genre stickiness: bonus for staying in the same family, penalty for early switch
-    if genre_compatible && from_family != GenreFamily::Other && genre_run_length > 0 && genre_run_length < 5 {
+    if genre_compatible
+        && from_family != GenreFamily::Other
+        && genre_run_length > 0
+        && genre_run_length < 5
+    {
         axis.value = (axis.value + 0.1).min(1.0);
         axis.label.push_str(" + streak bonus");
     } else if !genre_compatible && genre_run_length > 0 && genre_run_length < 2 {
@@ -1198,10 +1226,38 @@ pub(super) struct PriorityWeights {
 
 pub(super) fn priority_weights(priority: SequencingPriority) -> PriorityWeights {
     match priority {
-        SequencingPriority::Balanced => PriorityWeights { key: 0.30, bpm: 0.20, energy: 0.18, genre: 0.17, brightness: 0.08, rhythm: 0.07 },
-        SequencingPriority::Harmonic => PriorityWeights { key: 0.48, bpm: 0.18, energy: 0.12, genre: 0.08, brightness: 0.08, rhythm: 0.06 },
-        SequencingPriority::Energy => PriorityWeights { key: 0.12, bpm: 0.18, energy: 0.42, genre: 0.12, brightness: 0.08, rhythm: 0.08 },
-        SequencingPriority::Genre => PriorityWeights { key: 0.18, bpm: 0.18, energy: 0.12, genre: 0.38, brightness: 0.08, rhythm: 0.06 },
+        SequencingPriority::Balanced => PriorityWeights {
+            key: 0.30,
+            bpm: 0.20,
+            energy: 0.18,
+            genre: 0.17,
+            brightness: 0.08,
+            rhythm: 0.07,
+        },
+        SequencingPriority::Harmonic => PriorityWeights {
+            key: 0.48,
+            bpm: 0.18,
+            energy: 0.12,
+            genre: 0.08,
+            brightness: 0.08,
+            rhythm: 0.06,
+        },
+        SequencingPriority::Energy => PriorityWeights {
+            key: 0.12,
+            bpm: 0.18,
+            energy: 0.42,
+            genre: 0.12,
+            brightness: 0.08,
+            rhythm: 0.08,
+        },
+        SequencingPriority::Genre => PriorityWeights {
+            key: 0.18,
+            bpm: 0.18,
+            energy: 0.12,
+            genre: 0.38,
+            brightness: 0.08,
+            rhythm: 0.06,
+        },
     }
 }
 
@@ -1252,7 +1308,10 @@ const ENERGY_W_DANCE: f64 = 0.4;
 const ENERGY_W_LOUDNESS: f64 = 0.3;
 const ENERGY_W_ONSET: f64 = 0.3;
 
-pub(super) fn compute_track_energy(essentia: Option<&crate::audio::EssentiaOutput>, bpm: f64) -> f64 {
+pub(super) fn compute_track_energy(
+    essentia: Option<&crate::audio::EssentiaOutput>,
+    bpm: f64,
+) -> f64 {
     let bpm_proxy = ((bpm - BPM_PROXY_FLOOR) / BPM_PROXY_RANGE).clamp(0.0, 1.0);
     let Some(essentia) = essentia else {
         return bpm_proxy;
@@ -1265,9 +1324,12 @@ pub(super) fn compute_track_energy(essentia: Option<&crate::audio::EssentiaOutpu
     match (danceability, loudness_integrated, onset_rate) {
         (Some(dance), Some(loudness), Some(onset)) => {
             let normalized_dance = (dance / DANCEABILITY_MAX).clamp(0.0, 1.0);
-            let normalized_loudness = ((loudness - LOUDNESS_FLOOR_LUFS) / LOUDNESS_RANGE_LUFS).clamp(0.0, 1.0);
+            let normalized_loudness =
+                ((loudness - LOUDNESS_FLOOR_LUFS) / LOUDNESS_RANGE_LUFS).clamp(0.0, 1.0);
             let onset_rate_normalized = (onset / ONSET_RATE_MAX).clamp(0.0, 1.0);
-            ((ENERGY_W_DANCE * normalized_dance) + (ENERGY_W_LOUDNESS * normalized_loudness) + (ENERGY_W_ONSET * onset_rate_normalized))
+            ((ENERGY_W_DANCE * normalized_dance)
+                + (ENERGY_W_LOUDNESS * normalized_loudness)
+                + (ENERGY_W_ONSET * onset_rate_normalized))
                 .clamp(0.0, 1.0)
         }
         _ => bpm_proxy,
@@ -1314,7 +1376,10 @@ pub(super) fn parse_camelot_key(raw_key: &str) -> Option<CamelotKey> {
 }
 
 pub(super) fn musical_key_to_camelot(raw_key: &str) -> Option<CamelotKey> {
-    let normalized = raw_key.trim().replace('\u{266F}', "#").replace('\u{266D}', "b");
+    let normalized = raw_key
+        .trim()
+        .replace('\u{266F}', "#")
+        .replace('\u{266D}', "b");
     if normalized.is_empty() {
         return None;
     }

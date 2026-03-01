@@ -1,18 +1,17 @@
 use crate::discogs;
 
 #[cfg(test)]
+use crate::beatport;
+#[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
-#[cfg(test)]
-use crate::beatport;
 
 #[cfg(test)]
 pub(super) type DiscogsLookupOverrideResult =
     Result<Option<discogs::DiscogsResult>, discogs::LookupError>;
 #[cfg(test)]
-pub(super) type BeatportLookupOverrideResult =
-    Result<Option<beatport::BeatportResult>, String>;
+pub(super) type BeatportLookupOverrideResult = Result<Option<beatport::BeatportResult>, String>;
 
 #[cfg(test)]
 type DiscogsLookupOverrideKey = (String, String, Option<String>);

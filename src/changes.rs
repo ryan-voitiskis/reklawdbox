@@ -31,7 +31,8 @@ impl ChangeManager {
                 continue;
             }
             staged += 1;
-            staged_changes_by_track_id.entry(change.track_id.clone())
+            staged_changes_by_track_id
+                .entry(change.track_id.clone())
                 .and_modify(|existing| merge_track_change(existing, &change))
                 .or_insert(change);
         }
@@ -280,7 +281,10 @@ fn merge_missing_fields(existing: &mut TrackChange, incoming: &TrackChange) {
     }
 }
 
-fn apply_changes_with_map(tracks: &[Track], changes_by_track_id: &HashMap<String, TrackChange>) -> Vec<Track> {
+fn apply_changes_with_map(
+    tracks: &[Track],
+    changes_by_track_id: &HashMap<String, TrackChange>,
+) -> Vec<Track> {
     tracks
         .iter()
         .map(|track| {

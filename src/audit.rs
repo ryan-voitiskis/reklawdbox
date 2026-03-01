@@ -18,7 +18,9 @@ use crate::tags::{self, FileReadResult};
 // Issue types & safety tiers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString, strum::EnumIter, strum::Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString, strum::EnumIter, strum::Display,
+)]
 pub enum IssueType {
     #[strum(serialize = "EMPTY_ARTIST")]
     EmptyArtist,
@@ -100,7 +102,6 @@ pub enum SafetyTier {
     Review,
 }
 
-
 // ---------------------------------------------------------------------------
 // Audit status & resolution
 // ---------------------------------------------------------------------------
@@ -142,7 +143,12 @@ struct StatusCounts {
 }
 
 fn aggregate_status_counts(summary: &store::AuditSummary) -> StatusCounts {
-    let mut counts = StatusCounts { open: 0, resolved: 0, accepted: 0, deferred: 0 };
+    let mut counts = StatusCounts {
+        open: 0,
+        resolved: 0,
+        accepted: 0,
+        deferred: 0,
+    };
     for (_, status, count) in &summary.by_type_status {
         match AuditStatus::from_str(status) {
             Some(AuditStatus::Open) => counts.open += count,
@@ -210,8 +216,7 @@ fn is_disc_subdir(name: &str) -> bool {
 /// Lowercase patterns for tech specs in directory names.
 /// Matching is always done against the lowercased input.
 const TECH_SPEC_PATTERNS: &[&str] = &[
-    "[flac]", "[wav]", "[mp3]", "[aiff]", "[aac]",
-    "24-96", "24-48", "24-44", "16-44", "16-48",
+    "[flac]", "[wav]", "[mp3]", "[aiff]", "[aac]", "24-96", "24-48", "24-44", "16-44", "16-48",
     "24bit", "16bit",
 ];
 
@@ -271,7 +276,11 @@ pub fn classify_track_context(path: &Path) -> AuditContext {
     // Check for disc subdirectories (CD1, CD2, Disc 1, etc.)
     let effective_dir_name = if is_disc_subdir(dir_name) {
         // Go up one more level for the album dir
-        match parent.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+        match parent
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+        {
             Some(n) => n,
             None => return AuditContext::LooseTrack,
         }
@@ -596,9 +605,7 @@ pub fn check_tags(
         if !skip.contains(&IssueType::WavTag3Missing) && !tag3_missing.is_empty() {
             issues.push(DetectedIssue {
                 issue_type: IssueType::WavTag3Missing,
-                detail: Some(
-                    serde_json::json!({ "fields": tag3_missing }).to_string(),
-                ),
+                detail: Some(serde_json::json!({ "fields": tag3_missing }).to_string()),
             });
         }
 
@@ -606,8 +613,14 @@ pub fn check_tags(
         if !skip.contains(&IssueType::WavTagDrift) {
             let mut drifted = Vec::new();
             for field in &["artist", "title", "album", "genre", "year", "comment"] {
-                let id3v2_value = id3v2.get(*field).and_then(|v| v.as_deref()).map(|s| s.trim());
-                let riff_info_value = riff_info.get(*field).and_then(|v| v.as_deref()).map(|s| s.trim());
+                let id3v2_value = id3v2
+                    .get(*field)
+                    .and_then(|v| v.as_deref())
+                    .map(|s| s.trim());
+                let riff_info_value = riff_info
+                    .get(*field)
+                    .and_then(|v| v.as_deref())
+                    .map(|s| s.trim());
                 if let (Some(v2_val), Some(ri_val)) = (id3v2_value, riff_info_value)
                     && v2_val != ri_val
                 {
@@ -654,7 +667,9 @@ pub fn check_filename(
 
     // ORIGINAL_MIX_SUFFIX
     if !skip.contains(&IssueType::OriginalMixSuffix) && filename.contains("(Original Mix)") {
-        let new_name = filename.replace(" (Original Mix)", "").replace("(Original Mix)", "");
+        let new_name = filename
+            .replace(" (Original Mix)", "")
+            .replace("(Original Mix)", "");
         issues.push(DetectedIssue {
             issue_type: IssueType::OriginalMixSuffix,
             detail: Some(
@@ -672,9 +687,7 @@ pub fn check_filename(
         && let Some((_, dir_name)) = effective_album_dir_name(path)
     {
         let dir_lower = dir_name.to_ascii_lowercase();
-        let has_tech_specs = TECH_SPEC_PATTERNS
-            .iter()
-            .any(|pat| dir_lower.contains(pat));
+        let has_tech_specs = TECH_SPEC_PATTERNS.iter().any(|pat| dir_lower.contains(pat));
         if has_tech_specs {
             let clean = normalize_dir_name(dir_name);
             issues.push(DetectedIssue {
@@ -709,7 +722,9 @@ pub fn check_filename(
     // BAD_FILENAME — filename doesn't match canonical or acceptable alternates
     if !skip.contains(&IssueType::BadFilename) {
         let is_canonical = match context {
-            AuditContext::AlbumTrack => parsed.track_num.is_some() && parsed.artist.is_some() && parsed.title.is_some(),
+            AuditContext::AlbumTrack => {
+                parsed.track_num.is_some() && parsed.artist.is_some() && parsed.title.is_some()
+            }
             AuditContext::LooseTrack => parsed.artist.is_some() && parsed.title.is_some(),
         };
         let is_acceptable_alternate = match context {
@@ -749,7 +764,10 @@ pub fn check_filename(
         if let (Some(fn_artist), Some(t_artist)) = (&parsed.artist, &tag_artist) {
             let filename_artist_folded = casefold_text(fn_artist.trim());
             let tag_artist_folded = casefold_text(t_artist.trim());
-            if !filename_artist_folded.is_empty() && !tag_artist_folded.is_empty() && filename_artist_folded != tag_artist_folded {
+            if !filename_artist_folded.is_empty()
+                && !tag_artist_folded.is_empty()
+                && filename_artist_folded != tag_artist_folded
+            {
                 drifts.push(serde_json::json!({
                     "field": "artist",
                     "filename": fn_artist,
@@ -763,7 +781,10 @@ pub fn check_filename(
             let fn_t_clean = fn_title.replace(" (Original Mix)", "");
             let filename_title_folded = casefold_text(fn_t_clean.trim());
             let tag_title_folded = casefold_text(t_title.trim());
-            if !filename_title_folded.is_empty() && !tag_title_folded.is_empty() && filename_title_folded != tag_title_folded {
+            if !filename_title_folded.is_empty()
+                && !tag_title_folded.is_empty()
+                && filename_title_folded != tag_title_folded
+            {
                 drifts.push(serde_json::json!({
                     "field": "title",
                     "filename": fn_title,
@@ -952,16 +973,12 @@ pub fn scan(
     // 2. Load existing audit_files for this scope
     let existing = store::get_audit_files_in_scope(conn, &scope)
         .map_err(|e| format!("DB error loading audit files: {e}"))?;
-    let existing_map: HashMap<String, store::AuditFile> = existing
-        .into_iter()
-        .map(|f| (f.path.clone(), f))
-        .collect();
+    let existing_map: HashMap<String, store::AuditFile> =
+        existing.into_iter().map(|f| (f.path.clone(), f)).collect();
 
     // Track disk paths for missing-file detection
-    let disk_path_set: HashSet<String> = disk_files
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
+    let disk_path_set: HashSet<String> =
+        disk_files.iter().map(|p| p.display().to_string()).collect();
 
     // 3. Delete missing files
     let missing_from_disk = delete_missing_files_if_walk_complete(
@@ -1022,7 +1039,12 @@ pub fn scan(
             // Run checks
             let mut detected: Vec<DetectedIssue> = Vec::new();
             if !matches!(read_result, FileReadResult::Error { .. }) {
-                detected.extend(check_tags(file_path, &read_result, &context, skip_issue_types));
+                detected.extend(check_tags(
+                    file_path,
+                    &read_result,
+                    &context,
+                    skip_issue_types,
+                ));
                 detected.extend(check_filename(
                     file_path,
                     &read_result,
@@ -1036,7 +1058,8 @@ pub fn scan(
                 .map_err(|e| format!("DB error upserting file: {e}"))?;
 
             // Upsert detected issues
-            let detected_types: Vec<&str> = detected.iter().map(|d| d.issue_type.as_str()).collect();
+            let detected_types: Vec<&str> =
+                detected.iter().map(|d| d.issue_type.as_str()).collect();
             for issue in &detected {
                 store::upsert_audit_issue(
                     &tx,
@@ -1063,13 +1086,9 @@ pub fn scan(
                     }
                 }
 
-                let resolved_count = store::mark_issues_resolved_for_path(
-                    &tx,
-                    &path_str,
-                    &types_still_open,
-                    &now,
-                )
-                .map_err(|e| format!("DB error resolving issues: {e}"))?;
+                let resolved_count =
+                    store::mark_issues_resolved_for_path(&tx, &path_str, &types_still_open, &now)
+                        .map_err(|e| format!("DB error resolving issues: {e}"))?;
                 if resolved_count > 0 {
                     *auto_resolved.entry("_total".to_string()).or_insert(0) += resolved_count;
                 }
@@ -1135,15 +1154,16 @@ pub struct IssueRecord {
 }
 
 fn store_issue_to_record(issue: store::AuditIssue) -> IssueRecord {
-    let detail = issue.detail.as_deref().and_then(|d| {
-        match serde_json::from_str(d) {
+    let detail = issue
+        .detail
+        .as_deref()
+        .and_then(|d| match serde_json::from_str(d) {
             Ok(v) => Some(v),
             Err(e) => {
                 tracing::warn!("issue {}: detail JSON parse failed: {e}", issue.id);
                 None
             }
-        }
-    });
+        });
     IssueRecord {
         id: issue.id,
         path: issue.path,
@@ -1208,8 +1228,7 @@ pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, Stri
     if scope == "/" {
         return Err("Scope must not be empty or root (/)".to_string());
     }
-    let summary = store::get_audit_summary(conn, &scope)
-        .map_err(|e| format!("DB error: {e}"))?;
+    let summary = store::get_audit_summary(conn, &scope).map_err(|e| format!("DB error: {e}"))?;
 
     let mut by_type: HashMap<String, HashMap<String, i64>> = HashMap::new();
     for (issue_type, status, count) in &summary.by_type_status {
@@ -1386,7 +1405,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues.iter().any(|i| i.issue_type == IssueType::EmptyArtist));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
     }
 
     #[test]
@@ -1410,15 +1433,21 @@ mod tests {
             &AuditContext::AlbumTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::MissingTrackNum));
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::MissingAlbum));
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::MissingYear));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingTrackNum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingAlbum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
     }
 
     #[test]
@@ -1465,9 +1494,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::ArtistInTitle));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
     }
 
     #[test]
@@ -1483,27 +1514,27 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::WavTag3Missing));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTag3Missing)
+        );
     }
 
     #[test]
     fn check_tags_wav_tag_drift() {
-        let result = make_wav(
-            &[("artist", "Correct")],
-            &[("artist", "Wrong")],
-            vec![],
-        );
+        let result = make_wav(&[("artist", "Correct")], &[("artist", "Wrong")], vec![]);
         let issues = check_tags(
             Path::new("/test/track.wav"),
             &result,
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::WavTagDrift));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTagDrift)
+        );
     }
 
     #[test]
@@ -1515,9 +1546,7 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::GenreSet));
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::GenreSet));
     }
 
     #[test]
@@ -1531,9 +1560,11 @@ mod tests {
         );
         assert!(issues.iter().any(|i| i.issue_type == IssueType::NoTags));
         // Should NOT also report EMPTY_ARTIST etc when NO_TAGS fires
-        assert!(!issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::EmptyArtist));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
     }
 
     #[test]
@@ -1560,9 +1591,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::OriginalMixSuffix));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix)
+        );
     }
 
     #[test]
@@ -1574,9 +1607,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::TechSpecsInDir));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::TechSpecsInDir)
+        );
     }
 
     #[test]
@@ -1588,9 +1623,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
     }
 
     #[test]
@@ -1602,9 +1639,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(!issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
     }
 
     #[test]
@@ -1616,9 +1655,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(!issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
     }
 
     #[test]
@@ -1630,9 +1671,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(!issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::FilenameTagDrift));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
     }
 
     // -- normalize_dir_name --
@@ -1701,7 +1744,13 @@ mod tests {
     #[test]
     fn check_tags_missing_year_ignores_date_field() {
         // Even if "date" is set, missing "year" should flag MISSING_YEAR
-        let tags = make_tags(&[("artist", "A"), ("title", "T"), ("album", "Alb"), ("track", "1"), ("date", "2024")]);
+        let tags = make_tags(&[
+            ("artist", "A"),
+            ("title", "T"),
+            ("album", "Alb"),
+            ("track", "1"),
+            ("date", "2024"),
+        ]);
         let result = FileReadResult::Single {
             path: "/music/Artist/Album (2024)/01 A - T.flac".to_string(),
             format: "FLAC".to_string(),
@@ -1709,8 +1758,17 @@ mod tests {
             tags,
             cover_art: None,
         };
-        let issues = check_tags(Path::new("/x"), &result, &AuditContext::AlbumTrack, &HashSet::new());
-        assert!(issues.iter().any(|i| i.issue_type == IssueType::MissingYear));
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
     }
 
     // Finding 2: Multi-byte UTF-8 in filename doesn't panic
@@ -1735,8 +1793,16 @@ mod tests {
             tags,
             cover_art: None,
         };
-        let issues = check_tags(Path::new("/x"), &result, &AuditContext::LooseTrack, &HashSet::new());
-        let ait = issues.iter().find(|i| i.issue_type == IssueType::ArtistInTitle).expect("should detect");
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect");
         let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
         assert_eq!(detail["new_title"], "The Track");
     }
@@ -1757,9 +1823,11 @@ mod tests {
             &AuditContext::LooseTrack,
             &HashSet::new(),
         );
-        assert!(issues
-            .iter()
-            .any(|i| i.issue_type == IssueType::ArtistInTitle));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
     }
 
     #[test]
@@ -1826,8 +1894,12 @@ mod tests {
             cover_art: None,
         };
         let issues = check_filename(p, &result, &AuditContext::AlbumTrack, &HashSet::new());
-        assert!(!issues.iter().any(|i| i.issue_type == IssueType::MissingYearInDir),
-            "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix");
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYearInDir),
+            "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix"
+        );
     }
 
     #[test]
@@ -1852,9 +1924,11 @@ mod tests {
         assert_eq!(removed, 0);
         let files = store::get_audit_files_in_scope(&conn, "/music/").unwrap();
         assert_eq!(files.len(), 1);
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("Skipped missing-file cleanup")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Skipped missing-file cleanup"))
+        );
     }
 
     #[cfg(unix)]
@@ -1890,14 +1964,17 @@ mod tests {
 
         let summary = scan_result.expect("scan should continue with warnings");
         assert_eq!(summary.missing_from_disk, 0);
-        assert!(summary
-            .warnings
-            .iter()
-            .any(|w| w.contains("Cannot read")));
-        assert!(summary
-            .warnings
-            .iter()
-            .any(|w| w.contains("Skipped missing-file cleanup")));
-        assert!(store::get_audit_file(&conn, blocked_path).unwrap().is_some());
+        assert!(summary.warnings.iter().any(|w| w.contains("Cannot read")));
+        assert!(
+            summary
+                .warnings
+                .iter()
+                .any(|w| w.contains("Skipped missing-file cleanup"))
+        );
+        assert!(
+            store::get_audit_file(&conn, blocked_path)
+                .unwrap()
+                .is_some()
+        );
     }
 }

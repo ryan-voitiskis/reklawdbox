@@ -389,7 +389,11 @@ async function handleDeviceSessionFinalize(
     )
   }
 
-  const sessionToken = await deriveFinalizeSessionToken(row, deviceId, pendingToken,)
+  const sessionToken = await deriveFinalizeSessionToken(
+    row,
+    deviceId,
+    pendingToken,
+  )
   if (!sessionToken) {
     return json(
       {
@@ -1016,7 +1020,11 @@ async function finalizedReplayForPending(
     return null
   }
 
-  const sessionToken = await deriveFinalizeSessionToken(row, deviceId, pendingToken,)
+  const sessionToken = await deriveFinalizeSessionToken(
+    row,
+    deviceId,
+    pendingToken,
+  )
   if (!sessionToken) {
     return null
   }
@@ -1184,7 +1192,9 @@ function isBrokerClientAuthorized(request: Request, env: Env,): boolean {
 }
 
 function unauthorizedBrokerClientResponse(env: Env,): Response {
-  if (!env.BROKER_CLIENT_TOKEN?.trim() && !isUnauthenticatedBrokerAllowed(env,)) {
+  if (
+    !env.BROKER_CLIENT_TOKEN?.trim() && !isUnauthenticatedBrokerAllowed(env,)
+  ) {
     return json(
       {
         error: 'unauthorized',
@@ -1266,7 +1276,10 @@ function normalize(input: string,): string {
 }
 
 async function deriveFinalizeSessionToken(
-  row: Pick<DeviceSessionRow, 'oauth_access_token' | 'oauth_access_token_secret'>,
+  row: Pick<
+    DeviceSessionRow,
+    'oauth_access_token' | 'oauth_access_token_secret'
+  >,
   deviceId: string,
   pendingToken: string,
 ): Promise<string | null> {
@@ -1283,7 +1296,7 @@ async function deriveFinalizeSessionToken(
     row.oauth_access_token_secret,
     `broker-session:v1:extra:${message}`,
   )
-  return `${partA}${partB.slice(0, 32)}`
+  return `${partA}${partB.slice(0, 32,)}`
 }
 
 function randomToken(bytes: number,): string {
@@ -1308,9 +1321,13 @@ async function hmacSha256Hex(key: string, input: string,): Promise<string> {
     encoder.encode(key,),
     { name: 'HMAC', hash: 'SHA-256', },
     false,
-    ['sign'],
+    ['sign',],
   )
-  const digest = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(input,),)
+  const digest = await crypto.subtle.sign(
+    'HMAC',
+    cryptoKey,
+    encoder.encode(input,),
+  )
   const arr = Array.from(new Uint8Array(digest,),)
   return arr.map((b,) => b.toString(16,).padStart(2, '0',)).join('',)
 }

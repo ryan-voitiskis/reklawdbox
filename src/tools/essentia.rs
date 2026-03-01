@@ -4,7 +4,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 pub(super) const ESSENTIA_PYTHON_ENV_VAR: &str = "CRATE_DIG_ESSENTIA_PYTHON";
-pub(super) const ESSENTIA_IMPORT_CHECK_SCRIPT: &str = "import essentia; print(essentia.__version__)";
+pub(super) const ESSENTIA_IMPORT_CHECK_SCRIPT: &str =
+    "import essentia; print(essentia.__version__)";
 pub(super) const ESSENTIA_PROBE_TIMEOUT_SECS: u64 = 5;
 
 pub(super) fn validate_essentia_python(path: &str) -> bool {

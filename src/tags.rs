@@ -231,8 +231,15 @@ pub struct ExtractArtResult {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum FileEmbedResult {
-    Ok { path: String, status: String },
-    Error { path: String, status: String, error: String },
+    Ok {
+        path: String,
+        status: String,
+    },
+    Error {
+        path: String,
+        status: String,
+        error: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -459,16 +466,14 @@ pub fn validate_write_tags(tags: &HashMap<String, Option<String>>) -> Result<(),
                     )));
                 }
             }
-            "track" | "disc" => {
-                match val.parse::<u32>() {
-                    Ok(n) if n > 0 => {}
-                    _ => {
-                        return Err(TagError::Validation(format!(
-                            "Invalid {field} \"{val}\": must be a positive integer or null/empty to delete"
-                        )));
-                    }
+            "track" | "disc" => match val.parse::<u32>() {
+                Ok(n) if n > 0 => {}
+                _ => {
+                    return Err(TagError::Validation(format!(
+                        "Invalid {field} \"{val}\": must be a positive integer or null/empty to delete"
+                    )));
                 }
-            }
+            },
             _ => {}
         }
     }
@@ -490,10 +495,11 @@ pub fn read_file_tags(
 ) -> FileReadResult {
     let path_str = path.display().to_string();
 
-    let tagged_file = match Probe::open(path)
-        .map_err(|e| e.to_string())
-        .and_then(|p| p.options(parse_options(include_cover_art)).read().map_err(|e| e.to_string()))
-    {
+    let tagged_file = match Probe::open(path).map_err(|e| e.to_string()).and_then(|p| {
+        p.options(parse_options(include_cover_art))
+            .read()
+            .map_err(|e| e.to_string())
+    }) {
         Ok(f) => f,
         Err(e) => {
             return FileReadResult::Error {
@@ -508,8 +514,20 @@ pub fn read_file_tags(
     let fields_list = resolve_fields(fields);
 
     match file_type {
-        FileType::Wav => read_wav_tags(&tagged_file, &path_str, fmt, &fields_list, include_cover_art),
-        _ => read_single_tags(&tagged_file, &path_str, fmt, &fields_list, include_cover_art),
+        FileType::Wav => read_wav_tags(
+            &tagged_file,
+            &path_str,
+            fmt,
+            &fields_list,
+            include_cover_art,
+        ),
+        _ => read_single_tags(
+            &tagged_file,
+            &path_str,
+            fmt,
+            &fields_list,
+            include_cover_art,
+        ),
     }
 }
 
@@ -526,10 +544,7 @@ fn read_wav_tags(
 
     let id3v2 = match id3v2_tag {
         Some(tag) => read_tag_fields(tag, fields),
-        None => fields
-            .iter()
-            .map(|&f| (f.to_string(), None))
-            .collect(),
+        None => fields.iter().map(|&f| (f.to_string(), None)).collect(),
     };
 
     // For RIFF INFO, only read fields that are available in RIFF INFO.
@@ -599,10 +614,8 @@ fn read_single_tags(
         }
         None => {
             // No tags at all — return all fields as None
-            let empty: HashMap<String, Option<String>> = fields
-                .iter()
-                .map(|&f| (f.to_string(), None))
-                .collect();
+            let empty: HashMap<String, Option<String>> =
+                fields.iter().map(|&f| (f.to_string(), None)).collect();
             ("none", empty, None)
         }
     };
@@ -714,10 +727,15 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
         fields_written,
         fields_deleted,
         wav_targets: if is_wav {
-            Some(wav_targets.iter().map(|t| match t {
-                WavTarget::Id3v2 => "id3v2".to_string(),
-                WavTarget::RiffInfo => "riff_info".to_string(),
-            }).collect())
+            Some(
+                wav_targets
+                    .iter()
+                    .map(|t| match t {
+                        WavTarget::Id3v2 => "id3v2".to_string(),
+                        WavTarget::RiffInfo => "riff_info".to_string(),
+                    })
+                    .collect(),
+            )
         } else {
             None
         },
@@ -754,11 +772,9 @@ fn write_tag_layer(
         None => {
             // Insert a new empty tag of this type
             tagged_file.insert_tag(Tag::new(tag_type));
-            tagged_file
-                .tag_mut(tag_type)
-                .ok_or_else(|| {
-                    TagError::Unsupported(format!("File does not support {tag_type:?} tags"))
-                })?
+            tagged_file.tag_mut(tag_type).ok_or_else(|| {
+                TagError::Unsupported(format!("File does not support {tag_type:?} tags"))
+            })?
         }
     };
 
@@ -876,9 +892,7 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
     // WAV with riff_info-only target: diff against RIFF INFO.
     // WAV with id3v2-only or both: diff against ID3v2.
     // Non-WAV: use primary tag.
-    let riff_only = is_wav
-        && wav_targets.len() == 1
-        && wav_targets[0] == WavTarget::RiffInfo;
+    let riff_only = is_wav && wav_targets.len() == 1 && wav_targets[0] == WavTarget::RiffInfo;
     let primary_tag = if is_wav {
         if riff_only {
             tagged_file.tag(TagType::RiffInfo)
@@ -923,10 +937,15 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
         status: "preview".to_string(),
         changes,
         wav_targets: if is_wav {
-            Some(wav_targets.iter().map(|t| match t {
-                WavTarget::Id3v2 => "id3v2".to_string(),
-                WavTarget::RiffInfo => "riff_info".to_string(),
-            }).collect())
+            Some(
+                wav_targets
+                    .iter()
+                    .map(|t| match t {
+                        WavTarget::Id3v2 => "id3v2".to_string(),
+                        WavTarget::RiffInfo => "riff_info".to_string(),
+                    })
+                    .collect(),
+            )
         } else {
             None
         },
@@ -1043,8 +1062,7 @@ fn embed_cover_art_inner(
         .map_err(|e| TagError::Io(format!("Failed to parse image: {e}")))?;
 
     // Build a new picture with the desired PictureType and detected MIME
-    let mut builder = Picture::unchecked(image_data)
-        .pic_type(pic_type);
+    let mut builder = Picture::unchecked(image_data).pic_type(pic_type);
     if let Some(mime) = detected.mime_type() {
         builder = builder.mime_type(mime.clone());
     }
@@ -1085,13 +1103,9 @@ fn embed_cover_art_inner(
             Some(t) => t,
             None => {
                 tagged_file.insert_tag(Tag::new(primary_type));
-                tagged_file
-                    .tag_mut(primary_type)
-                    .ok_or_else(|| {
-                        TagError::Unsupported(format!(
-                            "File does not support {primary_type:?} tags"
-                        ))
-                    })?
+                tagged_file.tag_mut(primary_type).ok_or_else(|| {
+                    TagError::Unsupported(format!("File does not support {primary_type:?} tags"))
+                })?
             }
         };
 
@@ -1118,8 +1132,8 @@ mod tests {
         for &field in ALL_FIELDS {
             let key = field_to_item_key(field)
                 .unwrap_or_else(|| panic!("No ItemKey for field \"{field}\""));
-            let back = item_key_to_field(&key)
-                .unwrap_or_else(|| panic!("No field for ItemKey {key:?}"));
+            let back =
+                item_key_to_field(&key).unwrap_or_else(|| panic!("No field for ItemKey {key:?}"));
             assert_eq!(back, field, "Roundtrip failed for {field}");
         }
     }
@@ -1279,11 +1293,11 @@ mod tests {
             h.extend_from_slice(b"WAVE");
             h.extend_from_slice(b"fmt ");
             h.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-            h.extend_from_slice(&1u16.to_le_bytes());  // PCM
-            h.extend_from_slice(&1u16.to_le_bytes());  // mono
+            h.extend_from_slice(&1u16.to_le_bytes()); // PCM
+            h.extend_from_slice(&1u16.to_le_bytes()); // mono
             h.extend_from_slice(&44100u32.to_le_bytes()); // sample rate
             h.extend_from_slice(&88200u32.to_le_bytes()); // byte rate
-            h.extend_from_slice(&2u16.to_le_bytes());  // block align
+            h.extend_from_slice(&2u16.to_le_bytes()); // block align
             h.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
             h.extend_from_slice(b"data");
             h.extend_from_slice(&data_size.to_le_bytes());

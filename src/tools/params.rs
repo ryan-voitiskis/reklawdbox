@@ -483,9 +483,7 @@ pub(super) enum AuditOperation {
         #[schemars(description = "Re-read all files including unchanged (default: false)")]
         revalidate: Option<bool>,
 
-        #[schemars(
-            description = "Issue types to exclude from detection (e.g. [\"GENRE_SET\"])"
-        )]
+        #[schemars(description = "Issue types to exclude from detection (e.g. [\"GENRE_SET\"])")]
         skip_issue_types: Option<Vec<String>>,
     },
 

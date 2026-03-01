@@ -169,7 +169,10 @@ pub(super) fn consult_genre_workflow_docs() -> CorpusConsultation {
     )
 }
 
-pub(super) fn attach_corpus_provenance(result: &mut serde_json::Value, consultation: CorpusConsultation) {
+pub(super) fn attach_corpus_provenance(
+    result: &mut serde_json::Value,
+    consultation: CorpusConsultation,
+) {
     result["consulted_documents"] = serde_json::json!(consultation.consulted_documents);
     result["manifest_status"] = serde_json::json!(consultation.manifest_status);
     if let Some(warning) = consultation.warning {

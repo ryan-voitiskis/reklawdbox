@@ -336,10 +336,7 @@ pub fn get_audit_files_in_scope(
 }
 
 #[cfg(test)]
-pub fn get_audit_file(
-    conn: &Connection,
-    path: &str,
-) -> Result<Option<AuditFile>, rusqlite::Error> {
+pub fn get_audit_file(conn: &Connection, path: &str) -> Result<Option<AuditFile>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT path, last_audited, file_mtime, file_size
          FROM audit_files WHERE path = ?1",
@@ -528,10 +525,7 @@ pub fn mark_issues_resolved_for_path(
     Ok(count)
 }
 
-pub fn get_audit_summary(
-    conn: &Connection,
-    scope: &str,
-) -> Result<AuditSummary, rusqlite::Error> {
+pub fn get_audit_summary(conn: &Connection, scope: &str) -> Result<AuditSummary, rusqlite::Error> {
     let pattern = format!("{}%", escape_like(scope));
     let mut stmt = conn.prepare(
         "SELECT issue_type, status, COUNT(*) as cnt
@@ -541,7 +535,11 @@ pub fn get_audit_summary(
          ORDER BY issue_type, status",
     )?;
     let rows = stmt.query_map(params![pattern], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
     })?;
     let by_type_status: Vec<(String, String, i64)> = rows.collect::<Result<_, _>>()?;
     Ok(AuditSummary { by_type_status })
@@ -566,7 +564,9 @@ pub fn delete_missing_audit_files(
              LIMIT ?3",
         )?;
         let batch_paths: Vec<String> = stmt
-            .query_map(params![&pattern, &last_path, BATCH_SIZE as i64], |row| row.get(0))?
+            .query_map(params![&pattern, &last_path, BATCH_SIZE as i64], |row| {
+                row.get(0)
+            })?
             .collect::<Result<_, _>>()?;
         if batch_paths.is_empty() {
             break;
@@ -995,7 +995,14 @@ mod tests {
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
         // Simulate user accepting
-        resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, None, "t2").unwrap();
+        resolve_audit_issues(
+            &conn,
+            &[1],
+            crate::audit::Resolution::AcceptedAsIs,
+            None,
+            "t2",
+        )
+        .unwrap();
 
         // Re-scan upserts the same issue — should preserve accepted status
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t3").unwrap();
@@ -1009,8 +1016,15 @@ mod tests {
         let (_dir, conn) = open_temp_store();
 
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
 
         // Resolve the issue
         resolve_audit_issues(
@@ -1029,14 +1043,27 @@ mod tests {
         assert_eq!(issue.resolved_at.as_deref(), Some("t2"));
 
         // Re-scan detects the issue again — should reopen and clear stale fields
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", Some("d2"), "open", "t3")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            Some("d2"),
+            "open",
+            "t3",
+        )
+        .unwrap();
 
         let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
         assert_eq!(issue.status, "open");
-        assert!(issue.resolution.is_none(), "resolution should be cleared on reopen");
+        assert!(
+            issue.resolution.is_none(),
+            "resolution should be cleared on reopen"
+        );
         assert!(issue.note.is_none(), "note should be cleared on reopen");
-        assert!(issue.resolved_at.is_none(), "resolved_at should be cleared on reopen");
+        assert!(
+            issue.resolved_at.is_none(),
+            "resolved_at should be cleared on reopen"
+        );
     }
 
     #[test]
@@ -1044,10 +1071,24 @@ mod tests {
         let (_dir, conn) = open_temp_store();
 
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", Some("d1"), "open", "t1")
-            .unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", Some("d2"), "open", "t2")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            Some("d1"),
+            "open",
+            "t1",
+        )
+        .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            Some("d2"),
+            "open",
+            "t2",
+        )
+        .unwrap();
 
         // Should still be only one issue, with updated detail
         let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
@@ -1060,10 +1101,24 @@ mod tests {
         let (_dir, conn) = open_temp_store();
 
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
-            .unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_TITLE",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
 
         let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
         assert_eq!(issues.len(), 2);
@@ -1079,14 +1134,33 @@ mod tests {
         let (_dir, conn) = open_temp_store();
 
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
-            .unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_TITLE",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
 
-        let count =
-            resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, Some("intentional"), "t2")
-                .unwrap();
+        let count = resolve_audit_issues(
+            &conn,
+            &[1],
+            crate::audit::Resolution::AcceptedAsIs,
+            Some("intentional"),
+            "t2",
+        )
+        .unwrap();
         assert_eq!(count, 1);
 
         let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
@@ -1106,9 +1180,23 @@ mod tests {
         upsert_audit_file(&conn, "/music/a.flac", "t", "m", 100).unwrap();
         upsert_audit_file(&conn, "/music/b.wav", "t", "m", 200).unwrap();
         upsert_audit_issue(&conn, "/music/a.flac", "EMPTY_ARTIST", None, "open", "t1").unwrap();
-        upsert_audit_issue(&conn, "/music/b.wav", "WAV_TAG3_MISSING", None, "open", "t1")
-            .unwrap();
-        resolve_audit_issues(&conn, &[1], crate::audit::Resolution::AcceptedAsIs, None, "t2").unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/b.wav",
+            "WAV_TAG3_MISSING",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
+        resolve_audit_issues(
+            &conn,
+            &[1],
+            crate::audit::Resolution::AcceptedAsIs,
+            None,
+            "t2",
+        )
+        .unwrap();
 
         // Filter by status
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
@@ -1116,8 +1204,8 @@ mod tests {
         assert_eq!(open[0].issue_type, "WAV_TAG3_MISSING");
 
         // Filter by issue_type
-        let wav = get_audit_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0)
-            .unwrap();
+        let wav =
+            get_audit_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
         assert_eq!(wav.len(), 1);
 
         // Filter by both
@@ -1140,8 +1228,15 @@ mod tests {
         upsert_audit_file(&conn, "/music/a.flac", "t", "m", 100).unwrap();
         upsert_audit_file(&conn, "/music/b.wav", "t", "m", 200).unwrap();
         upsert_audit_issue(&conn, "/music/a.flac", "EMPTY_ARTIST", None, "open", "t1").unwrap();
-        upsert_audit_issue(&conn, "/music/b.wav", "WAV_TAG3_MISSING", None, "open", "t1")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/b.wav",
+            "WAV_TAG3_MISSING",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
 
         let summary = get_audit_summary(&conn, "/music/").unwrap();
         assert_eq!(summary.by_type_status.len(), 2);
@@ -1207,20 +1302,29 @@ mod tests {
         let (_dir, conn) = open_temp_store();
 
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_ARTIST", None, "open", "t1")
-            .unwrap();
-        upsert_audit_issue(&conn, "/music/track.flac", "EMPTY_TITLE", None, "open", "t1")
-            .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
+        upsert_audit_issue(
+            &conn,
+            "/music/track.flac",
+            "EMPTY_TITLE",
+            None,
+            "open",
+            "t1",
+        )
+        .unwrap();
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
         // Mark resolved except GENRE_SET which is still detected
-        let count = mark_issues_resolved_for_path(
-            &conn,
-            "/music/track.flac",
-            &["GENRE_SET"],
-            "t2",
-        )
-        .unwrap();
+        let count = mark_issues_resolved_for_path(&conn, "/music/track.flac", &["GENRE_SET"], "t2")
+            .unwrap();
         assert_eq!(count, 2);
 
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();

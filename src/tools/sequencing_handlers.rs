@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::db;
@@ -35,15 +35,21 @@ pub(super) fn handle_score_transition(
 
     let (from_profile, to_profile) = {
         let store = server.cache_store_conn()?;
-        let from = build_track_profile(from_track, &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build source track profile: {e}")))?;
-        let to = build_track_profile(to_track, &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build destination track profile: {e}")))?;
+        let from = build_track_profile(from_track, &store).map_err(|e| {
+            mcp_internal_error(format!("Failed to build source track profile: {e}"))
+        })?;
+        let to = build_track_profile(to_track, &store).map_err(|e| {
+            mcp_internal_error(format!("Failed to build destination track profile: {e}"))
+        })?;
         (from, to)
     };
 
     let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(params.harmonic_style.unwrap_or(HarmonicMixingStyle::Balanced));
+    let harmonic_style = Some(
+        params
+            .harmonic_style
+            .unwrap_or(HarmonicMixingStyle::Balanced),
+    );
     let scores = score_transition_profiles(
         &from_profile,
         &to_profile,
@@ -105,7 +111,11 @@ pub(super) fn handle_query_transition_candidates(
 
     let priority = params.priority.unwrap_or(SequencingPriority::Balanced);
     let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(params.harmonic_style.unwrap_or(HarmonicMixingStyle::Balanced));
+    let harmonic_style = Some(
+        params
+            .harmonic_style
+            .unwrap_or(HarmonicMixingStyle::Balanced),
+    );
     let limit = params.limit.unwrap_or(10).min(50) as usize;
 
     // Load from-track
@@ -345,9 +355,8 @@ pub(super) fn handle_build_set(
                 )?;
             requested_phases.into_iter().take(actual_target).collect()
         }
-        _ => resolve_energy_curve(params.energy_curve.as_ref(), actual_target).map_err(|e| {
-            McpError::invalid_params(format!("Invalid energy_curve: {e}"), None)
-        })?,
+        _ => resolve_energy_curve(params.energy_curve.as_ref(), actual_target)
+            .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?,
     };
 
     // Compute BPM trajectory if bpm_range is set
@@ -367,7 +376,11 @@ pub(super) fn handle_build_set(
     );
 
     let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(params.harmonic_style.unwrap_or(HarmonicMixingStyle::Balanced));
+    let harmonic_style = Some(
+        params
+            .harmonic_style
+            .unwrap_or(HarmonicMixingStyle::Balanced),
+    );
     let bpm_drift_pct = params.bpm_drift_pct.unwrap_or(6.0);
 
     // Route: beam_width=1 -> greedy (backward compat), beam_width>=2 -> beam search
@@ -477,12 +490,11 @@ pub(super) fn handle_build_set(
                             serde_json::json!(round_to_3_decimals(pct));
 
                         if !master_tempo && profile.bpm > 0.0 {
-                            let shift =
-                                (12.0 * (target_bpm / profile.bpm).log2()).round() as i32;
+                            let shift = (12.0 * (target_bpm / profile.bpm).log2()).round() as i32;
                             if shift != 0
-                                && let Some(ek) = profile.camelot_key.map(|k| {
-                                    format_camelot(transpose_camelot_key(k, shift))
-                                })
+                                && let Some(ek) = profile
+                                    .camelot_key
+                                    .map(|k| format_camelot(transpose_camelot_key(k, shift)))
                             {
                                 track_json["effective_key"] = serde_json::json!(ek);
                             }

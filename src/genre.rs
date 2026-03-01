@@ -49,7 +49,6 @@ pub const GENRES: &[&str] = &[
     "UK Bass",
 ];
 
-
 /// Returns the canonical casing of a genre if it's in the taxonomy.
 pub fn canonical_genre_name(genre: &str) -> Option<&'static str> {
     let genre = genre.trim();
@@ -133,9 +132,10 @@ pub fn genre_alias_map() -> &'static HashMap<String, &'static str> {
 
 /// Returns the canonical genre if the input is a known alias, `None` if already canonical or unknown.
 pub fn canonical_genre_from_alias(genre: &str) -> Option<&'static str> {
-    genre_alias_map().get(&genre.trim().to_ascii_lowercase()).copied()
+    genre_alias_map()
+        .get(&genre.trim().to_ascii_lowercase())
+        .copied()
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenreFamily {
@@ -154,14 +154,15 @@ pub fn genre_family(canonical: &str) -> GenreFamily {
         "House" | "Deep House" | "Tech House" | "Afro House" | "Gospel House"
         | "Progressive House" | "Garage" | "Speed Garage" | "Disco" => GenreFamily::House,
 
-        "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno"
-        | "Hard Techno" | "Drone Techno" | "Acid" | "Electro" => GenreFamily::Techno,
+        "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno" | "Hard Techno"
+        | "Drone Techno" | "Acid" | "Electro" => GenreFamily::Techno,
 
-        "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "UK Bass" | "Grime"
-        | "Bassline" | "Broken Beat" => GenreFamily::Bass,
+        "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "UK Bass" | "Grime" | "Bassline"
+        | "Broken Beat" => GenreFamily::Bass,
 
-        "Ambient" | "Downtempo" | "Dub" | "Dub Reggae" | "IDM"
-        | "Experimental" => GenreFamily::Downtempo,
+        "Ambient" | "Downtempo" | "Dub" | "Dub Reggae" | "IDM" | "Experimental" => {
+            GenreFamily::Downtempo
+        }
 
         _ => GenreFamily::Other,
     }
@@ -182,7 +183,11 @@ mod tests {
     fn taxonomy_sorted() {
         let mut sorted = GENRES.to_vec();
         sorted.sort_by_key(|a| a.to_lowercase());
-        assert_eq!(GENRES, sorted.as_slice(), "GENRES array must be sorted alphabetically");
+        assert_eq!(
+            GENRES,
+            sorted.as_slice(),
+            "GENRES array must be sorted alphabetically"
+        );
     }
 
     #[test]

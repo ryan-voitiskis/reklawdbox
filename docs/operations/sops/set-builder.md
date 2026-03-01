@@ -778,7 +778,10 @@ Generate candidate set orderings from a track pool using beam search.
             "bpm": { "value": 0.972, "label": "Seamless (1.2%, 1.5 BPM)" },
             "energy": { "value": 1.0, "label": "Rising (build phase)" },
             "genre": { "value": 1.0, "label": "Same genre" },
-            "brightness": { "value": 0.7, "label": "Noticeable brightness shift" },
+            "brightness": {
+              "value": 0.7,
+              "label": "Noticeable brightness shift"
+            },
             "rhythm": { "value": 1.0, "label": "Matching groove" },
             "composite": 0.958,
             "adjustments": []
@@ -789,13 +792,39 @@ Generate candidate set orderings from a track pool using beam search.
       ],
       "set_score": 8.4,
       "estimated_duration_minutes": 68,
-      "bpm_trajectory": [122.0, 122.0, 123.6, 125.3, 127.0, 128.6, 130.0, 130.0, 130.0, 128.0, 126.0, 124.0]
+      "bpm_trajectory": [
+        122.0,
+        122.0,
+        123.6,
+        125.3,
+        127.0,
+        128.6,
+        130.0,
+        130.0,
+        130.0,
+        128.0,
+        126.0,
+        124.0
+      ]
     }
   ],
   "pool_size": 87,
   "tracks_used": 12,
   "beam_width": 3,
-  "bpm_trajectory": [122.0, 122.0, 123.6, 125.3, 127.0, 128.6, 130.0, 130.0, 130.0, 128.0, 126.0, 124.0]
+  "bpm_trajectory": [
+    122.0,
+    122.0,
+    123.6,
+    125.3,
+    127.0,
+    128.6,
+    130.0,
+    130.0,
+    130.0,
+    128.0,
+    126.0,
+    124.0
+  ]
 }
 ```
 

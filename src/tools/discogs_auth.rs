@@ -64,9 +64,11 @@ async fn fetch_pending_state(
     now: i64,
 ) -> Result<PendingState, discogs::LookupError> {
     let pending = {
-        let lock = server.state.discogs_pending.lock().map_err(|_| {
-            discogs::LookupError::message("Discogs auth state lock poisoned")
-        })?;
+        let lock = server
+            .state
+            .discogs_pending
+            .lock()
+            .map_err(|_| discogs::LookupError::message("Discogs auth state lock poisoned"))?;
         lock.clone()
     };
 
@@ -76,9 +78,7 @@ async fn fetch_pending_state(
                 discogs::device_session_status(&server.state.http, cfg, p)
                     .await
                     .map_err(|e| {
-                        discogs::LookupError::message(format!(
-                            "Discogs broker status error: {e}"
-                        ))
+                        discogs::LookupError::message(format!("Discogs broker status error: {e}"))
                     })?
                     .status,
             )
@@ -108,14 +108,11 @@ async fn dispatch_pending(
 ) -> Result<Option<discogs::DiscogsResult>, discogs::LookupError> {
     match pending {
         PendingState::Authorized(p) => {
-            let finalized =
-                discogs::device_session_finalize(&server.state.http, cfg, &p)
-                    .await
-                    .map_err(|e| {
-                        discogs::LookupError::message(format!(
-                            "Discogs broker finalize error: {e}"
-                        ))
-                    })?;
+            let finalized = discogs::device_session_finalize(&server.state.http, cfg, &p)
+                .await
+                .map_err(|e| {
+                    discogs::LookupError::message(format!("Discogs broker finalize error: {e}"))
+                })?;
             {
                 let store = server.cache_store_conn().map_err(|e| {
                     discogs::LookupError::message(format!("Internal store error: {e}"))
@@ -127,9 +124,7 @@ async fn dispatch_pending(
                     finalized.expires_at,
                 )
                 .map_err(|e| {
-                    discogs::LookupError::message(format!(
-                        "Broker session cache write error: {e}"
-                    ))
+                    discogs::LookupError::message(format!("Broker session cache write error: {e}"))
                 })?;
             }
             {
@@ -171,13 +166,13 @@ async fn start_new_session(
 ) -> Result<Option<discogs::DiscogsResult>, discogs::LookupError> {
     let started = discogs::device_session_start(&server.state.http, cfg)
         .await
-        .map_err(|e| {
-            discogs::LookupError::message(format!("Discogs broker start error: {e}"))
-        })?;
+        .map_err(|e| discogs::LookupError::message(format!("Discogs broker start error: {e}")))?;
     {
-        let mut lock = server.state.discogs_pending.lock().map_err(|_| {
-            discogs::LookupError::message("Discogs auth state lock poisoned")
-        })?;
+        let mut lock = server
+            .state
+            .discogs_pending
+            .lock()
+            .map_err(|_| discogs::LookupError::message("Discogs auth state lock poisoned"))?;
         *lock = Some(started.clone());
     }
     Err(discogs::LookupError::AuthRequired(
@@ -214,9 +209,7 @@ pub(super) async fn lookup_discogs_remote(
                     discogs::LookupError::message(format!("Internal store error: {e}"))
                 })?;
                 store::get_broker_discogs_session(&store, &cfg.base_url).map_err(|e| {
-                    discogs::LookupError::message(format!(
-                        "Broker session cache read error: {e}"
-                    ))
+                    discogs::LookupError::message(format!("Broker session cache read error: {e}"))
                 })?
             };
 
@@ -238,16 +231,15 @@ pub(super) async fn lookup_discogs_remote(
                         Err(discogs::LookupError::AuthRequired(_)) => {
                             // Session rejected by broker — clear it and fall through
                             let store = server.cache_store_conn().map_err(|e| {
-                                discogs::LookupError::message(format!(
-                                    "Internal store error: {e}"
-                                ))
+                                discogs::LookupError::message(format!("Internal store error: {e}"))
                             })?;
-                            store::clear_broker_discogs_session(&store, &cfg.base_url)
-                                .map_err(|e| {
+                            store::clear_broker_discogs_session(&store, &cfg.base_url).map_err(
+                                |e| {
                                     discogs::LookupError::message(format!(
                                         "Broker session cache clear error: {e}"
                                     ))
-                                })?;
+                                },
+                            )?;
                         }
                         Err(e) => return Err(e),
                     }
@@ -256,13 +248,11 @@ pub(super) async fn lookup_discogs_remote(
                     let store = server.cache_store_conn().map_err(|e| {
                         discogs::LookupError::message(format!("Internal store error: {e}"))
                     })?;
-                    store::clear_broker_discogs_session(&store, &cfg.base_url).map_err(
-                        |e| {
-                            discogs::LookupError::message(format!(
-                                "Broker session cache clear error: {e}"
-                            ))
-                        },
-                    )?;
+                    store::clear_broker_discogs_session(&store, &cfg.base_url).map_err(|e| {
+                        discogs::LookupError::message(format!(
+                            "Broker session cache clear error: {e}"
+                        ))
+                    })?;
                 }
                 SessionState::None => {}
             }

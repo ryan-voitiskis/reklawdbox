@@ -408,9 +408,7 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), AudioError> {
     }
 
     if all_samples.is_empty() {
-        return Err(AudioError::Decode(
-            "Decoded zero audio samples".to_string(),
-        ));
+        return Err(AudioError::Decode("Decoded zero audio samples".to_string()));
     }
 
     Ok((all_samples, sample_rate))
@@ -425,8 +423,12 @@ fn decode_buffer_to_mono(buf: &AudioBufferRef) -> Vec<f32> {
         AudioBufferRef::S24(b) => {
             downmix_to_mono(b.planes().planes(), |v| v.inner() as f32 / 8388608.0)
         }
-        AudioBufferRef::S32(b) => downmix_to_mono(b.planes().planes(), |&v| v as f32 / 2147483648.0),
-        AudioBufferRef::U8(b) => downmix_to_mono(b.planes().planes(), |&v| (v as f32 - 128.0) / 128.0),
+        AudioBufferRef::S32(b) => {
+            downmix_to_mono(b.planes().planes(), |&v| v as f32 / 2147483648.0)
+        }
+        AudioBufferRef::U8(b) => {
+            downmix_to_mono(b.planes().planes(), |&v| (v as f32 - 128.0) / 128.0)
+        }
         AudioBufferRef::U16(b) => {
             downmix_to_mono(b.planes().planes(), |&v| (v as f32 - 32768.0) / 32768.0)
         }
@@ -486,7 +488,10 @@ fn stratum_notation_to_camelot(stratum_notation: &str) -> String {
     format!("{camelot_num}{camelot_letter}")
 }
 
-pub fn analyze_with_stratum(samples: &[f32], sample_rate: u32) -> Result<StratumResult, AudioError> {
+pub fn analyze_with_stratum(
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<StratumResult, AudioError> {
     let config = stratum_dsp::AnalysisConfig::default();
 
     let start = Instant::now();
@@ -856,23 +861,33 @@ def column_stack(cols):
         );
 
         // Frame-based features
-        let mfcc = result.mfcc_mean.as_ref().expect("mfcc_mean should be present");
+        let mfcc = result
+            .mfcc_mean
+            .as_ref()
+            .expect("mfcc_mean should be present");
         assert_eq!(mfcc.len(), 13, "mfcc_mean should have 13 coefficients");
 
-        let contrast = result.spectral_contrast_mean.as_ref().expect("spectral_contrast_mean should be present");
+        let contrast = result
+            .spectral_contrast_mean
+            .as_ref()
+            .expect("spectral_contrast_mean should be present");
         assert_eq!(
             contrast.len(),
             6,
             "spectral_contrast_mean should have 6 bands"
         );
 
-        let dissonance = result.dissonance_mean.expect("dissonance_mean should be present");
+        let dissonance = result
+            .dissonance_mean
+            .expect("dissonance_mean should be present");
         assert!(
             dissonance > 0.0 && dissonance < 1.0,
             "dissonance should be in (0, 1), got {dissonance}"
         );
 
-        let intensity = result.intensity_mean.expect("intensity_mean should be present");
+        let intensity = result
+            .intensity_mean
+            .expect("intensity_mean should be present");
         assert!(intensity > 0.0, "intensity_mean should be positive");
         assert!(
             result.intensity_var.is_some(),
@@ -954,8 +969,8 @@ def column_stack(cols):
             samples.len() as f64 / sample_rate as f64
         );
 
-        let result =
-            analyze_with_stratum(&samples, sample_rate).unwrap_or_else(|e| panic!("analysis failed: {e}"));
+        let result = analyze_with_stratum(&samples, sample_rate)
+            .unwrap_or_else(|e| panic!("analysis failed: {e}"));
 
         assert!(
             result.bpm > 0.0,

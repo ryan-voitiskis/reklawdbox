@@ -541,7 +541,11 @@ async fn lookup_inner_legacy(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let snippet = if body.len() > 200 { &body[..200] } else { &body };
+        let snippet = if body.len() > 200 {
+            &body[..200]
+        } else {
+            &body
+        };
         return Err(format!("Discogs HTTP {status}: {snippet}"));
     }
 

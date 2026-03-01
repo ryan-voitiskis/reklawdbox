@@ -152,7 +152,11 @@ impl EditableField {
 
     /// Comma-separated list of all field names (for error messages and descriptions).
     pub fn all_names_csv() -> String {
-        Self::ALL.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")
+        Self::ALL
+            .iter()
+            .map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

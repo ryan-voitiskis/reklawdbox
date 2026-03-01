@@ -10,6 +10,7 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 globset = "0.4"
+lofty = "0.23"
 percent-encoding = "2"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -17,13 +18,12 @@ rmcp = { version = "0.15", features = ["server", "transport-io"] }
 rusqlite = { version = "0.34", features = ["bundled-sqlcipher-vendored-openssl"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
-strum = { version = "0.27", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 stratum-dsp = "=1.0.0"
+strum = { version = "0.27", features = ["derive"] }
 symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "aac"] }
 thiserror = "2"
-lofty = "0.23"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

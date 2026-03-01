@@ -3,7 +3,7 @@ import {
   env,
   waitOnExecutionContext,
 } from 'cloudflare:test'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, } from 'vitest'
 import worker from '../src/index'
 
 const BASE_URL = 'https://broker.test'
@@ -22,14 +22,14 @@ describe('broker test runner baseline', () => {
       method: 'POST',
     },)
 
-    expect(response.status).toBe(401)
+    expect(response.status,).toBe(401,)
     const body = await response.json<{
       error: string
       message: string
     }>()
-    expect(body.error).toBe('unauthorized')
-    expect(body.message).toBe('invalid broker client token')
-  },)
+    expect(body.error,).toBe('unauthorized',)
+    expect(body.message,).toBe('invalid broker client token',)
+  })
 
   it('returns guidance when broker token is not configured', async () => {
     const response = await request(
@@ -43,14 +43,14 @@ describe('broker test runner baseline', () => {
       },
     )
 
-    expect(response.status).toBe(401)
+    expect(response.status,).toBe(401,)
     const body = await response.json<{
       error: string
       message: string
     }>()
-    expect(body.error).toBe('unauthorized')
-    expect(body.message).toContain('BROKER_CLIENT_TOKEN')
-  },)
+    expect(body.error,).toBe('unauthorized',)
+    expect(body.message,).toContain('BROKER_CLIENT_TOKEN',)
+  })
 
   it('creates a device session when broker token is valid', async () => {
     const response = await request('/v1/device/session/start', {
@@ -60,7 +60,7 @@ describe('broker test runner baseline', () => {
       },
     },)
 
-    expect(response.status).toBe(200)
+    expect(response.status,).toBe(200,)
     const body = await response.json<{
       device_id: string
       pending_token: string
@@ -69,11 +69,11 @@ describe('broker test runner baseline', () => {
       expires_at: number
     }>()
 
-    expect(body.device_id).toMatch(/^[0-9a-f]{40}$/)
-    expect(body.pending_token).toMatch(/^[0-9a-f]{48}$/)
-    expect(body.auth_url).toContain('/v1/discogs/oauth/link?device_id=')
-    expect(body.poll_interval_seconds).toBe(5)
-    expect(body.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000,))
+    expect(body.device_id,).toMatch(/^[0-9a-f]{40}$/,)
+    expect(body.pending_token,).toMatch(/^[0-9a-f]{48}$/,)
+    expect(body.auth_url,).toContain('/v1/discogs/oauth/link?device_id=',)
+    expect(body.poll_interval_seconds,).toBe(5,)
+    expect(body.expires_at,).toBeGreaterThan(Math.floor(Date.now() / 1000,),)
 
     const row = await env.DB.prepare(
       `SELECT status
@@ -82,8 +82,8 @@ describe('broker test runner baseline', () => {
     )
       .bind(body.device_id,)
       .first<{ status: string }>()
-    expect(row?.status).toBe('pending')
-  },)
+    expect(row?.status,).toBe('pending',)
+  })
 
   it('returns invalid_json for malformed finalize payloads', async () => {
     const response = await request('/v1/device/session/finalize', {
@@ -95,14 +95,14 @@ describe('broker test runner baseline', () => {
       body: '{"device_id":"abc"',
     },)
 
-    expect(response.status).toBe(400)
+    expect(response.status,).toBe(400,)
     const body = await response.json<{
       error: string
       message: string
     }>()
-    expect(body.error).toBe('invalid_json')
-    expect(body.message).toBe('request body must be valid JSON')
-  },)
+    expect(body.error,).toBe('invalid_json',)
+    expect(body.message,).toBe('request body must be valid JSON',)
+  })
 
   it('replays the same finalize token for an already-finalized session', async () => {
     const deviceId = 'device-finalized'
@@ -163,21 +163,21 @@ describe('broker test runner baseline', () => {
       },),
     },)
 
-    expect(response.status).toBe(200)
+    expect(response.status,).toBe(200,)
     const body = await response.json<{
       session_token: string
       expires_at: number
     }>()
-    expect(body.session_token).toBe(expectedSessionToken)
-    expect(body.expires_at).toBe(sessionExpiresAt)
-  },)
+    expect(body.session_token,).toBe(expectedSessionToken,)
+    expect(body.expires_at,).toBe(sessionExpiresAt,)
+  })
 
   it('reports auth posture on /v1/health', async () => {
     const okResponse = await request('/v1/health', {
       method: 'GET',
     },)
 
-    expect(okResponse.status).toBe(200)
+    expect(okResponse.status,).toBe(200,)
     const okBody = await okResponse.json<{
       status: string
       broker_client_auth: {
@@ -186,10 +186,10 @@ describe('broker test runner baseline', () => {
         allow_unauthenticated_broker: boolean
       }
     }>()
-    expect(okBody.status).toBe('ok')
-    expect(okBody.broker_client_auth.mode).toBe('token_required')
-    expect(okBody.broker_client_auth.token_configured).toBe(true)
-    expect(okBody.broker_client_auth.allow_unauthenticated_broker).toBe(false)
+    expect(okBody.status,).toBe('ok',)
+    expect(okBody.broker_client_auth.mode,).toBe('token_required',)
+    expect(okBody.broker_client_auth.token_configured,).toBe(true,)
+    expect(okBody.broker_client_auth.allow_unauthenticated_broker,).toBe(false,)
 
     const devOverrideResponse = await request(
       '/v1/health',
@@ -203,9 +203,13 @@ describe('broker test runner baseline', () => {
         warning?: string
       }
     }>()
-    expect(devOverrideBody.status).toBe('warning')
-    expect(devOverrideBody.broker_client_auth.mode).toBe('unauthenticated_dev_override')
-    expect(devOverrideBody.broker_client_auth.warning).toContain('local development')
+    expect(devOverrideBody.status,).toBe('warning',)
+    expect(devOverrideBody.broker_client_auth.mode,).toBe(
+      'unauthenticated_dev_override',
+    )
+    expect(devOverrideBody.broker_client_auth.warning,).toContain(
+      'local development',
+    )
 
     const misconfiguredResponse = await request(
       '/v1/health',
@@ -222,10 +226,14 @@ describe('broker test runner baseline', () => {
         warning?: string
       }
     }>()
-    expect(misconfiguredBody.status).toBe('warning')
-    expect(misconfiguredBody.broker_client_auth.mode).toBe('misconfigured_no_token')
-    expect(misconfiguredBody.broker_client_auth.warning).toContain('BROKER_CLIENT_TOKEN')
-  },)
+    expect(misconfiguredBody.status,).toBe('warning',)
+    expect(misconfiguredBody.broker_client_auth.mode,).toBe(
+      'misconfigured_no_token',
+    )
+    expect(misconfiguredBody.broker_client_auth.warning,).toContain(
+      'BROKER_CLIENT_TOKEN',
+    )
+  })
 
   it('prunes expired rows when scheduled handler runs', async () => {
     const now = Math.floor(Date.now() / 1000,)
@@ -363,23 +371,23 @@ describe('broker test runner baseline', () => {
        FROM device_sessions`,
     )
       .first<{ count: number }>()
-    expect(Number(remainingDeviceRows?.count ?? 0,)).toBe(1)
+    expect(Number(remainingDeviceRows?.count ?? 0,),).toBe(1,)
 
     const remainingOauthRows = await env.DB.prepare(
       `SELECT COUNT(*) AS count
        FROM oauth_request_tokens`,
     )
       .first<{ count: number }>()
-    expect(Number(remainingOauthRows?.count ?? 0,)).toBe(1)
+    expect(Number(remainingOauthRows?.count ?? 0,),).toBe(1,)
 
     const remainingCacheRows = await env.DB.prepare(
       `SELECT COUNT(*) AS count
        FROM discogs_search_cache`,
     )
       .first<{ count: number }>()
-    expect(Number(remainingCacheRows?.count ?? 0,)).toBe(1)
-  },)
-},)
+    expect(Number(remainingCacheRows?.count ?? 0,),).toBe(1,)
+  })
+})
 
 describe('discogs proxy rate limiting', () => {
   it('serializes concurrent proxy searches through the global rate-limit gate', async () => {
@@ -420,11 +428,11 @@ describe('discogs proxy rate limiting', () => {
       .run()
 
     const discogsCallTimes: number[] = []
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+    const fetchSpy = vi.spyOn(globalThis, 'fetch',).mockImplementation(
       async (input: RequestInfo | URL,) => {
         const url = typeof input === 'string' ? input : input.toString()
-        if (!url.startsWith('https://api.discogs.com/database/search?')) {
-          throw new Error(`unexpected fetch URL: ${url}`)
+        if (!url.startsWith('https://api.discogs.com/database/search?',)) {
+          throw new Error(`unexpected fetch URL: ${url}`,)
         }
         discogsCallTimes.push(Date.now(),)
         return new Response(
@@ -476,22 +484,22 @@ describe('discogs proxy rate limiting', () => {
       )
       const elapsedMs = Date.now() - startedAt
 
-      expect(responses,).toHaveLength(3)
+      expect(responses,).toHaveLength(3,)
       for (const response of responses) {
-        expect(response.status).toBe(200)
+        expect(response.status,).toBe(200,)
       }
-      expect(discogsCallTimes,).toHaveLength(3)
+      expect(discogsCallTimes,).toHaveLength(3,)
 
       const gapOneMs = discogsCallTimes[1] - discogsCallTimes[0]
       const gapTwoMs = discogsCallTimes[2] - discogsCallTimes[1]
-      expect(gapOneMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
-      expect(gapTwoMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
-      expect(elapsedMs).toBeGreaterThanOrEqual((minIntervalMs * 2) - 25)
+      expect(gapOneMs,).toBeGreaterThanOrEqual(minIntervalMs - 25,)
+      expect(gapTwoMs,).toBeGreaterThanOrEqual(minIntervalMs - 25,)
+      expect(elapsedMs,).toBeGreaterThanOrEqual((minIntervalMs * 2) - 25,)
     } finally {
       fetchSpy.mockRestore()
     }
-  },)
-},)
+  })
+})
 
 function request(
   path: string,
@@ -518,7 +526,7 @@ async function deriveFinalizeSessionToken(
     oauthTokenSecret,
     `broker-session:v1:extra:${message}`,
   )
-  return `${partA}${partB.slice(0, 32)}`
+  return `${partA}${partB.slice(0, 32,)}`
 }
 
 async function hmacSha256Hex(key: string, input: string,): Promise<string> {
@@ -536,7 +544,9 @@ async function hmacSha256Hex(key: string, input: string,): Promise<string> {
     encoder.encode(input,),
   )
   const bytes = new Uint8Array(digest,)
-  return Array.from(bytes,).map((b,) => b.toString(16,).padStart(2, '0',)).join('',)
+  return Array.from(bytes,).map((b,) => b.toString(16,).padStart(2, '0',)).join(
+    '',
+  )
 }
 
 async function sha256Hex(input: string,): Promise<string> {
@@ -545,5 +555,7 @@ async function sha256Hex(input: string,): Promise<string> {
     new TextEncoder().encode(input,),
   )
   const bytes = new Uint8Array(digest,)
-  return Array.from(bytes,).map((b,) => b.toString(16,).padStart(2, '0',)).join('',)
+  return Array.from(bytes,).map((b,) => b.toString(16,).padStart(2, '0',)).join(
+    '',
+  )
 }

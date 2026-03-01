@@ -1,5 +1,5 @@
-mod audit;
 mod audio;
+mod audit;
 mod beatport;
 mod changes;
 mod cli;
@@ -68,16 +68,12 @@ mod tests {
 
     #[test]
     fn runs_cli_for_read_tags_subcommand() {
-        assert!(should_run_cli(
-            vec!["reklawdbox", "read-tags"].into_iter()
-        ));
+        assert!(should_run_cli(vec!["reklawdbox", "read-tags"].into_iter()));
     }
 
     #[test]
     fn runs_cli_for_write_tags_subcommand() {
-        assert!(should_run_cli(
-            vec!["reklawdbox", "write-tags"].into_iter()
-        ));
+        assert!(should_run_cli(vec!["reklawdbox", "write-tags"].into_iter()));
     }
 
     #[test]
@@ -89,9 +85,7 @@ mod tests {
 
     #[test]
     fn runs_cli_for_embed_art_subcommand() {
-        assert!(should_run_cli(
-            vec!["reklawdbox", "embed-art"].into_iter()
-        ));
+        assert!(should_run_cli(vec!["reklawdbox", "embed-art"].into_iter()));
     }
 
     #[test]

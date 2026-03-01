@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::audit;

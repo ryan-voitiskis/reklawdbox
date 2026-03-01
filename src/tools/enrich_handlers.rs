@@ -1,5 +1,5 @@
-use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 use super::*;
 use crate::beatport;
@@ -52,11 +52,8 @@ pub(super) async fn handle_lookup_discogs(
                     .unwrap_or(serde_json::Value::Null),
                 None => serde_json::Value::Null,
             };
-            let result = lookup_output_with_cache_metadata(
-                result,
-                true,
-                Some(cached.created_at.as_str()),
-            );
+            let result =
+                lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
@@ -73,8 +70,7 @@ pub(super) async fn handle_lookup_discogs(
     let (match_quality, response_json) = match &result {
         Some(r) => {
             let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-            let json =
-                serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
             (Some(quality), Some(json))
         }
         None => (Some("none"), None),
@@ -144,11 +140,8 @@ pub(super) async fn handle_lookup_beatport(
                     .unwrap_or(serde_json::Value::Null),
                 None => serde_json::Value::Null,
             };
-            let result = lookup_output_with_cache_metadata(
-                result,
-                true,
-                Some(cached.created_at.as_str()),
-            );
+            let result =
+                lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
@@ -161,8 +154,7 @@ pub(super) async fn handle_lookup_beatport(
 
     let (match_quality, response_json) = match &result {
         Some(r) => {
-            let json =
-                serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
             (Some("exact"), Some(json))
         }
         None => (Some("none"), None),
@@ -229,14 +221,9 @@ pub(super) async fn handle_enrich_tracks(
         for provider in &providers {
             if skip_cached && !force_refresh {
                 let store_conn = server.cache_store_conn()?;
-                if store::get_enrichment(
-                    &store_conn,
-                    provider.as_str(),
-                    &norm_artist,
-                    &norm_title,
-                )
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
-                .is_some()
+                if store::get_enrichment(&store_conn, provider.as_str(), &norm_artist, &norm_title)
+                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                    .is_some()
                 {
                     progress.cached += 1;
                     continue;
@@ -275,9 +262,7 @@ pub(super) async fn handle_enrich_tracks(
                                 Some(quality),
                                 Some(&json_str),
                             )
-                            .map_err(|e| {
-                                mcp_internal_error(format!("Cache write error: {e}"))
-                            })?;
+                            .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                             progress.processed += 1;
                         }
                         Ok(None) => {
@@ -290,20 +275,17 @@ pub(super) async fn handle_enrich_tracks(
                                 Some("none"),
                                 None,
                             )
-                            .map_err(|e| {
-                                mcp_internal_error(format!("Cache write error: {e}"))
-                            })?;
+                            .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                             progress.skipped += 1;
                         }
                         Err(e) => {
-                            let error_message =
-                                if let Some(remediation) = e.auth_remediation() {
-                                    let msg = auth_remediation_message(remediation);
-                                    discogs_auth_error = Some(msg.clone());
-                                    msg
-                                } else {
-                                    e.to_string()
-                                };
+                            let error_message = if let Some(remediation) = e.auth_remediation() {
+                                let msg = auth_remediation_message(remediation);
+                                discogs_auth_error = Some(msg.clone());
+                                msg
+                            } else {
+                                e.to_string()
+                            };
                             progress.failures.push(serde_json::json!({
                                 "track_id": track.id,
                                 "artist": track.artist,
@@ -328,9 +310,7 @@ pub(super) async fn handle_enrich_tracks(
                                 Some("exact"),
                                 Some(&json_str),
                             )
-                            .map_err(|e| {
-                                mcp_internal_error(format!("Cache write error: {e}"))
-                            })?;
+                            .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                             progress.processed += 1;
                         }
                         Ok(None) => {
@@ -343,9 +323,7 @@ pub(super) async fn handle_enrich_tracks(
                                 Some("none"),
                                 None,
                             )
-                            .map_err(|e| {
-                                mcp_internal_error(format!("Cache write error: {e}"))
-                            })?;
+                            .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                             progress.skipped += 1;
                         }
                         Err(e) => {
