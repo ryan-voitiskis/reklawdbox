@@ -211,8 +211,13 @@ pub enum AuditContext {
 }
 
 /// Check if a directory name represents a disc subdirectory (CD1, Disc 1, etc.).
+/// Rejects false positives like "Disco Dreams", "Discovery", "CD" bare.
+static DISC_SUBDIR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:CD\s*\d+|Dis[ck]\s*\d+)$").expect("DISC_SUBDIR_RE must compile")
+});
+
 fn is_disc_subdir(name: &str) -> bool {
-    name.starts_with("CD") || name.starts_with("Disc") || name.starts_with("disc")
+    DISC_SUBDIR_RE.is_match(name)
 }
 
 /// Compiled regex matching tech-spec fragments in directory names:
@@ -298,11 +303,18 @@ fn detect_album_dirs(paths: &[std::path::PathBuf]) -> HashSet<std::path::PathBuf
             *counts.entry(parent.to_path_buf()).or_default() += 1;
         }
     }
-    counts
-        .into_iter()
-        .filter(|&(_, count)| count >= 2)
-        .map(|(dir, _)| dir)
-        .collect()
+    counts.retain(|_, count| *count >= 2);
+
+    // Leaf-dir filter: a dir is an album dir only if no other audio-containing
+    // dir is its direct child. This excludes mixed dirs (e.g. `lossy/` with
+    // loose tracks AND artist subdirs) from being classified as album dirs.
+    let child_parents: HashSet<std::path::PathBuf> = counts
+        .keys()
+        .filter_map(|dir| dir.parent().map(|p| p.to_path_buf()))
+        .collect();
+    counts.retain(|dir, _| !child_parents.contains(dir));
+
+    counts.into_keys().collect()
 }
 
 pub fn classify_track_context(
@@ -333,12 +345,6 @@ pub fn classify_track_context(
         (parent, dir_name)
     };
 
-    // Check if in a play/ directory
-    let lower = effective_dir_name.to_lowercase();
-    if lower == "play" || lower.starts_with("play/") {
-        return AuditContext::LooseTrack;
-    }
-
     let normalized = normalize_dir_name(effective_dir_name);
     if has_year_suffix(&normalized) {
         return AuditContext::AlbumTrack;
@@ -366,6 +372,31 @@ fn effective_album_dir_name(path: &Path) -> Option<(&Path, &str)> {
     } else {
         Some((parent, dir_name))
     }
+}
+
+/// Check whether any ancestor directory (up to 2 levels above the parent)
+/// already has a year suffix, so nested subdirs don't redundantly flag
+/// MISSING_YEAR_IN_DIR.
+fn ancestor_has_year(path: &Path) -> bool {
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+    let mut current = parent.parent();
+    for _ in 0..2 {
+        match current {
+            Some(dir) => {
+                if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+                    if has_year_suffix(name) || has_year_suffix(&normalize_dir_name(name)) {
+                        return true;
+                    }
+                }
+                current = dir.parent();
+            }
+            None => break,
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +850,7 @@ pub fn check_filename(
         && let Some((_, dir_name)) = effective_album_dir_name(path)
         && !has_year_suffix(dir_name)
         && !has_year_suffix(&normalize_dir_name(dir_name))
+        && !ancestor_has_year(path)
     {
         issues.push(DetectedIssue {
             issue_type: IssueType::MissingYearInDir,
@@ -1465,7 +1497,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_loose_track_in_play_dir() {
+    fn classify_loose_track_in_unnamed_dir() {
         let p = Path::new("/music/play/Artist - Track.wav");
         assert_eq!(classify_track_context(p, &HashSet::new()), AuditContext::LooseTrack);
     }
@@ -2494,5 +2526,71 @@ mod tests {
                 .any(|i| i.issue_type == IssueType::FilenameTagDrift),
             "Question mark in both filename and tag should not trigger drift"
         );
+    }
+
+    // -- is_disc_subdir regression --
+
+    #[test]
+    fn disc_subdir_rejects_false_positives() {
+        assert!(!is_disc_subdir("Disco Dreams Unlimited (2018)"));
+        assert!(!is_disc_subdir("Discovering Infinity"));
+        assert!(!is_disc_subdir("CD"));
+        assert!(!is_disc_subdir("Disc"));
+        assert!(!is_disc_subdir("Disconnected"));
+    }
+
+    #[test]
+    fn disc_subdir_accepts_real_disc_dirs() {
+        assert!(is_disc_subdir("CD1"));
+        assert!(is_disc_subdir("CD 2"));
+        assert!(is_disc_subdir("CD10"));
+        assert!(is_disc_subdir("Disc 1"));
+        assert!(is_disc_subdir("disc2"));
+        assert!(is_disc_subdir("Disk 3"));
+    }
+
+    // -- ancestor_has_year --
+
+    #[test]
+    fn ancestor_year_suppresses_nested_subdir() {
+        let p = Path::new("/music/Artist/Album (2021)/bonus-tracks/01 track.flac");
+        assert!(ancestor_has_year(p));
+    }
+
+    #[test]
+    fn ancestor_year_absent_when_no_year_above() {
+        let p = Path::new("/music/Artist/SomeDir/nested/01 track.flac");
+        assert!(!ancestor_has_year(p));
+    }
+
+    // -- leaf-dir filter in detect_album_dirs --
+
+    #[test]
+    fn leaf_dir_filter_excludes_parent_of_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            // parent dir has loose numbered files
+            PathBuf::from("/music/lossy/01 Track A.flac"),
+            PathBuf::from("/music/lossy/02 Track B.flac"),
+            // child subdir also has numbered files
+            PathBuf::from("/music/lossy/Artist/01 Track X.flac"),
+            PathBuf::from("/music/lossy/Artist/02 Track Y.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        // /music/lossy/Artist is a leaf → included
+        assert!(album_dirs.contains(&PathBuf::from("/music/lossy/Artist")));
+        // /music/lossy is parent of a child album dir → excluded
+        assert!(!album_dirs.contains(&PathBuf::from("/music/lossy")));
+    }
+
+    #[test]
+    fn leaf_dir_filter_keeps_standalone_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            PathBuf::from("/music/Artist/Album/01 Track.flac"),
+            PathBuf::from("/music/Artist/Album/02 Track.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        assert!(album_dirs.contains(&PathBuf::from("/music/Artist/Album")));
     }
 }
