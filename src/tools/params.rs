@@ -200,6 +200,8 @@ pub struct EnrichTracksParams {
     pub playlist_id: Option<String>,
     #[schemars(description = "Max tracks to enrich (default 50)")]
     pub max_tracks: Option<u32>,
+    #[schemars(description = "Offset for pagination (skip first N tracks in result set)")]
+    pub offset: Option<u32>,
     #[schemars(description = "Providers to use: 'discogs', 'beatport' (default ['discogs'])")]
     pub providers: Option<Vec<crate::types::Provider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]

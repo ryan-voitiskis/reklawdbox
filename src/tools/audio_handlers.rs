@@ -186,6 +186,7 @@ pub(super) async fn handle_analyze_audio_batch(
             params.playlist_id.as_deref(),
             params.filters,
             params.max_tracks,
+            None,
             &ResolveTracksOpts {
                 default_max_tracks: Some(20),
                 max_tracks_cap: Some(200),

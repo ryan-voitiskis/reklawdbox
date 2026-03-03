@@ -200,6 +200,7 @@ pub(super) async fn handle_enrich_tracks(
             params.playlist_id.as_deref(),
             params.filters,
             params.max_tracks,
+            params.offset,
             &ResolveTracksOpts {
                 default_max_tracks: Some(50),
                 max_tracks_cap: Some(200),
@@ -284,6 +285,18 @@ pub(super) async fn handle_enrich_tracks(
                                 discogs_auth_error = Some(msg.clone());
                                 msg
                             } else {
+                                // Cache non-auth errors (e.g. empty artist/title)
+                                // so they don't block future batches
+                                let store_conn = server.cache_store_conn()?;
+                                store::set_enrichment(
+                                    &store_conn,
+                                    provider.as_str(),
+                                    &norm_artist,
+                                    &norm_title,
+                                    Some("error"),
+                                    None,
+                                )
+                                .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                                 e.to_string()
                             };
                             progress.failures.push(serde_json::json!({
@@ -327,6 +340,17 @@ pub(super) async fn handle_enrich_tracks(
                             progress.skipped += 1;
                         }
                         Err(e) => {
+                            // Cache Beatport errors so they don't block future batches
+                            let store_conn = server.cache_store_conn()?;
+                            store::set_enrichment(
+                                &store_conn,
+                                provider.as_str(),
+                                &norm_artist,
+                                &norm_title,
+                                Some("error"),
+                                None,
+                            )
+                            .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
                             progress.failures.push(serde_json::json!({
                                 "track_id": track.id,
                                 "artist": track.artist,

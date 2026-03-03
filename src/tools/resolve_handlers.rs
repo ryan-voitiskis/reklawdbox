@@ -71,6 +71,7 @@ pub(super) fn handle_resolve_tracks_data(
             params.playlist_id.as_deref(),
             params.filters,
             params.max_tracks,
+            None,
             &ResolveTracksOpts {
                 default_max_tracks: Some(50),
                 max_tracks_cap: Some(200),
@@ -147,6 +148,7 @@ pub(super) fn handle_cache_coverage(
             params.playlist_id.as_deref(),
             params.filters,
             params.max_tracks,
+            None,
             &ResolveTracksOpts {
                 default_max_tracks: None,
                 max_tracks_cap: None,

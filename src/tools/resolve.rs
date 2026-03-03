@@ -25,6 +25,7 @@ pub(super) fn resolve_tracks(
     playlist_id: Option<&str>,
     filters: SearchFilterParams,
     max_tracks_param: Option<u32>,
+    offset: Option<u32>,
     opts: &ResolveTracksOpts,
 ) -> Result<Vec<crate::types::Track>, McpError> {
     let effective_max: Option<usize> = match opts.default_max_tracks {
@@ -65,7 +66,7 @@ pub(super) fn resolve_tracks(
         }
     } else {
         let limit = effective_max.map(|m| m as u32);
-        let search = filters.into_search_params(true, limit, None);
+        let search = filters.into_search_params(true, limit, offset);
         if bounded {
             db::search_tracks(conn, &search)
                 .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
