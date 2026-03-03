@@ -282,6 +282,28 @@ fn has_year_suffix(name: &str) -> bool {
     }
 }
 
+/// Check if a directory name contains a year range like `1977-1992` or
+/// `1992–2014` (with either ASCII hyphen or en-dash).
+fn has_year_range(name: &str) -> bool {
+    static YEAR_RANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(\d{4})[-–](\d{4})\b").expect("YEAR_RANGE_RE must compile")
+    });
+    YEAR_RANGE_RE.captures(name).is_some_and(|caps| {
+        let a = caps[1].parse::<u16>().unwrap_or(0);
+        let b = caps[2].parse::<u16>().unwrap_or(0);
+        (1900..=2099).contains(&a) && (1900..=2099).contains(&b)
+    })
+}
+
+/// Check if a directory name contains a bare (non-parenthesized) 4-digit year
+/// like `Live in Tokyo - 1st December 2013` or `FM Broadcast August 1996`.
+fn has_bare_year(name: &str) -> bool {
+    static BARE_YEAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(19|20)\d{2}\b").expect("BARE_YEAR_RE must compile")
+    });
+    BARE_YEAR_RE.is_match(name)
+}
+
 /// Pre-pass: detect directories that contain 2+ files with track-number
 /// prefixes (e.g. `01 `, `02-`, `03.`). These are album directories even
 /// without a year suffix.
@@ -850,6 +872,8 @@ pub fn check_filename(
         && let Some((_, dir_name)) = effective_album_dir_name(path)
         && !has_year_suffix(dir_name)
         && !has_year_suffix(&normalize_dir_name(dir_name))
+        && !has_year_range(dir_name)
+        && !has_bare_year(dir_name)
         && !ancestor_has_year(path)
     {
         issues.push(DetectedIssue {
@@ -1528,6 +1552,40 @@ mod tests {
         assert!(!has_year_suffix("Album Name"));
         assert!(!has_year_suffix("Album (Deluxe)"));
         assert!(!has_year_suffix("(20)"));
+    }
+
+    // -- has_year_range --
+
+    #[test]
+    fn year_range_present() {
+        assert!(has_year_range("The Studio Album Collection 1977-1992"));
+        assert!(has_year_range("Live 1992-2014"));
+        assert!(has_year_range("Anthology 2000\u{2013}2020")); // en-dash
+    }
+
+    #[test]
+    fn year_range_absent() {
+        assert!(!has_year_range("Album Name"));
+        assert!(!has_year_range("CCCP Edits 4"));
+        assert!(!has_year_range("Album 123-456")); // not valid years
+        assert!(!has_year_range("Album 1899-2100")); // out of range
+    }
+
+    // -- has_bare_year --
+
+    #[test]
+    fn bare_year_present() {
+        assert!(has_bare_year("Live at Alexandra Palace - London 8th and 9th May 2019"));
+        assert!(has_bare_year("FM Broadcast August 1996"));
+        assert!(has_bare_year("Live in Tokyo - 1st December 2013"));
+    }
+
+    #[test]
+    fn bare_year_absent() {
+        assert!(!has_bare_year("Album Name"));
+        assert!(!has_bare_year("CCCP Edits 4"));
+        assert!(!has_bare_year("Return to Nothing"));
+        assert!(!has_bare_year("Fever (Limited Edition)"));
     }
 
     // -- parse_filename --

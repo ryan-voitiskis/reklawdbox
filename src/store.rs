@@ -580,7 +580,7 @@ pub fn resolve_audit_issues(
         count += conn.execute(
             "UPDATE audit_issues
              SET status = ?1, resolution = ?2, note = COALESCE(?3, note), resolved_at = ?4
-             WHERE id = ?5 AND status = 'open'",
+             WHERE id = ?5 AND status IN ('open', 'deferred', 'accepted')",
             params![status, resolution_str, note, resolved_at, id],
         )?;
     }
@@ -597,7 +597,7 @@ pub fn mark_issues_resolved_for_path(
         let count = conn.execute(
             "UPDATE audit_issues
              SET status = 'resolved', resolution = 'fixed', resolved_at = ?1
-             WHERE path = ?2 AND status = 'open'",
+             WHERE path = ?2 AND status IN ('open', 'deferred')",
             params![resolved_at, path],
         )?;
         return Ok(count);
@@ -608,7 +608,7 @@ pub fn mark_issues_resolved_for_path(
     let sql = format!(
         "UPDATE audit_issues
          SET status = 'resolved', resolution = 'fixed', resolved_at = ?1
-         WHERE path = ?2 AND status = 'open' AND issue_type NOT IN ({})",
+         WHERE path = ?2 AND status IN ('open', 'deferred') AND issue_type NOT IN ({})",
         placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;

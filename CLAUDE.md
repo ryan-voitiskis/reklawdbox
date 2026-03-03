@@ -16,8 +16,6 @@ scoring, and greedy set sequencing with energy-curve shaping.
 - Audio analysis: `symphonia` decode + `stratum-dsp`; optional Essentia via Python subprocess.
 - Companion service: Discogs broker in TypeScript on Cloudflare Workers + D1.
 
-Use Conventional Commits.
-
 ## MCP Development Loop
 
 This project IS the MCP server. When modifying server code, `cargo build --release`
