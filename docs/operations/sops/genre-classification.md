@@ -121,13 +121,15 @@ Tracks with these genres will be compared against their canonical form:
   ─────────────────────────────────────────────────────────────
   Electronica                        → Techno              19   ⚠ debatable
   Bass                               → UK Bass             16   ⚠ debatable
-  Drone Techno                       → Deep Techno          8   ⚠ debatable
-  Gospel House                       → House                3   ⚠ debatable
-  Progressive House                  → House                2   ⚠ debatable
+  Electronic                         → Experimental         8   ⚠ debatable
+  Drone                              → Ambient              5   ⚠ debatable
+  Melodic House & Techno             → Deep Techno          4   ⚠ debatable
+  Indie Dance                        → House                2   ⚠ debatable
   Hip-Hop                            → Hip Hop             29
   DnB                                → Drum & Bass         16
   Techno (Peak Time / Driving)       → Techno              18
   Techno (Raw / Deep / Hypnotic)     → Deep Techno         14
+  UK Garage                          → Garage              12
   [... remaining aliases ...]
 
 ⚠ = mapping may lose useful specificity.
@@ -252,7 +254,7 @@ update_tracks(changes=[
 
 ### Repeat
 
-Call `resolve_tracks_data` with the next batch (offset by already-processed tracks or use a filter that excludes already-staged tracks). Continue until all ungenred tracks are processed.
+Call `resolve_tracks_data` again with the same filters. The `has_genre` filter queries the Rekordbox DB, which is unchanged until XML import — so the same tracks will appear across calls. To avoid re-processing, pass `track_ids` of the remaining unprocessed tracks, or track which track IDs have already been classified and exclude them client-side. Continue until all ungenred tracks are processed.
 
 ---
 
