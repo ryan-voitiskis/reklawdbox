@@ -143,7 +143,8 @@ Read, write, and manage metadata tags directly on audio files (FLAC, MP3, WAV, M
 ```
 
 WAV files support dual-layer tagging (ID3v2 + RIFF INFO). Use `--wav-targets` to control
-which layers are written. See `docs/spec/native-tag-tools.md` for full parameter reference.
+which layers are written. See [`site/src/content/docs/reference/tools.mdx`](site/src/content/docs/reference/tools.mdx)
+for full tool parameter reference.
 
 ### Essentia Setup (Recommended)
 
