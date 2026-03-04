@@ -95,7 +95,7 @@ This makes harmonic ranking behavior match practical DJ mixing behavior on CDJs/
 
 ## SOP Updates Needed
 
-Update `docs/operations/sops/set-builder.md` to include an explicit pre-build configuration step:
+Update `docs/sops/set-builder.md` to include an explicit pre-build configuration step:
 
 1. Confirm Master Tempo intention (`on` or `off`).
 2. Confirm whether the set should prioritize near-native BPM or allow stronger tempo moves.

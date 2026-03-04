@@ -1,6 +1,6 @@
 # Set Builder: Scoring Improvements & SOP Alignment — 2026-03-01
 
-Follows up on `docs/operations/reports/2026-02-22-set-builder-harmonic-query-plan.md`.
+Follows up on `docs/reports/2026-02-22-set-builder-harmonic-query-plan.md`.
 That plan's Phases 1-3 are substantially implemented. This plan covers the
 remaining gaps: scoring refinements (Category B) and SOP documentation alignment
 (Category A).
@@ -170,7 +170,7 @@ Runs in CI automatically via existing `cargo test`.
 
 ## Category A: SOP Alignment (Documentation)
 
-Bring `docs/operations/sops/set-builder.md` into alignment with the actual
+Bring `docs/sops/set-builder.md` into alignment with the actual
 implementation. The SOP was written before several features landed and now omits
 or misrepresents implemented capabilities.
 

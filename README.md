@@ -241,7 +241,7 @@ For enrichment/audio/set workflows, the common sequence is:
 - [`docs/reference/rekordbox-internals.md`](docs/reference/rekordbox-internals.md) — Rekordbox file formats, database schema, XML structure, ecosystem tools
 - [`docs/developer/rekordbox-gotchas.md`](docs/developer/rekordbox-gotchas.md) — Rekordbox schema/XML edge cases and invariants used by code paths
 - [`docs/developer/rekordbox-gotchas.md#queries`](docs/developer/rekordbox-gotchas.md#queries) — Query-building and binding patterns used in DB access code
-- [`docs/operations/runbooks/backup-and-restore.md`](docs/operations/runbooks/backup-and-restore.md) — Backup usage and restore procedures
+- [`docs/runbooks/backup-and-restore.md`](docs/runbooks/backup-and-restore.md) — Backup usage and restore procedures
 - [`README.md#discogs-auth-flow`](README.md#discogs-auth-flow) — Discogs broker setup, first-run auth, and re-auth/reset guidance
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — Development workflow, testing expectations, and pull request checklist
 - [`SECURITY.md`](SECURITY.md) — Supported versions and vulnerability reporting process

@@ -1,6 +1,6 @@
 # SOP Test Session Log — 2026-02-20/22
 
-End-to-end test of `docs/operations/sops/genre-classification.md` against a live Rekordbox library (2460 tracks, 468 ungenred).
+End-to-end test of `docs/sops/genre-classification.md` against a live Rekordbox library (2460 tracks, 468 ungenred).
 
 ## Steps Completed
 

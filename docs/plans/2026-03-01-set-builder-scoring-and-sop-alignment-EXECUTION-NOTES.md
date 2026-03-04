@@ -32,7 +32,7 @@ Companion to `2026-03-01-set-builder-scoring-and-sop-alignment.md`.
 
 ## Phase 2: SOP Alignment
 
-All A1–A9 applied to `docs/operations/sops/set-builder.md`:
+All A1–A9 applied to `docs/sops/set-builder.md`:
 
 - **A1:** Pre-build config dialog + confirmation step.
 - **A2+A7:** `query_transition_candidates` in tool tables, Step 4, full spec.
