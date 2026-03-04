@@ -102,6 +102,15 @@ fn create_server_with_connections(
     store_conn: Connection,
     http: reqwest::Client,
 ) -> ReklawdboxServer {
+    create_server_with_store_path(db_conn, store_conn, http, None)
+}
+
+fn create_server_with_store_path(
+    db_conn: Connection,
+    store_conn: Connection,
+    http: reqwest::Client,
+    store_path: Option<String>,
+) -> ReklawdboxServer {
     let server = ReklawdboxServer {
         state: Arc::new(ServerState {
             db: OnceLock::new(),
@@ -111,6 +120,7 @@ fn create_server_with_connections(
             essentia_setup_lock: tokio::sync::Mutex::new(()),
             discogs_pending: Mutex::new(None),
             db_path: None,
+            store_path,
             changes: ChangeManager::new(),
             http,
         }),
@@ -137,14 +147,14 @@ fn create_real_server_with_temp_store(
     let db_conn = db::open_real_db()?;
     let store_dir = tempfile::tempdir().ok()?;
     let store_path = store_dir.path().join("internal.sqlite3");
-    let store_conn = store::open(
-        store_path
-            .to_str()
-            .expect("temp store path should be UTF-8"),
-    )
-    .expect("internal store should open for integration test");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str)
+        .expect("internal store should open for integration test");
 
-    let server = create_server_with_connections(db_conn, store_conn, http);
+    let server = create_server_with_store_path(db_conn, store_conn, http, Some(store_path_str));
     Some((server, store_dir))
 }
 
@@ -1579,12 +1589,11 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
 
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
-    let store_conn = store::open(
-        store_path
-            .to_str()
-            .expect("temp store path should be UTF-8"),
-    )
-    .expect("temp internal store should open");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
 
     let artist = "Aníbal";
     let title_one = "Señorita";
@@ -1627,8 +1636,12 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
     )
     .expect("second sentinel discogs cache entry should write");
 
-    let server =
-        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
 
     let params = EnrichTracksParams {
         filters: SearchFilterParams::default(),
@@ -1642,6 +1655,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         providers: Some(vec![crate::types::Provider::Discogs]),
         skip_cached: Some(true),
         force_refresh: Some(false),
+        concurrency: None,
     };
 
     let first_result = server
@@ -1675,6 +1689,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
             providers: Some(vec![crate::types::Provider::Discogs]),
             skip_cached: Some(true),
             force_refresh: Some(false),
+            concurrency: None,
         }))
         .await
         .expect("second enrich_tracks run should also be fully cached");
@@ -1709,12 +1724,11 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
     let db_conn = create_single_track_test_db("cached-track-1", "/tmp/cached-track-1.flac");
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
-    let store_conn = store::open(
-        store_path
-            .to_str()
-            .expect("temp store path should be UTF-8"),
-    )
-    .expect("temp internal store should open");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
 
     let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
     let norm_title = crate::normalize::normalize_for_matching("Señorita");
@@ -1737,8 +1751,12 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
     )
     .expect("beatport cache should seed");
 
-    let server =
-        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
     let result = server
         .enrich_tracks(Parameters(EnrichTracksParams {
             filters: SearchFilterParams::default(),
@@ -1752,6 +1770,7 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
             ]),
             skip_cached: Some(true),
             force_refresh: Some(false),
+            concurrency: None,
         }))
         .await
         .expect("enrich_tracks should resolve from cache for both providers");
@@ -1934,6 +1953,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
             track_ids: None,
             playlist_id: None,
             max_tracks: None,
+            format: None,
         }))
         .await
         .expect("cache_coverage should succeed");
@@ -2022,6 +2042,7 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
             ]),
             playlist_id: None,
             max_tracks: None,
+            format: None,
         }))
         .await
         .expect("cache_coverage track_ids scope should succeed");
@@ -2036,6 +2057,7 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
             track_ids: None,
             playlist_id: Some("pl-cache".to_string()),
             max_tracks: None,
+            format: None,
         }))
         .await
         .expect("cache_coverage playlist scope should succeed");
@@ -2213,6 +2235,7 @@ async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
             providers: Some(vec![crate::types::Provider::Beatport]),
             skip_cached: Some(false),
             force_refresh: Some(true),
+            concurrency: None,
         }))
         .await
         .expect("enrich_tracks should succeed for beatport provider");
@@ -2281,6 +2304,7 @@ async fn resolve_tracks_data_batch_consistency() {
             track_ids: Some(track_ids.clone()),
             playlist_id: None,
             max_tracks: Some(track_ids.len() as u32),
+            format: None,
         }))
         .await
         .expect("batch resolve should succeed");

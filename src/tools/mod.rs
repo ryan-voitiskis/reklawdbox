@@ -65,6 +65,9 @@ pub(super) struct ServerState {
     pub(super) essentia_setup_lock: tokio::sync::Mutex<()>,
     pub(super) discogs_pending: Mutex<Option<discogs::PendingDeviceSession>>,
     pub(super) db_path: Option<String>,
+    /// Explicit store path override (used by tests and batch tasks that need
+    /// to open separate read-only / writer connections to the same file).
+    pub(super) store_path: Option<String>,
     pub(super) changes: ChangeManager,
     pub(super) http: reqwest::Client,
 }
@@ -121,6 +124,9 @@ impl ReklawdboxServer {
     }
 
     pub(super) fn cache_store_path(&self) -> String {
+        if let Some(ref p) = self.state.store_path {
+            return p.clone();
+        }
         std::env::var("CRATE_DIG_STORE_PATH")
             .unwrap_or_else(|_| store::default_path().to_string_lossy().to_string())
     }
@@ -154,6 +160,7 @@ impl ReklawdboxServer {
                 essentia_setup_lock: tokio::sync::Mutex::new(()),
                 discogs_pending: Mutex::new(None),
                 db_path,
+                store_path: None,
                 changes: ChangeManager::new(),
                 http,
             }),

@@ -42,8 +42,12 @@ pub async fn lookup(
     artist: &str,
     title: &str,
 ) -> Result<Option<BeatportResult>, BeatportError> {
-    // Rate limit
-    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    // Rate limit (configurable via env, default 1000ms)
+    let interval_ms: u64 = std::env::var("REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
 
     let query = format!("{artist} {title}");
     let url = format!(
