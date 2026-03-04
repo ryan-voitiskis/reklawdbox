@@ -208,6 +208,8 @@ pub struct EnrichTracksParams {
     pub skip_cached: Option<bool>,
     #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
     pub force_refresh: Option<bool>,
+    #[schemars(description = "Max concurrent enrichments (default 4, max 8)")]
+    pub concurrency: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -254,6 +256,17 @@ pub struct ResolveTracksDataParams {
     pub playlist_id: Option<String>,
     #[schemars(description = "Max tracks to resolve (default 50)")]
     pub max_tracks: Option<u32>,
+    #[schemars(description = "Response format: 'full' (default) or 'classification' (compact, only decision-tree fields)")]
+    pub format: Option<ResolveFormat>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveFormat {
+    #[default]
+    Full,
+    Classification,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]

@@ -80,6 +80,7 @@ pub(super) fn handle_resolve_tracks_data(
         )?
     };
 
+    let params_format = params.format.unwrap_or_default();
     let essentia_installed = server.essentia_python_path().is_some();
     let mut results = Vec::with_capacity(tracks.len());
     for track in &tracks {
@@ -104,17 +105,28 @@ pub(super) fn handle_resolve_tracks_data(
             (discogs_cache, beatport_cache, stratum_cache, essentia_cache)
         };
 
-        let staged = server.state.changes.get(&track.id);
-
-        results.push(resolve_single_track(
-            track,
-            discogs_cache.as_ref(),
-            beatport_cache.as_ref(),
-            stratum_cache.as_ref(),
-            essentia_cache.as_ref(),
-            essentia_installed,
-            staged.as_ref(),
-        ));
+        let result = match params_format {
+            ResolveFormat::Full => {
+                let staged = server.state.changes.get(&track.id);
+                resolve_single_track(
+                    track,
+                    discogs_cache.as_ref(),
+                    beatport_cache.as_ref(),
+                    stratum_cache.as_ref(),
+                    essentia_cache.as_ref(),
+                    essentia_installed,
+                    staged.as_ref(),
+                )
+            }
+            ResolveFormat::Classification => resolve_single_track_compact(
+                track,
+                discogs_cache.as_ref(),
+                beatport_cache.as_ref(),
+                stratum_cache.as_ref(),
+                essentia_cache.as_ref(),
+            ),
+        };
+        results.push(result);
     }
 
     let json =
@@ -446,6 +458,152 @@ pub(crate) fn resolve_single_track(
         "staged_changes": staged_val,
         "data_completeness": data_completeness,
         "genre_taxonomy": genre_taxonomy,
+    })
+}
+
+/// Build a compact resolved JSON for classification workflows.
+/// Returns only fields needed for the decision tree, ~400-500 bytes per track.
+fn resolve_single_track_compact(
+    track: &crate::types::Track,
+    discogs_cache: Option<&store::EnrichmentCacheEntry>,
+    beatport_cache: Option<&store::EnrichmentCacheEntry>,
+    stratum_cache: Option<&store::CachedAudioAnalysis>,
+    essentia_cache: Option<&store::CachedAudioAnalysis>,
+) -> serde_json::Value {
+    // Current genre canonical (same logic as full version)
+    let current_genre_canonical = if track.genre.is_empty() {
+        serde_json::Value::Null
+    } else if let Some(canonical) = genre::canonical_genre_name(&track.genre) {
+        serde_json::json!(canonical)
+    } else if let Some(canonical) = genre::canonical_genre_from_alias(&track.genre) {
+        serde_json::json!(canonical)
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Parse Discogs styles and map through taxonomy, keeping only exact/alias matches.
+    // Group by canonical genre name and count how many styles mapped to each.
+    let discogs_val = parse_enrichment_cache(discogs_cache);
+    let discogs_mapped_genres: serde_json::Value = {
+        let mut genre_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        if let Some(styles) = discogs_val
+            .as_ref()
+            .and_then(|v| v.get("styles"))
+            .and_then(|v| v.as_array())
+        {
+            for style in styles.iter().filter_map(|s| s.as_str()) {
+                let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
+                if (mapping_type == "exact" || mapping_type == "alias")
+                    && let Some(genre_name) = maps_to
+                {
+                    *genre_counts.entry(genre_name).or_insert(0) += 1;
+                }
+            }
+        }
+        if genre_counts.is_empty() {
+            serde_json::Value::Null
+        } else {
+            let mut entries: Vec<serde_json::Value> = genre_counts
+                .into_iter()
+                .map(|(genre, count)| {
+                    serde_json::json!({"genre": genre, "style_count": count})
+                })
+                .collect();
+            // Sort for deterministic output
+            entries.sort_by(|a, b| {
+                a.get("genre")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("genre").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            serde_json::json!(entries)
+        }
+    };
+
+    // Parse Beatport genre and map through taxonomy, only keeping exact/alias.
+    let beatport_val = parse_enrichment_cache(beatport_cache);
+    let beatport_mapped_genre: serde_json::Value = beatport_val
+        .as_ref()
+        .and_then(|v| v.get("genre"))
+        .and_then(|v| v.as_str())
+        .filter(|g| !g.is_empty())
+        .and_then(|bp_genre| {
+            let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);
+            if mapping_type == "exact" || mapping_type == "alias" {
+                maps_to.map(|g| serde_json::json!(g))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(serde_json::Value::Null);
+
+    // Parse stratum cache for bpm, key
+    let stratum_json = stratum_cache.and_then(|sc| {
+        serde_json::from_str::<serde_json::Value>(&sc.features_json).ok()
+    });
+
+    let stratum_bpm = stratum_json
+        .as_ref()
+        .and_then(|sj| sj.get("bpm"))
+        .and_then(|v| v.as_f64());
+    let stratum_key = stratum_json
+        .as_ref()
+        .and_then(|sj| sj.get("key"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Key agreement (same as full version)
+    let key_agreement = stratum_key
+        .as_deref()
+        .map(|sk| sk.eq_ignore_ascii_case(&track.key));
+
+    // Parse essentia cache
+    let essentia_data = essentia_cache.and_then(|ec| {
+        serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json).ok()
+    });
+
+    // Build audio sub-object
+    let audio_obj = if stratum_json.is_some() || essentia_data.is_some() {
+        let mut obj = serde_json::json!({
+            "stratum_bpm": stratum_bpm,
+            "stratum_key": stratum_key,
+            "key_agreement": key_agreement,
+        });
+        if let Some(ref ed) = essentia_data {
+            obj["danceability"] = serde_json::json!(ed.danceability);
+            obj["rhythm_regularity"] = serde_json::json!(ed.rhythm_regularity);
+            obj["spectral_centroid_mean"] = serde_json::json!(ed.spectral_centroid_mean);
+            obj["dynamic_complexity"] = serde_json::json!(ed.dynamic_complexity);
+        } else {
+            obj["danceability"] = serde_json::Value::Null;
+            obj["rhythm_regularity"] = serde_json::Value::Null;
+            obj["spectral_centroid_mean"] = serde_json::Value::Null;
+            obj["dynamic_complexity"] = serde_json::Value::Null;
+        }
+        obj
+    } else {
+        serde_json::Value::Null
+    };
+
+    serde_json::json!({
+        "track_id": track.id,
+        "artist": track.artist,
+        "title": track.title,
+        "current_genre": track.genre,
+        "current_genre_canonical": current_genre_canonical,
+        "bpm": track.bpm,
+        "key": track.key,
+        "rating": track.rating,
+        "discogs_mapped_genres": discogs_mapped_genres,
+        "beatport_mapped_genre": beatport_mapped_genre,
+        "audio": audio_obj,
+        "data": {
+            "stratum": stratum_cache.is_some(),
+            "essentia": essentia_cache.is_some(),
+            "discogs": discogs_cache.is_some(),
+            "beatport": beatport_cache.is_some(),
+        },
     })
 }
 
