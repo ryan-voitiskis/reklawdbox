@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-reklawdbox is configured entirely through environment variables set in your MCP host config. No config files, no CLI flags.
+In MCP server mode, reklawdbox is configured through environment variables set in your MCP host config. CLI subcommands also accept command-line flags — see [CLI Commands](/cli/) for details. CLI commands load environment variables from `.mcp.json` automatically.
 
 ## Required
 
@@ -32,7 +32,7 @@ The broker is a separate Cloudflare Workers service that handles Discogs OAuth a
 
 Probe behavior:
 
-- The server probes `CRATE_DIG_ESSENTIA_PYTHON` and the default venv path at startup.
+- The server probes `CRATE_DIG_ESSENTIA_PYTHON` and the default venv path **lazily on first use** (not at startup). The first tool call that needs Essentia triggers the probe.
 - If neither imports Essentia successfully, tools report Essentia as unavailable and continue with stratum-dsp only.
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
@@ -54,6 +54,15 @@ The backup script runs synchronously before any XML is written. If neither the e
 | `CRATE_DIG_STORE_PATH` | Path to internal cache SQLite | `~/Library/Application Support/reklawdbox/internal.sqlite3` |
 
 The cache database stores Discogs/Beatport enrichment results, audio analysis output, and broker session tokens. It is safe to delete at any time — data will be re-fetched or re-analyzed on next use.
+
+## Advanced
+
+| Variable                              | Description                                        | Default    |
+| ------------------------------------- | -------------------------------------------------- | ---------- |
+| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS` | Minimum interval between Beatport requests (ms)    | `1000`     |
+| `REKLAWDBOX_CORPUS_PATH`              | Path to the Rekordbox knowledge corpus manifest    | `docs/rekordbox/manifest.yaml` |
+
+These are internal tuning knobs. The Beatport interval controls rate limiting — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
 
 ## Deprecated (legacy Discogs direct auth)
 

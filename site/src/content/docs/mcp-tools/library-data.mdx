@@ -49,7 +49,7 @@ Factory sample tracks are excluded by default. Set `include_samples: true` to in
 
 ### `get_track`
 
-Get full details for a single track by ID. Returns all Rekordbox metadata fields plus any cached enrichment and audio analysis data.
+Get full details for a single track by ID. Returns Rekordbox metadata fields only — no enrichment or audio analysis data. Use `resolve_track_data` to also retrieve cached enrichment and audio analysis data.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -122,6 +122,10 @@ Report enrichment and audio cache completeness for a track scope. Accepts [share
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | | Specific track IDs |
 | `playlist_id` | string | | Check tracks in this playlist |
-| `max_tracks` | integer | | Max tracks to check (default: `200`) |
+| `max_tracks` | integer | | Max tracks to check (default: unbounded) |
 
 Returns: total tracks in scope, per-provider cached counts and percentages, and gap counts (tracks missing audio analysis, enrichment, or all data).
+
+<Aside type="caution">
+  Cache coverage counts any cached entry — including "no match" and error results from Discogs/Beatport. A high coverage percentage does not guarantee usable enrichment data for every track. Use `resolve_tracks_data` to inspect actual match quality before relying on coverage numbers.
+</Aside>

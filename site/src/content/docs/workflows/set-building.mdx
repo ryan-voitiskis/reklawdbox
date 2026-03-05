@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Steps, Card, CardGrid } from '@astrojs/starlight/components';
 
-Build ordered tracklists for DJ sets using cached audio analysis and enrichment data. The agent scores transitions across 6 axes (key, BPM, energy, genre, brightness, rhythm), sequences tracks using greedy heuristics, and presents multiple candidates for you to compare and refine.
+Build ordered tracklists for DJ sets using cached audio analysis and enrichment data. The agent scores transitions across 6 axes (key, BPM, energy, genre, brightness, rhythm), sequences tracks using beam search, and presents multiple candidates for you to compare and refine.
 
 <Aside type="note">
   Set building is read-only — it never modifies track metadata. It only creates playlist orderings exported as XML.
@@ -65,7 +65,7 @@ Build ordered tracklists for DJ sets using cached audio analysis and enrichment 
 
 <Steps>
 
-1. The agent calls `build_set` to generate 2-3 candidate tracklists.
+1. The agent calls `build_set` to generate candidate tracklists. The number of candidates depends on the `beam_width` parameter (default 3, max 8) — higher values explore more paths and may produce more distinct orderings.
 
 2. Each candidate includes:
    - Full track list with key, BPM, genre, and energy for each track
@@ -103,8 +103,8 @@ Once you pick a candidate, you can edit it interactively:
 
 After each edit:
 - Adjacent transitions are re-scored automatically
-- The agent calls `suggest` to recommend the best replacement if you remove a track without specifying one
-- Run `check` to re-display the full set with updated scores and energy curve
+- The agent can call `query_transition_candidates` to recommend the best replacement if you remove a track without specifying one
+- The agent can call `score_transition` to re-display the full set with updated scores and energy curve
 
 Iterate until you are satisfied with the flow. There is no limit on the number of edits — the agent re-scores instantly since all data is cached.
 

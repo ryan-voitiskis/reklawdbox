@@ -39,9 +39,9 @@ These live in the same directory as `master.db`.
 
 ### "Discogs auth is not configured"
 
-**Cause:** `REKLAWDBOX_DISCOGS_BROKER_URL` is not set in your MCP host config.
+**Cause:** Neither broker auth nor legacy credentials are available. This should not occur with default configuration — the broker URL and token have compiled-in defaults pointing to the production broker. The most likely cause is overriding `REKLAWDBOX_DISCOGS_BROKER_URL` with an invalid URL in your MCP config.
 
-**Fix:** Add both `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` to your MCP config environment variables. See [Getting Started](/getting-started/) for the full config example.
+**Fix:** Remove any custom `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` overrides from your MCP config to use the built-in defaults. If you are self-hosting a broker, verify the URL is valid and includes the scheme (e.g., `https://`).
 
 ### "Discogs sign-in is still pending"
 

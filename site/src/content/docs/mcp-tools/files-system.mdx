@@ -30,7 +30,7 @@ Read metadata tags from audio files.
 | `include_cover_art` | boolean | | Include cover art metadata (default: `false`) |
 | `limit` | integer | | Max files to read (default: `200`, max: `2000`) |
 
-Provide at least one of `paths`, `track_ids`, or `directory`.
+Provide **exactly one** of `paths`, `track_ids`, or `directory`. Passing multiple selectors or none returns an error.
 
 ---
 
@@ -105,7 +105,7 @@ Scan a directory tree for convention violations.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `operation` | string | **yes** | `"scan"` |
-| `scope` | string | **yes** | Directory path to audit |
+| `scope` | string | **yes** | Directory path to audit (must not be empty or root `/`) |
 | `revalidate` | boolean | | Re-read all files including unchanged (default: `false`) |
 | `skip_issue_types` | string[] | | Issue types to exclude (e.g., `["GENRE_SET"]`) |
 
@@ -120,7 +120,7 @@ Query detected issues from a previous scan.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `operation` | string | **yes** | `"query_issues"` |
-| `scope` | string | **yes** | Directory path prefix to filter |
+| `scope` | string | **yes** | Directory path prefix to filter (must not be empty or root `/`) |
 | `status` | string | | `"open"`, `"resolved"`, `"accepted"`, `"deferred"` |
 | `issue_type` | string | | Filter by issue type |
 | `limit` | integer | | Max results (default: `100`) |
@@ -144,7 +144,7 @@ Get an audit summary with issue counts by type and status.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `operation` | string | **yes** | `"get_summary"` |
-| `scope` | string | **yes** | Directory path prefix |
+| `scope` | string | **yes** | Directory path prefix (must not be empty or root `/`) |
 
 ---
 

@@ -73,7 +73,7 @@ Preview all staged changes, showing a diff from the current Rekordbox state.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `track_ids` | string[] | | Filter to specific track IDs (empty = all staged) |
+| `track_ids` | string[] | | Filter to specific track IDs (omit to show all staged; an empty array matches nothing) |
 
 ---
 
@@ -95,6 +95,10 @@ Each playlist object:
 
 When there are no staged changes and no playlists, the response includes `"message": "No changes to write."` and no file is created.
 
+<Aside type="caution">
+  On successful export, `write_xml` **drains all staged changes** — including changes unrelated to the playlists being exported. If the export fails, staged changes are restored. If you have pending metadata edits from a different workflow, use `preview_changes` to review them before calling `write_xml`, or use `clear_changes` to discard unwanted staged changes first.
+</Aside>
+
 <Aside type="note">
   After export, import in Rekordbox via **File > Import > Import Playlist/Collection**, then drag tracks from the XML node into your collection. See [XML Export reference](/reference/xml-export/) for the full import workflow.
 </Aside>
@@ -107,5 +111,5 @@ Clear staged changes, either entirely or selectively by track or field.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `track_ids` | string[] | | Track IDs to clear (empty = clear all) |
-| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"` (empty = all) |
+| `track_ids` | string[] | | Track IDs to clear (omit to clear all; an empty array clears nothing) |
+| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"` (omit to clear all fields on matched tracks) |

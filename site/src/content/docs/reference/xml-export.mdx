@@ -54,19 +54,24 @@ These are the fields reklawdbox actively writes when you use tools like `write_x
 - **Rating** — star rating (1-5), converted to XML values automatically
 - **Colour** — track color label
 
-### Pass-through fields
+### Other track fields
 
-All other track fields are read from the database and passed through unchanged:
+These fields are read from the database and included in the export:
 
-- Title, artist, album, composer, remixer, label
+- Title, artist, album, remixer, label, year
 - Key (Tonality), BPM (AverageBpm)
-- File location (Location)
+- File location (Location), file kind, bit rate, sample rate
+- Play count, date added, total time
 
-### Preserved structures
+The following fields are **hardcoded to defaults** and not read from the database: Composer (`""`), Grouping (`""`), Mix (`""`), Size (`0`), DiscNumber (`0`), TrackNumber (`0`).
 
-- **TEMPO** elements — beat grid data
-- **POSITION_MARK** elements — cue points, memory cues, loops
-- **Playlists** — included when `build_set` exports a set ordering
+### Playlists
+
+Playlist structures are included when `build_set` exports a set ordering or when `write_xml` is called with the `playlists` parameter.
+
+<Aside type="caution">
+  reklawdbox emits self-closing `<TRACK .../>` elements with metadata attributes only. **TEMPO** (beat grids) and **POSITION_MARK** (cue points, memory cues, loops) child elements are **not** included in the export. These are preserved in the Rekordbox database and are not affected by XML reimport, but they will not appear in the exported XML file.
+</Aside>
 
 ---
 
@@ -106,18 +111,23 @@ When you export from reklawdbox and reimport into Rekordbox, some data is preser
 ### Preserved
 
 - Genre, Comments, Rating, Colour
-- Track title, artist, album, composer, remixer, label
+- Track title, artist, album, remixer, label
 - Key, BPM
-- Cue points (memory cues and hot cues) and beat grids
 - Playlist structure and track ordering
 
-### Not preserved
+### Not included in export
 
+- Cue points, memory cues, hot cues, and beat grids (TEMPO / POSITION_MARK elements)
+- Composer, Grouping, Mix, Size, DiscNumber, TrackNumber (hardcoded to defaults)
 - My Tags
-- Hot Cue Banks (the bank assignments, not the cues themselves)
+- Hot Cue Banks
 - Phrase analysis
 - Smart playlist criteria
 - Waveform data (stored in ANLZ files, not in XML)
+
+<Aside type="note">
+  Cue points and beat grids are stored in the Rekordbox database and ANLZ files. They are not lost — they just are not included in the reklawdbox XML export. Reimporting the XML does not overwrite or remove existing cues or beat grids.
+</Aside>
 
 ---
 
@@ -165,13 +175,11 @@ reklawdbox reads Camelot from the database and converts to classic notation when
 
 ## Backup behavior
 
-reklawdbox automatically creates a database backup before `write_xml` exports. Backups are stored at:
+Before `write_xml` exports, reklawdbox looks for an optional backup script. It checks (in order): the `REKLAWDBOX_BACKUP_SCRIPT` environment variable, then `scripts/backup.sh`, then `backup.sh` in the working directory. If a script is found, it runs synchronously before export. If no script exists, `write_xml` proceeds without a backup step.
 
-```
-~/Library/Pioneer/rekordbox-backups/
-```
+The backup script receives a `--pre-op` argument. Failures are logged as warnings but do not block the export.
 
-This is a safety net — if an import goes wrong, you can restore from the backup. Configure the backup script path with the `REKLAWDBOX_BACKUP_SCRIPT` [environment variable](/reference/environment-variables/).
+Configure a custom script path with the `REKLAWDBOX_BACKUP_SCRIPT` [environment variable](/reference/environment-variables/).
 
 ---
 

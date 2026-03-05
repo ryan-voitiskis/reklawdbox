@@ -9,7 +9,7 @@ import { Aside, Steps, Tabs, Card, CardGrid } from '@astrojs/starlight/component
 
 ## System overview
 
-reklawdbox is a single Rust binary (~8.5 MB, arm64). It runs as an MCP server communicating with your host (Claude Code, Claude Desktop, Codex) over stdio. Everything ships in one binary — no runtime dependencies except an optional Python venv for Essentia.
+reklawdbox is a single Rust binary (arm64). It runs as an MCP server communicating with your host (Claude Code, Claude Desktop, Codex) over stdio. Everything ships in one binary — no runtime dependencies except an optional Python venv for Essentia.
 
 Key components:
 
@@ -98,7 +98,7 @@ stratum-dsp is a Rust library embedded directly in the reklawdbox binary. It pro
 - **BPM detection** — tempo estimation from audio
 - **Key detection** — musical key mapped to Camelot notation
 
-stratum-dsp runs on every `analyze_track_audio` call. No setup required.
+stratum-dsp runs on `analyze_track_audio` calls when results are not already cached. No setup required.
 
 ### Essentia (optional, Python subprocess)
 
@@ -128,6 +128,7 @@ reklawdbox has additional modes beyond the MCP server. The binary supports these
 | Subcommand | Purpose |
 |------------|---------|
 | *(default)* | Start the MCP server (stdio). This is what your MCP host launches. |
+| `hydrate` | Batch enrichment (Discogs, Beatport) and audio analysis across your library. |
 | `analyze` | Batch audio analysis with filters. Analyze your entire collection or a filtered subset without going through MCP. |
 | `read-tags` | Read native file tags (ID3, Vorbis, etc.) from audio files. |
 | `write-tags` | Write native file tags to audio files. |
