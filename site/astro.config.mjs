@@ -11,6 +11,12 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'reklawdbox Docs',
+      logo: {
+        src: './src/assets/logo.png',
+        alt: 'reklawdbox',
+      },
+      favicon: '/favicon.png',
+      customCss: ['./src/styles/custom.css'],
       social: [{
         icon: 'github',
         label: 'GitHub',
