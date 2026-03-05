@@ -1,0 +1,165 @@
+---
+title: Mixing & Sequencing
+description: Tools for scoring transitions between tracks and building optimized DJ set sequences.
+sidebar:
+  order: 4
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+import CamelotWheel from '../../../components/CamelotWheel.astro';
+import EnergyCurves from '../../../components/EnergyCurves.astro';
+import PriorityWeights from '../../../components/PriorityWeights.astro';
+
+These three tools are the core of reklawdbox's DJ mixing intelligence. They use a six-axis scoring system that evaluates transitions across key, BPM, energy, genre, brightness, and rhythm — then combines these into a weighted composite score.
+
+## How transition scoring works
+
+Every transition is scored on six axes, each producing a value from 0.0 (clash) to 1.0 (perfect match):
+
+| Axis | What it measures | Source |
+|:-----|:-----------------|:-------|
+| **Key** | Camelot wheel distance | stratum-dsp |
+| **BPM** | Tempo delta as percentage | stratum-dsp / Rekordbox |
+| **Energy** | Whether energy direction matches the set's phase | Essentia (fallback: BPM proxy) |
+| **Genre** | Same genre or genre family | Genre taxonomy |
+| **Brightness** | Spectral centroid delta | Essentia |
+| **Rhythm** | Rhythm regularity delta | Essentia |
+
+The composite score is a weighted average. Weights depend on the **priority mode**:
+
+<PriorityWeights />
+
+When Essentia data is unavailable, the brightness and rhythm axes are excluded and remaining weights are renormalized.
+
+### Key compatibility
+
+Key scoring uses the Camelot wheel — a circular mapping of all 24 musical keys where adjacent positions are harmonically compatible:
+
+<CamelotWheel />
+
+| Relationship | Score | Example |
+|:-------------|:-----:|:--------|
+| Same key | 1.0 | 8A &rarr; 8A |
+| Adjacent &plusmn;1, same letter | 0.9 | 8A &rarr; 9A |
+| Same number, A&harr;B | 0.8 | 8A &rarr; 8B |
+| &plusmn;1, different letter | 0.55 | 8A &rarr; 9B |
+| &plusmn;2, same letter | 0.45 | 8A &rarr; 10A |
+| Everything else | 0.1 | Clash |
+
+The **harmonic style** parameter gates which transitions are allowed:
+
+| Style | Minimum key score | Effect |
+|:------|:-----------------:|:-------|
+| `conservative` | 0.8 | Only same-key and adjacent — pure harmonic mixing |
+| `balanced` | 0.45 | Allows mood shifts and &plusmn;2 — good default |
+| `adventurous` | 0.1 (build/peak), 0.45 (warmup/release) | Opens up during high-energy phases |
+
+### BPM scoring
+
+BPM compatibility uses an exponential decay based on the percentage delta:
+
+```
+score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
+```
+
+| Delta % | Score | Label |
+|:-------:|:-----:|:------|
+| &lt;2% | ~1.0 | Seamless |
+| 2-4% | ~0.8 | Comfortable pitch adjust |
+| 4-6% | ~0.5 | Noticeable |
+| 6-9% | ~0.3 | Creative transition needed |
+| &ge;9% | &lt;0.2 | Jarring |
+
+### Energy curves
+
+When building a set, each position is assigned an **energy phase**. The energy axis rewards transitions that match the expected direction for that phase.
+
+<EnergyCurves />
+
+| Phase | Expected direction | Ideal delta |
+|:------|:-------------------|:------------|
+| **Warmup** | Stable or slight rise | -0.03 to +0.12 |
+| **Build** | Rising energy | &ge; +0.03 |
+| **Peak** | High and stable | Track energy &ge; 0.65, &vert;delta&vert; &le; 0.10 |
+| **Release** | Dropping energy | &le; -0.03 |
+
+For the full scoring math, see the [Transition Scoring reference](/reference/transition-scoring/).
+
+---
+
+## `score_transition`
+
+Score a single transition between two tracks across all six axes plus a weighted composite.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `from_track_id` | string | **yes** | Source track ID |
+| `to_track_id` | string | **yes** | Destination track ID |
+| `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
+| `priority` | string | | `"balanced"`, `"harmonic"`, `"energy"`, `"genre"` |
+| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
+| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
+
+When `master_tempo` is `false`, the scorer accounts for pitch shift from BPM adjustment when evaluating key compatibility — a track sped up by 3% shifts its effective key by approximately 0.5 semitones.
+
+---
+
+## `query_transition_candidates`
+
+Rank pool tracks as transition candidates from a reference track. Returns a scored list sorted by composite score, making it easy to find the best next track.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `from_track_id` | string | **yes** | Source track to transition from |
+| `pool_track_ids` | string[] | | Pool of candidate track IDs to rank |
+| `playlist_id` | string | | Use a playlist as the candidate pool |
+| `target_bpm` | number | | Target BPM — scores how well each candidate fits |
+| `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
+| `priority` | string | | `"balanced"`, `"harmonic"`, `"energy"`, `"genre"` |
+| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
+| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
+| `limit` | integer | | Max results (default: `10`, max: `50`) |
+
+Provide either `pool_track_ids` or `playlist_id` to define the candidate pool.
+
+---
+
+## `build_set`
+
+Generate candidate DJ set sequences from a track pool using beam search with energy-curve shaping.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | **yes** | Pool of candidate track IDs (pre-filtered) |
+| `target_tracks` | integer | **yes** | Desired number of tracks per candidate set |
+| `priority` | string | | Weight axis (default: `"balanced"`) |
+| `energy_curve` | string or array | | Preset name or custom phase array (default: `"warmup_build_peak_release"`) |
+| `start_track_id` | string | | Force a specific opening track |
+| `beam_width` | integer | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`) |
+| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
+| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
+| `bpm_drift_pct` | number | | Max BPM drift from start track as % (default: `6.0`) |
+| `bpm_range` | number[] | | `[start_bpm, end_bpm]` — plans a BPM trajectory across the set |
+
+<Aside type="note">
+  The `candidates` parameter is deprecated — use `beam_width` instead. Both control how many paths are explored, but `beam_width` better describes the beam search algorithm.
+</Aside>
+
+**Energy curve presets:** `"warmup_build_peak_release"` (default), `"flat"`, `"peak_only"`. Pass a custom array of phase strings for full control (e.g., `["warmup", "build", "build", "peak", "peak", "release"]`).
+
+**BPM trajectory:** When `bpm_range` is set (e.g., `[126, 134]`), the builder plans a BPM arc across the set and outputs per-track `play_at_bpm`, `pitch_adjustment_pct`, and `effective_key` values.
+
+Returns candidate sequences with per-transition scores, overall set score, and estimated total duration.
+
+### Quality gates
+
+Generated sets are evaluated against quality thresholds:
+
+| Metric | Threshold | Description |
+|:-------|:---------:|:------------|
+| Mean composite | &ge; 0.65 | Average transition score |
+| Min composite | &ge; 0.30 | Worst individual transition |
+| Composite variance | &le; 0.08 | Consistency across transitions |
+| Harmonic coherence | &ge; 50% | Fraction of transitions with key &ge; 0.8 |
+| Energy fidelity | &ge; 40% | Fraction of transitions with perfect energy |
+| Max pitch adjustment | &le; 8% | Maximum BPM deviation across set |

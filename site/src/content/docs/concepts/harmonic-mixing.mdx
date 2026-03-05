@@ -6,6 +6,9 @@ sidebar:
 ---
 
 import { Aside, Card, CardGrid, Badge } from '@astrojs/starlight/components';
+import CamelotWheel from '../../../components/CamelotWheel.astro';
+import PriorityWeights from '../../../components/PriorityWeights.astro';
+import EnergyCurves from '../../../components/EnergyCurves.astro';
 
 Harmonic mixing means mixing tracks in compatible musical keys so transitions sound smooth instead of dissonant. reklawdbox automates this using the Camelot wheel and extends it with multi-axis scoring that accounts for BPM, energy, genre, brightness, and rhythm.
 
@@ -15,22 +18,7 @@ The Camelot system maps all 24 musical keys (12 pitches x 2 modes) to a numbered
 
 Adjacent positions on the wheel are harmonically compatible. Moving clockwise or counterclockwise by one position (same letter) shifts the key by a perfect fifth — the most natural-sounding key change.
 
-### Full Camelot mapping
-
-| Classic Key | Camelot | Classic Key | Camelot |
-|:-----------:|:-------:|:-----------:|:-------:|
-| G#m / Abm | 1A | B | 1B |
-| Ebm / D#m | 2A | Gb / F# | 2B |
-| Bbm / A#m | 3A | Db / C# | 3B |
-| Fm | 4A | Ab / G# | 4B |
-| Cm | 5A | Eb / D# | 5B |
-| Gm | 6A | Bb / A# | 6B |
-| Dm | 7A | F | 7B |
-| Am | 8A | C | 8B |
-| Em | 9A | G | 9B |
-| Bm | 10A | D | 10B |
-| F#m / Gbm | 11A | A | 11B |
-| C#m / Dbm | 12A | E | 12B |
+<CamelotWheel />
 
 <Aside type="note">
   Rekordbox lets you display keys in either Classic notation (Am, C) or Camelot notation (8A, 8B) — it is a user preference in the settings. reklawdbox always uses Camelot internally for scoring, regardless of display format.
@@ -45,8 +33,8 @@ reklawdbox scores key transitions on a 0-1 scale based on the relationship betwe
 | Same key | 1.0 | 6A to 6A | Perfect |
 | +/-1, same letter | 0.9 | 6A to 7A | Energy boost / drop |
 | Same number, A to B | 0.8 | 6A to 6B | Mood shift |
-| +/-2, same letter | 0.5 | 6A to 8A | Acceptable |
-| +/-1, different letter | 0.4 | 6A to 7B | Rough |
+| +/-1, different letter | 0.55 | 6A to 7B | Energy diagonal |
+| +/-2, same letter | 0.45 | 6A to 8A | Extended |
 | Everything else | 0.1 | — | Clash |
 
 The wheel wraps: 12A to 1A is a +1 move (adjacent), not an 11-step jump.
@@ -72,12 +60,7 @@ Each axis produces a score from 0 to 1. The composite score is a weighted averag
 
 ### Priority modes
 
-| Mode | Key | BPM | Energy | Genre | Brightness | Rhythm |
-|:-----|:---:|:---:|:------:|:-----:|:----------:|:------:|
-| **Balanced** | 0.30 | 0.20 | 0.18 | 0.17 | 0.08 | 0.07 |
-| **Harmonic** | 0.48 | 0.18 | 0.12 | 0.08 | 0.08 | 0.06 |
-| **Energy** | 0.12 | 0.18 | 0.42 | 0.12 | 0.08 | 0.08 |
-| **Genre** | 0.18 | 0.18 | 0.12 | 0.38 | 0.08 | 0.06 |
+<PriorityWeights />
 
 <Aside type="tip">
   When brightness and rhythm data are unavailable (no Essentia analysis), those axes are excluded and the remaining weights are renormalized. The scoring still works — it is just less precise.
@@ -85,17 +68,21 @@ Each axis produces a score from 0 to 1. The composite score is a weighted averag
 
 ### BPM scoring detail
 
-| BPM delta | Score | Label |
-|:---------:|:-----:|:------|
-| 0-2 | 1.0 | Seamless |
-| 2-4 | 0.8 | Comfortable pitch adjust |
-| 4-6 | 0.5 | Noticeable |
-| 6-8 | 0.3 | Needs creative transition |
-| 8+ | 0.1 | Likely jarring |
+BPM compatibility uses an exponential decay: `score = exp(-0.019 * pct^2)` where `pct` is the percentage delta between the two BPMs.
+
+| Delta % | Score | Label |
+|:-------:|:-----:|:------|
+| &lt;2% | ~1.0 | Seamless |
+| 2-4% | ~0.8 | Comfortable pitch adjust |
+| 4-6% | ~0.5 | Noticeable |
+| 6-9% | ~0.3 | Creative transition needed |
+| &ge;9% | &lt;0.2 | Jarring |
 
 ## Energy curves
 
 When building a set with `build_set`, reklawdbox shapes the energy arc across the entire sequence. Each position in the set is assigned an **energy phase**, and the energy axis scoring rewards transitions that match the expected direction for that phase.
+
+<EnergyCurves />
 
 ### Phases
 
@@ -120,9 +107,9 @@ When building a set with `build_set`, reklawdbox shapes the energy arc across th
 
 `score_transition` computes the full six-axis score between two tracks. It does not require an energy curve — it scores a single pair in isolation.
 
-`build_set` uses a greedy algorithm: starting from a seed track, it scores every remaining candidate and picks the best composite match for the current phase. This repeats until the set reaches the target length.
+`build_set` uses beam search: starting from a seed track, it explores multiple candidate paths in parallel (controlled by `beam_width`), scoring each transition against the current energy phase. A beam width of 1 is pure greedy; higher values explore more options at the cost of compute time.
 
-The greedy approach means `build_set` does not guarantee a globally optimal sequence, but it produces good results quickly and generates multiple candidate plans (with slight variation) so you can pick the one you prefer.
+Beam search does not guarantee a globally optimal sequence, but it produces strong results quickly and generates multiple candidate orderings so you can pick the one you prefer.
 
 For the full scoring math and all parameter options, see the [Transition Scoring reference](/reference/transition-scoring/).
 

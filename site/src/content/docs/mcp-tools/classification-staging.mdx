@@ -1,0 +1,111 @@
+---
+title: Classification & Staging
+description: Tools for reviewing genre taxonomy, staging metadata changes, previewing diffs, and exporting to Rekordbox XML.
+sidebar:
+  order: 3
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+## Genre tools
+
+---
+
+### `get_genre_taxonomy` <Badge text="no params" variant="note" />
+
+Returns the configured genre taxonomy: the canonical genre list and alias mappings used for normalization suggestions. The taxonomy contains 45+ genres optimized for DJ mixing contexts.
+
+---
+
+### `suggest_normalizations`
+
+Analyze genres in your library and suggest normalizations to the canonical taxonomy.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `min_count` | integer | | Only include genres with at least this many tracks (default: `1`) |
+
+Returns three sections:
+
+- **`alias`** — known mappings from your genre strings to canonical genres (e.g., "Tech House" &rarr; "Tech House")
+- **`unknown`** — genres that don't match any alias or canonical entry
+- **`canonical`** — genres that already match the taxonomy exactly
+
+---
+
+## Staging tools
+
+reklawdbox never writes to the Rekordbox database directly. Changes are staged in memory and exported as Rekordbox-compatible XML for reimport. This gives you a chance to review every change before it touches your library.
+
+```
+update_tracks ──> preview_changes ──> write_xml ──> import in Rekordbox
+                       │
+                  clear_changes (undo)
+```
+
+---
+
+### `update_tracks`
+
+Stage changes to track metadata. Changes are held in memory until exported with `write_xml` or cleared with `clear_changes`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `changes` | array | **yes** | Array of track change objects |
+
+Each change object:
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `track_id` | string | **yes** | Track ID |
+| `genre` | string | | New genre |
+| `comments` | string | | New comments |
+| `rating` | integer | | Star rating (1-5) |
+| `color` | string | | Color name |
+
+You can stage changes for multiple tracks in one call. Calling `update_tracks` again for the same track **merges** fields — only the specified fields are overwritten, existing staged fields are preserved.
+
+---
+
+### `preview_changes`
+
+Preview all staged changes, showing a diff from the current Rekordbox state.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Filter to specific track IDs (empty = all staged) |
+
+---
+
+### `write_xml`
+
+Export staged changes to a Rekordbox-compatible XML file. Optionally include playlist definitions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `output_path` | string | | Output path (default: `./rekordbox-exports/reklawdbox-{timestamp}.xml`) |
+| `playlists` | array | | Optional playlist exports |
+
+Each playlist object:
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `name` | string | **yes** | Playlist name |
+| `track_ids` | string[] | **yes** | Track IDs in playlist order |
+
+When there are no staged changes and no playlists, the response includes `"message": "No changes to write."` and no file is created.
+
+<Aside type="note">
+  After export, import in Rekordbox via **File > Import > Import Playlist/Collection**, then drag tracks from the XML node into your collection. See [XML Export reference](/reference/xml-export/) for the full import workflow.
+</Aside>
+
+---
+
+### `clear_changes`
+
+Clear staged changes, either entirely or selectively by track or field.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Track IDs to clear (empty = clear all) |
+| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"` (empty = all) |

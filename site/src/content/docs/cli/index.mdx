@@ -1,0 +1,256 @@
+---
+title: CLI Commands
+description: Standalone command-line tools for batch operations, file tag management, and cover art.
+sidebar:
+  order: 0
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+The reklawdbox binary serves double duty: without arguments it starts the MCP server, but with a subcommand it runs as a standalone CLI tool. CLI commands are useful for batch operations that run unattended — especially `hydrate`, which can warm caches overnight.
+
+```bash
+# MCP server mode (default, launched by your MCP host)
+reklawdbox
+
+# CLI mode
+reklawdbox <command> [options]
+```
+
+CLI commands load environment variables from `.mcp.json` automatically, so they share the same configuration as the MCP server without needing duplicate shell exports.
+
+---
+
+## `hydrate`
+
+Batch enrichment + audio analysis across your entire library or a filtered subset. This is the recommended way to warm caches before classification or set-building sessions.
+
+```bash
+reklawdbox hydrate [options]
+```
+
+| Flag | Short | Type | Default | Description |
+|------|:-----:|------|---------|-------------|
+| `--providers` | | list | `discogs,beatport,analysis` | Comma-separated provider list |
+| `--playlist` | | string | | Filter by playlist ID |
+| `--artist` | | string | | Filter by artist (partial match) |
+| `--genre` | | string | | Filter by genre (partial match) |
+| `--bpm-min` | | number | | Minimum BPM |
+| `--bpm-max` | | number | | Maximum BPM |
+| `--key` | | string | | Filter by musical key |
+| `--label` | | string | | Filter by label (partial match) |
+| `--path` | | string | | Filter by file path (partial match) |
+| `--query` | | string | | Search query matching title or artist |
+| `--added-after` | | date | | ISO date — tracks added on or after |
+| `--added-before` | | date | | ISO date — tracks added on or before |
+| `--rating-min` | | 1-5 | | Minimum star rating |
+| `--max-tracks` | | integer | unlimited | Cap number of tracks to process |
+| `--no-retry-errors` | | flag | | Don't retry previously-errored enrichments |
+| `--concurrency` | `-j` | integer | `4` | Enrichment concurrency (min `1`, max `16`) |
+| `--yes` | `-y` | flag | | Skip confirmation prompt |
+
+### What it does
+
+1. **Discovers tracks** using your filters, then pre-filters by cache status per provider
+2. **Shows a summary** with cache/pending/error counts and time estimates
+3. **Prompts for confirmation** (skip with `-y`)
+4. **Runs all three providers concurrently:**
+   - **Discogs** — configurable concurrency (default 4), device-auth flow if session expired
+   - **Beatport** — serial (1 req/s rate limit), retries on 429/5xx
+   - **Audio analysis** — auto-scaled to ~80% CPU (`cpus - 2`, min 2, max 16)
+5. **Progress bars** with per-provider status counters, updated every 500ms
+6. **Graceful Ctrl+C** — cancels new work but waits for in-flight tasks to finish
+
+### Discogs authentication
+
+If a Discogs session is needed, hydrate starts a device-auth flow:
+1. Opens the authorization URL in your browser
+2. Polls the broker until you approve
+3. Stores the session token (persists across runs)
+
+### Examples
+
+```bash
+# Hydrate everything (Discogs + Beatport + audio analysis)
+reklawdbox hydrate
+
+# Just audio analysis, 8 concurrent
+reklawdbox hydrate --providers analysis -j 8
+
+# Hydrate a specific playlist, skip confirmation
+reklawdbox hydrate --playlist "Weekend Set" -y
+
+# Only Discogs, only tracks added this year
+reklawdbox hydrate --providers discogs --added-after 2026-01-01
+
+# Only Discogs for a specific genre
+reklawdbox hydrate --providers discogs --genre "Techno"
+```
+
+<Aside type="tip">
+  Run `hydrate` overnight to warm your caches. A library of 1,000 tracks takes roughly 30-60 minutes for Discogs + Beatport enrichment and 45-90 minutes for audio analysis, depending on concurrency and file sizes.
+</Aside>
+
+---
+
+## `analyze`
+
+Batch audio analysis using stratum-dsp and optional Essentia. A focused alternative to `hydrate --providers analysis` with additional control over analysis backends.
+
+```bash
+reklawdbox analyze [options]
+```
+
+| Flag | Short | Type | Default | Description |
+|------|:-----:|------|---------|-------------|
+| `--playlist` | | string | | Filter by playlist ID |
+| `--artist` | | string | | Filter by artist (partial match) |
+| `--genre` | | string | | Filter by genre (partial match) |
+| `--bpm-min` | | number | | Minimum BPM |
+| `--bpm-max` | | number | | Maximum BPM |
+| `--key` | | string | | Filter by musical key |
+| `--label` | | string | | Filter by label (partial match) |
+| `--path` | | string | | Filter by file path (partial match) |
+| `--query` | | string | | Search query matching title or artist |
+| `--added-after` | | date | | ISO date |
+| `--added-before` | | date | | ISO date |
+| `--rating-min` | | 1-5 | | Minimum star rating |
+| `--max-tracks` | | integer | `200` | Max tracks to process |
+| `--no-skip-cached` | | flag | | Re-analyze already-cached tracks |
+| `--stratum-only` | | flag | | Skip Essentia, run stratum-dsp only |
+| `--concurrency` | `-j` | integer | auto | Concurrent analyses (min `2`, max `16`) |
+
+Default concurrency is `cpus - 2` (clamped to [2, 16]). Cache validation checks file size and modification time — changed files are automatically re-analyzed.
+
+### Example
+
+```bash
+# Analyze all techno tracks, stratum-dsp only, 4 concurrent
+reklawdbox analyze --genre Techno --stratum-only -j 4
+```
+
+---
+
+## `read-tags`
+
+Read native metadata tags from audio files.
+
+```bash
+reklawdbox read-tags <paths...> [options]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `<paths>` | string[] | required | Audio files or directories |
+| `--fields` | list | all | Comma-separated field filter |
+| `--cover-art` | flag | | Include cover art metadata |
+| `--json` | flag | | Output as JSON (JSONL for multiple files) |
+
+Directories are scanned for audio files (single level). Human-readable output groups tags by format and section. WAV files show both ID3v2 and RIFF INFO layers with a note about any fields missing from RIFF INFO.
+
+### Example
+
+```bash
+# Read all tags from a file
+reklawdbox read-tags ~/Music/track.flac
+
+# JSON output, only artist and title
+reklawdbox read-tags ~/Music/*.flac --fields artist,title --json
+```
+
+---
+
+## `write-tags`
+
+Write or delete metadata tags on an audio file.
+
+```bash
+reklawdbox write-tags <path> [options]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `<path>` | string | required | Audio file to write to |
+| `--artist` | string | | Set artist |
+| `--title` | string | | Set title |
+| `--album` | string | | Set album |
+| `--album-artist` | string | | Set album artist |
+| `--genre` | string | | Set genre |
+| `--year` | string | | Set year |
+| `--track` | string | | Set track number |
+| `--disc` | string | | Set disc number |
+| `--comment` | string | | Set comment |
+| `--publisher` | string | | Set publisher |
+| `--bpm` | string | | Set BPM |
+| `--key` | string | | Set musical key |
+| `--composer` | string | | Set composer |
+| `--remixer` | string | | Set remixer |
+| `--dry-run` | flag | | Preview changes without writing |
+| `--wav-targets` | list | both | WAV targets: `id3v2`, `riff_info` |
+| `--json-input` | flag | | Read tags from stdin as JSON |
+| `--json` | flag | | Output as JSON |
+
+Set a field to an empty string (`""`) to **delete** it. Use `--dry-run` to preview changes before committing.
+
+### Examples
+
+```bash
+# Set genre and preview
+reklawdbox write-tags track.flac --genre "Techno" --dry-run
+
+# Delete the comment field
+reklawdbox write-tags track.flac --comment ""
+
+# Batch update via JSON stdin
+echo '{"artist": "Artist", "genre": "House"}' | reklawdbox write-tags track.flac --json-input
+
+# Write to specific WAV layers
+reklawdbox write-tags track.wav --artist "Artist" --wav-targets riff_info
+```
+
+---
+
+## `extract-art`
+
+Extract embedded cover art from an audio file.
+
+```bash
+reklawdbox extract-art <path> [options]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `<path>` | string | required | Audio file |
+| `--output` | string | `cover.{ext}` | Output path |
+| `--picture-type` | string | `front_cover` | Picture type to extract |
+| `--json` | flag | | Output as JSON |
+
+### Example
+
+```bash
+reklawdbox extract-art track.flac --output artwork.jpg
+```
+
+---
+
+## `embed-art`
+
+Embed cover art into one or more audio files.
+
+```bash
+reklawdbox embed-art <image> <targets...> [options]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `<image>` | string | required | Image file (JPEG or PNG) |
+| `<targets>` | string[] | required | Audio files to embed into |
+| `--picture-type` | string | `front_cover` | Picture type |
+| `--json` | flag | | Output as JSON |
+
+### Example
+
+```bash
+# Embed cover art into multiple files
+reklawdbox embed-art cover.jpg track1.flac track2.flac track3.flac
+```

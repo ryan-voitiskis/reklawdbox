@@ -1,0 +1,181 @@
+---
+const cx = 220;
+const cy = 220;
+
+const aR1 = 68;   // A ring inner
+const aR2 = 116;  // A ring outer
+const bR1 = 124;  // B ring inner
+const bR2 = 172;  // B ring outer
+const gapDeg = 1.2;
+
+const positions = [
+  { n: 1,  minor: 'G\u266Fm', major: 'B',   color: '#ef4444' },
+  { n: 2,  minor: 'E\u266Dm', major: 'F\u266F',  color: '#f97316' },
+  { n: 3,  minor: 'B\u266Dm', major: 'D\u266D',  color: '#eab308' },
+  { n: 4,  minor: 'Fm',  major: 'A\u266D',  color: '#84cc16' },
+  { n: 5,  minor: 'Cm',  major: 'E\u266D',  color: '#22c55e' },
+  { n: 6,  minor: 'Gm',  major: 'B\u266D',  color: '#14b8a6' },
+  { n: 7,  minor: 'Dm',  major: 'F',   color: '#06b6d4' },
+  { n: 8,  minor: 'Am',  major: 'C',   color: '#3b82f6' },
+  { n: 9,  minor: 'Em',  major: 'G',   color: '#6366f1' },
+  { n: 10, minor: 'Bm',  major: 'D',   color: '#8b5cf6' },
+  { n: 11, minor: 'F\u266Fm', major: 'A',   color: '#d946ef' },
+  { n: 12, minor: 'C\u266Fm', major: 'E',   color: '#ec4899' },
+];
+
+function toRad(deg: number) { return deg * Math.PI / 180; }
+
+function arcPath(angleDeg: number, r1: number, r2: number) {
+  const half = 15 - gapDeg;
+  const a1 = toRad(angleDeg - half);
+  const a2 = toRad(angleDeg + half);
+  const c1 = Math.cos(a1), s1 = Math.sin(a1);
+  const c2 = Math.cos(a2), s2 = Math.sin(a2);
+  return [
+    `M ${(cx + r2 * c1).toFixed(1)} ${(cy + r2 * s1).toFixed(1)}`,
+    `A ${r2} ${r2} 0 0 1 ${(cx + r2 * c2).toFixed(1)} ${(cy + r2 * s2).toFixed(1)}`,
+    `L ${(cx + r1 * c2).toFixed(1)} ${(cy + r1 * s2).toFixed(1)}`,
+    `A ${r1} ${r1} 0 0 0 ${(cx + r1 * c1).toFixed(1)} ${(cy + r1 * s1).toFixed(1)}`,
+    'Z',
+  ].join(' ');
+}
+
+function pt(angleDeg: number, r: number) {
+  const a = toRad(angleDeg);
+  return { x: +(cx + r * Math.cos(a)).toFixed(1), y: +(cy + r * Math.sin(a)).toFixed(1) };
+}
+
+const midA = (aR1 + aR2) / 2;
+const midB = (bR1 + bR2) / 2;
+
+const segments = positions.map((p, i) => {
+  const angle = -90 + i * 30;
+  return {
+    ...p,
+    pathA: arcPath(angle, aR1, aR2),
+    pathB: arcPath(angle, bR1, bR2),
+    codeA: pt(angle, midA - 6),
+    keyA:  pt(angle, midA + 8),
+    codeB: pt(angle, midB - 6),
+    keyB:  pt(angle, midB + 8),
+  };
+});
+
+// compatibility arcs: draw a few example connections
+const exAngle8A = -90 + 7 * 30; // position 8 (Am) = index 7
+const exAngle9A = -90 + 8 * 30; // position 9 (Em) = index 8
+const exAngle8B = exAngle8A;
+---
+
+<figure class="camelot-wheel">
+  <svg viewBox="0 0 440 440" xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Camelot wheel showing 24 musical keys arranged by harmonic compatibility">
+    <defs>
+      <filter id="text-bg">
+        <feFlood flood-color="rgba(0,0,0,0.25)" result="bg"/>
+        <feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+
+    <!-- A (minor) ring segments -->
+    {segments.map(s => (
+      <path d={s.pathA} fill={s.color} opacity="0.68" />
+    ))}
+
+    <!-- B (major) ring segments -->
+    {segments.map(s => (
+      <path d={s.pathB} fill={s.color} />
+    ))}
+
+    <!-- center label -->
+    <text x={cx} y={cy - 12} text-anchor="middle" class="center-label" dominant-baseline="central">
+      <tspan font-weight="700">Camelot</tspan>
+    </text>
+    <text x={cx} y={cy + 6} text-anchor="middle" class="center-sublabel" dominant-baseline="central">inner = A (minor)</text>
+    <text x={cx} y={cy + 20} text-anchor="middle" class="center-sublabel" dominant-baseline="central">outer = B (major)</text>
+
+    <!-- A ring labels -->
+    {segments.map(s => (
+      <g>
+        <text x={s.codeA.x} y={s.codeA.y} text-anchor="middle" dominant-baseline="central" class="code-label">{s.n}A</text>
+        <text x={s.keyA.x} y={s.keyA.y} text-anchor="middle" dominant-baseline="central" class="key-label">{s.minor}</text>
+      </g>
+    ))}
+
+    <!-- B ring labels -->
+    {segments.map(s => (
+      <g>
+        <text x={s.codeB.x} y={s.codeB.y} text-anchor="middle" dominant-baseline="central" class="code-label">{s.n}B</text>
+        <text x={s.keyB.x} y={s.keyB.y} text-anchor="middle" dominant-baseline="central" class="key-label">{s.major}</text>
+      </g>
+    ))}
+  </svg>
+
+  <figcaption class="wheel-legend">
+    <span class="legend-item"><span class="dot" style="background:#22c55e"></span> Adjacent (&plusmn;1) = 0.9</span>
+    <span class="legend-item"><span class="dot" style="background:#3b82f6"></span> Same number A&harr;B = 0.8</span>
+    <span class="legend-item"><span class="dot" style="background:#8b5cf6"></span> &plusmn;2 same letter = 0.45</span>
+    <span class="legend-item"><span class="dot" style="background:#ef4444"></span> Everything else = 0.1</span>
+  </figcaption>
+</figure>
+
+<style>
+  .camelot-wheel {
+    max-width: 440px;
+    margin: 2rem auto;
+  }
+  .code-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 12.5px;
+    font-weight: 700;
+    fill: #fff;
+    paint-order: stroke;
+    stroke: rgba(0,0,0,0.35);
+    stroke-width: 2.5px;
+    stroke-linejoin: round;
+  }
+  .key-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9px;
+    font-weight: 500;
+    fill: rgba(255,255,255,0.88);
+    paint-order: stroke;
+    stroke: rgba(0,0,0,0.25);
+    stroke-width: 2px;
+    stroke-linejoin: round;
+  }
+  .center-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    fill: var(--sl-color-text);
+  }
+  .center-sublabel {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9.5px;
+    fill: var(--sl-color-text-accent);
+    opacity: 0.7;
+  }
+  .wheel-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem 1.25rem;
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--sl-color-text);
+    opacity: 0.85;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+</style>

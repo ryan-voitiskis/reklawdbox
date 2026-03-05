@@ -1,0 +1,127 @@
+---
+title: Library & Data
+description: Tools for searching tracks, reading playlists, and resolving cached enrichment and analysis data.
+sidebar:
+  order: 1
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+## Library tools
+
+These tools read your Rekordbox collection. They query the encrypted Rekordbox `master.db` in read-only mode.
+
+---
+
+### `read_library` <Badge text="no params" variant="note" />
+
+Returns a high-level library summary: total track count, genre distribution, BPM range, key distribution, and rating breakdown. Use this as a starting point to understand the collection before scoping searches.
+
+---
+
+### `search_tracks`
+
+Search and filter tracks. All parameters are optional — combine any set of filters.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `query` | string | | Free-text search matching title or artist |
+| `artist` | string | | Filter by artist (partial match) |
+| `genre` | string | | Filter by genre (partial match) |
+| `rating_min` | integer | | Minimum star rating (1-5) |
+| `bpm_min` | number | | Minimum BPM |
+| `bpm_max` | number | | Maximum BPM |
+| `key` | string | | Filter by musical key (e.g., `"Am"`) |
+| `has_genre` | boolean | | Filter by whether track has a genre set |
+| `label` | string | | Filter by label (partial match) |
+| `path` | string | | Filter by file path/folder (substring) |
+| `path_prefix` | string | | Require file path starts with this prefix |
+| `added_after` | string | | ISO date — tracks added on or after |
+| `added_before` | string | | ISO date — tracks added on or before |
+| `playlist` | string | | Filter by playlist ID |
+| `include_samples` | boolean | | Include Rekordbox factory samples (default: `false`) |
+| `limit` | integer | | Max results (default: `50`, max: `200`) |
+| `offset` | integer | | Skip first N results for pagination |
+
+Factory sample tracks are excluded by default. Set `include_samples: true` to include them.
+
+---
+
+### `get_track`
+
+Get full details for a single track by ID. Returns all Rekordbox metadata fields plus any cached enrichment and audio analysis data.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | **yes** | Track ID |
+
+---
+
+### `get_playlists` <Badge text="no params" variant="note" />
+
+List all playlists with track counts. Returns the full playlist tree including folders and smart playlists.
+
+---
+
+### `get_playlist_tracks`
+
+List tracks in a specific playlist, in playlist order.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `playlist_id` | string | **yes** | Playlist ID |
+| `limit` | integer | | Max results (default: `200`) |
+
+---
+
+## Data resolution tools
+
+These tools return locally-cached data without making external API calls or running analysis. Use them to check what data is already available before deciding whether to enrich or analyze.
+
+---
+
+### `resolve_track_data`
+
+Return all cached enrichment data, audio analysis results, and staged changes for one track.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | **yes** | Track ID |
+
+---
+
+### `resolve_tracks_data`
+
+Batch version of `resolve_track_data`. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to resolve.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs (highest priority selector) |
+| `playlist_id` | string | | Resolve tracks in this playlist |
+| `max_tracks` | integer | | Max tracks to return (default: `50`) |
+| `format` | string | | `"full"` (default) or `"classification"` |
+
+The `"classification"` format returns a compact payload (~400-500 bytes per track instead of 2-4KB) containing only the fields needed for genre classification decisions:
+
+- Mapped Discogs genres/styles
+- Beatport genre
+- Audio features: BPM, key, danceability, rhythm regularity, spectral centroid, dynamic complexity
+- Completeness flags for each data source
+
+<Aside type="tip">
+  Use `format: "classification"` when classifying genres across a large batch — it keeps context window usage low while providing all the evidence needed for the decision tree.
+</Aside>
+
+---
+
+### `cache_coverage`
+
+Report enrichment and audio cache completeness for a track scope. Accepts [shared search filters](/mcp-tools/#shared-search-filters).
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs |
+| `playlist_id` | string | | Check tracks in this playlist |
+| `max_tracks` | integer | | Max tracks to check (default: `200`) |
+
+Returns: total tracks in scope, per-provider cached counts and percentages, and gap counts (tracks missing audio analysis, enrichment, or all data).

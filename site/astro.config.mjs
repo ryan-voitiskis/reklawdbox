@@ -39,6 +39,14 @@ export default defineConfig({
           autogenerate: { directory: 'workflows' },
         },
         {
+          label: 'MCP Tools',
+          autogenerate: { directory: 'mcp-tools' },
+        },
+        {
+          label: 'CLI',
+          autogenerate: { directory: 'cli' },
+        },
+        {
           label: 'Reference',
           autogenerate: { directory: 'reference' },
         },

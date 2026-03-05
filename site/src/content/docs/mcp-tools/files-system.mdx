@@ -1,0 +1,169 @@
+---
+title: Files & System
+description: Tools for reading/writing native file tags, managing cover art, auditing collections, and clearing caches.
+sidebar:
+  order: 5
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+## File tag tools
+
+Read and write native metadata tags (ID3v2, Vorbis Comment, RIFF INFO, MP4/iTunes) directly on audio files. These operate on the files themselves, not the Rekordbox database.
+
+Supported formats: FLAC, MP3, WAV, M4A, AAC, AIFF.
+
+---
+
+### `read_file_tags`
+
+Read metadata tags from audio files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `paths` | string[] | | Explicit file paths |
+| `track_ids` | string[] | | Resolve paths from Rekordbox track IDs |
+| `directory` | string | | Scan a directory for audio files |
+| `glob` | string | | Glob filter within directory (default: all audio) |
+| `recursive` | boolean | | Scan subdirectories (default: `false`) |
+| `fields` | string[] | | Return only these tag fields (default: all) |
+| `include_cover_art` | boolean | | Include cover art metadata (default: `false`) |
+| `limit` | integer | | Max files to read (default: `200`, max: `2000`) |
+
+Provide at least one of `paths`, `track_ids`, or `directory`.
+
+---
+
+### `write_file_tags`
+
+Write or delete metadata tags on audio files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `writes` | array | **yes** | Array of write operations |
+| `dry_run` | boolean | | Preview changes without writing (default: `false`) |
+
+Each write entry:
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `path` | string | **yes** | Path to audio file |
+| `tags` | object | **yes** | Field names mapped to values, or `null` to delete |
+| `wav_targets` | string[] | | WAV only: `"id3v2"`, `"riff_info"` (default: both) |
+| `comment_mode` | string | | How to handle existing comments |
+
+**Comment merge modes:**
+
+| Mode | Behavior |
+|:-----|:---------|
+| `replace` | Overwrite existing comment (default) |
+| `prepend` | Insert before existing, separated by ` \| ` |
+| `append` | Insert after existing, separated by ` \| ` |
+
+<Aside type="caution">
+  Rekordbox reads only RIFF INFO from WAV files. Always write both layers (the default) to keep tags in sync. WAV writes use atomic copy-write-rename to prevent split-state files from partial failures.
+</Aside>
+
+---
+
+### `extract_cover_art`
+
+Extract embedded cover art from an audio file and save it to disk.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `path` | string | **yes** | Path to audio file |
+| `output_path` | string | | Save location (default: `cover.{ext}` in same directory) |
+| `picture_type` | string | | Which art to extract (default: `"front_cover"`) |
+
+---
+
+### `embed_cover_art`
+
+Embed cover art into one or more audio files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `image_path` | string | **yes** | Path to image file (JPEG or PNG) |
+| `targets` | string[] | **yes** | Audio files to embed art into |
+| `picture_type` | string | | Picture type (default: `"front_cover"`) |
+
+---
+
+## System tools
+
+---
+
+### `audit_state`
+
+Manage collection audits: scan directories for convention violations, query detected issues, resolve them, and generate summaries. Uses a tagged union — the `operation` field determines the action.
+
+#### Operation: `scan`
+
+Scan a directory tree for convention violations.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `operation` | string | **yes** | `"scan"` |
+| `scope` | string | **yes** | Directory path to audit |
+| `revalidate` | boolean | | Re-read all files including unchanged (default: `false`) |
+| `skip_issue_types` | string[] | | Issue types to exclude (e.g., `["GENRE_SET"]`) |
+
+Detected issue types include: empty fields (artist, title, genre, key, comment), WAV tag drift between ID3v2 and RIFF INFO layers, filename convention violations (track number prefix, directory format), and imported file protection warnings.
+
+The scan annotates issues with Rekordbox import status — tracks that have been imported cannot have their file paths updated via XML reimport.
+
+#### Operation: `query_issues`
+
+Query detected issues from a previous scan.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `operation` | string | **yes** | `"query_issues"` |
+| `scope` | string | **yes** | Directory path prefix to filter |
+| `status` | string | | `"open"`, `"resolved"`, `"accepted"`, `"deferred"` |
+| `issue_type` | string | | Filter by issue type |
+| `limit` | integer | | Max results (default: `100`) |
+| `offset` | integer | | Pagination offset (default: `0`) |
+
+#### Operation: `resolve_issues`
+
+Mark issues as resolved with a resolution type.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `operation` | string | **yes** | `"resolve_issues"` |
+| `issue_ids` | integer[] | **yes** | Issue IDs to resolve |
+| `resolution` | string | **yes** | `"accepted_as_is"`, `"wont_fix"`, `"deferred"` |
+| `note` | string | | Optional comment |
+
+#### Operation: `get_summary`
+
+Get an audit summary with issue counts by type and status.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `operation` | string | **yes** | `"get_summary"` |
+| `scope` | string | **yes** | Directory path prefix |
+
+---
+
+### `clear_caches` <Badge text="no params" variant="note" />
+
+Clear all internal caches: enrichment cache, audio analysis cache, and audit state. Useful when you want to force fresh data from all sources.
+
+<Aside type="caution">
+  This clears everything — all Discogs and Beatport data will need to be re-fetched. This can take significant time for large libraries.
+</Aside>
+
+---
+
+### `help`
+
+Get workflow guides with step-by-step instructions and links to documentation on reklawdbox.com.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `topic` | string | | `"genre"`, `"set"`, `"audit"` — or omit for all workflows |
+
+Returns structured JSON with workflow steps, key tools for each workflow, and URLs to the relevant documentation pages.

@@ -1,0 +1,112 @@
+---
+title: Enrichment & Analysis
+description: Tools for looking up external metadata from Discogs and Beatport, and analyzing audio with stratum-dsp and Essentia.
+sidebar:
+  order: 2
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+## Enrichment tools
+
+Look up external metadata from Discogs and Beatport. Results are cached in the internal SQLite database — subsequent calls for the same track return cached data instantly unless `force_refresh` is set.
+
+---
+
+### `lookup_discogs`
+
+Look up a single track on Discogs. Returns genre, style, label, year, catalog number, and release metadata.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | | Track ID — auto-fills artist/title/album from library |
+| `artist` | string | | Artist name (required if no `track_id`) |
+| `title` | string | | Track title (required if no `track_id`) |
+| `album` | string | | Album/release title for more accurate matching |
+| `force_refresh` | boolean | | Bypass cache and fetch fresh data (default: `false`) |
+
+<Aside type="note">
+  Discogs authentication is handled automatically via the broker. If the session has expired, the response includes an `auth_url` — open it in a browser, approve access, and call the tool again. Sessions persist across server restarts.
+</Aside>
+
+---
+
+### `lookup_beatport`
+
+Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and label.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | | Track ID — auto-fills artist/title from library |
+| `artist` | string | | Artist name (required if no `track_id`) |
+| `title` | string | | Track title (required if no `track_id`) |
+| `force_refresh` | boolean | | Bypass cache and fetch fresh data (default: `false`) |
+
+---
+
+### `enrich_tracks`
+
+Batch enrich tracks via Discogs and/or Beatport. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs (highest priority selector) |
+| `playlist_id` | string | | Enrich tracks in this playlist |
+| `max_tracks` | integer | | Max tracks to enrich (default: `50`) |
+| `offset` | integer | | Skip first N tracks in result set |
+| `providers` | string[] | | Providers: `"discogs"`, `"beatport"` (default: `["discogs"]`) |
+| `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
+| `force_refresh` | boolean | | Bypass cache entirely (default: `false`) |
+| `concurrency` | integer | | Max concurrent enrichments (default: `4`, max: `8`) |
+
+Discogs and Beatport lookups run in parallel per track. Beatport is rate-limited to 2 concurrent requests via a separate semaphore. Discogs auth failures broadcast to all in-flight tasks to avoid wasted retries.
+
+<Aside type="tip">
+  For large libraries, use the CLI `hydrate` command instead — it runs unattended with progress bars, time estimates, and graceful Ctrl+C shutdown. See [CLI reference](/cli/).
+</Aside>
+
+---
+
+## Audio analysis tools
+
+Analyze audio files with **stratum-dsp** (always available — compiled in) and **Essentia** (optional Python subprocess). Results are cached per track per backend.
+
+**stratum-dsp** provides: BPM, key, rhythm regularity
+
+**Essentia** adds: danceability, spectral centroid (brightness), loudness, onset rate, dynamic complexity
+
+---
+
+### `analyze_track_audio`
+
+Analyze one track. Returns BPM, key, and (with Essentia) energy descriptors.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | **yes** | Track ID |
+| `skip_cached` | boolean | | Skip if already cached (default: `true`) |
+
+Set `skip_cached: false` to force a fresh analysis, overwriting cached results. Cache validation checks both file size and modification time — if the audio file has changed, the cache is automatically invalidated.
+
+---
+
+### `analyze_audio_batch`
+
+Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to analyze.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs (highest priority selector) |
+| `playlist_id` | string | | Analyze tracks in this playlist |
+| `max_tracks` | integer | | Max tracks to analyze (default: `20`) |
+| `offset` | integer | | Skip first N tracks in result set |
+| `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
+| `concurrency` | integer | | Max concurrent analyses (default: `cpus - 2`, min: `2`, max: `16`) |
+
+Each track is processed in its own task. Stratum-dsp (CPU-bound, runs on blocking thread) and Essentia (I/O-bound subprocess) overlap via `tokio::join!` per track for maximum throughput. All cache writes are serialized through a dedicated writer task.
+
+---
+
+### `setup_essentia` <Badge text="no params" variant="note" />
+
+Install or validate Essentia in a local Python venv. If Essentia is already available, reports the current status. If not, creates a venv at `.venvs/essentia/` and installs the package. Activation takes effect immediately — no server restart needed.

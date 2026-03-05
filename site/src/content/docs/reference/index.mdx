@@ -7,13 +7,9 @@ sidebar:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-Complete technical reference for reklawdbox. These pages document every tool, configuration option, and behavioral contract.
+Technical reference for configuration, scoring math, and export format. For tool documentation, see the dedicated [MCP Tools](/mcp-tools/) and [CLI](/cli/) sections.
 
 <CardGrid>
-  <Card title="Tool Catalog" icon="list-format">
-    All 27 MCP tools with parameters, defaults, and response shapes.
-    [Read more](/reference/tools/)
-  </Card>
   <Card title="Environment Variables" icon="setting">
     Configuration via environment variables in your MCP host config.
     [Read more](/reference/environment-variables/)
@@ -25,5 +21,13 @@ Complete technical reference for reklawdbox. These pages document every tool, co
   <Card title="XML Export" icon="document">
     Rekordbox XML format, import workflow, and known limitations.
     [Read more](/reference/xml-export/)
+  </Card>
+  <Card title="MCP Tools" icon="list-format">
+    All 30 MCP tools with parameters, defaults, and behavior.
+    [Browse tools](/mcp-tools/)
+  </Card>
+  <Card title="CLI Commands" icon="laptop">
+    Standalone commands for batch enrichment, analysis, and file operations.
+    [Browse CLI](/cli/)
   </Card>
 </CardGrid>

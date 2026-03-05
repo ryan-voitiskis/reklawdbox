@@ -1,0 +1,158 @@
+---
+// Energy curve preset visualization
+// X: set progress (0-100%), Y: target energy level (0-1)
+
+const w = 480;
+const h = 200;
+const pad = { top: 20, right: 20, bottom: 32, left: 44 };
+const plotW = w - pad.left - pad.right;
+const plotH = h - pad.top - pad.bottom;
+
+function sx(pct: number) { return pad.left + pct * plotW; }
+function sy(val: number) { return pad.top + (1 - val) * plotH; }
+
+// warmup_build_peak_release (default)
+// 0-15% warmup, 15-45% build, 45-75% peak, 75-100% release
+const wbpr = [
+  [0, 0.25], [0.08, 0.3], [0.15, 0.38],
+  [0.25, 0.52], [0.35, 0.68], [0.45, 0.82],
+  [0.55, 0.88], [0.65, 0.9], [0.75, 0.88],
+  [0.82, 0.72], [0.90, 0.48], [1.0, 0.28],
+].map(([x, y]) => `${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(' ');
+
+// flat - all peak
+const flat = [
+  [0, 0.82], [0.5, 0.84], [1.0, 0.82],
+].map(([x, y]) => `${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(' ');
+
+// peak_only - fast ramp, long sustain, brief release
+const peakOnly = [
+  [0, 0.45], [0.10, 0.82],
+  [0.50, 0.88], [0.85, 0.86],
+  [0.92, 0.62], [1.0, 0.35],
+].map(([x, y]) => `${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(' ');
+
+const gridLines = [0, 0.25, 0.5, 0.75, 1.0];
+const xTicks = [0, 0.25, 0.5, 0.75, 1.0];
+
+// phase boundary labels for default curve
+const phases = [
+  { start: 0, end: 0.15, label: 'Warmup' },
+  { start: 0.15, end: 0.45, label: 'Build' },
+  { start: 0.45, end: 0.75, label: 'Peak' },
+  { start: 0.75, end: 1.0, label: 'Release' },
+];
+---
+
+<figure class="energy-curves">
+  <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Energy curve presets showing how energy level changes across a DJ set">
+
+    <!-- grid -->
+    {gridLines.map(v => (
+      <line x1={pad.left} y1={sy(v)} x2={w - pad.right} y2={sy(v)}
+            stroke="var(--sl-color-gray-5)" stroke-width="0.5" />
+    ))}
+
+    <!-- y-axis labels -->
+    {gridLines.map(v => (
+      <text x={pad.left - 6} y={sy(v)} text-anchor="end" dominant-baseline="central"
+            class="axis-label">{v.toFixed(1) === '0.0' ? '0' : v < 1 ? v.toFixed(2) : '1.0'}</text>
+    ))}
+
+    <!-- x-axis labels -->
+    {xTicks.map(v => (
+      <text x={sx(v)} y={h - pad.bottom + 16} text-anchor="middle" class="axis-label">
+        {Math.round(v * 100)}%
+      </text>
+    ))}
+
+    <!-- phase boundaries (dashed vertical lines) -->
+    {[0.15, 0.45, 0.75].map(v => (
+      <line x1={sx(v)} y1={pad.top} x2={sx(v)} y2={h - pad.bottom}
+            stroke="var(--sl-color-gray-5)" stroke-width="0.5" stroke-dasharray="4 3" />
+    ))}
+
+    <!-- phase labels at top -->
+    {phases.map(p => (
+      <text x={sx((p.start + p.end) / 2)} y={pad.top - 6} text-anchor="middle" class="phase-label">
+        {p.label}
+      </text>
+    ))}
+
+    <!-- curves -->
+    <polyline points={flat} fill="none" stroke="#14b8a6" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" opacity="0.7" />
+    <polyline points={peakOnly} fill="none" stroke="#f97316" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" opacity="0.8" />
+    <polyline points={wbpr} fill="none" stroke="#3b82f6" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- axis titles -->
+    <text x={pad.left - 32} y={pad.top + plotH / 2} text-anchor="middle"
+          dominant-baseline="central" transform={`rotate(-90, ${pad.left - 32}, ${pad.top + plotH / 2})`}
+          class="axis-title">Energy</text>
+    <text x={pad.left + plotW / 2} y={h - 2} text-anchor="middle" class="axis-title">Set progress</text>
+  </svg>
+
+  <figcaption class="curve-legend">
+    <span class="legend-item"><span class="swatch" style="background:#3b82f6"></span> warmup_build_peak_release</span>
+    <span class="legend-item"><span class="swatch" style="background:#14b8a6;opacity:0.7"></span> flat</span>
+    <span class="legend-item"><span class="swatch" style="background:#f97316;opacity:0.8"></span> peak_only</span>
+  </figcaption>
+</figure>
+
+<style>
+  .energy-curves {
+    max-width: 520px;
+    margin: 1.5rem auto;
+  }
+  .energy-curves svg {
+    width: 100%;
+    height: auto;
+  }
+  .axis-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10px;
+    fill: var(--sl-color-text);
+    opacity: 0.6;
+  }
+  .axis-title {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10.5px;
+    fill: var(--sl-color-text);
+    opacity: 0.7;
+    font-weight: 500;
+  }
+  .phase-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9.5px;
+    fill: var(--sl-color-text-accent);
+    opacity: 0.6;
+    font-weight: 500;
+  }
+  .curve-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem 1.2rem;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-text);
+    opacity: 0.85;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+    font-family: ui-monospace, monospace;
+  }
+  .swatch {
+    width: 18px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+</style>

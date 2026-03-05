@@ -34,8 +34,14 @@ Codex — to your collection.
   <Card title="Workflows" icon="pencil">
     Genre classification, set building, and collection audits.
   </Card>
+  <Card title="MCP Tools" icon="list-format">
+    All 30 MCP tools grouped by function — library, enrichment, staging, mixing, and more.
+  </Card>
+  <Card title="CLI" icon="laptop">
+    Standalone commands for batch enrichment, audio analysis, and file tag management.
+  </Card>
   <Card title="Reference" icon="document">
-    All 27 tools, environment variables, transition scoring math, and XML export details.
+    Environment variables, transition scoring math, and XML export details.
   </Card>
   <Card title="Troubleshooting" icon="warning">
     Fix common setup, auth, and runtime problems.
@@ -65,20 +71,18 @@ XML — the Rekordbox database is never modified directly.
 - **Provides CLI subcommands** for batch audio analysis and native file tag
   read/write outside of MCP.
 
-## 27 MCP tools
+## 30 MCP tools
 
-**Library** — `read_library`, `search_tracks`, `get_track`, `get_playlists`, `get_playlist_tracks`
+**Library & Data** — `read_library`, `search_tracks`, `get_track`, `get_playlists`, `get_playlist_tracks`, `resolve_track_data`, `resolve_tracks_data`, `cache_coverage`
 
-**Metadata** — `get_genre_taxonomy`, `update_tracks`, `preview_changes`, `write_xml`, `clear_changes`, `suggest_normalizations`
+**Enrichment & Analysis** — `lookup_discogs`, `lookup_beatport`, `enrich_tracks`, `analyze_track_audio`, `analyze_audio_batch`, `setup_essentia`
 
-**Enrichment** — `lookup_discogs`, `lookup_beatport`, `enrich_tracks`
+**Classification & Staging** — `get_genre_taxonomy`, `suggest_normalizations`, `update_tracks`, `preview_changes`, `write_xml`, `clear_changes`
 
-**Audio Analysis** — `analyze_track_audio`, `analyze_audio_batch`, `setup_essentia`
+**Mixing & Sequencing** — `score_transition`, `query_transition_candidates`, `build_set`
 
-**Set Building** — `score_transition`, `build_set`
+**Files & System** — `read_file_tags`, `write_file_tags`, `extract_cover_art`, `embed_cover_art`, `audit_state`, `clear_caches`, `help`
 
-**Data** — `resolve_track_data`, `resolve_tracks_data`, `cache_coverage`
+## 6 CLI commands
 
-**File Tags** — `read_file_tags`, `write_file_tags`, `extract_cover_art`, `embed_cover_art`
-
-**Collection Audit** — `audit_state`
+`hydrate`, `analyze`, `read-tags`, `write-tags`, `extract-art`, `embed-art`

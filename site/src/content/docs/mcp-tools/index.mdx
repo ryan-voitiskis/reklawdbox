@@ -1,0 +1,71 @@
+---
+title: MCP Tools
+description: All 30 MCP tools exposed by the reklawdbox server, grouped by function.
+sidebar:
+  order: 0
+---
+
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+
+reklawdbox exposes **30 MCP tools** that an AI agent calls to read your Rekordbox library, enrich metadata, analyze audio, build DJ sets, and export changes. Every tool accepts JSON parameters and returns structured JSON. The Rekordbox database is never written to directly — metadata changes are staged in memory and exported as XML.
+
+## Tool pipeline
+
+A typical workflow flows left to right through these tool groups:
+
+```
+Library & Data ──> Enrichment & Analysis ──> Classification & Staging ──> Export
+       |                                              |
+       └──────── Mixing & Sequencing ─────────────────┘
+                         |
+               Files & System (direct file ops, audit, cache management)
+```
+
+## Tool groups
+
+<CardGrid>
+  <Card title="Library & Data" icon="magnifier">
+    Search tracks, read playlists, resolve cached enrichment and analysis data.
+    [8 tools](/mcp-tools/library-data/)
+  </Card>
+  <Card title="Enrichment & Analysis" icon="rocket">
+    Look up metadata on Discogs and Beatport. Analyze audio for BPM, key, and energy descriptors.
+    [6 tools](/mcp-tools/enrichment-analysis/)
+  </Card>
+  <Card title="Classification & Staging" icon="pencil">
+    Review genre taxonomy, stage metadata changes, preview diffs, and export to XML.
+    [6 tools](/mcp-tools/classification-staging/)
+  </Card>
+  <Card title="Mixing & Sequencing" icon="bars-ascending">
+    Score transitions between tracks and build optimized DJ set sequences.
+    [3 tools](/mcp-tools/mixing/)
+  </Card>
+  <Card title="Files & System" icon="setting">
+    Read/write native file tags, manage cover art, audit collections, and clear caches.
+    [7 tools](/mcp-tools/files-system/)
+  </Card>
+</CardGrid>
+
+## Shared search filters
+
+Many tools accept a common set of **search filter parameters** to scope which tracks they operate on. These filters are shared across `search_tracks`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | string | Free-text search matching title or artist |
+| `artist` | string | Filter by artist (partial match) |
+| `genre` | string | Filter by genre (partial match) |
+| `rating_min` | integer | Minimum star rating (1-5) |
+| `bpm_min` | number | Minimum BPM |
+| `bpm_max` | number | Maximum BPM |
+| `key` | string | Filter by musical key (e.g., `"Am"`, `"Cm"`) |
+| `has_genre` | boolean | Filter by whether track has a genre set |
+| `label` | string | Filter by label (partial match) |
+| `path` | string | Filter by file path/folder (substring match) |
+| `path_prefix` | string | Filter to tracks whose file path starts with this prefix |
+| `added_after` | string | ISO date — only tracks added on or after |
+| `added_before` | string | ISO date — only tracks added on or before |
+
+<Aside type="tip">
+  These filters are combinable. Use `genre: "Techno"` + `bpm_min: 130` + `has_genre: true` to scope an enrichment batch to up-tempo techno tracks that already have genres assigned.
+</Aside>

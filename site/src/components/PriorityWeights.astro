@@ -1,0 +1,132 @@
+---
+// Stacked horizontal bar chart showing priority mode weight distributions
+
+interface Axis {
+  name: string;
+  color: string;
+}
+
+const axes: Axis[] = [
+  { name: 'Key',        color: '#3b82f6' },
+  { name: 'BPM',        color: '#22c55e' },
+  { name: 'Energy',     color: '#f97316' },
+  { name: 'Genre',      color: '#8b5cf6' },
+  { name: 'Brightness', color: '#06b6d4' },
+  { name: 'Rhythm',     color: '#ec4899' },
+];
+
+interface Mode {
+  name: string;
+  weights: number[];
+}
+
+const modes: Mode[] = [
+  { name: 'Balanced', weights: [0.30, 0.20, 0.18, 0.17, 0.08, 0.07] },
+  { name: 'Harmonic', weights: [0.48, 0.18, 0.12, 0.08, 0.08, 0.06] },
+  { name: 'Energy',   weights: [0.12, 0.18, 0.42, 0.12, 0.08, 0.08] },
+  { name: 'Genre',    weights: [0.18, 0.18, 0.12, 0.38, 0.08, 0.06] },
+];
+---
+
+<figure class="priority-weights">
+  <div class="chart">
+    {modes.map(mode => (
+      <div class="row">
+        <span class="mode-name">{mode.name}</span>
+        <div class="bar-track">
+          {mode.weights.map((w, i) => (
+            <div
+              class="bar-segment"
+              style={`width: ${w * 100}%; background: ${axes[i].color};`}
+              title={`${axes[i].name}: ${Math.round(w * 100)}%`}
+            >
+              {w >= 0.12 && <span class="seg-label">{Math.round(w * 100)}%</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  <figcaption class="weight-legend">
+    {axes.map(a => (
+      <span class="legend-item">
+        <span class="dot" style={`background: ${a.color}`}></span>
+        {a.name}
+      </span>
+    ))}
+  </figcaption>
+</figure>
+
+<style>
+  .priority-weights {
+    max-width: 560px;
+    margin: 1.5rem auto;
+  }
+  .chart {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .mode-name {
+    width: 5.5rem;
+    text-align: right;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--sl-color-text);
+    flex-shrink: 0;
+  }
+  .bar-track {
+    flex: 1;
+    display: flex;
+    height: 26px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar-segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    transition: opacity 0.15s;
+  }
+  .bar-segment:hover {
+    opacity: 0.85;
+  }
+  .seg-label {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    white-space: nowrap;
+  }
+  .weight-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem 1rem;
+    margin-top: 0.75rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-text);
+    opacity: 0.85;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+</style>
