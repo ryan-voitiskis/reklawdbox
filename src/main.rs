@@ -20,6 +20,31 @@ mod xml;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
+/// Load env vars from `.mcp.json` so CLI commands get the same config
+/// that Claude Code injects for the MCP server. Shell env takes precedence.
+fn load_env_from_mcp_json() {
+    let Ok(bytes) = std::fs::read(".mcp.json") else {
+        return;
+    };
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Some(env) = root
+        .pointer("/mcpServers/reklawdbox/env")
+        .and_then(|v| v.as_object())
+    else {
+        return;
+    };
+    for (key, val) in env {
+        if let Some(val) = val.as_str() {
+            if std::env::var_os(key).is_none() {
+                // SAFETY: called at the top of main() before any threads are spawned.
+                unsafe { std::env::set_var(key, val) };
+            }
+        }
+    }
+}
+
 fn should_run_cli<I, S>(mut args: I) -> bool
 where
     I: Iterator<Item = S>,
@@ -36,6 +61,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    load_env_from_mcp_json();
     if should_run_cli(std::env::args()) {
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
