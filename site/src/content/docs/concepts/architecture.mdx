@@ -9,16 +9,14 @@ import { Aside, Steps, Tabs, Card, CardGrid } from '@astrojs/starlight/component
 
 ## System overview
 
-reklawdbox is a single Rust binary (arm64). It runs as an MCP server communicating with your host (Claude Code, Claude Desktop, Codex) over stdio. Everything ships in one binary — no runtime dependencies except an optional Python venv for Essentia.
+Single Rust binary (arm64), communicates with your MCP host over stdio. No runtime dependencies except an optional Python venv for Essentia.
 
-Key components:
-
-- **MCP server** — accepts tool calls over stdio, returns structured JSON responses
-- **SQLCipher reader** — opens the encrypted Rekordbox `master.db` read-only via rusqlite with bundled SQLCipher and OpenSSL
-- **Internal SQLite** — separate database (WAL mode) for enrichment cache, audio analysis cache, and broker session tokens
-- **HTTP client** — reqwest + rustls for Discogs broker and Beatport requests
-- **Audio analysis** — symphonia for decoding, stratum-dsp for BPM/key detection (embedded in binary)
-- **Essentia** — optional Python subprocess for advanced audio descriptors
+- **MCP server** — tool calls over stdio, structured JSON responses
+- **SQLCipher reader** — encrypted Rekordbox `master.db`, read-only, via rusqlite with bundled SQLCipher/OpenSSL
+- **Internal SQLite** — WAL-mode cache for enrichment, audio analysis, and broker sessions
+- **HTTP client** — reqwest + rustls for Discogs broker and Beatport
+- **Audio analysis** — symphonia decode, stratum-dsp BPM/key detection (embedded)
+- **Essentia** — optional Python subprocess for energy, danceability, spectral features
 
 ## Data flow
 
@@ -39,49 +37,43 @@ reklawdbox (single Rust binary)
 
 ## Rekordbox database
 
-Rekordbox 6 and 7 encrypt `master.db` with SQLCipher 4 (AES-256-CBC). The encryption key is universal — the same for every installation. reklawdbox bundles SQLCipher and handles decryption transparently.
+Rekordbox 6/7 encrypt `master.db` with SQLCipher 4 (AES-256-CBC). The key is universal across installations. reklawdbox bundles SQLCipher and handles decryption transparently.
 
 ### Key tables
 
 | Table | Purpose |
 |-------|---------|
-| `DjmdContent` | Every track in your collection. Title, ArtistID, GenreID, BPM (integer x100), KeyID, Rating, `Commnt` (not a typo — that is the actual column name) |
-| `djmdArtist` | Artist names. FK from `DjmdContent.ArtistID` |
-| `djmdAlbum` | Album names. FK from `DjmdContent.AlbumID` |
-| `djmdGenre` | Genre names. FK from `DjmdContent.GenreID` |
-| `djmdKey` | Musical key names. FK from `DjmdContent.KeyID` |
+| `DjmdContent` | Tracks — title, ArtistID, GenreID, BPM (int × 100), KeyID, Rating, `Commnt` (actual column name) |
+| `djmdArtist` | Artist names (FK from DjmdContent) |
+| `djmdAlbum` | Album names (FK from DjmdContent) |
+| `djmdGenre` | Genre names (FK from DjmdContent) |
+| `djmdKey` | Musical key names (FK from DjmdContent) |
 | `djmdLabel` | Record label names |
-| `djmdColor` | Color tag names. FK from `DjmdContent.ColorID` |
-| `djmdPlaylist` | Playlists and folders. Type 0 = playlist, 1 = folder, 4 = smart playlist |
-| `djmdSongPlaylist` | Track-to-playlist membership (join table) |
+| `djmdColor` | Color tag names (FK from DjmdContent) |
+| `djmdPlaylist` | Playlists/folders (type 0 = playlist, 1 = folder, 4 = smart) |
+| `djmdSongPlaylist` | Track-to-playlist join table |
 
 <Aside type="note">
-  All primary keys are `VARCHAR(255)` strings, not integers. This is an unusual schema choice by Pioneer but reklawdbox handles it transparently.
+  All primary keys are `VARCHAR(255)` strings, not integers.
 </Aside>
-
-### BPM encoding
-
-Rekordbox stores BPM as an integer with two implied decimal places. A track at 128.50 BPM is stored as `12850`. reklawdbox converts this to a float automatically when returning track data.
 
 ## Discogs broker
 
-The Discogs broker is a companion service written in TypeScript, deployed on Cloudflare Workers with D1 (SQLite) for storage. It acts as an OAuth proxy — your reklawdbox instance never holds Discogs consumer secrets or user tokens directly.
+TypeScript companion on Cloudflare Workers + D1. Acts as an OAuth proxy — reklawdbox never holds Discogs consumer secrets directly.
 
 ### Authentication flow
 
 <Steps>
 
-1. You call `lookup_discogs` for any track. The broker checks if you have an active session.
+1. Call `lookup_discogs`. The broker checks for an active session.
 
-2. If not authenticated, the broker returns an OAuth authorization URL. Open it in your browser.
+2. If unauthenticated, the broker returns an OAuth URL. Open it in your browser.
 
-3. After you approve access on Discogs, the broker stores your OAuth token in D1 and returns a broker session token to reklawdbox.
+3. After approval, the broker stores your OAuth token and returns a session token to reklawdbox.
 
-4. reklawdbox stores the broker session token in its internal SQLite. All subsequent `lookup_discogs` calls use this token automatically.
+4. Subsequent calls use the session token automatically. Deleting the internal database requires re-authorization.
 
 </Steps>
-
-The broker session token is stored locally at the internal SQLite path. If you delete the internal database, you will need to re-authorize.
 
 <Aside type="tip">
   The broker is open-source and self-hostable. Set `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` to point at your own deployment.
@@ -89,64 +81,38 @@ The broker session token is stored locally at the internal SQLite path. If you d
 
 ## Audio analysis pipeline
 
-reklawdbox has two analysis backends that serve different purposes.
+Two backends, cached per track in internal SQLite.
 
 ### stratum-dsp (always available)
 
-stratum-dsp is a Rust library embedded directly in the reklawdbox binary. It provides:
+Rust library embedded in the binary. Provides BPM detection and key detection (Camelot notation). No setup required.
 
-- **BPM detection** — tempo estimation from audio
-- **Key detection** — musical key mapped to Camelot notation
+### Essentia (optional)
 
-stratum-dsp runs on `analyze_track_audio` calls when results are not already cached. No setup required.
-
-### Essentia (optional, Python subprocess)
-
-Essentia adds advanced audio descriptors that stratum-dsp does not cover:
-
-- **Danceability** — rhythmic regularity and beat strength
-- **Rhythm regularity** — how consistent the rhythmic pattern is
-- **Spectral centroid** — brightness/timbre (higher = brighter sound)
-- **Loudness (integrated)** — perceived loudness in LUFS
-- **Onset rate** — transient density (higher = more percussive)
-- **Dynamic complexity** — loudness range over time
-
-Essentia runs as a Python subprocess. It requires a virtual environment with the `essentia` package installed. See [Getting Started](/getting-started/) for setup instructions.
+Python subprocess adding advanced descriptors: danceability, rhythm regularity, spectral centroid (brightness), loudness (LUFS), onset rate, and dynamic complexity. Requires a Python venv — see [Getting Started](/getting-started/).
 
 <Aside type="note">
-  Essentia results are used for energy computation and the brightness/rhythm axes in transition scoring. Without Essentia, energy falls back to a BPM-based proxy and those axes score at a neutral 0.5.
+  Without Essentia, energy falls back to a BPM proxy and brightness/rhythm axes score at a neutral 0.5.
 </Aside>
 
-### Caching
-
-Both backends cache their results in the internal SQLite database, keyed by file path and analyzer name. Analysis only runs once per track per backend. Use `skip_cached: false` in `analyze_track_audio` to force a re-analysis if needed.
+Analysis runs once per track per backend. Use `skip_cached: false` to force re-analysis.
 
 ## CLI subcommands
 
-reklawdbox has additional modes beyond the MCP server. The binary supports these subcommands:
+The binary doubles as a standalone CLI. No MCP host required.
 
 | Subcommand | Purpose |
 |------------|---------|
-| *(default)* | Start the MCP server (stdio). This is what your MCP host launches. |
-| `hydrate` | Batch enrichment (Discogs, Beatport) and audio analysis across your library. |
-| `analyze` | Batch audio analysis with filters. Analyze your entire collection or a filtered subset without going through MCP. |
-| `read-tags` | Read native file tags (ID3, Vorbis, etc.) from audio files. |
-| `write-tags` | Write native file tags to audio files. |
-| `extract-art` | Extract embedded cover art from audio files. |
-| `embed-art` | Embed cover art into audio files. |
+| *(default)* | Start the MCP server (stdio) |
+| `hydrate` | Batch enrichment + audio analysis |
+| `analyze` | Batch audio analysis with filters |
+| `read-tags` | Read native file tags (ID3, Vorbis, etc.) |
+| `write-tags` | Write native file tags |
+| `extract-art` | Extract embedded cover art |
+| `embed-art` | Embed cover art into audio files |
+| `setup` | Configure broker URL/token (self-hosted brokers only) |
 
-The CLI subcommands operate directly on files and do not require an MCP host. They are useful for batch operations and scripting.
-
-```bash
-# Batch-analyze all tracks matching a filter
-./reklawdbox analyze --genre "Techno" --limit 50
-
-# Read tags from a file
-./reklawdbox read-tags /path/to/track.flac
-
-# Extract cover art
-./reklawdbox extract-art /path/to/track.mp3 --output cover.jpg
-```
+See [CLI Commands](/cli/) for full usage.
 
 <CardGrid>
   <Card title="Concepts Overview" icon="open-book">

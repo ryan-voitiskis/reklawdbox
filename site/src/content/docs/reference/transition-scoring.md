@@ -28,16 +28,15 @@ Axes 5 and 6 require Essentia audio analysis. When that data is missing, those a
 
 Key relationships are evaluated on the Camelot wheel, where adjacent positions represent harmonically compatible keys.
 
-| Relationship               | Score | Label        |
-| -------------------------- | ----- | ------------ |
-| Same key (6A to 6A)        | 1.0   | Perfect      |
-| +1 same letter (6A to 7A)  | 0.9   | Energy boost |
-| -1 same letter (6A to 5A)  | 0.9   | Energy drop  |
-| Same number A/B (6A to 6B) | 0.8   | Mood shift   |
-| +2 same letter (6A to 8A)  | 0.5   | Acceptable   |
-| -2 same letter (6A to 4A)  | 0.5   | Acceptable   |
-| +1 other letter (6A to 7B) | 0.4   | Rough        |
-| Everything else            | 0.1   | Clash        |
+| Relationship               | Score | Label            |
+| -------------------------- | ----- | ---------------- |
+| Same key (6A to 6A)        | 1.0   | Perfect          |
+| +1 same letter (6A to 7A)  | 0.9   | Energy boost     |
+| -1 same letter (6A to 5A)  | 0.9   | Energy drop      |
+| Same number A/B (6A to 6B) | 0.8   | Mood shift       |
+| +/-1 other letter (6A to 7B) | 0.55  | Energy diagonal |
+| +/-2 same letter (6A to 8A) | 0.45  | Extended        |
+| Everything else            | 0.1   | Clash            |
 
 Camelot wraps at the boundary: 12A to 1A is +1 (adjacent), not +11.
 
@@ -47,19 +46,21 @@ The +1/-1 moves are the bread and butter of harmonic mixing. Same-number A/B shi
 
 ## BPM compatibility
 
-BPM delta is the absolute difference in tempo between two tracks.
+BPM compatibility uses an exponential decay based on the percentage delta between two tracks:
 
-| Delta   | Score | Label                     |
+```
+score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
+```
+
+| Delta % | Score | Label                     |
 | ------- | ----- | ------------------------- |
-| 0-2 BPM | 1.0   | Seamless                  |
-| 2-4 BPM | 0.8   | Comfortable pitch adjust  |
-| 4-6 BPM | 0.5   | Noticeable                |
-| 6-8 BPM | 0.3   | Needs creative transition |
-| > 8 BPM | 0.1   | Likely jarring            |
+| <2%     | ~1.0  | Seamless                  |
+| 2-4%    | ~0.8  | Comfortable pitch adjust  |
+| 4-6%    | ~0.5  | Noticeable                |
+| 6-9%    | ~0.3  | Creative transition needed |
+| ≥9%     | <0.2  | Jarring                   |
 
-reklawdbox uses stratum-dsp analyzed BPM when available, which is more accurate than Rekordbox's built-in analysis. Falls back to Rekordbox metadata BPM if no stratum-dsp analysis is cached.
-
-The thresholds assume both tracks will be pitch-adjusted to match. A 4 BPM gap means one or both decks need noticeable pitch fader movement. Beyond 8 BPM, you typically need to use techniques like looping, echo-out, or hard cuts rather than a smooth blend.
+reklawdbox uses stratum-dsp analyzed BPM when available, falling back to Rekordbox metadata BPM.
 
 ---
 

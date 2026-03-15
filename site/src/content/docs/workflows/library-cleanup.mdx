@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, Aside, Badge } from '@astrojs/starlight/components';
 
-If your library has missing genres, wrong labels, inconsistent naming, or sparse metadata, you might not know where to start. Library Cleanup breaks the work into five explicit sessions, each with clear entry and exit criteria.
+Five sessions, each with clear entry and exit criteria. Follow in order — later sessions depend on earlier ones.
 
 <Aside type="danger">
   **Some sessions write directly to files (Sessions 1–3), while others stage changes as XML (Sessions 4–5).** For XML sessions, the Rekordbox database only updates after you import the XML file. Each session reads from the database, so you **must** complete each checkpoint before starting the next session.
@@ -15,15 +15,9 @@ If your library has missing genres, wrong labels, inconsistent naming, or sparse
 
 ## Why order matters
 
-The dependency chain looks like this:
+**Clean metadata → accurate enrichment → label data → genre signals**
 
-**Clean metadata → accurate enrichment matches → label data → genre signals**
-
-- **Enrichment** matches on artist name and track title. Typos and inconsistent naming cause missed or wrong matches.
-- **Genre classification** uses enrichment data (Discogs styles, Beatport genres), labels, and audio analysis as evidence. The more signals available, the more accurate the result.
-- **Genre audit** verifies existing tags against the same cached evidence. Running it before enrichment means you're checking tags without the data needed to correct them.
-
-Working out of order means you'll either get poor results or end up re-running workflows.
+Enrichment matches on artist/title — typos cause missed matches. Genre classification uses enrichment + audio analysis as evidence. Working out of order means poor results or re-running workflows.
 
 ## Sessions
 
@@ -43,16 +37,16 @@ To scope to specific directories:
 Audit [/path/to/music, /another/path] for naming and tagging issues.
 ```
 
-The agent will follow the Collection Audit SOP — fix artist names, track titles, and naming conventions. Enrichment matches on these fields, so cleaning them first dramatically improves match rates.
+Fix artist names, track titles, and naming conventions. Cleaning these first improves enrichment match rates.
 
 <LinkCard title="Collection Audit workflow" href="/workflows/collection-audit/" />
 
 #### CHECKPOINT
 
-No XML export needed — Collection Audit works with direct file operations (renames and tag writes). Verify metadata is clean by spot-checking corrected tracks in Rekordbox.
+No XML export — Collection Audit uses direct file operations. Spot-check corrected tracks in Rekordbox.
 
 <Aside type="tip">
-  This is a natural context-reset point. You can close this agent session and start a new one for Session 2.
+  Natural context-reset point — close this session and start fresh for Session 2.
 </Aside>
 
 ---
@@ -61,18 +55,16 @@ No XML export needed — Collection Audit works with direct file operations (ren
 
 <Badge text="Entry" variant="note" /> Clean metadata — Session 1 complete.
 
-Hydrate all caches using the CLI — it runs unattended with progress bars and handles the full pipeline in one pass:
-
 ```sh
 reklawdbox hydrate --cpu overnight -y
 ```
 
-The `--cpu overnight` flag uses max cores without nicing; `-y` skips the confirmation prompt. Use filters like `--artist`, `--genre`, or `--added-after` to scope to a subset if needed.
+`--cpu overnight` uses max cores; `-y` skips confirmation. Use `--artist`, `--genre`, or `--added-after` to scope.
 
-**Exit criteria:** Run `reklawdbox hydrate` again — it will report any remaining gaps. All providers must be at 100%.
+**Exit:** Re-run `reklawdbox hydrate` — it reports remaining gaps. All providers must be at 100%.
 
 <Aside type="tip">
-  This is a natural context-reset point. No XML export is needed — enrichment data is persisted in the local cache database.
+  Natural context-reset point — enrichment data is persisted in the cache database.
 </Aside>
 
 ---
@@ -87,28 +79,18 @@ The `--cpu overnight` flag uses max cores without nicing; `-y` skips the confirm
 Find tracks missing labels in my collection and fill them from enrichment data.
 ```
 
-Check label coverage across your collection:
-
-```
-search_tracks(has_label=false)
-```
-
-Labels are the strongest genre signal for electronic music. Review unlabelled tracks — enrichment usually has label data. Where gaps remain, use `write_file_tags` to write labels directly to audio files:
-
-```
-write_file_tags(writes=[{"path": "...", "tags": {"publisher": "Label Name"}}])
-```
+Labels are the strongest genre signal for electronic music. Check `search_tracks(has_label=false)` — enrichment usually has label data. Fill gaps with `write_file_tags` (labels use the `publisher` tag field).
 
 <Aside type="note">
-  Labels are stored in the `publisher` tag field. After writing, Rekordbox will pick up changes on its next file analysis. For large batches, consider using the Rekordbox "Reload Tags" function.
+  After writing labels, Rekordbox picks them up on next file analysis. Use "Reload Tags" for large batches.
 </Aside>
 
 #### CHECKPOINT
 
-No XML export needed for label changes — they're written directly to audio files. Verify in Rekordbox that labels appear.
+No XML export — labels are written directly to files. Verify in Rekordbox.
 
 <Aside type="tip">
-  This is a natural context-reset point. You can close this agent session and start a new one for Session 4.
+  Natural context-reset point — close this session and start fresh for Session 4.
 </Aside>
 
 ---
@@ -141,18 +123,7 @@ Classify genres for my ungenred tracks.
    classify_tracks(max_tracks=50)
    ```
 
-   The server applies the genre decision tree using all cached evidence. Review results grouped by confidence:
-
-   - **High/Medium:** approve in bulk or per-track
-   - **Low/Insufficient (`needs_review`):** agent reviews with artist/title context, presents recommendations
-
-   Stage approved classifications:
-
-   ```
-   update_tracks(changes=[{"track_id": "...", "genre": "..."}])
-   ```
-
-   Repeat with `offset` pagination until all tracks are processed.
+   Review results by confidence — High/Medium can be approved in bulk, Low/Insufficient need per-track review. Stage approved changes with `update_tracks`. Repeat with `offset` until all tracks are processed.
 
 <LinkCard title="Genre Classification workflow" href="/workflows/genre-classification/" />
 
@@ -163,10 +134,10 @@ preview_changes()
 write_xml()
 ```
 
-Import the XML file into Rekordbox. Verify genres by browsing the genre column in Rekordbox.
+Import XML into Rekordbox and verify genres.
 
 <Aside type="tip">
-  This is a natural context-reset point. You can close this agent session and start a new one for Session 5.
+  Natural context-reset point — close this session and start fresh for Session 5.
 </Aside>
 
 ---
@@ -187,15 +158,7 @@ Audit my existing genre tags.
    audit_genres(max_tracks=50)
    ```
 
-   The summary shows confirmed vs conflict counts. Only conflicts and manual-review tracks appear in results.
-
-2. **Review conflicts** and approve or reject changes:
-
-   ```
-   update_tracks(changes=[{"track_id": "...", "genre": "..."}])
-   ```
-
-   Repeat with `offset` pagination until all tracks are processed.
+   Only conflicts and manual-review tracks appear. Review and approve/reject, then stage with `update_tracks`. Repeat with `offset` until done.
 
 <LinkCard title="Genre Audit workflow" href="/workflows/genre-audit/" />
 
@@ -206,16 +169,14 @@ preview_changes()
 write_xml()
 ```
 
-Import the XML file into Rekordbox. Spot-check corrected genres.
+Import XML into Rekordbox. Spot-check corrected genres.
 
 ---
 
 ## Skipping sessions
 
-Not every library needs all sessions:
-
-- **Metadata already clean?** Skip Session 1, start at Session 2 (Enrichment).
-- **Already enriched?** Check with `cache_coverage()` — if 100%, jump to Session 3.
-- **Labels already present?** Skip Session 3.
-- **No existing genre tags?** Skip Session 5 — classification covers untagged tracks.
-- **No ungenred tracks?** Skip Session 4 — audit covers tagged tracks.
+- **Metadata already clean?** Start at Session 2.
+- **Already enriched?** `cache_coverage()` at 100% → jump to Session 3.
+- **Labels present?** Skip Session 3.
+- **No existing genre tags?** Skip Session 5.
+- **No ungenred tracks?** Skip Session 4.

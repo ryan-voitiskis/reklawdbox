@@ -10,18 +10,16 @@ import CamelotWheel from '../../../components/CamelotWheel.astro';
 import PriorityWeights from '../../../components/PriorityWeights.astro';
 import EnergyCurves from '../../../components/EnergyCurves.astro';
 
-Harmonic mixing means mixing tracks in compatible musical keys so transitions sound smooth instead of dissonant. reklawdbox automates this using the Camelot wheel and extends it with multi-axis scoring that accounts for BPM, energy, genre, brightness, and rhythm.
+Mixing tracks in compatible musical keys so transitions sound smooth. reklawdbox automates this via the Camelot wheel and extends it with multi-axis scoring across BPM, energy, genre, brightness, and rhythm.
 
 ## The Camelot wheel
 
-The Camelot system maps all 24 musical keys (12 pitches x 2 modes) to a numbered wheel. Each position has a number (1-12) and a letter: **A** for minor keys, **B** for major keys.
-
-Adjacent positions on the wheel are harmonically compatible. Moving clockwise or counterclockwise by one position (same letter) shifts the key by a perfect fifth — the most natural-sounding key change.
+Maps all 24 musical keys to a numbered wheel: 1-12 with **A** (minor) or **B** (major). Adjacent positions are harmonically compatible — moving ±1 (same letter) shifts by a perfect fifth.
 
 <CamelotWheel />
 
 <Aside type="note">
-  Rekordbox lets you display keys in either Classic notation (Am, C) or Camelot notation (8A, 8B) — it is a user preference in the settings. reklawdbox always uses Camelot internally for scoring, regardless of display format.
+  Rekordbox displays keys in Classic (Am) or Camelot (8A) notation — user preference. reklawdbox always uses Camelot internally.
 </Aside>
 
 ## Key compatibility scoring
@@ -43,7 +41,7 @@ Missing keys (track has no key detected) score 0.1 — same as a clash. Run `ana
 
 ## Beyond key: multi-axis scoring
 
-Key compatibility alone is not enough for a good transition. reklawdbox scores transitions on **six axes**, then combines them into a single composite score using weighted averages.
+reklawdbox scores transitions on **six axes**, combined into a weighted composite score.
 
 ### The six axes
 
@@ -63,7 +61,7 @@ Each axis produces a score from 0 to 1. The composite score is a weighted averag
 <PriorityWeights />
 
 <Aside type="tip">
-  When brightness and rhythm data are unavailable (no Essentia analysis), those axes are excluded and the remaining weights are renormalized. The scoring still works — it is just less precise.
+  Without Essentia, brightness and rhythm axes are excluded and remaining weights renormalized.
 </Aside>
 
 ### BPM scoring detail
@@ -80,7 +78,7 @@ BPM compatibility uses an exponential decay: `score = exp(-0.019 * pct^2)` where
 
 ## Energy curves
 
-When building a set with `build_set`, reklawdbox shapes the energy arc across the entire sequence. Each position in the set is assigned an **energy phase**, and the energy axis scoring rewards transitions that match the expected direction for that phase.
+`build_set` shapes the energy arc across the sequence. Each position is assigned an **energy phase**, and the energy axis rewards transitions matching the expected direction.
 
 <EnergyCurves />
 
@@ -105,13 +103,9 @@ When building a set with `build_set`, reklawdbox shapes the energy arc across th
 
 ## How `score_transition` and `build_set` use this
 
-`score_transition` computes the full six-axis score between two tracks. It does not require an energy curve — it scores a single pair in isolation.
+`score_transition` scores a single pair in isolation (no energy curve needed). `build_set` uses beam search from a seed track, exploring multiple paths in parallel (`beam_width` controls breadth). Not globally optimal, but produces strong results quickly with multiple candidates to choose from.
 
-`build_set` uses beam search: starting from a seed track, it explores multiple candidate paths in parallel (controlled by `beam_width`), scoring each transition against the current energy phase. A beam width of 1 is pure greedy; higher values explore more options at the cost of compute time.
-
-Beam search does not guarantee a globally optimal sequence, but it produces strong results quickly and generates multiple candidate orderings so you can pick the one you prefer.
-
-For the full scoring math and all parameter options, see the [Transition Scoring reference](/reference/transition-scoring/).
+For the full scoring math, see the [Transition Scoring reference](/reference/transition-scoring/).
 
 <CardGrid>
   <Card title="Concepts Overview" icon="open-book">

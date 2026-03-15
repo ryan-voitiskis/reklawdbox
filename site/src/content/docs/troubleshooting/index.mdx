@@ -11,27 +11,15 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 ### "Cannot open database" or "database is locked"
 
-**Cause:** Rekordbox is running and holds an exclusive lock on `master.db`.
-
-**Fix:** Close Rekordbox completely (check for background processes), then restart the MCP server.
+Rekordbox holds an exclusive lock. Close it completely (check for background processes), then restart the MCP server.
 
 ### "Failed to open database" or path errors
 
-**Cause:** `REKORDBOX_DB_PATH` is not set and auto-detection failed. This happens when Rekordbox is installed in a non-standard location.
-
-**Fix:** Set `REKORDBOX_DB_PATH` in your MCP host config to the full path of your `master.db`. The default location is `~/Library/Pioneer/rekordbox/master.db`. See [Environment Variables](/reference/environment-variables/) for details.
+Auto-detection failed. Set `REKORDBOX_DB_PATH` in your MCP config to the full path of `master.db` (default: `~/Library/Pioneer/rekordbox/master.db`).
 
 ### "Not a database" or decryption errors
 
-**Cause:** SQLCipher version mismatch or a corrupted database file.
-
-**Fix:** Make sure you're using the reklawdbox binary (it bundles the correct SQLCipher version). If the database is corrupted, restore from Rekordbox's built-in backups:
-
-- `master.backup.db`
-- `master.backup2.db`
-- `master.backup3.db`
-
-These live in the same directory as `master.db`.
+SQLCipher mismatch or corrupted DB. Ensure you're using the reklawdbox binary (bundles correct SQLCipher). If corrupted, restore from `master.backup.db` / `master.backup2.db` / `master.backup3.db` in the same directory.
 
 ---
 
@@ -39,21 +27,15 @@ These live in the same directory as `master.db`.
 
 ### "Discogs auth is not configured"
 
-**Cause:** The broker URL is invalid. This should not occur with default configuration — the broker URL and token have compiled-in defaults pointing to the production broker. The most likely cause is overriding `REKLAWDBOX_DISCOGS_BROKER_URL` with an invalid URL in your MCP config.
-
-**Fix:** Remove any custom `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` overrides from your MCP config to use the built-in defaults. If you are self-hosting a broker, verify the URL is valid and includes the scheme (e.g., `https://`).
+Broker URL is invalid. Remove custom `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` overrides to use built-in defaults. If self-hosting, verify the URL includes the scheme (`https://`).
 
 ### "Discogs sign-in is still pending"
 
-**Cause:** The browser authorization flow was not completed.
-
-**Fix:** Open the `auth_url` returned by the tool in your browser, approve the request on Discogs, then call `lookup_discogs` again.
+Browser authorization wasn't completed. Open the `auth_url` in your browser, approve on Discogs, then call `lookup_discogs` again.
 
 ### "Discogs broker session is missing or expired"
 
-**Cause:** The session token expired or was rejected by the broker.
-
-**Fix:** Call `lookup_discogs` again to start a new auth flow. If that still fails, do a hard reset:
+Call `lookup_discogs` again to start a new auth flow. If that fails, hard reset:
 
 <Steps>
 
@@ -78,127 +60,76 @@ These live in the same directory as `master.db`.
 
 ### "broker ... HTTP 401"
 
-**Cause:** `REKLAWDBOX_DISCOGS_BROKER_TOKEN` does not match the token configured on the deployed broker.
-
-**Fix:** Verify the token value in your MCP config matches what's set in the broker's Cloudflare Worker config. Copy-paste errors (trailing spaces, wrong quotes) are the most common cause.
+`REKLAWDBOX_DISCOGS_BROKER_TOKEN` doesn't match the deployed broker. Check for copy-paste errors (trailing spaces, wrong quotes).
 
 ### "broker ... HTTP 404/410"
 
-**Cause:** The pending device flow expired before you completed browser authorization.
-
-**Fix:** Call `lookup_discogs` again to start a new flow. Device flows are short-lived — complete the browser step promptly after receiving the URL.
+Device flow expired before browser authorization completed. Call `lookup_discogs` again — complete the browser step promptly.
 
 ---
 
 ## Essentia / audio analysis
 
-### "Essentia not available" — tools only report stratum-dsp results
+### "Essentia not available"
 
-**Cause:** No Essentia installation found at either `CRATE_DIG_ESSENTIA_PYTHON` or the default venv path.
+No installation found. Either call `setup_essentia` through your agent (installs and activates without restart), or run `bash scripts/setup-essentia.sh` manually and set `CRATE_DIG_ESSENTIA_PYTHON` in your MCP config.
 
-**Fix (option A):** Call the `setup_essentia` tool through your agent. It installs Essentia and activates it without a server restart.
+### Essentia stopped after config change
 
-**Fix (option B):** Install manually:
-
-```bash
-bash scripts/setup-essentia.sh
-```
-
-Then set `CRATE_DIG_ESSENTIA_PYTHON` to `~/.local/share/reklawdbox/essentia-venv/bin/python` in your MCP host config and restart the server.
-
-### Essentia was working but stopped after a config change
-
-**Cause:** The Essentia probe result is memoized for the process lifetime. Changing config alone does not trigger a re-probe.
-
-**Fix:** Restart the MCP server after changing Essentia-related config. Alternatively, call the `setup_essentia` tool to force a re-probe without restarting.
+The probe is memoized per process. Restart the MCP server, or call `setup_essentia` to force a re-probe.
 
 ### Audio analysis fails for specific tracks
 
-**Cause:** Unsupported codec or a corrupted audio file.
-
-**Fix:** Check that the file plays correctly in a regular audio player. reklawdbox supports these formats via symphonia: FLAC, MP3, WAV, M4A, AAC, and AIFF. Other formats (OGG, WMA) are not supported.
+Unsupported codec or corrupted file. Supported formats: FLAC, MP3, WAV, M4A, AAC, AIFF. OGG and WMA are not supported.
 
 ---
 
 ## XML import
 
-### Tracks appear in Rekordbox but metadata didn't update
+### Metadata didn't update after import
 
-**Cause:** A long-standing Rekordbox reimport behavior (since RB 5.6.1) — existing tracks are not updated on a standard XML import.
-
-**Fix:** Use the two-step import:
-
-<Steps>
-
-1. Right-click the imported playlist in Rekordbox and select **Import To Collection**.
-
-2. Select all tracks in the playlist (Cmd+A), right-click, and select **Import To Collection** again. This forces Rekordbox to overwrite existing metadata with the values from the XML.
-
-</Steps>
+Rekordbox reimport bug (since RB 5.6.1). Right-click playlist → **Import To Collection**, then select all (Cmd+A), right-click → **Import To Collection** again. The second pass forces metadata overwrite.
 
 ### Import fails with no error
 
-**Cause:** The `<COLLECTION Entries="N">` count in the XML header doesn't match the actual number of tracks.
+`<COLLECTION Entries="N">` count doesn't match actual tracks. Shouldn't happen with reklawdbox — [file a bug](https://github.com/ryan-voitiskis/reklawdbox/issues) if it does.
 
-**Fix:** This should not happen with reklawdbox-generated XML. If it does, please [file a bug report](https://github.com/ryan-voitiskis/reklawdbox/issues).
+### Tracks appear as missing/offline
 
-### Tracks appear as missing/offline after import
-
-**Cause:** File paths in the XML don't match actual file locations on disk.
-
-**Fix:** This means the paths stored in the Rekordbox database are stale (files were moved or renamed after being added to Rekordbox). reklawdbox reads paths from the database — if the DB paths are wrong, the exported XML inherits those wrong paths. Fix the file locations in Rekordbox first, then re-export.
+File paths in the XML don't match disk locations. The Rekordbox DB paths are stale (files moved/renamed). Fix locations in Rekordbox first, then re-export.
 
 ---
 
 ## MCP host connection
 
-### Server doesn't start or immediately disconnects
+### Server doesn't start or disconnects
 
-**Cause:** Binary not found, wrong path in config, or missing execute permissions.
+Wrong path or missing permissions. Verify the binary path and run `chmod +x ./target/release/reklawdbox`.
 
-**Fix:** Verify the command path in your MCP config points to the built binary. Check it's executable:
+### Tools not visible
 
-```bash
-chmod +x ./target/release/reklawdbox
-```
-
-### Tools are not visible in the MCP host
-
-**Cause:** The server started but the host didn't enumerate tools correctly.
-
-**Fix:** Remove and re-add the MCP server in your host config. For Claude Code:
-
-```bash
-claude mcp remove reklawdbox
-claude mcp add reklawdbox -- ./target/release/reklawdbox
-```
+Remove and re-add: `claude mcp remove reklawdbox && claude mcp add reklawdbox -- ./target/release/reklawdbox`
 
 <Aside type="caution">
-  Check for duplicate MCP registrations. Claude Code can have reklawdbox registered in both local scope (`~/.claude.json`) and project scope (`.mcp.json`). Local overrides project. Use `claude mcp list` to check.
+  Check for duplicate registrations — Claude Code can have reklawdbox in both local (`~/.claude.json`) and project (`.mcp.json`) scope. Local overrides project. Use `claude mcp list` to check.
 </Aside>
 
 ### Slow tool responses
 
-**Cause:** First-run audio analysis and enrichment are slow by nature. Analysis reads and decodes full audio files; enrichment calls external APIs.
-
-**Fix:** This is expected behavior. Subsequent calls use the cache and return instantly. Use `skip_cached: true` (the default) to avoid re-analyzing tracks that already have results.
+First-run analysis and enrichment are slow (decoding files, API calls). Subsequent calls use cache. This is expected.
 
 ---
 
 ## General
 
-### "No changes to write" when calling write_xml
+### "No changes to write"
 
-**Cause:** No metadata changes have been staged.
-
-**Fix:** Stage changes first with `update_tracks`, verify them with `preview_changes`, then call `write_xml`.
+No changes staged. Use `update_tracks` first, then `write_xml`.
 
 ---
 
 ## Still stuck?
 
-If your problem isn't listed here, check:
-
-- [GitHub Issues](https://github.com/ryan-voitiskis/reklawdbox/issues) — for known bugs and feature requests
-- [Environment Variables](/reference/environment-variables/) — for configuration reference
-- [Getting Started](/getting-started/) — for initial setup walkthrough
+- [GitHub Issues](https://github.com/ryan-voitiskis/reklawdbox/issues)
+- [Environment Variables](/reference/environment-variables/)
+- [Getting Started](/getting-started/)

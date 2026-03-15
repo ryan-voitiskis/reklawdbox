@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import BatchImportSOP from '../../../partials/sops/batch-import.mdx'
 
-Process newly downloaded or purchased music into a clean, tagged, organized structure ready for Rekordbox import. This workflow handles albums, loose tracks, and zip archives from any source (Bandcamp, Beatport, Juno, Revibed, etc.).
+Process newly acquired music into a tagged, organized structure for Rekordbox import. Handles albums, loose tracks, and zip archives from any source.
 
 **Paste into your agent to start:**
 
@@ -23,20 +23,14 @@ Process the new music in [/path/to/folder] for Rekordbox import.
 ## What this workflow does
 
 1. **Extracts and organizes** — unzips archives, categorizes albums vs loose tracks
-2. **Enriches metadata** — looks up release info on Discogs and Beatport for label, year, and artist spelling verification
-3. **Writes tags** — sets all required fields including WAV dual-tagging
-4. **Renames files** — applies the `NN Artist - Title.ext` naming convention
+2. **Enriches metadata** — Discogs/Beatport lookups for label, year, artist verification
+3. **Writes tags** — all required fields including WAV dual-tagging
+4. **Renames files** — `NN Artist - Title.ext` convention
 5. **Embeds cover art** — from included images or Discogs
 6. **Moves to final location** — organized by artist/album with year
 
-## When to use this
-
-- You just purchased or downloaded new music
-- You have a folder of unorganized audio files that need tagging
-- You're migrating files from another DJ software and need to standardize tags
-
 <Aside type="caution">
-  WAV files require both ID3v2 and RIFF INFO tags for full compatibility. Rekordbox reads **only RIFF INFO** from WAVs. The `write_file_tags` tool handles writing both tag formats automatically.
+  Rekordbox reads **only RIFF INFO** from WAVs. `write_file_tags` writes both ID3v2 and RIFF INFO automatically.
 </Aside>
 
 ## Step-by-step

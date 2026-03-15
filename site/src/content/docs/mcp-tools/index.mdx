@@ -7,7 +7,7 @@ sidebar:
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
-reklawdbox exposes **30 MCP tools** that an AI agent calls to read your Rekordbox library, enrich metadata, analyze audio, build DJ sets, and export changes. Every tool accepts JSON parameters and returns structured JSON. The Rekordbox database is never written to directly — metadata changes are staged in memory and exported as XML.
+reklawdbox exposes **33 MCP tools** for reading your library, enriching metadata, analyzing audio, building sets, and exporting changes. All tools accept and return JSON.
 
 ## Tool pipeline
 
@@ -33,8 +33,8 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
     [6 tools](/mcp-tools/enrichment-analysis/)
   </Card>
   <Card title="Classification & Staging" icon="pencil">
-    Review genre taxonomy, stage metadata changes, preview diffs, and export to XML.
-    [6 tools](/mcp-tools/classification-staging/)
+    Genre classification, auditing, label backfill, staging, and XML export.
+    [9 tools](/mcp-tools/classification-staging/)
   </Card>
   <Card title="Mixing & Sequencing" icon="bars-ascending">
     Score transitions between tracks and build optimized DJ set sequences.
@@ -48,7 +48,7 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
 
 ## Shared search filters
 
-Many tools accept a common set of **search filter parameters** to scope which tracks they operate on. These filters are shared across `search_tracks`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
+Many tools share a common set of **search filter parameters**. Used by `search_tracks`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -60,6 +60,7 @@ Many tools accept a common set of **search filter parameters** to scope which tr
 | `bpm_max` | number | Maximum BPM |
 | `key` | string | Filter by musical key (e.g., `"Am"`, `"Cm"`) |
 | `has_genre` | boolean | Filter by whether track has a genre set |
+| `has_label` | boolean | Filter by whether track has a label set |
 | `label` | string | Filter by label (partial match) |
 | `path` | string | Filter by file path/folder (substring match) |
 | `path_prefix` | string | Filter to tracks whose file path starts with this prefix |
@@ -67,5 +68,5 @@ Many tools accept a common set of **search filter parameters** to scope which tr
 | `added_before` | string | ISO date — only tracks added on or before |
 
 <Aside type="tip">
-  These filters are combinable. Use `genre: "Techno"` + `bpm_min: 130` + `has_genre: true` to scope an enrichment batch to up-tempo techno tracks that already have genres assigned.
+  Filters are combinable: `genre: "Techno"` + `bpm_min: 130` + `has_genre: true` scopes to up-tempo techno with genres assigned.
 </Aside>

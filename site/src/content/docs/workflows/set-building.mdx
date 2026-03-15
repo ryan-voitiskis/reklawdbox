@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import SetBuildingSOP from '../../../partials/sops/set-building.mdx'
 
-Build ordered tracklists for DJ sets using cached audio analysis and enrichment data. The agent scores transitions across 6 axes (key, BPM, energy, genre, brightness, rhythm), sequences tracks using beam search, and presents multiple candidates for you to compare and refine.
+Build ordered tracklists using cached audio analysis and enrichment data. Transitions are scored across 6 axes, sequenced via beam search, and presented as multiple candidates for comparison.
 
 **Paste into your agent to start:**
 
@@ -26,43 +26,11 @@ Build a DJ set from my collection.
 - **Cache coverage at 100%** across all providers. Run `cache_coverage` to check.
 - **Essentia** is optional but improves energy, brightness, and rhythm scoring.
 
-## Transition scoring axes
+## Scoring and energy curves
 
-Each transition between adjacent tracks is scored on 6 axes:
+See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model (Camelot wheel, BPM decay, energy phases, priority weights).
 
-| Axis | What it measures |
-|---|---|
-| **Key** | Harmonic compatibility via Camelot wheel position |
-| **BPM** | Tempo proximity (smaller jumps score higher) |
-| **Energy** | Energy level continuity and adherence to the target curve |
-| **Genre** | Genre affinity (same genre or compatible genres score higher) |
-| **Brightness** | Spectral similarity (smooth tonal transitions) |
-| **Rhythm** | Rhythmic pattern compatibility |
-
-The **priority axis** parameter weights one axis more heavily. "Balanced" gives equal weight to all six.
-
-## Energy curves
-
-### warmup → build → peak → release (default)
-
-| Phase | Position | Energy |
-|---|---|---|
-| Warmup | 0-15% | Low energy, atmospheric |
-| Build | 15-45% | Gradually increasing |
-| Peak | 45-75% | Maximum energy |
-| Release | 75-100% | Winding down |
-
-### flat
-
-Constant peak energy throughout. Useful for peak-time sets.
-
-### peak_only
-
-Minimal warmup (0-10%), extended peak (10-85%), brief cooldown (85-100%).
-
-### Custom
-
-Specify energy levels per track position. Tell the agent the shape you want.
+**Energy presets:** `warmup_build_peak_release` (default), `flat` (constant peak), `peak_only` (fast ramp), or custom per-position arrays.
 
 ## Step-by-step
 

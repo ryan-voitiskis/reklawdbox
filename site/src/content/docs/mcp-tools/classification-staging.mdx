@@ -13,7 +13,7 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ### `get_genre_taxonomy` <Badge text="no params" variant="note" />
 
-Returns the configured genre taxonomy: the canonical genre list and alias mappings used for normalization suggestions. The taxonomy contains 45+ genres optimized for DJ mixing contexts.
+Returns the canonical genre list and alias mappings (45+ genres optimized for DJ mixing).
 
 ---
 
@@ -33,9 +33,49 @@ Returns three sections:
 
 ---
 
-## Staging tools
+### `classify_tracks`
 
-reklawdbox never writes to the Rekordbox database directly. Changes are staged in memory and exported as Rekordbox-compatible XML for reimport. This gives you a chance to review every change before it touches your library.
+Apply the genre decision tree to ungenred tracks using cached enrichment and audio evidence. Returns recommendations grouped by confidence level (high/medium/low/insufficient). Cache-only — never triggers external calls.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs to classify |
+| `playlist_id` | string | | Classify tracks in this playlist |
+| `max_tracks` | integer | | Max tracks (default: `50`, max: `200`) |
+| `offset` | integer | | Skip first N tracks for pagination |
+| `genre_overrides` | array | | Remap genre strings before scoring (e.g., `[{"from": "Melodic House & Techno", "to": "Deep Techno"}]`) |
+
+Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=false`.
+
+---
+
+### `audit_genres`
+
+Verify existing genre tags against enrichment and audio evidence. Returns only conflicts and manual-review tracks — confirmed tracks are counted in the summary but omitted. Cache-only.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs to audit |
+| `playlist_id` | string | | Audit tracks in this playlist |
+| `max_tracks` | integer | | Max tracks (default: `50`, max: `200`) |
+| `offset` | integer | | Skip first N tracks for pagination |
+| `include_confirmed` | boolean | | Include confirmed tracks in results (default: `false`) |
+
+Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=true`.
+
+---
+
+### `backfill_labels`
+
+Auto-fill empty labels from Discogs enrichment. Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `dry_run` | boolean | | Preview without staging (default: `false`) |
+
+---
+
+## Staging tools
 
 ```
 update_tracks ──> preview_changes ──> write_xml ──> import in Rekordbox
@@ -47,7 +87,7 @@ update_tracks ──> preview_changes ──> write_xml ──> import in Rekord
 
 ### `update_tracks`
 
-Stage changes to track metadata. Changes are held in memory until exported with `write_xml` or cleared with `clear_changes`.
+Stage changes to track metadata. Held in memory until exported or cleared.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -62,6 +102,7 @@ Each change object:
 | `comments` | string | | New comments |
 | `rating` | integer | | Star rating (1-5) |
 | `color` | string | | Color name |
+| `label` | string | | Record label |
 
 You can stage changes for multiple tracks in one call. Calling `update_tracks` again for the same track **merges** fields — only the specified fields are overwritten, existing staged fields are preserved.
 
@@ -79,7 +120,7 @@ Preview all staged changes, showing a diff from the current Rekordbox state.
 
 ### `write_xml`
 
-Export staged changes to a Rekordbox-compatible XML file. Optionally include playlist definitions.
+Export staged changes to Rekordbox-compatible XML. Optionally includes playlists.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -93,14 +134,12 @@ Each playlist object:
 | `name` | string | **yes** | Playlist name |
 | `track_ids` | string[] | **yes** | Track IDs in playlist order |
 
-When there are no staged changes and no playlists, the response includes `"message": "No changes to write."` and no file is created.
-
 <Aside type="caution">
-  On successful export, `write_xml` **drains all staged changes** — including changes unrelated to the playlists being exported. If the export fails, staged changes are restored. If you have pending metadata edits from a different workflow, use `preview_changes` to review them before calling `write_xml`, or use `clear_changes` to discard unwanted staged changes first.
+  `write_xml` **drains all staged changes** on success — including changes from other workflows. Use `preview_changes` first if you have pending edits you want to keep separate.
 </Aside>
 
 <Aside type="note">
-  After export, import in Rekordbox via **File > Import > Import Playlist/Collection**, then drag tracks from the XML node into your collection. See [XML Export reference](/reference/xml-export/) for the full import workflow.
+  After export, import via **File > Import > Import Playlist/Collection** in Rekordbox. See [XML Export](/reference/xml-export/) for details.
 </Aside>
 
 ---
@@ -112,4 +151,4 @@ Clear staged changes, either entirely or selectively by track or field.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | | Track IDs to clear (omit to clear all; an empty array clears nothing) |
-| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"` (omit to clear all fields on matched tracks) |
+| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"`, `"label"` (omit to clear all fields on matched tracks) |

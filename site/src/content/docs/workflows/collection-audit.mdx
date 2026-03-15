@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import CollectionAuditSOP from '../../../partials/sops/collection-audit.mdx'
 
-Detect and fix naming, tagging, and convention violations so every track imports into Rekordbox with correct Artist, Title, Album, Year, Track Number, and Label. Genre is handled separately by the [genre classification workflow](/workflows/genre-classification/).
+Fix naming, tagging, and convention violations so tracks import into Rekordbox correctly. Genre is handled separately by [genre classification](/workflows/genre-classification/).
 
 **Paste into your agent to start:**
 
@@ -27,14 +27,8 @@ Both ID3v2 and RIFF INFO must be written for full compatibility across players. 
 ## Imported file protection
 
 <Aside type="caution">
-  Files already imported in Rekordbox are **never** renamed by the collection audit. Rekordbox stores absolute file paths in its database. Renaming a file breaks the reference — Rekordbox shows the track as missing, and re-importing creates a duplicate. There is no way to update paths via XML reimport.
+  Imported files are **never** renamed — Rekordbox stores absolute paths and can't update them via XML. To rename an imported file: delete from Rekordbox, rename, re-import.
 </Aside>
-
-If you need to rename an imported file:
-
-1. Delete the track from your Rekordbox collection
-2. Rename the file
-3. Re-import the file into Rekordbox
 
 ## File naming conventions
 

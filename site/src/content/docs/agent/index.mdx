@@ -3,16 +3,11 @@ title: Agent SOPs
 description: Token-optimized workflow instructions for AI agents using reklawdbox.
 ---
 
-These pages are designed for agent consumption. Each SOP is a concise, imperative
-step-by-step guide with tool calls, decision trees, and explicit user checkpoints.
-
-Each page includes an **Agent prompt** — a copyable prompt you can paste into your
-agent session to start the workflow.
+Concise, imperative SOPs for AI agents. Each includes a copyable agent prompt.
 
 ### LLM-friendly access
 
-Each SOP is available as individual plaintext markdown — use the per-SOP URL in
-Init prompts so agents fetch only the workflow they need:
+Per-SOP plaintext URLs for init prompts:
 
 | Workflow | URL |
 |---|---|
@@ -36,13 +31,11 @@ See also [`/llms.txt`](/llms.txt) for the full site index.
 
 ## Before You Start
 
-Run `cache_coverage()` to check enrichment and analysis readiness. Most workflows
-require cached data — enrichment and audio analysis should be run first if coverage
-is low.
+Run `cache_coverage()` first. Most workflows require cached data — hydrate if coverage is low.
 
 ## Key Principles
 
-- **Read-only DB.** All changes are staged in memory and exported as XML.
-- **Human approval required.** Never auto-apply changes. Present recommendations and wait for confirmation.
-- **Cache-first.** Workflows run from cached data. Flag gaps rather than triggering external calls mid-workflow.
+- **Read-only DB.** Changes staged in memory, exported as XML.
+- **Human approval required.** Present recommendations, wait for confirmation.
+- **Cache-first.** Flag gaps rather than triggering external calls mid-workflow.
 - **Export path:** `update_tracks()` → `preview_changes()` → `write_xml()`

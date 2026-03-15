@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import GenreAuditSOP from '../../../partials/sops/genre-audit.mdx'
 
-Review existing genre tags against Discogs, Beatport, and audio evidence. The agent identifies BPM-implausible tags and evidence conflicts, presenting only the tracks that need attention. Every change requires your explicit approval.
+Review existing genre tags against Discogs, Beatport, and audio evidence. Only tracks with conflicts or BPM-implausible tags are surfaced. Every change requires your approval.
 
 **Paste into your agent to start:**
 
@@ -29,7 +29,7 @@ Audit my existing genre tags.
 
 ## How it works
 
-The `audit_genres` tool applies the same genre decision tree as classification, but compares the evidence-based result against the track's existing genre tag. Only conflicts and manual-review tracks are shown — confirmed tracks are counted in the summary but omitted from results.
+`audit_genres` applies the same decision tree as classification but compares results against existing tags. Only conflicts and manual-review tracks are shown — confirmed tracks are counted but omitted.
 
 ## Audit vs Classification
 

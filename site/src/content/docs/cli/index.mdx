@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Badge } from '@astrojs/starlight/components';
 
-The reklawdbox binary serves double duty: without arguments it starts the MCP server, but with a subcommand it runs as a standalone CLI tool. CLI commands are useful for batch operations that run unattended — especially `hydrate`, which can warm caches overnight.
+Without arguments, the binary starts the MCP server. With a subcommand, it runs as a standalone CLI tool for batch operations.
 
 ```bash
 # MCP server mode (default, launched by your MCP host)
@@ -17,13 +17,13 @@ reklawdbox
 reklawdbox <command> [options]
 ```
 
-CLI commands load environment variables from `.mcp.json` automatically, so they share the same configuration as the MCP server without needing duplicate shell exports.
+CLI commands load env vars from `.mcp.json` automatically — same config as the MCP server.
 
 ---
 
 ## `hydrate`
 
-Batch enrichment + audio analysis across your entire library or a filtered subset. This is the recommended way to warm caches before classification or set-building sessions.
+Batch enrichment + audio analysis. The recommended way to warm caches before classification or set building.
 
 ```bash
 reklawdbox hydrate [options]
@@ -50,24 +50,7 @@ reklawdbox hydrate [options]
 | `--concurrency` | `-j` | integer | `4` | Enrichment concurrency (min `1`, max `16`) |
 | `--yes` | `-y` | flag | | Skip confirmation prompt |
 
-### What it does
-
-1. **Discovers tracks** using your filters, then pre-filters by cache status per provider
-2. **Shows a summary** with cache/pending/error counts and time estimates
-3. **Prompts for confirmation** (skip with `-y`)
-4. **Runs all three providers concurrently:**
-   - **Discogs** — configurable concurrency (default 4), device-auth flow if session expired
-   - **Beatport** — serial (1 req/s rate limit), retries on 429/5xx
-   - **Audio analysis** — scaled by `--cpu` preset: `background` (~50% cores, niced) or `overnight` (cores - 2, max throughput)
-5. **Progress bars** with per-provider status counters, updated every 500ms
-6. **Graceful Ctrl+C** — cancels new work but waits for in-flight tasks to finish
-
-### Discogs authentication
-
-If a Discogs session is needed, hydrate starts a device-auth flow:
-1. Opens the authorization URL in your browser
-2. Polls the broker until you approve
-3. Stores the session token (persists across runs)
+Discovers tracks, shows a summary with cache/pending/error counts, prompts for confirmation, then runs all three providers concurrently with progress bars and graceful Ctrl+C. If Discogs auth is needed, it opens the browser flow automatically.
 
 ### Examples
 
@@ -92,14 +75,14 @@ reklawdbox hydrate --cpu overnight -y
 ```
 
 <Aside type="tip">
-  Run `hydrate --cpu overnight -y` to warm your caches unattended. A library of 1,000 tracks takes roughly 30-60 minutes for Discogs + Beatport enrichment and 45-90 minutes for audio analysis. Use `--cpu background` (the default) if you're using the machine at the same time — it nices the process and uses fewer cores.
+  `hydrate --cpu overnight -y` for unattended runs. ~1,000 tracks takes 30-60 min (enrichment) + 45-90 min (analysis). Use `--cpu background` (default) if using the machine at the same time.
 </Aside>
 
 ---
 
 ## `analyze`
 
-Batch audio analysis using stratum-dsp and optional Essentia. A focused alternative to `hydrate --providers analysis` with additional control over analysis backends.
+Batch audio analysis. A focused alternative to `hydrate --providers analysis` with additional backend control.
 
 ```bash
 reklawdbox analyze [options]
@@ -125,7 +108,7 @@ reklawdbox analyze [options]
 | `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (max cores) |
 | `--concurrency` | `-j` | integer | auto | Override analysis concurrency (overrides `--cpu` preset, min `1`, max `16`) |
 
-Default concurrency is set by the `--cpu` preset: `background` uses ~50% of cores with nice(10), `overnight` uses cores - 2 (clamped to [2, 16]). Cache validation checks file size and modification time — changed files are automatically re-analyzed.
+Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Changed files are automatically re-analyzed.
 
 ### Example
 
@@ -154,7 +137,7 @@ reklawdbox read-tags <paths...> [options]
 | `--cover-art` | flag | | Include cover art metadata |
 | `--json` | flag | | Output as JSON (JSONL for multiple files) |
 
-Directories are scanned for audio files (single level). Human-readable output groups tags by format and section. WAV files show both ID3v2 and RIFF INFO layers with a note about any fields missing from RIFF INFO.
+Directories are scanned one level deep. WAV files show both ID3v2 and RIFF INFO layers.
 
 ### Example
 
@@ -170,7 +153,7 @@ reklawdbox read-tags ~/Music/*.flac --fields artist,title --json
 
 ## `write-tags`
 
-Write or delete metadata tags on an audio file.
+Write or delete metadata tags on audio files.
 
 ```bash
 reklawdbox write-tags <path> [options]
@@ -198,7 +181,7 @@ reklawdbox write-tags <path> [options]
 | `--json-input` | flag | | Read tags from stdin as JSON |
 | `--json` | flag | | Output as JSON |
 
-Set a field to an empty string (`""`) to **delete** it. Use `--dry-run` to preview changes before committing.
+Set a field to `""` to delete it. Use `--dry-run` to preview.
 
 ### Examples
 
@@ -262,3 +245,19 @@ reklawdbox embed-art <image> <targets...> [options]
 # Embed cover art into multiple files
 reklawdbox embed-art cover.jpg track1.flac track2.flac track3.flac
 ```
+
+---
+
+## `setup`
+
+Interactive setup wizard. Writes a config file at `~/Library/Application Support/reklawdbox/config.toml` with broker URL and token settings.
+
+```bash
+reklawdbox setup [options]
+```
+
+| Flag | Short | Description |
+|------|:-----:|-------------|
+| `--yes` | `-y` | Accept defaults without prompting |
+
+Only needed if you are self-hosting a Discogs broker. The default broker is preconfigured.

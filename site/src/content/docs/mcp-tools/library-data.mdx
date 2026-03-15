@@ -9,13 +9,11 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ## Library tools
 
-These tools read your Rekordbox collection. They query the encrypted Rekordbox `master.db` in read-only mode.
-
 ---
 
 ### `read_library` <Badge text="no params" variant="note" />
 
-Returns a high-level library summary: total track count, genre distribution, BPM range, key distribution, and rating breakdown. Use this as a starting point to understand the collection before scoping searches.
+Returns a library summary: track count, genre distribution, BPM range, key distribution, and rating breakdown.
 
 ---
 
@@ -49,7 +47,7 @@ Factory sample tracks are excluded by default. Set `include_samples: true` to in
 
 ### `get_track`
 
-Get full details for a single track by ID. Returns Rekordbox metadata fields only — no enrichment or audio analysis data. Use `resolve_track_data` to also retrieve cached enrichment and audio analysis data.
+Get full details for a single track by ID. Returns Rekordbox metadata only — use `resolve_track_data` for enrichment and audio analysis data.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -76,13 +74,13 @@ List tracks in a specific playlist, in playlist order.
 
 ## Data resolution tools
 
-These tools return locally-cached data without making external API calls or running analysis. Use them to check what data is already available before deciding whether to enrich or analyze.
+Return locally-cached data without external API calls or analysis.
 
 ---
 
 ### `resolve_track_data`
 
-Return all cached enrichment data, audio analysis results, and staged changes for one track.
+Return all cached enrichment, audio analysis, and staged changes for one track.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -101,22 +99,17 @@ Batch version of `resolve_track_data`. Accepts [shared search filters](/mcp-tool
 | `max_tracks` | integer | | Max tracks to return (default: `50`) |
 | `format` | string | | `"full"` (default) or `"classification"` |
 
-The `"classification"` format returns a compact payload (~400-500 bytes per track instead of 2-4KB) containing only the fields needed for genre classification decisions:
-
-- Mapped Discogs genres/styles
-- Beatport genre
-- Audio features: BPM, key, danceability, rhythm regularity, spectral centroid, dynamic complexity
-- Completeness flags for each data source
+The `"classification"` format returns a compact payload (~400-500 bytes/track vs 2-4KB) with only genre classification fields: mapped Discogs genres/styles, Beatport genre, audio features, and completeness flags.
 
 <Aside type="tip">
-  Use `format: "classification"` when classifying genres across a large batch — it keeps context window usage low while providing all the evidence needed for the decision tree.
+  Use `format: "classification"` for large batches to keep context window usage low.
 </Aside>
 
 ---
 
 ### `cache_coverage`
 
-Report enrichment and audio cache completeness for a track scope. Accepts [shared search filters](/mcp-tools/#shared-search-filters).
+Report cache completeness for a track scope. Accepts [shared search filters](/mcp-tools/#shared-search-filters).
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -124,8 +117,8 @@ Report enrichment and audio cache completeness for a track scope. Accepts [share
 | `playlist_id` | string | | Check tracks in this playlist |
 | `max_tracks` | integer | | Max tracks to check (default: unbounded) |
 
-Returns: total tracks in scope, per-provider cached counts and percentages, and gap counts (tracks missing audio analysis, enrichment, or all data).
+Returns per-provider cached counts/percentages and gap counts.
 
 <Aside type="caution">
-  Cache coverage counts any cached entry — including "no match" and error results from Discogs/Beatport. A high coverage percentage does not guarantee usable enrichment data for every track. Use `resolve_tracks_data` to inspect actual match quality before relying on coverage numbers.
+  Coverage counts any cached entry — including "no match" and error results. Use `resolve_tracks_data` to inspect actual match quality.
 </Aside>

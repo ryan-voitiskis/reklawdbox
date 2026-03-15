@@ -9,9 +9,7 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ## File tag tools
 
-Read and write native metadata tags (ID3v2, Vorbis Comment, RIFF INFO, MP4/iTunes) directly on audio files. These operate on the files themselves, not the Rekordbox database.
-
-Supported formats: FLAC, MP3, WAV, M4A, AAC, AIFF.
+Read and write native metadata tags (ID3v2, Vorbis Comment, RIFF INFO, MP4/iTunes) on audio files. Supports FLAC, MP3, WAV, M4A, AAC, AIFF.
 
 ---
 
@@ -96,7 +94,7 @@ Embed cover art into one or more audio files.
 
 ### `audit_state`
 
-Manage collection audits: scan directories for convention violations, query detected issues, resolve them, and generate summaries. Uses a tagged union — the `operation` field determines the action.
+Collection audit tool. The `operation` field determines the action.
 
 #### Operation: `scan`
 
@@ -109,9 +107,7 @@ Scan a directory tree for convention violations.
 | `revalidate` | boolean | | Re-read all files including unchanged (default: `false`) |
 | `skip_issue_types` | string[] | | Issue types to exclude (e.g., `["GENRE_SET"]`) |
 
-Detected issue types include: empty fields (artist, title, genre, key, comment), WAV tag drift between ID3v2 and RIFF INFO layers, filename convention violations (track number prefix, directory format), and imported file protection warnings.
-
-The scan annotates issues with Rekordbox import status — tracks that have been imported cannot have their file paths updated via XML reimport.
+Detects: empty fields, WAV tag drift, filename convention violations, and imported file protection warnings.
 
 #### Operation: `query_issues`
 
@@ -150,20 +146,18 @@ Get an audit summary with issue counts by type and status.
 
 ### `clear_caches` <Badge text="no params" variant="note" />
 
-Clear all internal caches: enrichment cache, audio analysis cache, and audit state. Useful when you want to force fresh data from all sources.
+Clear all internal caches (enrichment, audio analysis, audit state) **and all staged metadata changes**.
 
 <Aside type="caution">
-  This clears everything — all Discogs and Beatport data will need to be re-fetched. This can take significant time for large libraries.
+  Clears everything — enrichment data must be re-fetched and any pending staged changes are lost. Call `preview_changes` and `write_xml` first if you have pending edits.
 </Aside>
 
 ---
 
 ### `help`
 
-Get workflow guides with step-by-step instructions and links to documentation on reklawdbox.com.
+Get workflow guides with step-by-step instructions.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `topic` | string | | `"import"`, `"genre"`, `"set"`, `"audit"` — or omit for all workflows |
-
-Returns structured JSON with workflow steps, key tools for each workflow, and URLs to the relevant documentation pages.
+| `topic` | string | | `"import"`, `"genre"`, `"set"`, `"audit"` — or omit for all |

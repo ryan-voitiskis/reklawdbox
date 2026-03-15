@@ -39,8 +39,6 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 ## MCP host configuration
 
-Register reklawdbox as an MCP server with your host. Pick your client below.
-
 <Tabs>
   <TabItem label="Claude Code">
     Add directly from the CLI:
@@ -108,45 +106,41 @@ Register reklawdbox as an MCP server with your host. Pick your client below.
 </Tabs>
 
 <Aside type="tip">
-  reklawdbox auto-detects the Rekordbox database at `~/Library/Pioneer/rekordbox/master.db`. You only need to set `REKORDBOX_DB_PATH` if your database is in a non-standard location or you have multiple Rekordbox installations.
+  The Rekordbox database is auto-detected at `~/Library/Pioneer/rekordbox/master.db`. Set `REKORDBOX_DB_PATH` only for non-standard locations.
 </Aside>
 
 ## Verify
 
-Once configured, ask your agent to call the `read_library` tool. It should return your library stats — track count, playlist count, and genre distribution. If it fails, check the [Troubleshooting](/troubleshooting/) page.
+Ask your agent to call `read_library`. It should return track count, playlist count, and genre distribution. If it fails, check [Troubleshooting](/troubleshooting/).
 
 ## Optional: Essentia setup
 
-Essentia adds advanced audio descriptors (danceability, energy, mood, voice/instrumental classification). It runs in a Python virtual environment.
+Essentia adds advanced audio descriptors (danceability, energy, spectral features).
 
 <Steps>
 
-1. Run the setup script:
+1. Run `bash scripts/setup-essentia.sh`
 
-   ```bash
-   bash scripts/setup-essentia.sh
-   ```
+2. Set `CRATE_DIG_ESSENTIA_PYTHON` in your MCP config to the venv path printed by the script (typically `~/.local/share/reklawdbox/essentia-venv/bin/python`).
 
-2. Set the `CRATE_DIG_ESSENTIA_PYTHON` environment variable in your MCP host config to the venv Python path printed by the script (typically `~/.local/share/reklawdbox/essentia-venv/bin/python`).
-
-3. Verify by calling `setup_essentia` through your agent. It should report Essentia as available.
+3. Verify by calling `setup_essentia` through your agent.
 
 </Steps>
 
 ## Optional: Discogs enrichment
 
-Discogs enrichment pulls release metadata, labels, and catalog numbers for your tracks. The built-in broker is preconfigured — no extra env vars needed.
+The broker is preconfigured — no extra env vars needed.
 
 <Steps>
 
-1. Call `lookup_discogs` for any track. On first use, the broker will return an OAuth authorization URL. Open it in your browser to grant access.
+1. Call `lookup_discogs` for any track. On first use, the broker returns an OAuth URL — open it in your browser.
 
-2. After authorizing, subsequent `lookup_discogs` calls will work automatically.
+2. After authorizing, subsequent calls work automatically.
 
 </Steps>
 
 ## Next steps
 
-- [Concepts](/concepts/) — understand the architecture and safety model
-- [Genre Classification](/workflows/genre-classification/) — the most common workflow for organizing your library
-- [Library Cleanup](/workflows/library-cleanup/) — if your library needs cleanup, start here for the recommended session sequence
+- [Concepts](/concepts/) — architecture and safety model
+- [Genre Classification](/workflows/genre-classification/) — most common workflow
+- [Library Cleanup](/workflows/library-cleanup/) — recommended session sequence for messy libraries

@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import GenreClassificationSOP from '../../../partials/sops/genre-classification.mdx'
 
-Classify genres across your collection using cached evidence from Discogs, Beatport, and audio analysis. The agent gathers evidence, applies a decision tree, and presents recommendations grouped by confidence level. Every change requires your explicit approval.
+Classify genres using cached evidence from Discogs, Beatport, and audio analysis. Recommendations are grouped by confidence level — every change requires your approval.
 
 **Paste into your agent to start:**
 
@@ -30,7 +30,7 @@ All providers must be at 100% before starting. Run `cache_coverage(has_genre=fal
 
 ## How it works
 
-The `classify_tracks` tool applies the genre decision tree server-side using all cached evidence — Discogs styles, Beatport genre, label mappings, and audio analysis (BPM, danceability, spectral profile). Results are returned grouped by confidence level with a summary.
+`classify_tracks` applies the genre decision tree server-side using all cached evidence (Discogs styles, Beatport genre, label mappings, audio analysis). Results are grouped by confidence with a summary.
 
 ## Confidence levels
 
@@ -57,7 +57,7 @@ This is the starter set, not a closed list. You can add genres during classifica
 | Rock | Speed Garage | Synth-pop | Tech House |
 | Techno | Trance | UK Bass | |
 
-The taxonomy favors specificity where it matters for mixing (e.g., "Deep House" and "Afro House" are distinct because they mix differently) while avoiding over-granularity.
+Specific where it matters for mixing (Deep House and Afro House are distinct) without over-granularity.
 
 ## Step-by-step
 

@@ -36,39 +36,28 @@ Codex — to your collection.
 
 ## What reklawdbox does
 
-reklawdbox is an MCP server that sits between your AI agent and Rekordbox 7.x.
-It gives the agent structured access to your library while keeping your
-database safe. All metadata changes are staged in memory and exported as
-XML — the Rekordbox database is never modified directly.
+An MCP server between your AI agent and Rekordbox 7.x. The database is read-only — all changes are staged in memory and exported as XML.
 
-- **Reads the encrypted Rekordbox `master.db` directly** using SQLCipher.
-  The database is opened read-only — reklawdbox never writes to it.
-- **Stages metadata changes in memory** (genre, comments, rating, color)
-  so you can review them before anything is exported.
-- **Exports Rekordbox-compatible XML** for safe reimport.
-  Your database is never modified directly.
-- **Enriches tracks via Discogs and Beatport** — pulls release metadata,
-  labels, catalog numbers, and artwork through a broker API and HTML extraction.
-- **Analyzes audio with stratum-dsp and optional Essentia** — computes BPM,
-  key, energy, danceability, and spectral features from your actual audio files.
-- **Scores transitions and builds DJ set sequences** — uses harmonic
-  compatibility, BPM proximity, energy curves, and genre affinity to find
-  optimal track ordering.
-- **Provides CLI subcommands** for batch audio analysis and native file tag
-  read/write outside of MCP.
+- **Reads encrypted `master.db`** directly via SQLCipher (read-only)
+- **Stages metadata changes** (genre, comments, rating, color) for review before export
+- **Exports Rekordbox-compatible XML** for safe reimport
+- **Enriches tracks** via Discogs and Beatport — labels, catalog numbers, artwork
+- **Analyzes audio** with stratum-dsp + optional Essentia — BPM, key, energy, danceability
+- **Scores transitions and builds sets** — harmonic compatibility, BPM, energy curves, genre affinity
+- **CLI subcommands** for batch analysis and file tag operations outside MCP
 
-## 30 MCP tools
+## 33 MCP tools
 
 **Library & Data** — `read_library`, `search_tracks`, `get_track`, `get_playlists`, `get_playlist_tracks`, `resolve_track_data`, `resolve_tracks_data`, `cache_coverage`
 
 **Enrichment & Analysis** — `lookup_discogs`, `lookup_beatport`, `enrich_tracks`, `analyze_track_audio`, `analyze_audio_batch`, `setup_essentia`
 
-**Classification & Staging** — `get_genre_taxonomy`, `suggest_normalizations`, `update_tracks`, `preview_changes`, `write_xml`, `clear_changes`
+**Classification & Staging** — `get_genre_taxonomy`, `suggest_normalizations`, `classify_tracks`, `audit_genres`, `backfill_labels`, `update_tracks`, `preview_changes`, `write_xml`, `clear_changes`
 
 **Mixing & Sequencing** — `score_transition`, `query_transition_candidates`, `build_set`
 
 **Files & System** — `read_file_tags`, `write_file_tags`, `extract_cover_art`, `embed_cover_art`, `audit_state`, `clear_caches`, `help`
 
-## 6 CLI commands
+## 7 CLI commands
 
-`hydrate`, `analyze`, `read-tags`, `write-tags`, `extract-art`, `embed-art`
+`hydrate`, `analyze`, `read-tags`, `write-tags`, `extract-art`, `embed-art`, `setup`

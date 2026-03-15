@@ -7,28 +7,9 @@ sidebar:
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-reklawdbox provides structured workflows for common library management tasks. Each workflow is designed for an AI agent to follow step-by-step, with human approval at every decision point. Nothing is written to your Rekordbox database — all changes are staged in memory and exported as XML.
+Every workflow follows the same pattern: scope tracks, gather evidence, present recommendations by confidence, get human approval, stage and export. The agent does the tedious work; you make the final call.
 
-## Core workflow pattern
-
-Every workflow follows the same loop:
-
-1. **Scope tracks** — search, filter, or select a playlist to define the working set.
-2. **Gather evidence** — check cache coverage, run enrichment lookups, analyze audio.
-3. **Present recommendations** — the agent groups results by confidence level so you can triage efficiently.
-4. **Human approves** — you accept, reject, or override each recommendation. Nothing proceeds without your sign-off.
-5. **Stage and export** — approved changes are staged in memory, previewed with `preview_changes`, and exported via `write_xml`.
-
-The agent handles the tedious parts (lookups, matching, scoring). You make the final call on every change.
-
-## Cache-first design
-
-All workflows operate on cached data. Before starting any workflow, check your cache coverage with `cache_coverage`:
-
-- **All providers at 100%** = ready to go
-- **Any provider below 100%** = hydrate first with `analyze_audio_batch` (local, fast) and `enrich_tracks` (external, rate-limited)
-
-Running analysis and enrichment upfront means the actual workflow steps are fast — no waiting on network requests or audio processing mid-flow.
+All workflows require cached data. Run `cache_coverage` first — if any provider is below 100%, hydrate with `analyze_audio_batch` and `enrich_tracks` before starting.
 
 ## Workflows
 
@@ -57,26 +38,12 @@ Running analysis and enrichment upfront means the actual workflow steps are fast
 
 ## Where to start
 
-- **Tags and filenames are messy?** Run a [Collection Audit](/workflows/collection-audit/).
-- **Metadata is clean, need genres?** Go to [Genre Classification](/workflows/genre-classification/).
-- **Want to verify existing genres?** Run a [Genre Audit](/workflows/genre-audit/).
-- **Want to build a set?** Go straight to [Set Building](/workflows/set-building/).
-- **Just acquired new music?** Start with [Batch Import](/workflows/batch-import/).
-
-All workflows share the same prerequisite: 100% cache coverage. Run `cache_coverage` first and hydrate any gaps before diving in.
-
-## Agent prompts
-
-Paste any of these into your agent session to start a workflow:
-
-| Workflow | Prompt |
-|---|---|
-| [Collection Audit](/workflows/collection-audit/) | `Audit my collection for naming and tagging issues.` |
-| [Genre Classification](/workflows/genre-classification/) | `Classify genres for my ungenred tracks.` |
-| [Genre Audit](/workflows/genre-audit/) | `Audit my existing genre tags.` |
-| [Set Building](/workflows/set-building/) | `Build a DJ set from my collection.` |
-| [Batch Import](/workflows/batch-import/) | `Process the new music in [/path/to/folder] for Rekordbox import.` |
+- **Tags and filenames are messy?** [Collection Audit](/workflows/collection-audit/)
+- **Metadata is clean, need genres?** [Genre Classification](/workflows/genre-classification/)
+- **Want to verify existing genres?** [Genre Audit](/workflows/genre-audit/)
+- **Want to build a set?** [Set Building](/workflows/set-building/)
+- **Just acquired new music?** [Batch Import](/workflows/batch-import/)
 
 <Aside type="tip" title="Messy library?">
-  Workflows build on each other — clean metadata improves enrichment, and enrichment improves genre classification. If your library needs significant cleanup, follow the [Library Cleanup](/workflows/library-cleanup/) guide for the recommended session sequence.
+  Workflows build on each other — clean metadata improves enrichment, enrichment improves classification. Follow the [Library Cleanup](/workflows/library-cleanup/) guide for the recommended session sequence.
 </Aside>

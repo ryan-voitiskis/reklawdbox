@@ -7,90 +7,73 @@ sidebar:
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-reklawdbox is an MCP server that sits between an AI agent and Rekordbox 7.x. It reads your encrypted database directly, stages metadata changes in memory, and exports Rekordbox-compatible XML for reimport. This page explains the core design principles that keep your library safe while giving your agent full read access.
+reklawdbox is an MCP server that sits between an AI agent and Rekordbox 7.x. It reads your encrypted database directly, stages metadata changes in memory, and exports Rekordbox-compatible XML for reimport.
 
 ## Read-only database access
 
-reklawdbox connects to the Rekordbox `master.db` using SQLCipher (AES-256-CBC encryption, PBKDF2-HMAC-SHA512 key derivation). The connection is opened **read-only** — the database is never modified. There is no code path in reklawdbox that executes a write operation against this file.
+reklawdbox opens the Rekordbox `master.db` **read-only** via SQLCipher (AES-256-CBC, PBKDF2-HMAC-SHA512). The database is never modified.
 
-- Auto-detects at `~/Library/Pioneer/rekordbox/master.db`
-- Override with the `REKORDBOX_DB_PATH` environment variable if your database is in a non-standard location
-- The schema contains 34 tables with VARCHAR(255) string IDs throughout
-- Key tables: `DjmdContent` (tracks), `djmdPlaylist`, `djmdSongPlaylist`, plus foreign key lookup tables for artists, albums, genres, keys, labels, and colors
-- BPM is stored as an integer with two implied decimal places (128.50 BPM = `12850`) — reklawdbox converts this to a float automatically
+- Auto-detects at `~/Library/Pioneer/rekordbox/master.db` (override with `REKORDBOX_DB_PATH`)
+- Key tables: `DjmdContent` (tracks), `djmdPlaylist`, `djmdSongPlaylist`, plus lookup tables for artists, albums, genres, keys, labels, and colors
+- BPM is stored as integer × 100 (128.50 BPM = `12850`) — converted to float automatically
 
 <Aside type="caution">
-  Never open `master.db` in a generic SQLite browser without SQLCipher support. The file is encrypted — you will see garbage data or corrupt it. reklawdbox handles decryption transparently.
+  Never open `master.db` in a generic SQLite browser without SQLCipher support — you'll see garbage data or corrupt it.
 </Aside>
 
 ## In-memory change staging
 
-When you ask your agent to update genre, comments, rating, or color on a track, those changes are staged in memory — not written anywhere. This gives you a full undo buffer: you can review, modify, or discard changes freely before committing.
+Changes to genre, comments, rating, color, or label are staged in memory — not written anywhere. You can review, modify, or discard freely before exporting.
 
-Three tools interact with the staging buffer:
+- `update_tracks` — stage changes for one or more tracks
+- `preview_changes` — review everything staged so far
+- `clear_changes` — discard all staged changes
 
-- `update_tracks` — stage changes for one or more tracks (genre, comments, rating, color)
-- `preview_changes` — review everything staged so far, grouped by track
-- `clear_changes` — discard all staged changes and start fresh
-
-Nothing touches disk until you explicitly call `write_xml`. If the server process restarts for any reason, all staged changes are lost — this is by design, not a bug.
+Nothing touches disk until you call `write_xml`. If the server restarts, staged changes are lost.
 
 <Aside type="tip">
-  Use `preview_changes` liberally. It is free and shows exactly what will end up in the exported XML.
+  Use `preview_changes` liberally — it shows exactly what will end up in the exported XML.
 </Aside>
 
 ## XML export (never direct DB writes)
 
-The only way changes leave reklawdbox is through Rekordbox-compatible XML export. The agent calls `write_xml` and reklawdbox writes a standard XML file that Rekordbox can import.
-
-**Reimport workflow:**
-
-1. `write_xml` produces a `.xml` file at a path you specify (or a default location)
-2. In Rekordbox: **File > Import > rekordbox xml**
-3. The XML collection appears under a separate node in the browser sidebar
-4. Select the tracks or playlists you want to update, right-click, and import to your collection
-
-The XML format is the same one Rekordbox uses for its own export/import. It is well-supported and has been stable across Rekordbox 5, 6, and 7.
+`write_xml` produces a Rekordbox-compatible XML file. In Rekordbox: **File > Import > rekordbox xml**, then select tracks to update. See [XML Export](/reference/xml-export/) for the full import workflow and known quirks.
 
 <Aside type="caution">
-  XML reimport is **additive only**. Removing a track from the XML does not delete it from Rekordbox. Only metadata fields present in the XML are updated during reimport.
+  XML reimport is **additive only** — it updates or adds tracks, never deletes them.
 </Aside>
 
 ## Local caching
 
-reklawdbox maintains a separate SQLite database (WAL mode) for caching. This is completely independent of the Rekordbox database and is safe to delete at any time — data will be re-fetched or re-analyzed on next use.
+A separate SQLite database (WAL mode) caches enrichment, audio analysis, and broker sessions. Safe to delete — data is re-fetched on next use.
 
-- **Default location:** `~/Library/Application Support/reklawdbox/internal.sqlite3`
-- **Override:** set the `CRATE_DIG_STORE_PATH` environment variable to use a different path
+- **Default:** `~/Library/Application Support/reklawdbox/internal.sqlite3` (override with `CRATE_DIG_STORE_PATH`)
 - **Enrichment cache:** Discogs and Beatport metadata keyed by search terms
-- **Audio analysis cache:** stratum-dsp and Essentia results keyed by file path and analyzer name
-- **Broker session tokens:** OAuth session tokens for the Discogs broker
+- **Audio analysis cache:** stratum-dsp and Essentia results keyed by file path and analyzer
+- **Broker sessions:** OAuth tokens for the Discogs broker
 
-reklawdbox uses a cache-first strategy: classification, set building, and transition scoring all read from cached data rather than re-computing on every call. The intended workflow is to run enrichment and audio analysis first, then use the results for genre classification, transition scoring, and set building.
+Classification, set building, and transition scoring all read from cached data. Run enrichment and audio analysis first, then use the results downstream.
 
 <Aside type="tip">
-  Use the `cache_coverage` tool to see how much of your library has cached enrichment and analysis data. This tells you whether you need to run more analysis before building sets.
+  Use `cache_coverage` to check how much of your library has cached data before starting a workflow.
 </Aside>
 
 ## Human-in-the-loop
 
-reklawdbox enforces a strict approval model at every stage:
+Every stage requires human approval:
 
-- **No changes without explicit approval.** The agent proposes metadata updates; you review them via `preview_changes` before any export happens.
-- **Every step is previewable.** Staged changes, transition scores, and set orderings are all inspectable before committing to XML.
-- **XML reimport requires manual action.** Even after `write_xml` produces a file, you still open Rekordbox and import it yourself. There is no programmatic write path to the database.
-- **Enrichment is non-destructive.** Discogs and Beatport lookups populate the cache but do not modify any track metadata. You decide what to apply.
+- The agent proposes changes; you review via `preview_changes` before export.
+- `write_xml` produces a file — you import it into Rekordbox yourself.
+- Enrichment lookups populate the cache but never modify track metadata.
 
-The design goal: your agent handles the tedious parts (genre normalization, key compatibility math, Discogs lookups), and you make the final call on every change.
+The agent handles the tedious work (genre normalization, key math, Discogs lookups). You make the final call on every change.
 
 ## What reklawdbox does not do
 
-To set expectations clearly:
-
-- **Does not write to the Rekordbox database.** Ever. Not even "safely." The only output is XML.
-- **Does not run in the background.** It is a request-response MCP server — your agent calls a tool, reklawdbox responds, done.
-- **Does not sync automatically.** If you add tracks in Rekordbox, reklawdbox sees them on the next `read_library` or `search_tracks` call. There is no file watcher.
-- **Does not work on Windows or Linux.** reklawdbox targets macOS Apple Silicon (arm64) only.
+- **No DB writes.** The only output is XML.
+- **No background process.** Request-response only — your agent calls a tool, reklawdbox responds.
+- **No auto-sync.** New Rekordbox tracks appear on the next `read_library` or `search_tracks` call.
+- **macOS Apple Silicon only.** No Windows or Linux support.
 
 <CardGrid>
   <Card title="Architecture" icon="setting">

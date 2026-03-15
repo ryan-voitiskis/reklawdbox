@@ -20,9 +20,9 @@ The auto-detection path works for standard macOS Rekordbox installations. Only s
 | Variable                          | Description                       | Default                        |
 | --------------------------------- | --------------------------------- | ------------------------------ |
 | `REKLAWDBOX_DISCOGS_BROKER_URL`   | URL of the Discogs broker service | Built-in production broker URL |
-| `REKLAWDBOX_DISCOGS_BROKER_TOKEN` | Auth token for the broker         | Set via `reklawdbox setup`     |
+| `REKLAWDBOX_DISCOGS_BROKER_TOKEN` | Auth token for the broker         | Built-in default               |
 
-The broker is a separate Cloudflare Workers service that handles Discogs OAuth and rate limiting on your behalf. The broker URL has a compiled-in default pointing to the production broker. The broker token must be configured — run `reklawdbox setup` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml` on macOS), or set the environment variable directly.
+The broker is a Cloudflare Workers service that handles Discogs OAuth and rate limiting. Both the URL and token have compiled-in defaults pointing to the production broker — no configuration needed for standard use. Only set these if you are self-hosting a broker. Run `reklawdbox setup` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml`).
 
 ## Audio analysis
 
@@ -82,4 +82,4 @@ A complete `mcp_servers` config block with all commonly used variables:
 }
 ```
 
-Replace `<you>` with your macOS username. If you built from source, use `./target/release/reklawdbox` as the command. Run `reklawdbox setup` after installation to configure the Discogs broker token.
+Replace `<you>` with your macOS username. If you built from source, use `./target/release/reklawdbox` as the command.
