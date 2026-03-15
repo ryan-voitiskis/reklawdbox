@@ -49,6 +49,7 @@ interface DiscogsApiSearchResult {
   label?: string[]
   genre?: string[]
   style?: string[]
+  format?: string[]
   uri?: string
 }
 
@@ -949,7 +950,7 @@ async function lookupDiscogsViaApi(
 
   if (!normArtist) {
     return {
-      result: toDiscogsResult(results[0], true),
+      result: toDiscogsResult(bestByScore(results), true),
       match_quality: 'fuzzy',
       cache_hit: false,
     }
@@ -963,20 +964,20 @@ async function lookupDiscogsViaApi(
 
   // 2. Among artist matches, prefer one where the release title also contains the search title
   if (artistMatches.length > 0 && normTitle) {
-    const titleMatch = artistMatches.find((entry) => {
+    const titleMatches = artistMatches.filter((entry) => {
       const resultTitle = normalize(entry.title ?? '')
       return resultTitle.includes(normTitle)
     })
-    if (titleMatch) {
+    if (titleMatches.length > 0) {
       return {
-        result: toDiscogsResult(titleMatch, false),
+        result: toDiscogsResult(bestByScore(titleMatches), false),
         match_quality: 'exact',
         cache_hit: false,
       }
     }
     // Artist matched but title didn't — return best artist match as fuzzy
     return {
-      result: toDiscogsResult(artistMatches[0], true),
+      result: toDiscogsResult(bestByScore(artistMatches), true),
       match_quality: 'fuzzy',
       cache_hit: false,
     }
@@ -985,7 +986,7 @@ async function lookupDiscogsViaApi(
   // Artist matched but no title to verify — fuzzy
   if (artistMatches.length > 0) {
     return {
-      result: toDiscogsResult(artistMatches[0], true),
+      result: toDiscogsResult(bestByScore(artistMatches), true),
       match_quality: 'fuzzy',
       cache_hit: false,
     }
@@ -993,25 +994,91 @@ async function lookupDiscogsViaApi(
 
   // No artist match — return first result as fuzzy only if title matches
   if (normTitle) {
-    const titleOnly = results.find((entry) => {
+    const titleOnly = results.filter((entry) => {
       const resultTitle = normalize(entry.title ?? '')
       return resultTitle.includes(normTitle)
     })
-    if (titleOnly) {
+    if (titleOnly.length > 0) {
       return {
-        result: toDiscogsResult(titleOnly, true),
+        result: toDiscogsResult(bestByScore(titleOnly), true),
         match_quality: 'fuzzy',
         cache_hit: false,
       }
     }
   }
 
-  // Nothing matched — still return first result as fuzzy
+  // Nothing matched — still return best-scored result as fuzzy
   return {
-    result: toDiscogsResult(results[0], true),
+    result: toDiscogsResult(bestByScore(results), true),
     match_quality: 'fuzzy',
     cache_hit: false,
   }
+}
+
+const COMPILATION_FORMATS = new Set([
+  'compilation',
+  'comp',
+  'sampler',
+  'mixed',
+])
+
+const PREFERRED_FORMATS = new Set([
+  'single',
+  'ep',
+  'maxi-single',
+  '7"',
+  '10"',
+  '12"',
+])
+
+function scoreRelease(entry: DiscogsApiSearchResult): number {
+  let score = 0
+  const formats = (entry.format ?? []).map((f) => f.toLowerCase())
+
+  // Penalize compilations heavily — wrong label is almost guaranteed
+  if (formats.some((f) => COMPILATION_FORMATS.has(f))) {
+    score -= 20
+  }
+
+  // Penalize "Various" in the title (compilation artist)
+  const title = (entry.title ?? '').toLowerCase()
+  if (title.startsWith('various')) {
+    score -= 15
+  }
+
+  // Prefer singles/EPs — most likely the original release
+  if (formats.some((f) => PREFERRED_FORMATS.has(f))) {
+    score += 10
+  }
+
+  // Prefer earlier year (original pressing)
+  const year = typeof entry.year === 'number'
+    ? entry.year
+    : parseInt(`${entry.year ?? ''}`, 10)
+  if (!isNaN(year) && year > 0) {
+    // Normalize: a 1990 release scores +5, a 2025 release scores ~+1
+    score += Math.max(0, Math.round((2030 - year) / 8))
+  }
+
+  return score
+}
+
+function bestByScore(entries: DiscogsApiSearchResult[]): DiscogsApiSearchResult {
+  if (entries.length === 0) {
+    throw new Error('bestByScore called with empty array')
+  }
+  if (entries.length === 1) return entries[0]
+  let best = entries[0]
+  let bestScore = scoreRelease(best)
+  for (let i = 1; i < entries.length; i++) {
+    const s = scoreRelease(entries[i])
+    // Ties broken by array position (Discogs search relevance order)
+    if (s > bestScore) {
+      best = entries[i]
+      bestScore = s
+    }
+  }
+  return best
 }
 
 function toDiscogsResult(

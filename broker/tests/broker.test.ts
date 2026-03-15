@@ -728,6 +728,7 @@ describe('discogs proxy search matching', () => {
       label?: string[]
       genre?: string[]
       style?: string[]
+      format?: string[]
       uri?: string
     }>,
   ): Promise<Response> {
@@ -857,6 +858,335 @@ describe('discogs proxy search matching', () => {
     const body = await response.json<{ result: { fuzzy_match: boolean }; match_quality: string }>()
     expect(body.match_quality).toBe('fuzzy')
     expect(body.result.fuzzy_match).toBe(true)
+  })
+
+  it('prefers original single over compilation when both match artist+title', async () => {
+    const response = await setupSessionAndSearch(
+      'score-original-over-comp',
+      { artist: 'Aphex Twin', title: 'Xtal' },
+      [
+        {
+          title: 'Aphex Twin - Selected Ambient Works 85-92',
+          year: 2006,
+          label: ['Apollo'],
+          genre: ['Electronic'],
+          style: ['Ambient'],
+          format: ['CD', 'Album', 'Compilation'],
+          uri: '/release/comp',
+        },
+        {
+          title: 'Aphex Twin - Selected Ambient Works 85-92',
+          year: 1992,
+          label: ['R & S Records'],
+          genre: ['Electronic'],
+          style: ['Ambient'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string; url: string }; match_quality: string }>()
+    expect(body.result.label).toBe('R & S Records')
+    expect(body.result.url).toContain('/release/original')
+  })
+
+  it('prefers earlier year release among identical formats', async () => {
+    const response = await setupSessionAndSearch(
+      'score-earlier-year',
+      { artist: 'Fantastic Man', title: 'Antiboudi' },
+      [
+        {
+          title: 'Fantastic Man - Solar Surfing',
+          year: 2020,
+          label: ['Mule Musiq'],
+          genre: ['Electronic'],
+          style: ['House'],
+          format: ['Vinyl', 'LP'],
+          uri: '/release/reissue',
+        },
+        {
+          title: 'Fantastic Man - Solar Surfing',
+          year: 2016,
+          label: ['Superconscious Records'],
+          genre: ['Electronic'],
+          style: ['House'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    expect(body.result.label).toBe('Superconscious Records')
+  })
+
+  it('penalizes Various Artists compilations', async () => {
+    const response = await setupSessionAndSearch(
+      'score-various-artists',
+      { artist: 'Moodymann', title: 'The Third Track' },
+      [
+        {
+          title: 'Various - Planet E Compilation',
+          year: 2005,
+          label: ['Planet E'],
+          genre: ['Electronic'],
+          style: ['Deep House'],
+          format: ['CD', 'Compilation'],
+          uri: '/release/various',
+        },
+        {
+          title: 'Moodymann - Silentintroduction',
+          year: 1997,
+          label: ['KDJ'],
+          genre: ['Electronic'],
+          style: ['Deep House'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    expect(body.result.label).toBe('KDJ')
+  })
+
+  it('prefers EP format over album format when both match', async () => {
+    const response = await setupSessionAndSearch(
+      'score-ep-over-album',
+      { artist: 'Vril', title: 'Sine Fine' },
+      [
+        {
+          title: 'Vril - Portal',
+          year: 2018,
+          label: ['Delsin'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          format: ['Vinyl', 'LP', 'Album'],
+          uri: '/release/album',
+        },
+        {
+          title: 'Vril - Anima Mundi',
+          year: 2015,
+          label: ['Giegling'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          format: ['Vinyl', '12"', 'EP'],
+          uri: '/release/ep',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    expect(body.result.label).toBe('Giegling')
+  })
+
+  it('prefers original pressing in fuzzy artist-only fallback', async () => {
+    const response = await setupSessionAndSearch(
+      'score-fuzzy-artist-only',
+      { artist: 'Rick Wade', title: 'Nonexistent Track' },
+      [
+        {
+          title: 'Rick Wade - Deep In The Pocket',
+          year: 2010,
+          label: ['Unknown Season'],
+          genre: ['Electronic'],
+          style: ['Deep House'],
+          format: ['CD', 'Compilation'],
+          uri: '/release/comp',
+        },
+        {
+          title: 'Rick Wade - Harmonie Park',
+          year: 2001,
+          label: ['Harmonie Park'],
+          genre: ['Electronic'],
+          style: ['Deep House'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    expect(body.match_quality).toBe('fuzzy')
+    expect(body.result.label).toBe('Harmonie Park')
+  })
+
+  it('breaks ties by array position (first wins)', async () => {
+    const response = await setupSessionAndSearch(
+      'score-tie-break',
+      { artist: 'Shed', title: 'Silent Witness' },
+      [
+        {
+          title: 'Shed - Silent Witness',
+          year: 2010,
+          label: ['Ostgut Ton'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/first',
+        },
+        {
+          title: 'Shed - Silent Witness',
+          year: 2010,
+          label: ['Ostgut Ton Repress'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/second',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string; url: string } }>()
+    expect(body.result.label).toBe('Ostgut Ton')
+    expect(body.result.url).toContain('/release/first')
+  })
+
+  it('compilation penalty dominates even with preferred format present', async () => {
+    const response = await setupSessionAndSearch(
+      'score-comp-with-preferred',
+      { artist: 'Aphex Twin', title: 'Xtal' },
+      [
+        {
+          title: 'Aphex Twin - Selected Ambient Works 85-92',
+          year: 1993,
+          label: ['Apollo'],
+          genre: ['Electronic'],
+          style: ['Ambient'],
+          format: ['12"', 'Compilation'],
+          uri: '/release/comp-vinyl',
+        },
+        {
+          title: 'Aphex Twin - Selected Ambient Works 85-92',
+          year: 2006,
+          label: ['R & S Records'],
+          genre: ['Electronic'],
+          style: ['Ambient'],
+          format: ['CD', 'Album'],
+          uri: '/release/cd-reissue',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string } }>()
+    expect(body.result.label).toBe('R & S Records')
+  })
+
+  it('prefers earlier year when formats are identical', async () => {
+    const response = await setupSessionAndSearch(
+      'score-year-only',
+      { artist: 'Legowelt', title: 'Disco Rout' },
+      [
+        {
+          title: 'Legowelt - Disco Rout',
+          year: 2018,
+          label: ['Reissue Label'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/reissue',
+        },
+        {
+          title: 'Legowelt - Disco Rout',
+          year: 2005,
+          label: ['Clone'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string } }>()
+    expect(body.result.label).toBe('Clone')
+  })
+
+  it('handles year as string correctly', async () => {
+    const response = await setupSessionAndSearch(
+      'score-string-year',
+      { artist: 'Legowelt', title: 'Disco Rout' },
+      [
+        {
+          title: 'Legowelt - Disco Rout',
+          year: '2018',
+          label: ['Reissue Label'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/reissue',
+        },
+        {
+          title: 'Legowelt - Disco Rout',
+          year: '1995',
+          label: ['Clone'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/original',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string } }>()
+    expect(body.result.label).toBe('Clone')
+  })
+
+  it('scores correctly when nothing matches and multiple results present', async () => {
+    const response = await setupSessionAndSearch(
+      'score-nothing-matched',
+      { artist: 'Unknown', title: 'Nope' },
+      [
+        {
+          title: 'Other - Compilation Hits',
+          year: 2020,
+          label: ['Comp Label'],
+          genre: ['Electronic'],
+          style: ['House'],
+          format: ['CD', 'Compilation'],
+          uri: '/release/comp',
+        },
+        {
+          title: 'Another - Original Single',
+          year: 2005,
+          label: ['Good Label'],
+          genre: ['Electronic'],
+          style: ['House'],
+          format: ['Vinyl', '12"'],
+          uri: '/release/single',
+        },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { label: string } }>()
+    expect(body.result.label).toBe('Good Label')
+  })
+
+  it('still picks correct result when no format data is present', async () => {
+    const response = await setupSessionAndSearch(
+      'score-no-format',
+      { artist: 'Shed', title: 'Silent Witness' },
+      [
+        { title: 'Shed - The Killer', year: 2008, label: ['Ostgut'], genre: ['Electronic'], style: ['Techno'], uri: '/release/1' },
+        { title: 'Shed - Silent Witness', year: 2010, label: ['Ostgut'], genre: ['Electronic'], style: ['Dub Techno'], uri: '/release/2' },
+      ],
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ result: { title: string }; match_quality: string }>()
+    expect(body.match_quality).toBe('exact')
+    expect(body.result.title).toBe('Shed - Silent Witness')
   })
 })
 
