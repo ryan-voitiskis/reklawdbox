@@ -3898,13 +3898,13 @@ async fn score_transition_returns_expected_axis_scores() {
     assert_eq!(payload["to"]["key"], "9A");
 
     assert_eq!(payload["scores"]["key"]["value"], 0.9);
-    // BPM uses exponential curve: 122→123.5 = 1.23% → exp(-0.019*1.23²) ≈ 0.972
-    assert_eq!(payload["scores"]["bpm"]["value"], 0.972);
+    // BPM uses Rekordbox BPM (128.0→123.5): 3.52% → exp(-0.019*3.52²) ≈ 0.791
+    assert_eq!(payload["scores"]["bpm"]["value"], 0.791);
     assert_eq!(payload["scores"]["energy"]["value"], 1.0);
     assert_eq!(payload["scores"]["genre"]["value"], 1.0);
     assert_eq!(payload["scores"]["brightness"]["value"], 0.5);
     assert_eq!(payload["scores"]["rhythm"]["value"], 0.5);
-    assert_eq!(payload["scores"]["composite"], 0.958);
+    assert_eq!(payload["scores"]["composite"], 0.915);
 
     // Top-level transition metadata fields
     assert!(
@@ -3923,8 +3923,8 @@ async fn score_transition_returns_expected_axis_scores() {
     );
     let bpm_pct = payload["bpm_adjustment_pct"].as_f64().unwrap();
     assert!(
-        bpm_pct > 1.0 && bpm_pct < 2.0,
-        "122→123.5 is ~1.23%; got {bpm_pct}"
+        bpm_pct > 3.0 && bpm_pct < 4.0,
+        "128→123.5 is ~3.52%; got {bpm_pct}"
     );
 }
 
