@@ -310,6 +310,17 @@ embed_cover_art(image_path="/path/to/cover_Artist - Title.jpg", targets=["/path/
 
 Clean up the downloaded image after embedding. If no Bandcamp page is available, try Discogs `cover_image`. Note any tracks without cover art in the report.
 
+### Step 4: Move loose tracks
+
+Ask the user where loose tracks should go. Albums have a clear convention (`Artist/Album (Year)/`), but loose track organization varies by user — some use flat directories, source-based folders, or other schemes.
+
+Once the user specifies a destination, move all loose tracks there:
+
+```sh
+mkdir -p "/path/to/dest/loose-tracks-dir"
+mv -n "/path/to/batch/Artist - Title.wav" "/path/to/dest/loose-tracks-dir/"
+```
+
 ---
 
 ## Phase 4: Multi-Disc Albums
