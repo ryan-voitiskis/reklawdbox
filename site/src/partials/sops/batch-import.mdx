@@ -19,7 +19,31 @@
 
 ## Phase 1: Assessment
 
-### Step 1: List the batch directory
+### Step 1: Discover library structure
+
+Before importing, understand how the destination library is organized. Use `read_library` to find the content root, then scan 2 levels deep:
+
+```sh
+find "/path/to/content-root" -maxdepth 2 -type d | head -80
+```
+
+Identify:
+- **Album directory** — which top-level directory contains `Artist/Album (Year)/` subdirectories?
+- **Loose track directory** — which top-level directory contains batch folders with flat audio files?
+
+Present your findings to the user and confirm before proceeding:
+
+```
+Your library structure appears to be:
+- Albums: {albums-dir}/{Artist}/{Album (Year)}/
+- Loose tracks: {loose-dir}/{batch-name}/
+
+Is this correct? What should this batch's loose tracks folder be named?
+```
+
+Use the confirmed paths for all move operations in Phase 2 Step 9 and Phase 3 Step 4. If the library is empty or the structure is unclear, ask the user to define their preferred convention.
+
+### Step 2: List the batch directory
 
 ```sh
 ls -la "/path/to/batch/"
@@ -27,7 +51,7 @@ ls -la "/path/to/batch/"
 
 Categorize: directories (albums/EPs), audio files at root (loose tracks), zip files (need extraction).
 
-### Step 2: Handle zip files
+### Step 3: Handle zip files
 
 Extract all root-level zips. Already-extracted zips (matching directory exists with files) are archived without re-extraction. Failed extractions go to `_failed_zips/`.
 
@@ -63,7 +87,7 @@ find . -maxdepth 1 -type f -name "*.zip" -print0 | while IFS= read -r -d '' zip;
 done
 ```
 
-### Step 3: Report to user
+### Step 4: Report to user
 
 Summarize what was found: album directories, loose tracks, zip results.
 
@@ -219,14 +243,14 @@ If no cover from Bandcamp or Discogs, note for user to source manually.
 
 ### Step 9: Create target directory and move files
 
-Determine clean directory name (strip tech specs, add year, clean special chars).
+Use the album directory convention established in Phase 1 Step 1. Determine clean directory name (strip tech specs, add year, clean special chars).
 
 ```sh
-# Single Artist
-mkdir -p "/path/to/dest/Artist Name/Album Name (Year)"
+# Single Artist — use the confirmed album directory
+mkdir -p "/path/to/albums-dir/Artist Name/Album Name (Year)"
 
 # Or VA
-mkdir -p "/path/to/dest/Various Artists/Label Name/Album Name (Year)"
+mkdir -p "/path/to/albums-dir/Various Artists/Label Name/Album Name (Year)"
 
 # Move audio + cover art
 find "/path/to/batch/Old Dir" -maxdepth 1 -type f \
@@ -312,13 +336,11 @@ Clean up the downloaded image after embedding. If no Bandcamp page is available,
 
 ### Step 4: Move loose tracks
 
-Ask the user where loose tracks should go. Albums have a clear convention (`Artist/Album (Year)/`), but loose track organization varies by user — some use flat directories, source-based folders, or other schemes.
-
-Once the user specifies a destination, move all loose tracks there:
+Use the loose track destination established in Phase 1 Step 1.
 
 ```sh
-mkdir -p "/path/to/dest/loose-tracks-dir"
-mv -n "/path/to/batch/Artist - Title.wav" "/path/to/dest/loose-tracks-dir/"
+mkdir -p "/path/to/loose-dir/batch-name"
+mv -n "/path/to/batch/Artist - Title.wav" "/path/to/loose-dir/batch-name/"
 ```
 
 ---
