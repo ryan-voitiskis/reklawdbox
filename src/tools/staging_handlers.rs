@@ -20,7 +20,11 @@ async fn run_pre_op_backup_if_configured() -> Result<(), String> {
         .filter(|v| !v.trim().is_empty());
     let mut backup_script_candidates: Vec<String> = backup_script_env.into_iter().collect();
     if !cfg!(test) {
-        backup_script_candidates.extend(["scripts/backup.sh".to_string(), "backup.sh".to_string()]);
+        let root = crate::project_root();
+        backup_script_candidates.extend([
+            root.join("scripts/backup.sh").to_string_lossy().into_owned(),
+            root.join("backup.sh").to_string_lossy().into_owned(),
+        ]);
     }
     let Some(script_path) = backup_script_candidates
         .iter()
@@ -353,7 +357,12 @@ pub(super) async fn handle_write_xml(
     let output_path = params
         .output_path
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("rekordbox-exports/reklawdbox-{timestamp}.xml")));
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("reklawdbox-exports")
+                .join(format!("reklawdbox-{timestamp}.xml"))
+        });
 
     if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
         server.state.changes.restore(snapshot);

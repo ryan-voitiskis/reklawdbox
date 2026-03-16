@@ -108,7 +108,9 @@ Rekordbox XML uses classic notation (`Am`, `Bb`, `F#m`). Camelot is display-only
 
 ## Backup behavior
 
-Before export, reklawdbox checks for a backup script (in order): `REKLAWDBOX_BACKUP_SCRIPT` env var, `scripts/backup.sh`, `backup.sh`. If found, it runs synchronously with `--pre-op` before writing. Failures log warnings but don't block export.
+Before export, reklawdbox checks for a backup script (in order): `REKLAWDBOX_BACKUP_SCRIPT` env var, then built-in probe paths. If found, it runs synchronously with `--pre-op` before writing. Failures log warnings but don't block export.
+
+XML files are written to `~/reklawdbox-exports/` by default.
 
 ---
 

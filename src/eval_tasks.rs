@@ -137,7 +137,7 @@ mod tests {
 
         format!(
             "{}/{}",
-            corpus::REKORDBOX_DOCS_ROOT,
+            corpus::REKORDBOX_DOCS_ROOT_RELATIVE,
             normalized_parts.join("/")
         )
     }

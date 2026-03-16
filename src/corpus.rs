@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-pub const REKORDBOX_DOCS_ROOT: &str = "docs/rekordbox";
-pub const REKORDBOX_MANIFEST_PATH: &str = "docs/rekordbox/manifest.yaml";
+pub const REKORDBOX_DOCS_ROOT_RELATIVE: &str = "docs/rekordbox";
+pub const REKORDBOX_MANIFEST_PATH_RELATIVE: &str = "docs/rekordbox/manifest.yaml";
 pub const REKORDBOX_CORPUS_PATH_ENV: &str = "REKLAWDBOX_CORPUS_PATH";
 
 static REKORDBOX_INDEX: OnceLock<CorpusIndex> = OnceLock::new();
@@ -179,7 +179,12 @@ impl CorpusIndex {
         let path = std::env::var(REKORDBOX_CORPUS_PATH_ENV)
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| REKORDBOX_MANIFEST_PATH.to_string());
+            .unwrap_or_else(|| {
+                crate::project_root()
+                    .join(REKORDBOX_MANIFEST_PATH_RELATIVE)
+                    .to_string_lossy()
+                    .into_owned()
+            });
         Self::from_manifest_path(path)
     }
 
@@ -342,7 +347,7 @@ fn to_repo_relative_doc_path(path: &str) -> Option<String> {
         return None;
     }
 
-    Some(format!("{REKORDBOX_DOCS_ROOT}/{}", parts.join("/")))
+    Some(format!("{REKORDBOX_DOCS_ROOT_RELATIVE}/{}", parts.join("/")))
 }
 
 fn looks_like_windows_drive_path(path: &str) -> bool {

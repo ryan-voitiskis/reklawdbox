@@ -21,14 +21,43 @@ mod types;
 mod xml;
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
+/// Resolve the project root directory.
+///
+/// Checks, in order:
+/// 1. `REKLAWDBOX_PROJECT_ROOT` env var
+/// 2. Ancestor of the running binary (works when binary is at `target/{profile}/reklawdbox`)
+/// 3. Current working directory
+pub(crate) fn project_root() -> &'static PathBuf {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        if let Ok(root) = std::env::var("REKLAWDBOX_PROJECT_ROOT") {
+            let p = PathBuf::from(&root);
+            if p.join("Cargo.toml").exists() {
+                return p;
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            // Binary at {root}/target/{profile}/reklawdbox → root is 3 parents up
+            if let Some(root) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+                if root.join("Cargo.toml").exists() {
+                    return root.to_path_buf();
+                }
+            }
+        }
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    })
+}
+
 /// Load env vars from `.mcp.json` so CLI commands get the same config
 /// that Claude Code injects for the MCP server. Shell env takes precedence.
 fn load_env_from_mcp_json() {
-    let Ok(bytes) = std::fs::read(".mcp.json") else {
+    let Ok(bytes) = std::fs::read(project_root().join(".mcp.json")) else {
         return;
     };
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
