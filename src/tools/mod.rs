@@ -16,7 +16,7 @@ mod corpus_helpers;
 mod discogs_auth;
 mod enrich_handlers;
 mod enrichment;
-mod essentia;
+pub(crate) mod essentia;
 mod file_tag_handlers;
 mod help_handler;
 mod label_handlers;

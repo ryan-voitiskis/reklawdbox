@@ -22,7 +22,7 @@ The auto-detection path works for standard macOS Rekordbox installations. Only s
 | `REKLAWDBOX_DISCOGS_BROKER_URL`   | URL of the Discogs broker service | Built-in production broker URL |
 | `REKLAWDBOX_DISCOGS_BROKER_TOKEN` | Auth token for the broker         | Built-in default               |
 
-The broker is a Cloudflare Workers service that handles Discogs OAuth and rate limiting. Both the URL and token have compiled-in defaults pointing to the production broker — no configuration needed for standard use. Only set these if you are self-hosting a broker. Run `reklawdbox setup` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml`).
+The broker is a Cloudflare Workers service that handles Discogs OAuth and rate limiting. Both the URL and token have compiled-in defaults pointing to the production broker — no configuration needed for standard use. Only set these if you are self-hosting a broker. Run `reklawdbox setup --broker` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml`).
 
 ## Audio analysis
 
@@ -37,7 +37,7 @@ Probe behavior:
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
 
-stratum-dsp always runs regardless of Essentia availability. It provides BPM, key, and energy. Essentia adds danceability, brightness, and additional spectral features.
+stratum-dsp always runs regardless of Essentia availability. It provides BPM, key, and energy. Essentia adds danceability, brightness, and additional spectral features. Run `reklawdbox setup` to install Essentia to the default venv path — no env var needed.
 
 ## Backup
 
@@ -73,13 +73,10 @@ A complete `mcp_servers` config block with all commonly used variables:
   "mcpServers": {
     "reklawdbox": {
       "type": "stdio",
-      "command": "/opt/homebrew/bin/reklawdbox",
-      "env": {
-        "CRATE_DIG_ESSENTIA_PYTHON": "/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python"
-      }
+      "command": "/opt/homebrew/bin/reklawdbox"
     }
   }
 }
 ```
 
-Replace `<you>` with your macOS username. If you built from source, use `./target/release/reklawdbox` as the command.
+If you built from source, use `./target/release/reklawdbox` as the command. After running `reklawdbox setup`, Essentia is auto-detected at the default venv path — no env vars needed for standard use.

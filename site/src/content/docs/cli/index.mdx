@@ -250,7 +250,7 @@ reklawdbox embed-art cover.jpg track1.flac track2.flac track3.flac
 
 ## `setup`
 
-Interactive setup wizard. Writes a config file at `~/Library/Application Support/reklawdbox/config.toml` with broker URL and token settings.
+Installs Essentia into a managed Python venv for audio analysis. Finds Python 3.9+, creates a venv at `~/.local/share/reklawdbox/essentia-venv`, and installs Essentia via pip.
 
 ```bash
 reklawdbox setup [options]
@@ -258,6 +258,7 @@ reklawdbox setup [options]
 
 | Flag | Short | Description |
 |------|:-----:|-------------|
-| `--yes` | `-y` | Accept defaults without prompting |
+| `--broker` | | Configure a custom Discogs broker URL and token (self-hosted brokers only) |
+| `--yes` | `-y` | Accept defaults without prompting (only applies to `--broker`) |
 
-Only needed if you are self-hosting a Discogs broker. The default broker is preconfigured.
+The `--broker` flag opens an interactive prompt for custom Discogs broker configuration, writing settings to `~/Library/Application Support/reklawdbox/config.toml`. The default broker is preconfigured and needs no setup.

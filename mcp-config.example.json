@@ -2,10 +2,7 @@
   "mcpServers": {
     "reklawdbox": {
       "type": "stdio",
-      "command": "/opt/homebrew/bin/reklawdbox",
-      "env": {
-        "CRATE_DIG_ESSENTIA_PYTHON": "/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python"
-      }
+      "command": "/opt/homebrew/bin/reklawdbox"
     }
   }
 }

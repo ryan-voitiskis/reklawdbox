@@ -59,8 +59,9 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create parent directories
     if let Some(parent) = venv_dir.parent() {
+        let display = parent.display();
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+            .map_err(|e| format!("Failed to create {display}: {e}"))?;
     }
 
     // Create venv (--clear ensures a fresh start if a broken venv exists)
@@ -71,8 +72,18 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
         "venv creation",
     )?;
 
-    // Install essentia
+    // Verify pip exists (missing when ensurepip is unavailable, e.g. Debian without python3-venv)
     let venv_pip = venv_dir.join("bin/pip");
+    if !venv_pip.exists() {
+        return Err(format!(
+            "Venv was created but pip is missing at {}. \
+             On Debian/Ubuntu, install the python3-venv package.",
+            venv_pip.display()
+        )
+        .into());
+    }
+
+    // Install essentia
     println!("Installing Essentia (this may take a minute)...");
     run_cmd(
         venv_pip.to_string_lossy().as_ref(),
@@ -80,32 +91,67 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
         "pip install essentia",
     )?;
 
-    // Validate
-    if !validate_essentia_python(&venv_python_str) {
-        return Err("Essentia installed but import validation failed.".into());
-    }
+    // Validate with diagnostics
+    validate_essentia_import(&venv_python_str)?;
 
     println!("Essentia installed at {venv_python_str}");
     Ok(())
 }
 
+/// Run the Essentia import check and return a detailed error on failure.
+fn validate_essentia_import(python_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(python_path)
+        .args(["-c", "import essentia; print(essentia.__version__)"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run Essentia import check: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Essentia installed but import validation failed (exit {}):\n{}",
+            output.status,
+            stderr.trim()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn find_python() -> Result<String, Box<dyn std::error::Error>> {
+    let mut diagnostics: Vec<String> = Vec::new();
     for &candidate in PYTHON_CANDIDATES {
-        let ok = Command::new(candidate)
+        match Command::new(candidate)
             .args([
                 "-c",
                 "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)",
             ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            return Ok(candidate.to_string());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+        {
+            Ok(output) if output.status.success() => return Ok(candidate.to_string()),
+            Ok(output) => {
+                diagnostics.push(format!("  {candidate}: version too old or check failed"));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    diagnostics.push(format!("    {}", stderr.trim()));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                diagnostics.push(format!("  {candidate}: not found"));
+            }
+            Err(e) => {
+                diagnostics.push(format!("  {candidate}: {e}"));
+            }
         }
     }
-    Err("No supported Python found (3.9+ required). Install Python and retry.".into())
+    Err(format!(
+        "No supported Python found (3.9+ required). Tried:\n{}",
+        diagnostics.join("\n")
+    )
+    .into())
 }
 
 fn run_cmd(program: &str, args: &[&str], context: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -116,9 +162,23 @@ fn run_cmd(program: &str, args: &[&str], context: &str) -> Result<(), Box<dyn st
         .output()
         .map_err(|e| format!("Failed to run {context}: {e}"))?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{context} failed:\n{stderr}").into());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut msg = format!("{context} failed (exit {}):", output.status);
+        if !stderr.trim().is_empty() {
+            msg.push_str(&format!("\n{}", stderr.trim()));
+        }
+        if !stdout.trim().is_empty() {
+            msg.push_str(&format!("\n{}", stdout.trim()));
+        }
+        return Err(msg.into());
+    }
+
+    // Surface warnings from successful runs (pip deprecation notices, etc.)
+    if !stderr.trim().is_empty() {
+        eprintln!("{}", stderr.trim());
     }
     Ok(())
 }

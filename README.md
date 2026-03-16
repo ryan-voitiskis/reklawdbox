@@ -140,19 +140,13 @@ for full tool parameter reference.
 
 ### Essentia Setup (Recommended)
 
-Use the repo script to install Essentia into the default probe location:
+Install Essentia for advanced audio features (danceability, energy, spectral analysis):
 
 ```bash
-bash scripts/setup-essentia.sh
+reklawdbox setup
 ```
 
-Then set `CRATE_DIG_ESSENTIA_PYTHON` in `.mcp.json` to:
-
-```text
-/Users/<you>/.local/share/reklawdbox/essentia-venv/bin/python
-```
-
-Restart the MCP host/server after updating config.
+This creates a managed Python venv at `~/.local/share/reklawdbox/essentia-venv` which is auto-detected — no env vars needed.
 
 ## Discogs Auth Flow
 

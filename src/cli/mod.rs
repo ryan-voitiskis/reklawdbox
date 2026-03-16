@@ -161,7 +161,7 @@ enum Cli {
     ExtractArt(tags::ExtractArtArgs),
     /// Embed cover art into audio files
     EmbedArt(tags::EmbedArtArgs),
-    /// Configure reklawdbox (broker token, etc.)
+    /// Install Essentia and configure reklawdbox
     Setup(setup::SetupArgs),
 }
 
