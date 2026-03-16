@@ -150,6 +150,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let cpu_preset = args.cpu;
     super::apply_cpu_niceness(cpu_preset);
     let analysis_concurrency = super::analysis_concurrency_for_preset(cpu_preset);
+    let analysis_budget_mb = super::memory_budget_mb(cpu_preset);
 
     let want_discogs = args.providers.contains(&Provider::Discogs);
     let want_beatport = args.providers.contains(&Provider::Beatport);
@@ -278,6 +279,9 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
     }
 
+    // LPT scheduling: longest tracks first so short tracks fill gaps at the tail
+    analysis_pending.sort_by(|a, b| b.0.length.cmp(&a.0.length));
+
     drop(store_conn);
 
     let total_tracks = tracks.len();
@@ -295,6 +299,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         "  {}",
         super::cpu_preset_summary(cpu_preset, analysis_concurrency)
     );
+    if want_analysis {
+        println!(
+            "  {}",
+            super::memory_preset_summary(analysis_budget_mb)
+        );
+    }
     if want_discogs {
         let retry_note = if discogs_errors > 0 && retry_errors {
             format!(", {} errors to retry", discogs_errors)
@@ -418,16 +428,19 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         tokio::sync::mpsc::channel::<HydrateCacheMsg>(enrich_concurrency * 8 + 32);
 
     let writer_store_path = store_path_str.clone();
+    let writer_cancel = cancel.clone();
     let writer_handle = tokio::task::spawn_blocking(move || {
         let conn = match store::open(&writer_store_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("Cache writer: failed to open store: {e}");
+                tracing::error!("Cache writer: failed to open store: {e} — aborting pipeline");
+                writer_cancel.cancel();
                 return;
             }
         };
+        let mut consecutive_failures: u32 = 0;
         while let Some(msg) = cache_rx.blocking_recv() {
-            match msg {
+            let write_result = match &msg {
                 HydrateCacheMsg::Enrichment {
                     provider,
                     norm_artist,
@@ -435,38 +448,51 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                     norm_album,
                     match_quality,
                     response_json,
-                } => {
-                    if let Err(e) = store::set_enrichment(
-                        &conn,
-                        &provider,
-                        &norm_artist,
-                        &norm_title,
-                        norm_album.as_deref(),
-                        match_quality.as_deref(),
-                        response_json.as_deref(),
-                    ) {
-                        tracing::error!(
-                            "Cache writer: enrichment write failed for {provider} {norm_artist}/{norm_title}: {e}"
-                        );
+                } => store::set_enrichment(
+                    &conn,
+                    provider,
+                    norm_artist,
+                    norm_title,
+                    norm_album.as_deref(),
+                    match_quality.as_deref(),
+                    response_json.as_deref(),
+                ),
+                HydrateCacheMsg::AudioAnalysis(a) => store::set_audio_analysis(
+                    &conn,
+                    &a.file_path,
+                    &a.analyzer,
+                    a.file_size,
+                    a.file_mtime,
+                    &a.analyzer_version,
+                    &a.features_json,
+                ),
+            };
+            if let Err(e) = write_result {
+                consecutive_failures += 1;
+                let label = match &msg {
+                    HydrateCacheMsg::Enrichment {
+                        provider,
+                        norm_artist,
+                        norm_title,
+                        ..
+                    } => format!("{provider} {norm_artist}/{norm_title}"),
+                    HydrateCacheMsg::AudioAnalysis(a) => {
+                        format!("{} {}", a.analyzer, a.file_path)
                     }
+                };
+                tracing::error!(
+                    "Cache writer: write failed for {label}: {e} ({consecutive_failures}/{})",
+                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
+                );
+                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
+                    tracing::error!(
+                        "Cache writer: {consecutive_failures} consecutive failures — aborting pipeline"
+                    );
+                    writer_cancel.cancel();
+                    return;
                 }
-                HydrateCacheMsg::AudioAnalysis(msg) => {
-                    if let Err(e) = store::set_audio_analysis(
-                        &conn,
-                        &msg.file_path,
-                        &msg.analyzer,
-                        msg.file_size,
-                        msg.file_mtime,
-                        &msg.analyzer_version,
-                        &msg.features_json,
-                    ) {
-                        tracing::error!(
-                            "Cache writer: analysis write failed for {} {}: {e}",
-                            msg.analyzer,
-                            msg.file_path
-                        );
-                    }
-                }
+            } else {
+                consecutive_failures = 0;
             }
         }
     });
@@ -758,7 +784,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         })
     };
 
-    // Analysis producer task
+    // Analysis producer task (dual semaphore: CPU + memory)
     let analysis_task = {
         let cancel = cancel.clone();
         let cache_tx = cache_tx.clone();
@@ -768,16 +794,32 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
             if analysis_pending.is_empty() {
                 return;
             }
-            let sem = Arc::new(tokio::sync::Semaphore::new(analysis_concurrency));
+            let cpu_sem = Arc::new(tokio::sync::Semaphore::new(analysis_concurrency));
+            let mem_sem = Arc::new(tokio::sync::Semaphore::new(analysis_budget_mb as usize));
             let mut handles = Vec::with_capacity(analysis_pending.len());
 
             for (track, needs_stratum, needs_essentia) in analysis_pending {
                 if cancel.is_cancelled() {
                     break;
                 }
-                let permit = match sem.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break,
+                let cost_mb =
+                    super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+                let cpu_permit = tokio::select! {
+                    result = cpu_sem.clone().acquire_owned() => match result {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    },
+                    _ = cancel.cancelled() => break,
+                };
+                let mem_permit = tokio::select! {
+                    result = mem_sem.clone().acquire_many_owned(cost_mb) => match result {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    },
+                    _ = cancel.cancelled() => {
+                        drop(cpu_permit);
+                        break;
+                    },
                 };
                 let essentia_python = essentia_python.clone();
                 let cache_tx = cache_tx.clone();
@@ -787,7 +829,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
                 handles.push(tokio::spawn(async move {
                     if cancel.is_cancelled() {
-                        drop(permit);
+                        drop(cpu_permit);
+                        drop(mem_permit);
                         return;
                     }
 
@@ -807,7 +850,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                     }
 
                     pb.inc(1);
-                    drop(permit);
+                    drop(cpu_permit);
+                    drop(mem_permit);
                 }));
             }
 

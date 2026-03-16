@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use tokio_util::sync::CancellationToken;
 
 use crate::{audio, db, store, tools};
 
@@ -149,6 +151,10 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     }
 
     let total = tracks.len();
+
+    // LPT scheduling: longest tracks first so short tracks fill gaps at the tail
+    to_analyze.sort_by(|a, b| b.0.length.cmp(&a.0.length));
+
     let pending = to_analyze.len();
 
     // Apply CPU preset
@@ -158,8 +164,10 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         Some(n) => n.clamp(1, 16) as usize,
         None => super::analysis_concurrency_for_preset(cpu_preset),
     };
+    let analysis_budget_mb = super::memory_budget_mb(cpu_preset);
 
     tracing::info!("{}", super::cpu_preset_summary(cpu_preset, concurrency));
+    tracing::info!("{}", super::memory_preset_summary(analysis_budget_mb));
     tracing::info!(
         "Scanning {total} tracks ({cached_count} cached, {pending} to analyze, concurrency={concurrency})"
     );
@@ -182,22 +190,39 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     // Drop pre-filter connection — writer task will open its own
     drop(store_conn);
 
-    let batch_start = Instant::now();
-    let analyzed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let failed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let completed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cancel = CancellationToken::new();
 
-    // Spawn cache writer task
+    // Ctrl+C handler
+    let cancel_clone = cancel.clone();
+    let mp_clone = mp.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            mp_clone
+                .println("Shutting down gracefully... (waiting for in-flight tasks)")
+                .ok();
+            cancel_clone.cancel();
+        }
+    });
+
+    let batch_start = Instant::now();
+    let analyzed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let failed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Spawn cache writer task (with consecutive failure abort)
     let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<CliCacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path_str.clone();
+    let writer_cancel = cancel.clone();
     let writer_handle = tokio::task::spawn_blocking(move || {
         let conn = match store::open(&writer_store_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("Cache writer: failed to open store: {e}");
+                tracing::error!("Cache writer: failed to open store: {e} — aborting pipeline");
+                writer_cancel.cancel();
                 return;
             }
         };
+        let mut consecutive_failures: u32 = 0;
         while let Some(msg) = cache_rx.blocking_recv() {
             if let Err(e) = store::set_audio_analysis(
                 &conn,
@@ -208,21 +233,54 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
                 &msg.analyzer_version,
                 &msg.features_json,
             ) {
+                consecutive_failures += 1;
                 tracing::error!(
-                    "Cache writer: failed to write {} for {}: {e}",
+                    "Cache writer: failed to write {} for {}: {e} ({consecutive_failures}/{})",
                     msg.analyzer,
-                    msg.file_path
+                    msg.file_path,
+                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
                 );
+                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
+                    tracing::error!(
+                        "Cache writer: {consecutive_failures} consecutive failures — aborting pipeline"
+                    );
+                    writer_cancel.cancel();
+                    return;
+                }
+            } else {
+                consecutive_failures = 0;
             }
         }
     });
 
-    // Spawn analysis tasks bounded by semaphore
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+    // Dual semaphore: CPU concurrency + memory budget
+    let cpu_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mem_sem = Arc::new(tokio::sync::Semaphore::new(analysis_budget_mb as usize));
     let mut handles = Vec::with_capacity(pending);
 
     for (track, needs_stratum, needs_essentia) in to_analyze {
-        let permit = sem.clone().acquire_owned().await?;
+        if cancel.is_cancelled() {
+            break;
+        }
+        // Memory cost clamped to budget so a single huge track can still run (solo)
+        let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+        let cpu_permit = tokio::select! {
+            result = cpu_sem.clone().acquire_owned() => match result {
+                Ok(p) => p,
+                Err(_) => break,
+            },
+            _ = cancel.cancelled() => break,
+        };
+        let mem_permit = tokio::select! {
+            result = mem_sem.clone().acquire_many_owned(cost_mb) => match result {
+                Ok(p) => p,
+                Err(_) => break,
+            },
+            _ = cancel.cancelled() => {
+                drop(cpu_permit);
+                break;
+            },
+        };
         let label = format!("{} - {}", track.artist, track.title);
         let essentia_python = essentia_python.clone();
         let cache_tx = cache_tx.clone();
@@ -231,8 +289,15 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         let completed_count = completed_count.clone();
         let mp = mp.clone();
         let pb = pb.clone();
+        let cancel = cancel.clone();
 
         handles.push(tokio::spawn(async move {
+            if cancel.is_cancelled() {
+                drop(cpu_permit);
+                drop(mem_permit);
+                return;
+            }
+
             let result = cli_analyze_single_track(
                 &track.file_path,
                 needs_stratum,
@@ -299,7 +364,8 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
             }
 
             pb.inc(1);
-            drop(permit);
+            drop(cpu_permit);
+            drop(mem_permit);
         }));
     }
 
