@@ -305,12 +305,12 @@ read_file_tags(paths=["/path/to/batch/Artist - Title.wav"])
 
 If tags are missing, look up with `lookup_discogs(...)` / `lookup_beatport(...)`. For Bandcamp-sourced downloads, also check the Bandcamp release page (see Phase 2 Step 4 for URL patterns) — it's often the only source for self-released and digital-only music.
 
-Write minimum tags:
+Write tags (include album — almost always available from the source release):
 
 ```
 write_file_tags(writes=[{
   path: "/path/to/batch/Artist - Title.wav",
-  tags: {artist: "Artist Name", title: "Track Title", publisher: "Label Name"}
+  tags: {artist: "Artist Name", title: "Track Title", album: "Release Name", publisher: "Label Name", year: "YEAR"}
 }])
 ```
 
