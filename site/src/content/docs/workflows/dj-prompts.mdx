@@ -1,0 +1,210 @@
+---
+title: DJ Prompts
+description: Conversational agent prompts for gig prep, collection analysis, practice, and music discovery.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Lightweight prompts that use existing tools in creative ways. No new tools required — the agent combines search, scoring, analysis, and its own musical knowledge to deliver value.
+
+<Aside type="note">
+  These prompts work best when cache coverage is high. Run `cache_coverage` first.
+</Aside>
+
+---
+
+## Gig Prep
+
+Context-aware set preparation. Instead of generic "build a set," tell the agent about the gig and let it translate context into constraints.
+
+**Paste into your agent:**
+
+```
+I have a gig coming up. Here's the context:
+
+- Venue/event: [name, type — club, festival, bar, warehouse]
+- Time slot: [e.g., 1-3am, opening, closing, sunrise]
+- Duration: [e.g., 2 hours]
+- Who's playing before/after me: [if known]
+- Vibe I'm going for: [in your own words]
+- Anything I definitely want to play: [optional track names]
+
+Help me prepare.
+```
+
+**What the agent should do:**
+
+1. Translate the context into musical constraints:
+   - Time slot → energy arc shape (opening = slow build, peak = sustained high, closing = controlled descent, sunrise = floaty/euphoric)
+   - "After an industrial DJ" → don't go harder, build tension differently
+   - "Bar, 50 people" → lower energy ceiling, more variety, deeper cuts
+2. Use `search_tracks` to find tracks matching the derived constraints (BPM range, genre, energy range)
+3. Use `query_transition_candidates` to identify tracks that work well together within the pool
+4. Present a curated pool (not a fixed sequence) — the DJ picks the order live
+5. Optionally run `build_set` for a suggested sequence within the pool
+
+The value is in the translation from natural language context to musical parameters — something a GUI tool can't do.
+
+---
+
+## Collection Gap Analysis
+
+Understand your library's shape — and its blind spots.
+
+**Paste into your agent:**
+
+```
+Analyze my collection for gaps and imbalances. I want to understand:
+- Where am I deep vs. thin?
+- What keys/tempos/genres am I missing?
+- Am I overindexing on anything?
+- What limits my flexibility as a DJ?
+```
+
+**What the agent should do:**
+
+1. Use `read_library` for overall stats (genre distribution, key distribution, track count)
+2. Use `search_tracks` with various filters to map coverage:
+   - BPM buckets (< 120, 120-125, 125-130, 130-135, 135+) — where are you thin?
+   - Key coverage across the Camelot wheel — any dead ends where you have 1 track and nothing compatible?
+   - Genre coverage — are you a techno DJ with 3 house tracks, or evenly spread?
+   - Energy distribution — all bangers and no warmup material?
+   - Rating distribution — are you only rating the tracks you already love?
+3. Identify specific gaps:
+   - Keys with < 3 tracks (harmonic dead ends)
+   - BPM ranges with < 5 tracks (can't sustain a set there)
+   - Labels you buy from heavily that have releases you're missing
+4. Present findings as actionable insights, not just charts
+
+---
+
+## Dig Session Partner
+
+A knowledgeable collaborator for music discovery, using your collection as context.
+
+**Paste into your agent:**
+
+```
+I'm digging for new music today. Here's what I'm looking for:
+[describe what you want — genre, mood, tempo, reference tracks, or just "surprise me"]
+
+Use my collection to understand my taste and suggest directions.
+```
+
+**What the agent should do:**
+
+1. Analyze the user's collection for patterns:
+   - Most common labels → suggest sibling/adjacent labels
+   - Artist clusters → suggest related artists via Discogs credits (remixers, collaborators, label-mates)
+   - Genre/era concentrations → suggest unexplored adjacent territories
+2. Use `lookup_discogs` and `lookup_beatport` to research suggestions
+3. Cross-reference against what the user already owns — don't suggest what they have
+4. Notice purchasing patterns:
+   - "You've bought 6 tracks from this label but nothing from their last 2 years — worth checking"
+   - "3 of your recent purchases are from artists who all appear on [compilation] — the other artists on it might interest you"
+   - "Your collection is 80% post-2020 releases — want some classic material for contrast?"
+5. Suggest specific releases or tracks to check out, with reasoning
+
+<Aside type="tip">
+  This works well as a conversation — tell the agent what you found, what you liked, what missed, and it refines its suggestions.
+</Aside>
+
+---
+
+## Post-Gig Debrief
+
+Analyze what you actually played and learn from it. Requires [session history tools](/concepts/architecture/) (see issue #24).
+
+**Paste into your agent:**
+
+```
+Debrief my last gig. Analyze the session from [date] and help me understand:
+- What was my energy arc?
+- What's in heavy rotation vs. fresh?
+- How did my actual set compare to what I prepped?
+```
+
+**What the agent should do:**
+
+1. Use `get_sessions` to find the session, `get_session_tracks` for the tracklist
+2. Resolve full track data and analyze the arc:
+   - Energy curve — where were the peaks and valleys? Was the peak too early/late?
+   - BPM trajectory — did tempo drift up, stay flat, or follow a deliberate arc?
+   - Harmonic movement — smooth Camelot steps or big jumps? Were the jumps intentional?
+   - Genre flow — did you stay in one lane or move between styles?
+3. Cross-reference with play history:
+   - Tracks appearing in 3+ recent sessions → heavy rotation (signature tracks or crutches?)
+   - Tracks played for the first time → how did they fit?
+   - Tracks from the prepped pool that weren't used → why not?
+4. Surface actionable observations:
+   - "Your first hour was all 6A/7A — harmonically safe but maybe too static"
+   - "You jumped from energy 4 to 8 at track 12 — was that intentional or did you panic?"
+   - "You played 'Black Sun' at your last 4 sessions — maybe rest it?"
+
+<Aside type="caution">
+  This prompt depends on session history tools (issue #24) which are not yet implemented.
+</Aside>
+
+---
+
+## Harmonic Journey Planning
+
+Plan extended harmonic arcs across a set — beyond pairwise key compatibility.
+
+**Paste into your agent:**
+
+```
+Plan a harmonic journey for my next set.
+- Starting key: [e.g., 6A, or "wherever my opener is"]
+- Style: [rising tension / major-minor shift / full wheel rotation / stay close]
+- Duration: [number of tracks or minutes]
+- Pool: [playlist name, genre filter, or "my whole library"]
+```
+
+**What the agent should do:**
+
+1. Map the user's available tracks by Camelot position using `search_tracks`
+2. Identify the harmonic landscape — where are the dense clusters? Where are the gaps?
+3. Plan a key sequence based on the requested style:
+   - **Rising tension:** move clockwise around the wheel (6A → 7A → 8A → ...), each step adds energy
+   - **Major-minor shift:** move between inner and outer ring (6A → 6B → 7B → 7A) for emotional contrast
+   - **Full rotation:** visit all 12 positions and return to start — a complete harmonic journey
+   - **Stay close:** never move more than 1 step, maximize harmonic smoothness
+4. For each position in the journey, suggest specific tracks that fit, scored by `query_transition_candidates`
+5. Flag problems:
+   - "You have nothing in 12A — this journey can't pass through there"
+   - "The jump from 9A to 11A skips a position — you'll need a bridge track or an intentional energy shift"
+   - "Your 3B tracks are all above 135 BPM but your 2A tracks are all below 125 — the key transition will also be a big tempo jump"
+
+---
+
+## Practice Session Design
+
+Structured practice instead of aimless browsing.
+
+**Paste into your agent:**
+
+```
+Design a practice session for me.
+Focus: [e.g., "learn my new tracks", "practice difficult transitions",
+        "explore a key I never use", "get comfortable below 124 BPM"]
+Duration: [e.g., 30 min, 1 hour]
+```
+
+**What the agent should do:**
+
+1. Based on the focus area, select appropriate tracks:
+   - **New tracks:** find recently added tracks (by date or specific batch), pair them with familiar tracks for context
+   - **Difficult transitions:** find pairs with challenging but rewarding compatibility — key jumps that work with the right timing, BPM gaps that need manual adjustment
+   - **Weak key areas:** find tracks in keys the DJ rarely uses (from gap analysis), pair with comfortable keys to practice moving in and out
+   - **Tempo range:** find tracks in the target BPM range, pair in sets of 3-4 for extended practice
+2. Use `score_transition` to find pairs that are:
+   - Achievable but not trivial (score 60-80 range — too easy doesn't build skill, too hard frustrates)
+   - Varied in challenge type (some harmonic, some tempo, some energy)
+3. Present as ordered exercises:
+   - "Mix 1: Track A → Track B (compatible keys, practice the 4 BPM gap)"
+   - "Mix 2: Track C → Track D (key jump from 6A to 8A — try mixing during the breakdown)"
+   - "Mix 3: Track E → Track F → Track G (3-track chain, maintain energy while shifting keys)"
+4. After practice, ask what worked and what didn't — refine for next session
