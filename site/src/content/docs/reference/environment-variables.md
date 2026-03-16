@@ -41,8 +41,8 @@ stratum-dsp always runs regardless of Essentia availability. It provides BPM, ke
 
 ## Backup
 
-| Variable                   | Description                                            | Default                                             |
-| -------------------------- | ------------------------------------------------------ | --------------------------------------------------- |
+| Variable                   | Description                                            | Default                                        |
+| -------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
 | `REKLAWDBOX_BACKUP_SCRIPT` | Path to a backup script run before `write_xml` exports | Probes built-in paths relative to project root |
 
 The backup script runs synchronously before any XML is written. If neither the env var nor the default probe paths point to an existing script, no backup runs and `write_xml` proceeds normally.

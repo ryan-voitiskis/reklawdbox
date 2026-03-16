@@ -603,7 +603,7 @@ async function handleDiscogsOauthLink(env: Env, url: URL): Promise<Response> {
       pending_token = excluded.pending_token,
       created_at = excluded.created_at,
       expires_at = excluded.expires_at`,
-    )
+  )
     .bind(
       requestToken.oauthToken,
       encryptedRequestTokenSecret,
@@ -687,7 +687,10 @@ async function handleDiscogsOauthCallback(
     )
   }
 
-  const requestTokenSecret = await readStoredSecret(env, temp.oauth_token_secret)
+  const requestTokenSecret = await readStoredSecret(
+    env,
+    temp.oauth_token_secret,
+  )
   const access = await requestDiscogsAccessToken(
     env,
     oauthToken,
@@ -708,7 +711,7 @@ async function handleDiscogsOauthCallback(
          authorized_at = ?4,
          updated_at = ?4
      WHERE device_id = ?5 AND pending_token = ?6`,
-    )
+  )
     .bind(
       access.oauthToken,
       encryptedAccessTokenSecret,
@@ -1063,7 +1066,9 @@ function scoreRelease(entry: DiscogsApiSearchResult): number {
   return score
 }
 
-function bestByScore(entries: DiscogsApiSearchResult[]): DiscogsApiSearchResult {
+function bestByScore(
+  entries: DiscogsApiSearchResult[],
+): DiscogsApiSearchResult {
   if (entries.length === 0) {
     throw new Error('bestByScore called with empty array')
   }
@@ -1238,7 +1243,10 @@ async function finalizedReplayForPending(
   deviceId: string,
   pendingToken: string,
 ): Promise<{ sessionToken: string; sessionExpiresAt: number } | null> {
-  if (row.status !== 'finalized' || !row.session_token_hash || !row.session_expires_at) {
+  if (
+    row.status !== 'finalized' || !row.session_token_hash
+    || !row.session_expires_at
+  ) {
     return null
   }
 
@@ -1393,7 +1401,9 @@ async function pruneExpiredRows(env: Env): Promise<void> {
 }
 
 function assertDiscogsOAuthEnv(env: Env): void {
-  if (!env.DISCOGS_CONSUMER_KEY?.trim() || !env.DISCOGS_CONSUMER_SECRET?.trim()) {
+  if (
+    !env.DISCOGS_CONSUMER_KEY?.trim() || !env.DISCOGS_CONSUMER_SECRET?.trim()
+  ) {
     throw new BrokerHttpError(
       'service_unavailable',
       DISCOGS_AUTH_NOT_CONFIGURED_MESSAGE,
@@ -1541,7 +1551,10 @@ async function getSessionAccessCredentials(
     row.oauth_access_token_secret,
   )
   if (!accessTokenSecret.wasEncrypted) {
-    const encryptedSecret = await encryptStoredSecret(env, accessTokenSecret.plaintext)
+    const encryptedSecret = await encryptStoredSecret(
+      env,
+      accessTokenSecret.plaintext,
+    )
     await env.DB.prepare(
       `UPDATE device_sessions
        SET oauth_access_token_secret = ?1
@@ -1604,7 +1617,10 @@ async function readStoredSecret(
   }
 }
 
-async function encryptStoredSecret(env: Env, plaintext: string): Promise<string> {
+async function encryptStoredSecret(
+  env: Env,
+  plaintext: string,
+): Promise<string> {
   const secret = stateEncryptionKey(env)
   const cryptoKey = await importStateCipherKey(secret)
   const iv = crypto.getRandomValues(new Uint8Array(12))
@@ -1616,9 +1632,11 @@ async function encryptStoredSecret(env: Env, plaintext: string): Promise<string>
     cryptoKey,
     new TextEncoder().encode(plaintext),
   )
-  return `${ENCRYPTED_SECRET_PREFIX}${bytesToHex(iv)}:${bytesToHex(
-    new Uint8Array(ciphertext),
-  )}`
+  return `${ENCRYPTED_SECRET_PREFIX}${bytesToHex(iv)}:${
+    bytesToHex(
+      new Uint8Array(ciphertext),
+    )
+  }`
 }
 
 function stateEncryptionKey(env: Env): string {
@@ -1661,7 +1679,9 @@ function bytesToHex(input: ArrayBufferView): string {
 }
 
 function hexToBytes(input: string): Uint8Array<ArrayBuffer> {
-  if (input.length === 0 || input.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(input)) {
+  if (
+    input.length === 0 || input.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(input)
+  ) {
     throw new Error('invalid hex input')
   }
   const out = new Uint8Array(new ArrayBuffer(input.length / 2))

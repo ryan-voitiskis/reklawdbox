@@ -28,7 +28,6 @@ rusqlite = { version = "0.34", features = ["bundled-sqlcipher-vendored-openssl"]
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 serde_yaml = "0.9"
 stratum-dsp = { path = "stratum-dsp" }
 strum = { version = "0.27", features = ["derive"] }
@@ -36,6 +35,7 @@ symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "aac"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-casefold = "0.2"

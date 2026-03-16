@@ -274,7 +274,9 @@ describe('broker test runner baseline', () => {
       expect(linkResponse.status).toBe(302)
 
       const callbackResponse = await request(
-        `/v1/discogs/oauth/callback?device_id=${encodeURIComponent(startBody.device_id)}&pending_token=${
+        `/v1/discogs/oauth/callback?device_id=${
+          encodeURIComponent(startBody.device_id)
+        }&pending_token=${
           encodeURIComponent(startBody.pending_token)
         }&oauth_token=req-token&oauth_verifier=test-verifier`,
         { method: 'GET' },
@@ -782,13 +784,29 @@ describe('discogs proxy search matching', () => {
       'match-exact-both',
       { artist: 'Legowelt', title: 'Disco Rout' },
       [
-        { title: 'Other Artist - Other Track', year: 2020, label: ['Label A'], genre: ['Electronic'], style: ['Techno'], uri: '/release/1' },
-        { title: 'Legowelt - Disco Rout', year: 2021, label: ['Clone'], genre: ['Electronic'], style: ['Electro'], uri: '/release/2' },
+        {
+          title: 'Other Artist - Other Track',
+          year: 2020,
+          label: ['Label A'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          uri: '/release/1',
+        },
+        {
+          title: 'Legowelt - Disco Rout',
+          year: 2021,
+          label: ['Clone'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          uri: '/release/2',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { title: string; fuzzy_match: boolean }; match_quality: string }>()
+    const body = await response.json<
+      { result: { title: string; fuzzy_match: boolean }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('exact')
     expect(body.result.title).toBe('Legowelt - Disco Rout')
     expect(body.result.fuzzy_match).toBe(false)
@@ -799,13 +817,29 @@ describe('discogs proxy search matching', () => {
       'match-artist-only',
       { artist: 'Legowelt', title: 'Nonexistent Track' },
       [
-        { title: 'Legowelt - Disco Rout', year: 2021, label: ['Clone'], genre: ['Electronic'], style: ['Electro'], uri: '/release/1' },
-        { title: 'Legowelt - Other EP', year: 2019, label: ['Clone'], genre: ['Electronic'], style: ['Electro'], uri: '/release/2' },
+        {
+          title: 'Legowelt - Disco Rout',
+          year: 2021,
+          label: ['Clone'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          uri: '/release/1',
+        },
+        {
+          title: 'Legowelt - Other EP',
+          year: 2019,
+          label: ['Clone'],
+          genre: ['Electronic'],
+          style: ['Electro'],
+          uri: '/release/2',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { title: string; fuzzy_match: boolean }; match_quality: string }>()
+    const body = await response.json<
+      { result: { title: string; fuzzy_match: boolean }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('fuzzy')
     expect(body.result.title).toBe('Legowelt - Disco Rout')
     expect(body.result.fuzzy_match).toBe(true)
@@ -816,14 +850,40 @@ describe('discogs proxy search matching', () => {
       'match-prefer-title',
       { artist: 'Shed', title: 'Silent Witness' },
       [
-        { title: 'Shed - The Killer', year: 2008, label: ['Ostgut'], genre: ['Electronic'], style: ['Techno'], uri: '/release/1' },
-        { title: 'Shed - Silent Witness', year: 2010, label: ['Ostgut'], genre: ['Electronic'], style: ['Dub Techno'], uri: '/release/2' },
-        { title: 'Shed - Shedding The Past', year: 2012, label: ['Ostgut'], genre: ['Electronic'], style: ['Techno'], uri: '/release/3' },
+        {
+          title: 'Shed - The Killer',
+          year: 2008,
+          label: ['Ostgut'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          uri: '/release/1',
+        },
+        {
+          title: 'Shed - Silent Witness',
+          year: 2010,
+          label: ['Ostgut'],
+          genre: ['Electronic'],
+          style: ['Dub Techno'],
+          uri: '/release/2',
+        },
+        {
+          title: 'Shed - Shedding The Past',
+          year: 2012,
+          label: ['Ostgut'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          uri: '/release/3',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { title: string; fuzzy_match: boolean; url: string }; match_quality: string }>()
+    const body = await response.json<
+      {
+        result: { title: string; fuzzy_match: boolean; url: string }
+        match_quality: string
+      }
+    >()
     expect(body.match_quality).toBe('exact')
     expect(body.result.title).toBe('Shed - Silent Witness')
     expect(body.result.fuzzy_match).toBe(false)
@@ -834,12 +894,21 @@ describe('discogs proxy search matching', () => {
       'match-title-only',
       { artist: 'Misspelled Artst', title: 'Correct Title' },
       [
-        { title: 'Real Artist - Correct Title', year: 2023, label: ['Label'], genre: ['Electronic'], style: ['House'], uri: '/release/1' },
+        {
+          title: 'Real Artist - Correct Title',
+          year: 2023,
+          label: ['Label'],
+          genre: ['Electronic'],
+          style: ['House'],
+          uri: '/release/1',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { title: string; fuzzy_match: boolean }; match_quality: string }>()
+    const body = await response.json<
+      { result: { title: string; fuzzy_match: boolean }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('fuzzy')
     expect(body.result.fuzzy_match).toBe(true)
     expect(body.result.title).toBe('Real Artist - Correct Title')
@@ -850,12 +919,21 @@ describe('discogs proxy search matching', () => {
       'match-nothing',
       { artist: 'Unknown', title: 'Nope' },
       [
-        { title: 'Completely Different - Something Else', year: 2020, label: ['Label'], genre: ['Rock'], style: ['Indie'], uri: '/release/1' },
+        {
+          title: 'Completely Different - Something Else',
+          year: 2020,
+          label: ['Label'],
+          genre: ['Rock'],
+          style: ['Indie'],
+          uri: '/release/1',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { fuzzy_match: boolean }; match_quality: string }>()
+    const body = await response.json<
+      { result: { fuzzy_match: boolean }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('fuzzy')
     expect(body.result.fuzzy_match).toBe(true)
   })
@@ -887,7 +965,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string; url: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { label: string; url: string }; match_quality: string }
+    >()
     expect(body.result.label).toBe('R & S Records')
     expect(body.result.url).toContain('/release/original')
   })
@@ -919,7 +999,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { label: string }; match_quality: string }
+    >()
     expect(body.result.label).toBe('Superconscious Records')
   })
 
@@ -950,7 +1032,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { label: string }; match_quality: string }
+    >()
     expect(body.result.label).toBe('KDJ')
   })
 
@@ -981,7 +1065,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { label: string }; match_quality: string }
+    >()
     expect(body.result.label).toBe('Giegling')
   })
 
@@ -1012,7 +1098,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { label: string }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('fuzzy')
     expect(body.result.label).toBe('Harmonie Park')
   })
@@ -1044,7 +1132,9 @@ describe('discogs proxy search matching', () => {
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { label: string; url: string } }>()
+    const body = await response.json<
+      { result: { label: string; url: string } }
+    >()
     expect(body.result.label).toBe('Ostgut Ton')
     expect(body.result.url).toContain('/release/first')
   })
@@ -1178,13 +1268,29 @@ describe('discogs proxy search matching', () => {
       'score-no-format',
       { artist: 'Shed', title: 'Silent Witness' },
       [
-        { title: 'Shed - The Killer', year: 2008, label: ['Ostgut'], genre: ['Electronic'], style: ['Techno'], uri: '/release/1' },
-        { title: 'Shed - Silent Witness', year: 2010, label: ['Ostgut'], genre: ['Electronic'], style: ['Dub Techno'], uri: '/release/2' },
+        {
+          title: 'Shed - The Killer',
+          year: 2008,
+          label: ['Ostgut'],
+          genre: ['Electronic'],
+          style: ['Techno'],
+          uri: '/release/1',
+        },
+        {
+          title: 'Shed - Silent Witness',
+          year: 2010,
+          label: ['Ostgut'],
+          genre: ['Electronic'],
+          style: ['Dub Techno'],
+          uri: '/release/2',
+        },
       ],
     )
 
     expect(response.status).toBe(200)
-    const body = await response.json<{ result: { title: string }; match_quality: string }>()
+    const body = await response.json<
+      { result: { title: string }; match_quality: string }
+    >()
     expect(body.match_quality).toBe('exact')
     expect(body.result.title).toBe('Shed - Silent Witness')
   })

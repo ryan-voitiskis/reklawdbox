@@ -86,21 +86,21 @@ These patterns are valid and should not be flagged as errors during audits:
 
 ### Filename parsing rules
 
-The delimiter is always ` - ` (space-dash-space). Bare hyphens inside artist or title names (e.g., "Jean-Michel Jarre") are not delimiters.
+The delimiter is always `-` (space-dash-space). Bare hyphens inside artist or title names (e.g., "Jean-Michel Jarre") are not delimiters.
 
 **Album tracks** (`NN Artist Name - Track Title.ext`):
 
 1. Strip file extension
 2. Leading digits = track number
 3. Skip whitespace after track number
-4. Split remainder on first ` - ` — left side is artist, right side is title
+4. Split remainder on first `-` — left side is artist, right side is title
 
 **Edge cases:**
 
-- Title contains ` - ` (e.g., `Artist - Track - Subtitle`) — split on first ` - ` only, unless artist is known from directory context.
+- Title contains `-` (e.g., `Artist - Track - Subtitle`) — split on first `-` only, unless artist is known from directory context.
 - VA compilations — filename artist is the per-track artist, not the AlbumArtist.
 
-**Loose tracks** (`Artist Name - Track Title.ext`): split on first ` - `.
+**Loose tracks** (`Artist Name - Track Title.ext`): split on first `-`.
 
 ## Tags
 

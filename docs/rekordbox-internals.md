@@ -11,9 +11,9 @@
 1. [File Locations (macOS)](#1-file-locations-macos)
 2. [The Encrypted Database (master.db)](#2-the-encrypted-database-masterdb)
 3. [Database Schema](#3-database-schema)
-4. [XML Format & Import/Export](#4-xml-format--importexport) *(condensed — see corpus for full reference)*
+4. [XML Format & Import/Export](#4-xml-format--importexport) _(condensed — see corpus for full reference)_
 5. [Analysis Files (ANLZ)](#5-analysis-files-anlz)
-6. [Metadata & Genre Strategy](#6-metadata--genre-strategy) *(condensed — see corpus for field mapping)*
+6. [Metadata & Genre Strategy](#6-metadata--genre-strategy) _(condensed — see corpus for field mapping)_
 7. [pyrekordbox Reference](#7-pyrekordbox-reference)
 8. [Ecosystem Tools](#8-ecosystem-tools)
 9. [Gotchas and Footguns](#9-gotchas-and-footguns)

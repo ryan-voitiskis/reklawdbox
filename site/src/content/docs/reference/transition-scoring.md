@@ -28,15 +28,15 @@ Axes 5 and 6 require Essentia audio analysis. When that data is missing, those a
 
 Key relationships are evaluated on the Camelot wheel, where adjacent positions represent harmonically compatible keys.
 
-| Relationship               | Score | Label            |
-| -------------------------- | ----- | ---------------- |
-| Same key (6A to 6A)        | 1.0   | Perfect          |
-| +1 same letter (6A to 7A)  | 0.9   | Energy boost     |
-| -1 same letter (6A to 5A)  | 0.9   | Energy drop      |
-| Same number A/B (6A to 6B) | 0.8   | Mood shift       |
+| Relationship                 | Score | Label           |
+| ---------------------------- | ----- | --------------- |
+| Same key (6A to 6A)          | 1.0   | Perfect         |
+| +1 same letter (6A to 7A)    | 0.9   | Energy boost    |
+| -1 same letter (6A to 5A)    | 0.9   | Energy drop     |
+| Same number A/B (6A to 6B)   | 0.8   | Mood shift      |
 | +/-1 other letter (6A to 7B) | 0.55  | Energy diagonal |
-| +/-2 same letter (6A to 8A) | 0.45  | Extended        |
-| Everything else            | 0.1   | Clash            |
+| +/-2 same letter (6A to 8A)  | 0.45  | Extended        |
+| Everything else              | 0.1   | Clash           |
 
 Camelot wraps at the boundary: 12A to 1A is +1 (adjacent), not +11.
 
@@ -52,13 +52,13 @@ BPM compatibility uses an exponential decay based on the percentage delta betwee
 score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
 ```
 
-| Delta % | Score | Label                     |
-| ------- | ----- | ------------------------- |
-| <2%     | ~1.0  | Seamless                  |
-| 2-4%    | ~0.8  | Comfortable pitch adjust  |
-| 4-6%    | ~0.5  | Noticeable                |
+| Delta % | Score | Label                      |
+| ------- | ----- | -------------------------- |
+| <2%     | ~1.0  | Seamless                   |
+| 2-4%    | ~0.8  | Comfortable pitch adjust   |
+| 4-6%    | ~0.5  | Noticeable                 |
 | 6-9%    | ~0.3  | Creative transition needed |
-| ≥9%     | <0.2  | Jarring                   |
+| ≥9%     | <0.2  | Jarring                    |
 
 BPM is taken from Rekordbox metadata — it's the value the DJ sees, works with, and can manually correct. stratum-dsp's estimate is used as a fallback only when Rekordbox BPM is zero (unanalyzed tracks).
 
@@ -208,10 +208,10 @@ These ranges are guidelines. A 0.65 score with a perfect key match and a genre c
 
 The scoring system degrades gracefully based on available data:
 
-| Data available          | Axes used                                                         |
-| ----------------------- | ----------------------------------------------------------------- |
-| Rekordbox metadata only | Key, BPM, energy (proxy), genre                                   |
+| Data available          | Axes used                                                            |
+| ----------------------- | -------------------------------------------------------------------- |
+| Rekordbox metadata only | Key, BPM, energy (proxy), genre                                      |
 | + stratum-dsp analysis  | Key (improved), BPM (fallback for unanalyzed), energy (proxy), genre |
-| + Essentia analysis     | All six axes                                                      |
+| + Essentia analysis     | All six axes                                                         |
 
 Run `analyze_audio_batch` on your tracks before building sets for the best scoring accuracy. Without Essentia, brightness and rhythm are excluded entirely, and energy falls back to the BPM-based proxy.

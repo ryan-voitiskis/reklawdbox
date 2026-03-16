@@ -80,6 +80,7 @@ fix and re-run until clean.
 ## Phase 6: Report
 
 Present a summary:
+
 - What was found (total findings by category)
 - What was fixed (with brief descriptions)
 - What was deferred (with reasons, for follow-up sessions)

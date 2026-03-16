@@ -40,7 +40,8 @@ export default defineConfig({
             {
               label: 'Agent SOPs',
               paths: ['agent/**'],
-              description: 'Token-optimized workflow instructions for AI agents',
+              description:
+                'Token-optimized workflow instructions for AI agents',
             },
             {
               label: 'Batch Import SOP',
