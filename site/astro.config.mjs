@@ -10,7 +10,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      title: 'reklawdbox Docs',
+      title: 'reklawdbox',
       logo: {
         src: './src/assets/logo.png',
         alt: 'reklawdbox',
