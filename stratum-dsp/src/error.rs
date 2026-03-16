@@ -7,16 +7,16 @@ use std::fmt;
 pub enum AnalysisError {
     /// Invalid input parameters
     InvalidInput(String),
-    
+
     /// Audio decoding error
     DecodingError(String),
-    
+
     /// Processing error during analysis
     ProcessingError(String),
-    
+
     /// Feature not yet implemented
     NotImplemented(String),
-    
+
     /// Numerical error (overflow, underflow, etc.)
     NumericalError(String),
 }
@@ -34,4 +34,3 @@ impl fmt::Display for AnalysisError {
 }
 
 impl std::error::Error for AnalysisError {}
-

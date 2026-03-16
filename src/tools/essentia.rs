@@ -8,7 +8,7 @@ pub(super) const ESSENTIA_IMPORT_CHECK_SCRIPT: &str =
     "import essentia; print(essentia.__version__)";
 pub(super) const ESSENTIA_PROBE_TIMEOUT_SECS: u64 = 5;
 
-pub(super) fn validate_essentia_python(path: &str) -> bool {
+pub(crate) fn validate_essentia_python(path: &str) -> bool {
     validate_essentia_python_with_timeout(path, Duration::from_secs(ESSENTIA_PROBE_TIMEOUT_SECS))
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn probe_essentia_python_path() -> Option<String> {
 
 pub(super) const ESSENTIA_VENV_RELPATH: &str = ".local/share/reklawdbox/essentia-venv";
 
-pub(super) fn essentia_venv_dir() -> Option<PathBuf> {
+pub(crate) fn essentia_venv_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(ESSENTIA_VENV_RELPATH))
 }
 

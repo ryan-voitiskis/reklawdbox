@@ -54,7 +54,7 @@ impl TimeSignature {
             TimeSignature::SixEight => 6,
         }
     }
-    
+
     /// Get name as string (e.g., "4/4", "3/4", "6/8")
     pub fn name(&self) -> &'static str {
         match self {
@@ -96,13 +96,14 @@ pub fn detect_time_signature(
         // Default to 4/4 (most common)
         return Ok((TimeSignature::FourFour, 0.5));
     }
-    
+
     if bpm_estimate <= EPSILON {
-        return Err(AnalysisError::InvalidInput(
-            format!("Invalid BPM for time signature detection: {:.2}", bpm_estimate)
-        ));
+        return Err(AnalysisError::InvalidInput(format!(
+            "Invalid BPM for time signature detection: {:.2}",
+            bpm_estimate
+        )));
     }
-    
+
     // Calculate beat intervals
     let mut intervals = Vec::new();
     for i in 1..beats.len() {
@@ -111,38 +112,39 @@ pub fn detect_time_signature(
             intervals.push(interval);
         }
     }
-    
+
     if intervals.is_empty() {
         return Ok((TimeSignature::FourFour, 0.5));
     }
-    
+
     // Calculate mean interval (expected beat interval)
     let mean_interval: f32 = intervals.iter().sum::<f32>() / intervals.len() as f32;
-    
+
     // Test each time signature hypothesis
     let mut scores = Vec::new();
-    
+
     // Test 4/4: Look for pattern repeating every 4 beats
     let score_44 = score_time_signature(&intervals, 4, mean_interval);
     scores.push((TimeSignature::FourFour, score_44));
-    
+
     // Test 3/4: Look for pattern repeating every 3 beats
     let score_34 = score_time_signature(&intervals, 3, mean_interval);
     scores.push((TimeSignature::ThreeFour, score_34));
-    
+
     // Test 6/8: Look for pattern repeating every 6 beats
     // In 6/8, beats are typically grouped in 3+3 pattern
     let score_68 = score_time_signature(&intervals, 6, mean_interval);
     scores.push((TimeSignature::SixEight, score_68));
-    
+
     // Find best match
-    let (best_sig, best_score) = scores.iter()
+    let (best_sig, best_score) = scores
+        .iter()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
-    
+
     // Normalize confidence to [0, 1]
     let confidence = (*best_score).min(1.0).max(0.0);
-    
+
     Ok((*best_sig, confidence))
 }
 
@@ -150,20 +152,16 @@ pub fn detect_time_signature(
 ///
 /// Tests how well the beat intervals match the expected pattern for a
 /// given time signature. Uses autocorrelation to find repeating patterns.
-fn score_time_signature(
-    intervals: &[f32],
-    beats_per_bar: u32,
-    mean_interval: f32,
-) -> f32 {
+fn score_time_signature(intervals: &[f32], beats_per_bar: u32, mean_interval: f32) -> f32 {
     if intervals.len() < beats_per_bar as usize {
         return 0.0;
     }
-    
+
     // Calculate autocorrelation at lag = beats_per_bar
     let lag = beats_per_bar as usize;
     let mut autocorr_sum = 0.0;
     let mut count = 0;
-    
+
     for i in 0..(intervals.len() - lag) {
         // Compare interval at position i with interval at position i + lag
         let diff = (intervals[i] - intervals[i + lag]).abs();
@@ -171,27 +169,29 @@ fn score_time_signature(
         autocorr_sum += similarity;
         count += 1;
     }
-    
+
     if count == 0 {
         return 0.0;
     }
-    
+
     let autocorr = autocorr_sum / count as f32;
-    
+
     // Also check if intervals are relatively consistent (low variance)
-    let variance: f32 = intervals.iter()
+    let variance: f32 = intervals
+        .iter()
         .map(|&interval| {
             let diff = interval - mean_interval;
             diff * diff
         })
-        .sum::<f32>() / intervals.len() as f32;
-    
+        .sum::<f32>()
+        / intervals.len() as f32;
+
     let cv = if mean_interval > EPSILON {
         variance.sqrt() / mean_interval
     } else {
         1.0
     };
-    
+
     // Score combines autocorrelation and consistency
     // Higher autocorr and lower CV = higher score
     let consistency_score = 1.0 / (1.0 + cv);
@@ -213,13 +213,16 @@ mod tests {
             beats.push(time);
             time += beat_interval;
         }
-        
+
         let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
-        
+
         // Should return a valid time signature with valid confidence
         assert!(confidence >= 0.0 && confidence <= 1.0);
         // Time signature should be one of the valid options
-        assert!(matches!(time_sig, TimeSignature::FourFour | TimeSignature::ThreeFour | TimeSignature::SixEight));
+        assert!(matches!(
+            time_sig,
+            TimeSignature::FourFour | TimeSignature::ThreeFour | TimeSignature::SixEight
+        ));
     }
 
     #[test]
@@ -233,9 +236,9 @@ mod tests {
             beats.push(time);
             time += beat_interval;
         }
-        
+
         let (_time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
-        
+
         // May detect 3/4 or default to 4/4 depending on pattern
         assert!(confidence >= 0.0 && confidence <= 1.0);
     }
@@ -243,9 +246,9 @@ mod tests {
     #[test]
     fn test_time_signature_insufficient_beats() {
         let beats = vec![0.0, 0.5, 1.0, 1.5]; // Only 4 beats
-        
+
         let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
-        
+
         // Should default to 4/4
         assert_eq!(time_sig, TimeSignature::FourFour);
         assert_eq!(confidence, 0.5);
@@ -265,4 +268,3 @@ mod tests {
         assert_eq!(TimeSignature::SixEight.name(), "6/8");
     }
 }
-

@@ -464,10 +464,7 @@ pub fn get_playlist_tracks_unbounded(
 /// 3. If the common prefix is at least 2 segments deep (e.g. `/Users/testuser/Music/`),
 ///    return it as the single root.
 /// 4. Otherwise, collect the distinct directories at depth = common_depth + 1.
-fn content_roots(
-    conn: &Connection,
-    exclude_samples: bool,
-) -> Result<Vec<String>, rusqlite::Error> {
+fn content_roots(conn: &Connection, exclude_samples: bool) -> Result<Vec<String>, rusqlite::Error> {
     let sampler_pattern = sampler_path_like_pattern();
     let sample_filter = if exclude_samples {
         " AND FolderPath NOT LIKE ?1 ESCAPE '\\'"
@@ -1086,7 +1083,11 @@ mod tests {
         };
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 5);
-        assert!(tracks.iter().all(|t| t.file_path.starts_with("/Users/testuser/")));
+        assert!(
+            tracks
+                .iter()
+                .all(|t| t.file_path.starts_with("/Users/testuser/"))
+        );
     }
 
     #[test]

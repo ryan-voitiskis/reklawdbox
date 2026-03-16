@@ -208,14 +208,16 @@ impl ChangeManager {
         let empty_set = HashSet::new();
         for change in snapshot {
             let touched_fields = touched.get(&change.track_id).unwrap_or(&empty_set);
-            let existing = map.entry(change.track_id.clone()).or_insert_with(|| TrackChange {
-                track_id: change.track_id.clone(),
-                genre: None,
-                comments: None,
-                rating: None,
-                color: None,
-                label: None,
-            });
+            let existing = map
+                .entry(change.track_id.clone())
+                .or_insert_with(|| TrackChange {
+                    track_id: change.track_id.clone(),
+                    genre: None,
+                    comments: None,
+                    rating: None,
+                    color: None,
+                    label: None,
+                });
             merge_untouched_fields(existing, &change, touched_fields);
         }
         // Remove phantom entries where all fields were filtered out by touched tracking.
@@ -359,21 +361,46 @@ fn record_touched_fields(change: &TrackChange, touched: &mut TouchedFields) {
         return;
     }
     let set = touched.entry(change.track_id.clone()).or_default();
-    if change.genre.is_some() { set.insert(EditableField::Genre); }
-    if change.comments.is_some() { set.insert(EditableField::Comments); }
-    if change.rating.is_some() { set.insert(EditableField::Rating); }
-    if change.color.is_some() { set.insert(EditableField::Color); }
-    if change.label.is_some() { set.insert(EditableField::Label); }
+    if change.genre.is_some() {
+        set.insert(EditableField::Genre);
+    }
+    if change.comments.is_some() {
+        set.insert(EditableField::Comments);
+    }
+    if change.rating.is_some() {
+        set.insert(EditableField::Rating);
+    }
+    if change.color.is_some() {
+        set.insert(EditableField::Color);
+    }
+    if change.label.is_some() {
+        set.insert(EditableField::Label);
+    }
 }
 
 /// Clear a single field on a `TrackChange`, returning true if the field was set.
 fn clear_field(entry: &mut TrackChange, field: EditableField) -> bool {
     match field {
-        EditableField::Genre if entry.genre.is_some() => { entry.genre = None; true }
-        EditableField::Comments if entry.comments.is_some() => { entry.comments = None; true }
-        EditableField::Rating if entry.rating.is_some() => { entry.rating = None; true }
-        EditableField::Color if entry.color.is_some() => { entry.color = None; true }
-        EditableField::Label if entry.label.is_some() => { entry.label = None; true }
+        EditableField::Genre if entry.genre.is_some() => {
+            entry.genre = None;
+            true
+        }
+        EditableField::Comments if entry.comments.is_some() => {
+            entry.comments = None;
+            true
+        }
+        EditableField::Rating if entry.rating.is_some() => {
+            entry.rating = None;
+            true
+        }
+        EditableField::Color if entry.color.is_some() => {
+            entry.color = None;
+            true
+        }
+        EditableField::Label if entry.label.is_some() => {
+            entry.label = None;
+            true
+        }
         _ => false,
     }
 }
@@ -1081,7 +1108,9 @@ mod tests {
 
         // Export fails — restore snapshot.
         cm.restore(snapshot);
-        let restored = cm.get("t1").expect("t1 should exist with untouched comments");
+        let restored = cm
+            .get("t1")
+            .expect("t1 should exist with untouched comments");
         // Genre was explicitly cleared — must not be resurrected.
         assert_eq!(restored.genre, None);
         // Comments were not touched — should be restored from snapshot.

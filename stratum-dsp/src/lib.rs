@@ -50,8 +50,8 @@ pub mod preprocessing;
 pub mod ml;
 
 // Re-export main types
-pub use analysis::result::{AnalysisResult, AnalysisMetadata, BeatGrid, Key, KeyType};
-pub use analysis::confidence::{AnalysisConfidence, compute_confidence};
+pub use analysis::confidence::{compute_confidence, AnalysisConfidence};
+pub use analysis::result::{AnalysisMetadata, AnalysisResult, BeatGrid, Key, KeyType};
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
 
@@ -90,20 +90,28 @@ pub fn analyze_audio(
 ) -> Result<AnalysisResult, AnalysisError> {
     use std::time::Instant;
     let start_time = Instant::now();
-    
-    log::debug!("Starting audio analysis: {} samples at {} Hz", samples.len(), sample_rate);
-    
+
+    log::debug!(
+        "Starting audio analysis: {} samples at {} Hz",
+        samples.len(),
+        sample_rate
+    );
+
     if samples.is_empty() {
-        return Err(AnalysisError::InvalidInput("Empty audio samples".to_string()));
+        return Err(AnalysisError::InvalidInput(
+            "Empty audio samples".to_string(),
+        ));
     }
-    
+
     if sample_rate == 0 {
-        return Err(AnalysisError::InvalidInput("Invalid sample rate".to_string()));
+        return Err(AnalysisError::InvalidInput(
+            "Invalid sample rate".to_string(),
+        ));
     }
-    
+
     // Phase 1A: Preprocessing
     let mut processed_samples = samples.to_vec();
-    
+
     // 1. Normalization
     use preprocessing::normalization::{normalize, NormalizationConfig};
     if config.enable_normalization {
@@ -112,11 +120,12 @@ pub fn analyze_audio(
             target_loudness_lufs: -14.0, // Default target
             max_headroom_db: 1.0,
         };
-        let _loudness_metadata = normalize(&mut processed_samples, norm_config, sample_rate as f32)?;
+        let _loudness_metadata =
+            normalize(&mut processed_samples, norm_config, sample_rate as f32)?;
     } else {
         log::debug!("Skipping normalization (enable_normalization=false)");
     }
-    
+
     // 2. Silence detection and trimming
     use preprocessing::silence::{detect_and_trim, SilenceDetector};
     let (trimmed_samples, _silence_regions) = if config.enable_silence_trimming {
@@ -130,33 +139,31 @@ pub fn analyze_audio(
         log::debug!("Skipping silence trimming (enable_silence_trimming=false)");
         (processed_samples.clone(), Vec::new())
     };
-    
+
     if trimmed_samples.is_empty() {
-        return Err(AnalysisError::ProcessingError("Audio is entirely silent after trimming".to_string()));
+        return Err(AnalysisError::ProcessingError(
+            "Audio is entirely silent after trimming".to_string(),
+        ));
     }
-    
+
     // Phase 1A: Onset Detection
     // Note: For now, we only have energy flux working directly on samples
     // Spectral methods (spectral_flux, hfc, hpss) require STFT which will be added in Phase 1B
     use features::onset::energy_flux::detect_energy_flux_onsets;
-    
+
     let energy_onsets = detect_energy_flux_onsets(
         &trimmed_samples,
         config.frame_size,
         config.hop_size,
         -20.0, // threshold_db
     )?;
-    
+
     log::debug!("Detected {} onsets using energy flux", energy_onsets.len());
-    
+
     // Phase 1F: Tempogram-based BPM Detection (replaces Phase 1B period estimation)
     // Compute STFT once (used by tempogram BPM and STFT-based onset detectors)
     use features::chroma::extractor::compute_stft;
-    let magnitude_spec_frames = compute_stft(
-        &trimmed_samples,
-        config.frame_size,
-        config.hop_size,
-    )?;
+    let magnitude_spec_frames = compute_stft(&trimmed_samples, config.frame_size, config.hop_size)?;
 
     // Onset consensus (improves beat tracking + legacy BPM fallback robustness)
     //
@@ -209,7 +216,8 @@ pub fn analyze_audio(
                 Vec::new()
             }
         };
-        let hfc_onsets_samples = to_samples(hfc_onsets_frames, config.hop_size, trimmed_samples.len());
+        let hfc_onsets_samples =
+            to_samples(hfc_onsets_frames, config.hop_size, trimmed_samples.len());
 
         let hpss_onsets_samples = if config.enable_hpss_onsets {
             use features::onset::hpss::{detect_hpss_onsets, hpss_decompose};
@@ -281,7 +289,7 @@ pub fn analyze_audio(
             }
         }
     }
-    
+
     // BPM estimation: tempogram (Phase 1F) + legacy (Phase 1B), optionally fused
     let legacy_estimate = {
         use features::period::{estimate_bpm, estimate_bpm_with_guardrails, LegacyBpmGuardrails};
@@ -330,11 +338,9 @@ pub fn analyze_audio(
         use crate::analysis::result::TempoCandidateDebug;
         use features::period::multi_resolution::multi_resolution_tempogram_from_samples;
         use features::period::tempogram::{
-            estimate_bpm_tempogram,
-            estimate_bpm_tempogram_band_fusion,
+            estimate_bpm_tempogram, estimate_bpm_tempogram_band_fusion,
             estimate_bpm_tempogram_with_candidates,
-            estimate_bpm_tempogram_with_candidates_band_fusion,
-            TempogramBandFusionConfig,
+            estimate_bpm_tempogram_with_candidates_band_fusion, TempogramBandFusionConfig,
         };
 
         let band_cfg = TempogramBandFusionConfig {
@@ -447,7 +453,8 @@ pub fn analyze_audio(
                     let fold_into_trap = base_est.bpm * 2.0 >= 170.0 && base_est.bpm * 2.0 <= 200.0;
                     let weak_base = base_est.method_agreement == 0 || base_est.confidence < 0.06;
 
-                    let ambiguous = trap_low || trap_high || family_competes || (weak_base && fold_into_trap);
+                    let ambiguous =
+                        trap_low || trap_high || family_competes || (weak_base && fold_into_trap);
                     // Instrumentation: "triggered" means we *considered* escalation, not just "base looks ambiguous".
                     tempogram_multi_res_triggered = Some(ambiguous);
 
@@ -510,13 +517,15 @@ pub fn analyze_audio(
                                 } else {
                                     1.0
                                 };
-                                let family_related =
-                                    (rel - 2.0).abs() < 0.05 || (rel - 1.5).abs() < 0.05 || (rel - (4.0 / 3.0)).abs() < 0.05;
+                                let family_related = (rel - 2.0).abs() < 0.05
+                                    || (rel - 1.5).abs() < 0.05
+                                    || (rel - (4.0 / 3.0)).abs() < 0.05;
 
                                 // Hard safety rule: do not “promote” a sane in-range tempo into an extreme
                                 // high tempo (e.g., 120 -> 240). Multi-res should primarily resolve
                                 // octave *folding* errors, not create them.
-                                let forbid_promote_high = base_est.bpm <= 180.0 && mr_est.bpm > 180.0;
+                                let forbid_promote_high =
+                                    base_est.bpm <= 180.0 && mr_est.bpm > 180.0;
 
                                 let mr_better = !forbid_promote_high
                                     && (mr_est.confidence >= (base_est.confidence + 0.05)
@@ -536,14 +545,30 @@ pub fn analyze_audio(
                                 }
 
                                 if let Some(track_id) = config.debug_track_id {
-                                    eprintln!("\n=== DEBUG multi-res decision (track_id={}) ===", track_id);
+                                    eprintln!(
+                                        "\n=== DEBUG multi-res decision (track_id={}) ===",
+                                        track_id
+                                    );
                                     if let Some(gt) = config.debug_gt_bpm {
                                         eprintln!("GT bpm: {:.3}", gt);
                                     }
-                                    eprintln!("base_est: bpm={:.2} conf={:.4} agree={}", base_est.bpm, base_est.confidence, base_est.method_agreement);
-                                    eprintln!("mr_est:   bpm={:.2} conf={:.4} agree={}", mr_est_log.bpm, mr_est_log.confidence, mr_est_log.method_agreement);
+                                    eprintln!(
+                                        "base_est: bpm={:.2} conf={:.4} agree={}",
+                                        base_est.bpm,
+                                        base_est.confidence,
+                                        base_est.method_agreement
+                                    );
+                                    eprintln!(
+                                        "mr_est:   bpm={:.2} conf={:.4} agree={}",
+                                        mr_est_log.bpm,
+                                        mr_est_log.confidence,
+                                        mr_est_log.method_agreement
+                                    );
                                     eprintln!("ambiguous(trap_low||trap_high)={}", ambiguous);
-                                    eprintln!("rel={:.3} family_related={} forbid_promote_high={}", rel, family_related, forbid_promote_high);
+                                    eprintln!(
+                                        "rel={:.3} family_related={} forbid_promote_high={}",
+                                        rel, family_related, forbid_promote_high
+                                    );
                                     eprintln!("mr_better={} used_mr={}", mr_better, used_mr);
                                 }
                             }
@@ -597,7 +622,8 @@ pub fn analyze_audio(
                                         // Accept percussive estimate only when it is a tempo-family move
                                         // and does not promote sane tempos into extremes.
                                         let rel = if chosen_est.bpm > 1e-6 {
-                                            (p_est.bpm / chosen_est.bpm).max(chosen_est.bpm / p_est.bpm)
+                                            (p_est.bpm / chosen_est.bpm)
+                                                .max(chosen_est.bpm / p_est.bpm)
                                         } else {
                                             1.0
                                         };
@@ -608,21 +634,27 @@ pub fn analyze_audio(
                                             || (rel - (2.0 / 3.0)).abs() < 0.05
                                             || (rel - (3.0 / 4.0)).abs() < 0.05;
 
-                                        let forbid_promote_high = chosen_est.bpm <= 180.0 && p_est.bpm > 180.0;
+                                        let forbid_promote_high =
+                                            chosen_est.bpm <= 180.0 && p_est.bpm > 180.0;
 
                                         // Slightly more permissive acceptance in the low-tempo trap region:
                                         // if percussive yields a coherent 2× tempo in a common range, take it
                                         // even if confidence is only marginally better.
                                         let base_low_trap = trap_low || base_est.bpm < 95.0;
-                                        let percussive_in_common = p_est.bpm >= 70.0 && p_est.bpm <= 180.0;
+                                        let percussive_in_common =
+                                            p_est.bpm >= 70.0 && p_est.bpm <= 180.0;
 
                                         let p_better = !forbid_promote_high
                                             && family_related
                                             && percussive_in_common
                                             && (p_est.confidence >= chosen_est.confidence + 0.04
-                                                || (base_low_trap && p_est.confidence >= chosen_est.confidence * 0.85)
-                                                || (p_est.method_agreement > chosen_est.method_agreement
-                                                    && p_est.confidence >= chosen_est.confidence * 0.92));
+                                                || (base_low_trap
+                                                    && p_est.confidence
+                                                        >= chosen_est.confidence * 0.85)
+                                                || (p_est.method_agreement
+                                                    > chosen_est.method_agreement
+                                                    && p_est.confidence
+                                                        >= chosen_est.confidence * 0.92));
 
                                         if p_better {
                                             chosen_est = p_est;
@@ -639,7 +671,10 @@ pub fn analyze_audio(
                                 }
                             }
                             Err(e) => {
-                                log::debug!("HPSS decomposition for percussive tempogram failed: {}", e);
+                                log::debug!(
+                                    "HPSS decomposition for percussive tempogram failed: {}",
+                                    e
+                                );
                                 tempogram_percussive_used = Some(false);
                             }
                         }
@@ -704,7 +739,8 @@ pub fn analyze_audio(
             match call {
                 Ok((estimate, cands)) => {
                     tempogram_candidates = Some(
-                        cands.into_iter()
+                        cands
+                            .into_iter()
                             .map(|c| TempoCandidateDebug {
                                 bpm: c.bpm,
                                 score: c.score,
@@ -862,13 +898,17 @@ pub fn analyze_audio(
             .or_else(|| legacy_estimate.as_ref().map(|e| (e.bpm, e.confidence)))
             .unwrap_or((0.0, 0.0))
     };
-    
+
     if bpm == 0.0 {
         log::warn!("Could not estimate BPM: tempogram and legacy methods both failed");
     } else {
-        log::debug!("Estimated BPM: {:.2} (confidence: {:.3})", bpm, bpm_confidence);
+        log::debug!(
+            "Estimated BPM: {:.2} (confidence: {:.3})",
+            bpm,
+            bpm_confidence
+        );
     }
-    
+
     // Phase 1C: Beat Tracking
     let (beat_grid, grid_stability) = if bpm > 0.0 && onsets_for_beat_tracking.len() >= 2 {
         // Convert onsets from sample indices to seconds
@@ -902,7 +942,11 @@ pub fn analyze_audio(
             }
         }
     } else {
-        log::debug!("Skipping beat tracking: BPM={:.2}, onsets={}", bpm, energy_onsets.len());
+        log::debug!(
+            "Skipping beat tracking: BPM={:.2}, onsets={}",
+            bpm,
+            energy_onsets.len()
+        );
         (
             BeatGrid {
                 downbeats: vec![],
@@ -912,7 +956,7 @@ pub fn analyze_audio(
             0.0,
         )
     };
-    
+
     // Phase 1D: Key Detection
     let (key, key_confidence, key_clarity) = if trimmed_samples.len() >= config.frame_size {
         // Extract chroma vectors with configurable options
@@ -921,24 +965,22 @@ pub fn analyze_audio(
         // to avoid a second STFT pass (and to enable spectrogram-domain conditioning for key).
         use features::chroma::extractor::{
             convert_linear_to_log_frequency_spectrogram,
-            extract_beat_synchronous_chroma,
+            estimate_tuning_offset_semitones_from_spectrogram, extract_beat_synchronous_chroma,
             extract_chroma_from_log_frequency_spectrogram,
             extract_chroma_from_spectrogram_with_options_and_energy,
             extract_chroma_from_spectrogram_with_options_and_energy_tuned,
-            extract_hpcp_from_spectrogram_with_options_and_energy_tuned,
             extract_hpcp_bass_blend_from_spectrogram_with_options_and_energy_tuned,
-            estimate_tuning_offset_semitones_from_spectrogram,
-            harmonic_spectrogram_hpss_median_mask,
-            harmonic_spectrogram_time_mask,
+            extract_hpcp_from_spectrogram_with_options_and_energy_tuned,
+            harmonic_spectrogram_hpss_median_mask, harmonic_spectrogram_time_mask,
             smooth_spectrogram_time,
         };
         use features::chroma::normalization::sharpen_chroma;
         use features::chroma::smoothing::smooth_chroma;
         use features::key::{
-            compute_key_clarity, detect_key_ensemble, detect_key_multi_scale, detect_key_weighted, detect_key_weighted_mode_heuristic,
-            KeyDetectionResult, KeyTemplates,
+            compute_key_clarity, detect_key_ensemble, detect_key_multi_scale, detect_key_weighted,
+            detect_key_weighted_mode_heuristic, KeyDetectionResult, KeyTemplates,
         };
-        
+
         // Key-only STFT override (optional): allow higher frequency resolution for key detection.
         let key_fft_size = if config.enable_key_stft_override {
             config.key_stft_frame_size.max(256)
@@ -955,7 +997,10 @@ pub fn analyze_audio(
             match compute_stft(&trimmed_samples, key_fft_size, key_hop_size) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::warn!("Key-only STFT override failed: {}, falling back to shared STFT", e);
+                    log::warn!(
+                        "Key-only STFT override failed: {}, falling back to shared STFT",
+                        e
+                    );
                     magnitude_spec_frames.clone()
                 }
             }
@@ -996,10 +1041,16 @@ pub fn analyze_audio(
                     }
                 }
             } else if config.enable_key_spectrogram_time_smoothing {
-                match smooth_spectrogram_time(&key_spec_frames, config.key_spectrogram_smooth_margin) {
+                match smooth_spectrogram_time(
+                    &key_spec_frames,
+                    config.key_spectrogram_smooth_margin,
+                ) {
                     Ok(s) => s,
                     Err(e) => {
-                        log::warn!("Key spectrogram time smoothing failed: {}, using raw spectrogram", e);
+                        log::warn!(
+                            "Key spectrogram time smoothing failed: {}, using raw spectrogram",
+                            e
+                        );
                         key_spec_frames.clone()
                     }
                 }
@@ -1012,129 +1063,136 @@ pub fn analyze_audio(
 
         // Optional: convert to log-frequency (semitone-aligned) spectrogram for key detection.
         // When enabled, HPCP is disabled (HPCP requires frequency information for harmonic summation).
-        let (use_log_freq, log_freq_spec, semitone_offset) = if config.enable_key_log_frequency && !spec_for_key.is_empty() {
-            match convert_linear_to_log_frequency_spectrogram(
-                &spec_for_key,
-                sample_rate,
-                key_fft_size,
-                100.0,
-                5000.0,
-            ) {
-                Ok(log_spec) => {
-                    // Compute semitone offset of first bin
-                    let fmin: f32 = 100.0;
-                    let semitone_min: f32 = 12.0 * (fmin / 440.0).log2() + 57.0;
-                    let semitone_bin_min = semitone_min.floor() as i32;
-                    (true, log_spec, semitone_bin_min)
+        let (use_log_freq, log_freq_spec, semitone_offset) =
+            if config.enable_key_log_frequency && !spec_for_key.is_empty() {
+                match convert_linear_to_log_frequency_spectrogram(
+                    &spec_for_key,
+                    sample_rate,
+                    key_fft_size,
+                    100.0,
+                    5000.0,
+                ) {
+                    Ok(log_spec) => {
+                        // Compute semitone offset of first bin
+                        let fmin: f32 = 100.0;
+                        let semitone_min: f32 = 12.0 * (fmin / 440.0).log2() + 57.0;
+                        let semitone_bin_min = semitone_min.floor() as i32;
+                        (true, log_spec, semitone_bin_min)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Key log-frequency conversion failed: {}, falling back to linear",
+                            e
+                        );
+                        (false, vec![], 0)
+                    }
                 }
-                Err(e) => {
-                    log::warn!("Key log-frequency conversion failed: {}, falling back to linear", e);
-                    (false, vec![], 0)
-                }
-            }
-        } else {
-            (false, vec![], 0)
-        };
+            } else {
+                (false, vec![], 0)
+            };
 
         // Optional: estimate tuning offset (in semitones) and apply during chroma mapping.
         // Note: tuning estimation still uses linear spectrogram (before log-freq conversion).
-        let tuning_offset = if config.enable_key_tuning_compensation && !spec_for_key.is_empty() && !use_log_freq {
-            match estimate_tuning_offset_semitones_from_spectrogram(
-                &spec_for_key,
-                sample_rate,
-                key_fft_size,
-                80.0,
-                2000.0,
-                config.key_tuning_frame_step,
-                config.key_tuning_peak_rel_threshold,
-            ) {
-                Ok(d) => d.clamp(
-                    -config.key_tuning_max_abs_semitones.abs(),
-                    config.key_tuning_max_abs_semitones.abs(),
-                ),
-                Err(e) => {
-                    log::warn!("Key tuning estimation failed: {}", e);
-                    0.0
-                }
-            }
-        } else {
-            0.0
-        };
-
-        let chroma_call = if config.enable_key_beat_synchronous && !beat_grid.beats.is_empty() && !use_log_freq {
-            // Beat-synchronous chroma: align chroma windows to beat boundaries
-            extract_beat_synchronous_chroma(
-                &spec_for_key,
-                sample_rate,
-                key_fft_size,
-                key_hop_size,
-                &beat_grid.beats,
-                config.soft_chroma_mapping,
-                config.soft_mapping_sigma,
-                tuning_offset,
-            )
-        } else if use_log_freq {
-            // Extract chroma from log-frequency spectrogram (each bin is already a semitone)
-            extract_chroma_from_log_frequency_spectrogram(&log_freq_spec, semitone_offset)
-                .map(|chroma_vecs| {
-                    // Compute frame energies from log-frequency spectrogram
-                    let energies: Vec<f32> = log_freq_spec
-                        .iter()
-                        .map(|frame| frame.iter().map(|&x| x * x).sum())
-                        .collect();
-                    (chroma_vecs, energies)
-                })
-        } else if config.enable_key_hpcp {
-            if config.enable_key_hpcp_bass_blend {
-                extract_hpcp_bass_blend_from_spectrogram_with_options_and_energy_tuned(
+        let tuning_offset =
+            if config.enable_key_tuning_compensation && !spec_for_key.is_empty() && !use_log_freq {
+                match estimate_tuning_offset_semitones_from_spectrogram(
                     &spec_for_key,
                     sample_rate,
                     key_fft_size,
+                    80.0,
+                    2000.0,
+                    config.key_tuning_frame_step,
+                    config.key_tuning_peak_rel_threshold,
+                ) {
+                    Ok(d) => d.clamp(
+                        -config.key_tuning_max_abs_semitones.abs(),
+                        config.key_tuning_max_abs_semitones.abs(),
+                    ),
+                    Err(e) => {
+                        log::warn!("Key tuning estimation failed: {}", e);
+                        0.0
+                    }
+                }
+            } else {
+                0.0
+            };
+
+        let chroma_call =
+            if config.enable_key_beat_synchronous && !beat_grid.beats.is_empty() && !use_log_freq {
+                // Beat-synchronous chroma: align chroma windows to beat boundaries
+                extract_beat_synchronous_chroma(
+                    &spec_for_key,
+                    sample_rate,
+                    key_fft_size,
+                    key_hop_size,
+                    &beat_grid.beats,
+                    config.soft_chroma_mapping,
                     config.soft_mapping_sigma,
                     tuning_offset,
-                    config.key_hpcp_peaks_per_frame,
-                    config.key_hpcp_num_harmonics,
-                    config.key_hpcp_harmonic_decay,
-                    config.key_hpcp_mag_power,
-                    config.enable_key_hpcp_whitening,
-                    config.key_hpcp_whitening_smooth_bins,
-                    config.key_hpcp_bass_fmin_hz,
-                    config.key_hpcp_bass_fmax_hz,
-                    config.key_hpcp_bass_weight,
+                )
+            } else if use_log_freq {
+                // Extract chroma from log-frequency spectrogram (each bin is already a semitone)
+                extract_chroma_from_log_frequency_spectrogram(&log_freq_spec, semitone_offset).map(
+                    |chroma_vecs| {
+                        // Compute frame energies from log-frequency spectrogram
+                        let energies: Vec<f32> = log_freq_spec
+                            .iter()
+                            .map(|frame| frame.iter().map(|&x| x * x).sum())
+                            .collect();
+                        (chroma_vecs, energies)
+                    },
+                )
+            } else if config.enable_key_hpcp {
+                if config.enable_key_hpcp_bass_blend {
+                    extract_hpcp_bass_blend_from_spectrogram_with_options_and_energy_tuned(
+                        &spec_for_key,
+                        sample_rate,
+                        key_fft_size,
+                        config.soft_mapping_sigma,
+                        tuning_offset,
+                        config.key_hpcp_peaks_per_frame,
+                        config.key_hpcp_num_harmonics,
+                        config.key_hpcp_harmonic_decay,
+                        config.key_hpcp_mag_power,
+                        config.enable_key_hpcp_whitening,
+                        config.key_hpcp_whitening_smooth_bins,
+                        config.key_hpcp_bass_fmin_hz,
+                        config.key_hpcp_bass_fmax_hz,
+                        config.key_hpcp_bass_weight,
+                    )
+                } else {
+                    extract_hpcp_from_spectrogram_with_options_and_energy_tuned(
+                        &spec_for_key,
+                        sample_rate,
+                        key_fft_size,
+                        config.soft_mapping_sigma,
+                        tuning_offset,
+                        config.key_hpcp_peaks_per_frame,
+                        config.key_hpcp_num_harmonics,
+                        config.key_hpcp_harmonic_decay,
+                        config.key_hpcp_mag_power,
+                        config.enable_key_hpcp_whitening,
+                        config.key_hpcp_whitening_smooth_bins,
+                    )
+                }
+            } else if config.enable_key_tuning_compensation && tuning_offset.abs() > 1e-6 {
+                extract_chroma_from_spectrogram_with_options_and_energy_tuned(
+                    &spec_for_key,
+                    sample_rate,
+                    key_fft_size,
+                    config.soft_chroma_mapping,
+                    config.soft_mapping_sigma,
+                    tuning_offset,
                 )
             } else {
-                extract_hpcp_from_spectrogram_with_options_and_energy_tuned(
+                extract_chroma_from_spectrogram_with_options_and_energy(
                     &spec_for_key,
                     sample_rate,
                     key_fft_size,
+                    config.soft_chroma_mapping,
                     config.soft_mapping_sigma,
-                    tuning_offset,
-                    config.key_hpcp_peaks_per_frame,
-                    config.key_hpcp_num_harmonics,
-                    config.key_hpcp_harmonic_decay,
-                    config.key_hpcp_mag_power,
-                    config.enable_key_hpcp_whitening,
-                    config.key_hpcp_whitening_smooth_bins,
                 )
-            }
-        } else if config.enable_key_tuning_compensation && tuning_offset.abs() > 1e-6 {
-            extract_chroma_from_spectrogram_with_options_and_energy_tuned(
-                &spec_for_key,
-                sample_rate,
-                key_fft_size,
-                config.soft_chroma_mapping,
-                config.soft_mapping_sigma,
-                tuning_offset,
-            )
-        } else {
-            extract_chroma_from_spectrogram_with_options_and_energy(
-                &spec_for_key,
-                sample_rate,
-                key_fft_size,
-                config.soft_chroma_mapping,
-                config.soft_mapping_sigma,
-            )
-        };
+            };
 
         match chroma_call {
             Ok((mut chroma_vectors, frame_energies)) => {
@@ -1143,9 +1201,12 @@ pub fn analyze_audio(
                     for chroma in &mut chroma_vectors {
                         *chroma = sharpen_chroma(chroma, config.chroma_sharpening_power);
                     }
-                    log::debug!("Applied chroma sharpening with power {:.2}", config.chroma_sharpening_power);
+                    log::debug!(
+                        "Applied chroma sharpening with power {:.2}",
+                        config.chroma_sharpening_power
+                    );
                 }
-                
+
                 // Apply temporal smoothing (optional but recommended)
                 if chroma_vectors.len() > 5 {
                     chroma_vectors = smooth_chroma(&chroma_vectors, 5);
@@ -1153,7 +1214,8 @@ pub fn analyze_audio(
 
                 // Optional edge trimming: remove intro/outro frames (often beat-only / percussive),
                 // focusing key detection on the more harmonically informative middle section.
-                let (chroma_slice, energy_slice): (&[Vec<f32>], &[f32]) = if config.enable_key_edge_trim
+                let (chroma_slice, energy_slice): (&[Vec<f32>], &[f32]) = if config
+                    .enable_key_edge_trim
                     && chroma_vectors.len() == frame_energies.len()
                     && chroma_vectors.len() >= 200
                 {
@@ -1187,7 +1249,7 @@ pub fn analyze_audio(
                     let t = 1.0 - (entropy / max_entropy);
                     t.clamp(0.0, 1.0)
                 }
-                
+
                 let mut frame_weights: Option<Vec<f32>> = if config.enable_key_frame_weighting
                     && !energy_slice.is_empty()
                     && energy_slice.len() == chroma_slice.len()
@@ -1200,7 +1262,11 @@ pub fn analyze_audio(
                     let mut weights = Vec::with_capacity(chroma_slice.len());
                     for (ch, &e) in chroma_slice.iter().zip(energy_slice.iter()) {
                         let tonal = chroma_tonalness(ch);
-                        let tonal = if tonal < config.key_min_tonalness { 0.0 } else { tonal };
+                        let tonal = if tonal < config.key_min_tonalness {
+                            0.0
+                        } else {
+                            tonal
+                        };
                         let e_norm = (e / median).max(0.0);
                         let w_t = tonal.powf(config.key_tonalness_power.max(0.0));
                         let w_e = e_norm.powf(config.key_energy_power.max(0.0));
@@ -1221,7 +1287,9 @@ pub fn analyze_audio(
                 }
 
                 // Optional: ensemble key detection (combine K-K and Temperley template scores).
-                let key_call: Result<KeyDetectionResult, AnalysisError> = if config.enable_key_ensemble {
+                let key_call: Result<KeyDetectionResult, AnalysisError> = if config
+                    .enable_key_ensemble
+                {
                     detect_key_ensemble(
                         chroma_slice,
                         frame_weights.as_deref(),
@@ -1232,10 +1300,11 @@ pub fn analyze_audio(
                 } else {
                     // Detect key using templates (selected template set)
                     let templates = KeyTemplates::new_with_template_set(config.key_template_set);
-                    
+
                     if config.enable_key_multi_scale
                         && !config.key_multi_scale_lengths.is_empty()
-                        && chroma_slice.len() >= *config.key_multi_scale_lengths.iter().min().unwrap_or(&1)
+                        && chroma_slice.len()
+                            >= *config.key_multi_scale_lengths.iter().min().unwrap_or(&1)
                     {
                         detect_key_multi_scale(
                             chroma_slice,
@@ -1261,123 +1330,142 @@ pub fn analyze_audio(
                         )
                     // Optional: segment voting (windowed detection + clarity-weighted score accumulation).
                     } else if config.enable_key_segment_voting
-                    && chroma_slice.len() >= config.key_segment_len_frames.max(1)
-                    && config.key_segment_len_frames >= 120
-                    && config.key_segment_hop_frames >= 1
-                {
-                    let seg_len = config.key_segment_len_frames.min(chroma_slice.len());
-                    let hop = config.key_segment_hop_frames.min(seg_len).max(1);
-                    let min_clarity = config.key_segment_min_clarity.clamp(0.0, 1.0);
+                        && chroma_slice.len() >= config.key_segment_len_frames.max(1)
+                        && config.key_segment_len_frames >= 120
+                        && config.key_segment_hop_frames >= 1
+                    {
+                        let seg_len = config.key_segment_len_frames.min(chroma_slice.len());
+                        let hop = config.key_segment_hop_frames.min(seg_len).max(1);
+                        let min_clarity = config.key_segment_min_clarity.clamp(0.0, 1.0);
 
-                    let mut acc_scores: Vec<(Key, f32)> = Vec::with_capacity(24);
-                    // init score table
-                    for k in 0..12 {
-                        acc_scores.push((Key::Major(k as u32), 0.0));
-                    }
-                    for k in 0..12 {
-                        acc_scores.push((Key::Minor(k as u32), 0.0));
-                    }
+                        let mut acc_scores: Vec<(Key, f32)> = Vec::with_capacity(24);
+                        // init score table
+                        for k in 0..12 {
+                            acc_scores.push((Key::Major(k as u32), 0.0));
+                        }
+                        for k in 0..12 {
+                            acc_scores.push((Key::Minor(k as u32), 0.0));
+                        }
 
-                    let mut used_segments = 0usize;
-                    let mut start = 0usize;
-                    while start + seg_len <= chroma_slice.len() {
-                        let seg = &chroma_slice[start..start + seg_len];
-                        let wseg = frame_weights
-                            .as_ref()
-                            .map(|w| &w[start..start + seg_len]);
-                        let seg_res = if config.enable_key_mode_heuristic || config.enable_key_minor_harmonic_bonus {
-                            detect_key_weighted_mode_heuristic(
-                                seg,
-                                &templates,
-                                wseg,
-                                config.key_mode_third_ratio_margin,
-                                if config.enable_key_mode_heuristic {
-                                    config.key_mode_flip_min_score_ratio
-                                } else {
-                                    0.0
-                                },
-                                config.enable_key_minor_harmonic_bonus,
-                                config.key_minor_leading_tone_bonus_weight,
-                            )?
-                        } else {
-                            detect_key_weighted(seg, &templates, wseg)?
-                        };
-                        let seg_clarity = compute_key_clarity(&seg_res.all_scores);
-                        if seg_clarity >= min_clarity {
-                            used_segments += 1;
-                            // Add all scores, weighted by clarity
-                            for (k, s) in seg_res.all_scores.iter() {
-                                if let Some((_kk, dst)) = acc_scores.iter_mut().find(|(kk, _)| kk == k) {
-                                    *dst += *s * seg_clarity;
+                        let mut used_segments = 0usize;
+                        let mut start = 0usize;
+                        while start + seg_len <= chroma_slice.len() {
+                            let seg = &chroma_slice[start..start + seg_len];
+                            let wseg = frame_weights.as_ref().map(|w| &w[start..start + seg_len]);
+                            let seg_res = if config.enable_key_mode_heuristic
+                                || config.enable_key_minor_harmonic_bonus
+                            {
+                                detect_key_weighted_mode_heuristic(
+                                    seg,
+                                    &templates,
+                                    wseg,
+                                    config.key_mode_third_ratio_margin,
+                                    if config.enable_key_mode_heuristic {
+                                        config.key_mode_flip_min_score_ratio
+                                    } else {
+                                        0.0
+                                    },
+                                    config.enable_key_minor_harmonic_bonus,
+                                    config.key_minor_leading_tone_bonus_weight,
+                                )?
+                            } else {
+                                detect_key_weighted(seg, &templates, wseg)?
+                            };
+                            let seg_clarity = compute_key_clarity(&seg_res.all_scores);
+                            if seg_clarity >= min_clarity {
+                                used_segments += 1;
+                                // Add all scores, weighted by clarity
+                                for (k, s) in seg_res.all_scores.iter() {
+                                    if let Some((_kk, dst)) =
+                                        acc_scores.iter_mut().find(|(kk, _)| kk == k)
+                                    {
+                                        *dst += *s * seg_clarity;
+                                    }
                                 }
                             }
+                            start += hop;
                         }
-                        start += hop;
-                    }
 
-                    if used_segments == 0 {
-                        if config.enable_key_mode_heuristic || config.enable_key_minor_harmonic_bonus {
-                            detect_key_weighted_mode_heuristic(
-                                chroma_slice,
-                                &templates,
-                                frame_weights.as_deref(),
-                                config.key_mode_third_ratio_margin,
-                                if config.enable_key_mode_heuristic {
-                                    config.key_mode_flip_min_score_ratio
-                                } else {
-                                    0.0
-                                },
-                                config.enable_key_minor_harmonic_bonus,
-                                config.key_minor_leading_tone_bonus_weight,
-                            )
+                        if used_segments == 0 {
+                            if config.enable_key_mode_heuristic
+                                || config.enable_key_minor_harmonic_bonus
+                            {
+                                detect_key_weighted_mode_heuristic(
+                                    chroma_slice,
+                                    &templates,
+                                    frame_weights.as_deref(),
+                                    config.key_mode_third_ratio_margin,
+                                    if config.enable_key_mode_heuristic {
+                                        config.key_mode_flip_min_score_ratio
+                                    } else {
+                                        0.0
+                                    },
+                                    config.enable_key_minor_harmonic_bonus,
+                                    config.key_minor_leading_tone_bonus_weight,
+                                )
+                            } else {
+                                detect_key_weighted(
+                                    chroma_slice,
+                                    &templates,
+                                    frame_weights.as_deref(),
+                                )
+                            }
                         } else {
-                            detect_key_weighted(chroma_slice, &templates, frame_weights.as_deref())
+                            // Sort accumulated scores and build a KeyDetectionResult.
+                            acc_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                            let (best_key, best_score) = acc_scores[0];
+                            let second_score = if acc_scores.len() > 1 {
+                                acc_scores[1].1
+                            } else {
+                                0.0
+                            };
+                            let confidence = if best_score > 0.0 {
+                                ((best_score - second_score) / best_score).max(0.0).min(1.0)
+                            } else {
+                                0.0
+                            };
+                            let top_n = 3usize.min(acc_scores.len());
+                            let top_keys =
+                                acc_scores.iter().take(top_n).cloned().collect::<Vec<_>>();
+                            Ok(KeyDetectionResult {
+                                key: best_key,
+                                confidence,
+                                all_scores: acc_scores,
+                                top_keys,
+                            })
                         }
+                    } else if config.enable_key_mode_heuristic
+                        || config.enable_key_minor_harmonic_bonus
+                    {
+                        detect_key_weighted_mode_heuristic(
+                            chroma_slice,
+                            &templates,
+                            frame_weights.as_deref(),
+                            config.key_mode_third_ratio_margin,
+                            if config.enable_key_mode_heuristic {
+                                config.key_mode_flip_min_score_ratio
+                            } else {
+                                0.0
+                            },
+                            config.enable_key_minor_harmonic_bonus,
+                            config.key_minor_leading_tone_bonus_weight,
+                        )
                     } else {
-                        // Sort accumulated scores and build a KeyDetectionResult.
-                        acc_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                        let (best_key, best_score) = acc_scores[0];
-                        let second_score = if acc_scores.len() > 1 { acc_scores[1].1 } else { 0.0 };
-                        let confidence = if best_score > 0.0 {
-                            ((best_score - second_score) / best_score).max(0.0).min(1.0)
-                        } else {
-                            0.0
-                        };
-                        let top_n = 3usize.min(acc_scores.len());
-                        let top_keys = acc_scores.iter().take(top_n).cloned().collect::<Vec<_>>();
-                        Ok(KeyDetectionResult {
-                            key: best_key,
-                            confidence,
-                            all_scores: acc_scores,
-                            top_keys,
-                        })
+                        detect_key_weighted(chroma_slice, &templates, frame_weights.as_deref())
                     }
-                } else if config.enable_key_mode_heuristic || config.enable_key_minor_harmonic_bonus {
-                    detect_key_weighted_mode_heuristic(
-                        chroma_slice,
-                        &templates,
-                        frame_weights.as_deref(),
-                        config.key_mode_third_ratio_margin,
-                        if config.enable_key_mode_heuristic {
-                            config.key_mode_flip_min_score_ratio
-                        } else {
-                            0.0
-                        },
-                        config.enable_key_minor_harmonic_bonus,
-                        config.key_minor_leading_tone_bonus_weight,
-                    )
-                } else {
-                    detect_key_weighted(chroma_slice, &templates, frame_weights.as_deref())
-                }
-            };
+                };
 
                 match key_call {
                     Ok(key_result) => {
                         // Compute key clarity
                         let clarity = compute_key_clarity(&key_result.all_scores);
-                        
-                        log::debug!("Detected key: {:?}, confidence: {:.3}, clarity: {:.3}",
-                                   key_result.key, key_result.confidence, clarity);
+
+                        log::debug!(
+                            "Detected key: {:?}, confidence: {:.3}, clarity: {:.3}",
+                            key_result.key,
+                            key_result.confidence,
+                            clarity
+                        );
 
                         // Optional debug dump to stderr (captured by validation harness)
                         if let Some(track_id) = config.debug_track_id {
@@ -1403,8 +1491,11 @@ pub fn analyze_audio(
                                     *x /= sum_agg;
                                 }
                             }
-                            let mut pcs: Vec<(usize, f32)> = agg.iter().cloned().enumerate().collect();
-                            pcs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                            let mut pcs: Vec<(usize, f32)> =
+                                agg.iter().cloned().enumerate().collect();
+                            pcs.sort_by(|a, b| {
+                                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                            });
 
                             eprintln!("\n=== DEBUG key (track_id={}) ===", track_id);
                             eprintln!(
@@ -1433,7 +1524,9 @@ pub fn analyze_audio(
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             );
-                            let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                            let note_names = [
+                                "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                            ];
                             eprintln!(
                                 "top_pitch_classes(weighted): {}",
                                 pcs.iter()
@@ -1443,7 +1536,7 @@ pub fn analyze_audio(
                                     .join(", ")
                             );
                         }
-                        
+
                         (key_result.key, key_result.confidence, clarity)
                     }
                     Err(e) => {
@@ -1458,31 +1551,43 @@ pub fn analyze_audio(
             }
         }
     } else {
-        log::debug!("Skipping key detection: insufficient samples (need at least {} samples)",
-                   config.frame_size);
+        log::debug!(
+            "Skipping key detection: insufficient samples (need at least {} samples)",
+            config.frame_size
+        );
         (Key::Major(0), 0.0, 0.0)
     };
-    
+
     let processing_time_ms = start_time.elapsed().as_secs_f32() * 1000.0;
-    
+
     // Build confidence warnings
     let mut confidence_warnings = Vec::new();
     let mut flags = Vec::new();
-    
+
     if bpm == 0.0 {
-        confidence_warnings.push("BPM detection failed: insufficient onsets or estimation error".to_string());
+        confidence_warnings
+            .push("BPM detection failed: insufficient onsets or estimation error".to_string());
     }
     if grid_stability < 0.5 {
-        confidence_warnings.push(format!("Low beat grid stability: {:.2} (may indicate tempo variation)", grid_stability));
+        confidence_warnings.push(format!(
+            "Low beat grid stability: {:.2} (may indicate tempo variation)",
+            grid_stability
+        ));
     }
     if key_confidence < 0.3 {
-        confidence_warnings.push(format!("Low key detection confidence: {:.2} (may indicate ambiguous or atonal music)", key_confidence));
+        confidence_warnings.push(format!(
+            "Low key detection confidence: {:.2} (may indicate ambiguous or atonal music)",
+            key_confidence
+        ));
     }
     if key_clarity < 0.2 {
-        confidence_warnings.push(format!("Low key clarity: {:.2} (track may be atonal or have weak tonality)", key_clarity));
+        confidence_warnings.push(format!(
+            "Low key clarity: {:.2} (track may be atonal or have weak tonality)",
+            key_clarity
+        ));
         flags.push(crate::analysis::result::AnalysisFlag::WeakTonality);
     }
-    
+
     // Phase 1E: Build result and compute comprehensive confidence scores
     // Genre discrimination features
     let mod_centroid = features::modulation::modulation_spectral_centroid(
@@ -1531,7 +1636,11 @@ pub fn analyze_audio(
             processing_time_ms,
             algorithm_version: "0.1.0-alpha".to_string(),
             onset_method_consensus: if energy_onsets.is_empty() { 0.0 } else { 1.0 },
-            methods_used: vec!["energy_flux".to_string(), "chroma_extraction".to_string(), "key_detection".to_string()],
+            methods_used: vec![
+                "energy_flux".to_string(),
+                "chroma_extraction".to_string(),
+                "key_detection".to_string(),
+            ],
             flags,
             confidence_warnings,
             tempogram_candidates,
@@ -1541,7 +1650,7 @@ pub fn analyze_audio(
             tempogram_percussive_used,
         },
     };
-    
+
     // Phase 1E: Compute comprehensive confidence scores
     use analysis::confidence::compute_confidence;
     let confidence = compute_confidence(&result);
@@ -1553,8 +1662,7 @@ pub fn analyze_audio(
         confidence.key_confidence,
         confidence.overall_confidence
     );
-    
+
     // Return result with Phase 1E confidence scoring integrated
     Ok(result)
 }
-

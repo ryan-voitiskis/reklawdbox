@@ -44,7 +44,11 @@ pub(crate) fn project_root() -> &'static PathBuf {
         }
         if let Ok(exe) = std::env::current_exe() {
             // Binary at {root}/target/{profile}/reklawdbox → root is 3 parents up
-            if let Some(root) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            if let Some(root) = exe
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+            {
                 if root.join("Cargo.toml").exists() {
                     return root.to_path_buf();
                 }

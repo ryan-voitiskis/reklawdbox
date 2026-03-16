@@ -131,7 +131,13 @@ pub enum EditableField {
 }
 
 impl EditableField {
-    pub const ALL: &[Self] = &[Self::Genre, Self::Comments, Self::Rating, Self::Color, Self::Label];
+    pub const ALL: &[Self] = &[
+        Self::Genre,
+        Self::Comments,
+        Self::Rating,
+        Self::Color,
+        Self::Label,
+    ];
 
     pub const fn as_str(&self) -> &'static str {
         match self {

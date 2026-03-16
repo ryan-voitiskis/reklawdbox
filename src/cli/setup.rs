@@ -1,27 +1,137 @@
 use std::io::{self, Write};
+use std::process::{Command, Stdio};
 
 use crate::config;
 use crate::discogs;
+use crate::tools::essentia::{essentia_venv_dir, validate_essentia_python};
+
+const PYTHON_CANDIDATES: &[&str] = &[
+    "python3.13",
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3.9",
+    "python3",
+];
 
 #[derive(clap::Args)]
 pub(crate) struct SetupArgs {
-    /// Accept defaults without prompting.
+    /// Configure a custom Discogs broker URL and token (self-hosted brokers only).
+    #[arg(long)]
+    broker: bool,
+
+    /// Accept defaults without prompting (only applies to --broker).
     #[arg(long, short = 'y')]
     yes: bool,
 }
 
 pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
+    install_essentia()?;
+
+    if args.broker {
+        configure_broker(args.yes)?;
+    }
+
+    println!();
+    println!("Setup complete.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Essentia installation
+// ---------------------------------------------------------------------------
+
+fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
+    let venv_dir = essentia_venv_dir()
+        .ok_or("Cannot determine home directory for venv location — is $HOME set?")?;
+    let venv_python = venv_dir.join("bin/python");
+    let venv_python_str = venv_python.to_string_lossy().to_string();
+
+    // Check if already installed and working
+    if venv_python.exists() && validate_essentia_python(&venv_python_str) {
+        println!("Essentia is already installed at {venv_python_str}");
+        return Ok(());
+    }
+
+    // Find a suitable Python
+    let python_bin = find_python()?;
+    println!("Using Python: {python_bin}");
+
+    // Create parent directories
+    if let Some(parent) = venv_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+
+    // Create venv (--clear ensures a fresh start if a broken venv exists)
+    println!("Creating virtualenv: {}", venv_dir.display());
+    run_cmd(
+        &python_bin,
+        &["-m", "venv", "--clear", &venv_dir.to_string_lossy()],
+        "venv creation",
+    )?;
+
+    // Install essentia
+    let venv_pip = venv_dir.join("bin/pip");
+    println!("Installing Essentia (this may take a minute)...");
+    run_cmd(
+        venv_pip.to_string_lossy().as_ref(),
+        &["install", "--pre", "essentia"],
+        "pip install essentia",
+    )?;
+
+    // Validate
+    if !validate_essentia_python(&venv_python_str) {
+        return Err("Essentia installed but import validation failed.".into());
+    }
+
+    println!("Essentia installed at {venv_python_str}");
+    Ok(())
+}
+
+fn find_python() -> Result<String, Box<dyn std::error::Error>> {
+    for &candidate in PYTHON_CANDIDATES {
+        let ok = Command::new(candidate)
+            .args([
+                "-c",
+                "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return Ok(candidate.to_string());
+        }
+    }
+    Err("No supported Python found (3.9+ required). Install Python and retry.".into())
+}
+
+fn run_cmd(program: &str, args: &[&str], context: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run {context}: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("{context} failed:\n{stderr}").into());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Custom Discogs broker configuration (--broker)
+// ---------------------------------------------------------------------------
+
+fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Error>> {
     let config_path =
         config::config_path().ok_or("Could not determine config directory — is $HOME set?")?;
 
     let mut cfg = config::load();
-    let existed = config_path.exists();
-
-    if existed {
-        println!("Existing config: {}", config_path.display());
-    } else {
-        println!("No config found. Creating: {}", config_path.display());
-    }
 
     // Broker URL
     let current_url = cfg
@@ -30,13 +140,13 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
         .url
         .as_deref()
         .unwrap_or(discogs::DEFAULT_BROKER_URL);
-    if args.yes {
+    if accept_defaults {
         if cfg.discogs.broker.url.is_none() {
             cfg.discogs.broker.url = Some(discogs::DEFAULT_BROKER_URL.to_string());
         }
     } else {
         println!();
-        println!("Discogs broker URL [{}]:", current_url);
+        println!("Discogs broker URL [{current_url}]:");
         let input = read_line_trimmed()?;
         cfg.discogs.broker.url = Some(if input.is_empty() {
             current_url.to_string()
@@ -62,24 +172,22 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
         .as_deref()
         == Some(discogs::DEFAULT_BROKER_URL);
 
-    if !is_default_url {
-        if !args.yes {
-            println!();
-            println!("Custom broker URL detected. A broker token may be required.");
-            let show_token = if cfg.discogs.broker.token.is_some() {
-                "(configured)"
-            } else {
-                "(none)"
-            };
-            println!("Discogs broker token [{show_token}]:");
-            let input = read_line_trimmed()?;
-            if !input.is_empty() {
-                let cleaned = input.trim_matches('"').trim_matches('\'').to_string();
-                if cleaned.is_empty() {
-                    return Err("Token cannot be empty.".into());
-                }
-                cfg.discogs.broker.token = Some(cleaned);
+    if !is_default_url && !accept_defaults {
+        println!();
+        println!("Custom broker URL detected. A broker token may be required.");
+        let show_token = if cfg.discogs.broker.token.is_some() {
+            "(configured)"
+        } else {
+            "(none)"
+        };
+        println!("Discogs broker token [{show_token}]:");
+        let input = read_line_trimmed()?;
+        if !input.is_empty() {
+            let cleaned = input.trim_matches('"').trim_matches('\'').to_string();
+            if cleaned.is_empty() {
+                return Err("Token cannot be empty.".into());
             }
+            cfg.discogs.broker.token = Some(cleaned);
         }
     }
 
@@ -92,10 +200,7 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     config::save(&cfg)?;
-    println!();
-    println!("Config saved to {}", config_path.display());
-    println!();
-    println!("Discogs enrichment is ready. Broker auth will happen on first use.");
+    println!("Broker config saved to {}", config_path.display());
     Ok(())
 }
 

@@ -36,11 +36,7 @@ const EPSILON: f32 = 1e-10;
 /// let peaks = find_peaks(&signal, 0.5, 2);
 /// // Returns peaks at indices 2 (value 1.0) and 5 (value 0.9)
 /// ```
-pub fn find_peaks(
-    signal: &[f32],
-    threshold: f32,
-    min_distance: usize,
-) -> Vec<(usize, f32)> {
+pub fn find_peaks(signal: &[f32], threshold: f32, min_distance: usize) -> Vec<(usize, f32)> {
     log::debug!(
         "Finding peaks in signal of length {}, threshold={:.3}, min_distance={}",
         signal.len(),
@@ -75,10 +71,10 @@ pub fn find_peaks(
 
     // Find all local maxima
     let mut peaks = Vec::new();
-    
+
     for i in 1..(signal.len() - 1) {
         let value = signal[i];
-        
+
         // Check if local maximum
         if value > signal[i - 1] && value > signal[i + 1] {
             // Check threshold
@@ -94,7 +90,7 @@ pub fn find_peaks(
         if signal[0] > signal[1] && signal[0] >= actual_threshold {
             peaks.push((0, signal[0]));
         }
-        
+
         // Last element: peak if > second-to-last and > threshold
         let last_idx = signal.len() - 1;
         if signal[last_idx] > signal[last_idx - 1] && signal[last_idx] >= actual_threshold {
@@ -106,19 +102,19 @@ pub fn find_peaks(
     if min_distance > 0 && peaks.len() > 1 {
         // Sort by value (highest first) to keep best peaks
         peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         let mut filtered_peaks = Vec::new();
         for (idx, value) in peaks {
             // Check if too close to any existing peak
             let too_close = filtered_peaks.iter().any(|(existing_idx, _)| {
                 (idx as i32 - *existing_idx as i32).abs() < min_distance as i32
             });
-            
+
             if !too_close {
                 filtered_peaks.push((idx, value));
             }
         }
-        
+
         peaks = filtered_peaks;
     }
 
@@ -126,7 +122,7 @@ pub fn find_peaks(
     peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     log::debug!("Found {} peaks", peaks.len());
-    
+
     peaks
 }
 
@@ -167,7 +163,7 @@ mod tests {
         let peaks = find_peaks(&signal, 0.5, 1);
         // Peak at index 3 (value 0.4), threshold = 0.4 * 0.5 = 0.2
         assert!(!peaks.is_empty());
-        
+
         // Absolute threshold
         let peaks = find_peaks(&signal, 0.5, 1);
         // Should be empty (max is 0.4, threshold 0.5 > 0.4)
@@ -180,7 +176,7 @@ mod tests {
         // Two close peaks
         let signal = vec![0.0, 0.5, 1.0, 0.8, 0.9, 0.3, 0.1];
         let peaks = find_peaks(&signal, 0.3, 3);
-        
+
         // With min_distance=3, should only keep one of the close peaks
         // Peak at index 2 (value 1.0) and index 4 (value 0.9) are 2 apart
         // Should keep the higher one (index 2)
@@ -193,7 +189,7 @@ mod tests {
         let signal = vec![1.0, 0.5, 0.3];
         let peaks = find_peaks(&signal, 0.5, 1);
         assert!(peaks.iter().any(|(idx, _)| *idx == 0));
-        
+
         // Last element is peak
         let signal = vec![0.3, 0.5, 1.0];
         let peaks = find_peaks(&signal, 0.5, 1);
@@ -206,7 +202,7 @@ mod tests {
         // Use absolute threshold > max value (0.3)
         // Use threshold > 1.0 to force absolute mode
         let peaks = find_peaks(&signal, 1.0, 1); // Absolute threshold > 0.3
-        // All values below threshold
+                                                 // All values below threshold
         assert!(peaks.is_empty());
     }
 
@@ -214,7 +210,7 @@ mod tests {
     fn test_find_peaks_sorted() {
         let signal = vec![0.0, 0.5, 1.0, 0.7, 0.3, 0.9, 0.2];
         let peaks = find_peaks(&signal, 0.3, 1);
-        
+
         // Should be sorted by value (highest first)
         for i in 1..peaks.len() {
             assert!(
@@ -224,4 +220,3 @@ mod tests {
         }
     }
 }
-

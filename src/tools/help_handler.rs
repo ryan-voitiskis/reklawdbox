@@ -12,8 +12,7 @@ const SOP_GENRE_AUDIT: &str = include_str!("../../site/src/partials/sops/genre-a
 const SOP_SET_BUILDING: &str = include_str!("../../site/src/partials/sops/set-building.mdx");
 const SOP_COLLECTION_AUDIT: &str =
     include_str!("../../site/src/partials/sops/collection-audit.mdx");
-const SOP_LABEL_BACKFILL: &str =
-    include_str!("../../site/src/partials/sops/label-backfill.mdx");
+const SOP_LABEL_BACKFILL: &str = include_str!("../../site/src/partials/sops/label-backfill.mdx");
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {

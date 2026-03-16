@@ -106,9 +106,7 @@ fn system_total_memory_mb() -> u32 {
             let bytes = unsafe { value.assume_init() };
             return (bytes / (1024 * 1024)) as u32;
         }
-        tracing::warn!(
-            "sysctlbyname(hw.memsize) failed — falling back to 16 GB memory assumption"
-        );
+        tracing::warn!("sysctlbyname(hw.memsize) failed — falling back to 16 GB memory assumption");
     }
     #[cfg(not(target_os = "macos"))]
     tracing::warn!("No sysctl on this platform — falling back to 16 GB memory assumption");
@@ -351,7 +349,10 @@ fn collect_audio_files(dir: &Path, recursive: bool, result: &mut Vec<PathBuf>) {
             }
         }
         Err(e) => {
-            eprintln!("Warning: skipping unreadable directory {}: {e}", dir.display());
+            eprintln!(
+                "Warning: skipping unreadable directory {}: {e}",
+                dir.display()
+            );
         }
     }
 }
@@ -640,8 +641,8 @@ mod tests {
     // Memory budget helpers ------------------------------------------------
 
     use super::{
-        memory_budget_mb, memory_preset_summary, system_total_memory_mb, track_memory_cost_mb,
-        CpuPreset, MEMORY_MIN_COST_MB,
+        CpuPreset, MEMORY_MIN_COST_MB, memory_budget_mb, memory_preset_summary,
+        system_total_memory_mb, track_memory_cost_mb,
     };
 
     #[test]

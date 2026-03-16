@@ -115,10 +115,7 @@ pub(super) fn handle_audit_genres(
     // For audit, exclude confirmed tracks (unless include_confirmed)
     let visible: Vec<&ClassificationResult> = results
         .iter()
-        .filter(|r| {
-            include_confirmed
-                || !matches!(r.action, ClassificationAction::Confirm)
-        })
+        .filter(|r| include_confirmed || !matches!(r.action, ClassificationAction::Confirm))
         .collect();
 
     let confirmed_count = results
@@ -243,8 +240,7 @@ fn build_track_evidence(
 
     // Parse Beatport genre
     let beatport_val = parse_response_json(beatport_cache.as_ref());
-    let (beatport_genre, beatport_raw) =
-        extract_beatport_genre(beatport_val.as_ref(), overrides);
+    let (beatport_genre, beatport_raw) = extract_beatport_genre(beatport_val.as_ref(), overrides);
 
     // Effective label
     let effective_label = if !track.label.is_empty() {
@@ -257,16 +253,10 @@ fn build_track_evidence(
             .filter(|l| !l.is_empty())
             .map(|s| s.to_string())
     };
-    let label_genre_val = effective_label
-        .as_deref()
-        .and_then(genre::label_genre);
+    let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
     // Audio features (has_audio reflects whether features actually parsed, not just cache presence)
-    let audio = extract_audio_features(
-        track,
-        stratum_cache.as_ref(),
-        essentia_cache.as_ref(),
-    );
+    let audio = extract_audio_features(track, stratum_cache.as_ref(), essentia_cache.as_ref());
     let has_audio = audio.is_some();
 
     Ok(TrackEvidence {
@@ -341,14 +331,17 @@ fn extract_discogs_genres(
                 continue;
             } else {
                 warn!(
-                    from = style, to = override_genre.as_str(),
+                    from = style,
+                    to = override_genre.as_str(),
                     "Genre override target is not a canonical genre — override ignored"
                 );
             }
         }
         // Standard taxonomy mapping
         let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-        if (mapping_type == "exact" || mapping_type == "alias") && let Some(genre_name) = maps_to {
+        if (mapping_type == "exact" || mapping_type == "alias")
+            && let Some(genre_name) = maps_to
+        {
             if let Some(canonical) = genre::canonical_genre_name(&genre_name) {
                 *genre_counts.entry(canonical).or_insert(0) += 1;
             }
@@ -380,7 +373,8 @@ fn extract_beatport_genre(
             return (Some(canonical), Some(raw.to_string()));
         } else {
             warn!(
-                from = raw, to = override_genre.as_str(),
+                from = raw,
+                to = override_genre.as_str(),
                 "Genre override target is not a canonical genre — override ignored"
             );
         }
@@ -406,7 +400,10 @@ fn extract_audio_features(
         match serde_json::from_str::<serde_json::Value>(&sc.features_json) {
             Ok(val) => Some(val),
             Err(e) => {
-                warn!(file = track.file_path.as_str(), "Stratum features_json failed to parse: {e}");
+                warn!(
+                    file = track.file_path.as_str(),
+                    "Stratum features_json failed to parse: {e}"
+                );
                 None
             }
         }
@@ -415,7 +412,10 @@ fn extract_audio_features(
         match serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json) {
             Ok(val) => Some(val),
             Err(e) => {
-                warn!(file = track.file_path.as_str(), "Essentia features_json failed to parse: {e}");
+                warn!(
+                    file = track.file_path.as_str(),
+                    "Essentia features_json failed to parse: {e}"
+                );
                 None
             }
         }
@@ -438,6 +438,8 @@ fn extract_audio_features(
         danceability: essentia_data.as_ref().and_then(|e| e.danceability),
         dynamic_complexity: essentia_data.as_ref().and_then(|e| e.dynamic_complexity),
         rhythm_regularity: essentia_data.as_ref().and_then(|e| e.rhythm_regularity),
-        spectral_centroid_mean: essentia_data.as_ref().and_then(|e| e.spectral_centroid_mean),
+        spectral_centroid_mean: essentia_data
+            .as_ref()
+            .and_then(|e| e.spectral_centroid_mean),
     })
 }

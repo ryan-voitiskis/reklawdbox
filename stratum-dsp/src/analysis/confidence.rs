@@ -25,44 +25,44 @@
 //! # Ok::<(), stratum_dsp::AnalysisError>(())
 //! ```
 
-use super::result::{AnalysisResult, AnalysisFlag};
+use super::result::{AnalysisFlag, AnalysisResult};
 use serde::{Deserialize, Serialize};
 
 /// Analysis confidence scores
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisConfidence {
     /// BPM confidence (0.0-1.0)
-    /// 
+    ///
     /// Based on:
     /// - Method agreement (autocorrelation + comb filterbank)
     /// - Peak prominence in period estimation
     /// - Octave error handling
     pub bpm_confidence: f32,
-    
+
     /// Key confidence (0.0-1.0)
-    /// 
+    ///
     /// Based on:
     /// - Template matching score difference
     /// - Key clarity (tonal strength)
     /// - Chroma vector quality
     pub key_confidence: f32,
-    
+
     /// Grid stability (0.0-1.0)
-    /// 
+    ///
     /// Based on:
     /// - Beat grid consistency (coefficient of variation)
     /// - Tempo variation detection
     /// - Downbeat alignment
     pub grid_stability: f32,
-    
+
     /// Overall confidence (weighted average)
-    /// 
+    ///
     /// Weighted combination of BPM, key, and grid stability:
     /// - BPM: 40% weight
     /// - Key: 30% weight
     /// - Grid: 30% weight
     pub overall_confidence: f32,
-    
+
     /// Confidence flags indicating specific issues
     pub flags: Vec<AnalysisFlag>,
 }
@@ -120,16 +120,16 @@ pub struct AnalysisConfidence {
 /// ```
 pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
     log::debug!("Computing confidence scores for analysis result");
-    
+
     // 1. BPM Confidence
     let bpm_confidence = compute_bpm_confidence(result);
-    
+
     // 2. Key Confidence
     let key_confidence = compute_key_confidence(result);
-    
+
     // 3. Grid Stability (already computed, but we validate it)
     let grid_stability = result.grid_stability.max(0.0).min(1.0);
-    
+
     // 4. Overall Confidence (weighted average)
     // Weights: BPM=40%, Key=30%, Grid=30%
     // If any component failed (confidence = 0), reduce overall confidence
@@ -148,10 +148,10 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
         // All components failed
         0.0
     };
-    
+
     // 5. Collect flags
     let mut flags = result.metadata.flags.clone();
-    
+
     // Add confidence-based flags
     if bpm_confidence < 0.3 {
         flags.push(AnalysisFlag::MultimodalBpm);
@@ -162,7 +162,7 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
     if grid_stability < 0.3 {
         flags.push(AnalysisFlag::TempoVariation);
     }
-    
+
     log::debug!(
         "Confidence scores: BPM={:.3}, Key={:.3}, Grid={:.3}, Overall={:.3}",
         bpm_confidence,
@@ -170,7 +170,7 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
         grid_stability,
         overall_confidence
     );
-    
+
     AnalysisConfidence {
         bpm_confidence,
         key_confidence,
@@ -189,7 +189,7 @@ impl AnalysisConfidence {
     pub fn is_high_confidence(&self) -> bool {
         self.overall_confidence >= 0.7
     }
-    
+
     /// Check if overall confidence is low (< 0.5)
     ///
     /// # Returns
@@ -198,7 +198,7 @@ impl AnalysisConfidence {
     pub fn is_low_confidence(&self) -> bool {
         self.overall_confidence < 0.5
     }
-    
+
     /// Check if overall confidence is medium (0.5-0.7)
     ///
     /// # Returns
@@ -207,7 +207,7 @@ impl AnalysisConfidence {
     pub fn is_medium_confidence(&self) -> bool {
         self.overall_confidence >= 0.5 && self.overall_confidence < 0.7
     }
-    
+
     /// Get a human-readable confidence level description
     ///
     /// # Returns
@@ -235,16 +235,19 @@ fn compute_bpm_confidence(result: &AnalysisResult) -> f32 {
         // BPM detection failed
         return 0.0;
     }
-    
+
     // Use the confidence from period estimation
     // This already includes method agreement and peak prominence
     let base_confidence = result.bpm_confidence.max(0.0).min(1.0);
-    
+
     // Additional adjustments based on metadata
     // Check if there are warnings about BPM
-    let has_bpm_warning = result.metadata.confidence_warnings.iter()
+    let has_bpm_warning = result
+        .metadata
+        .confidence_warnings
+        .iter()
         .any(|w| w.contains("BPM"));
-    
+
     if has_bpm_warning {
         // Reduce confidence if there are warnings
         base_confidence * 0.7
@@ -264,11 +267,11 @@ fn compute_key_confidence(result: &AnalysisResult) -> f32 {
         // Key detection failed or returned default
         return 0.0;
     }
-    
+
     // Use the confidence from key detection
     // This already includes template matching score difference
     let base_confidence = result.key_confidence.max(0.0).min(1.0);
-    
+
     // Incorporate key clarity directly: low clarity reduces confidence
     // Key clarity is a strong indicator of detection reliability
     let clarity_adjustment = if result.key_clarity < 0.2 {
@@ -281,17 +284,16 @@ fn compute_key_confidence(result: &AnalysisResult) -> f32 {
         // High clarity: no penalty (or slight boost)
         1.0
     };
-    
+
     // Additional adjustments based on metadata warnings
-    let has_key_warning = result.metadata.confidence_warnings.iter()
+    let has_key_warning = result
+        .metadata
+        .confidence_warnings
+        .iter()
         .any(|w| w.contains("key") || w.contains("Key") || w.contains("tonality"));
-    
-    let warning_adjustment = if has_key_warning {
-        0.7
-    } else {
-        1.0
-    };
-    
+
+    let warning_adjustment = if has_key_warning { 0.7 } else { 1.0 };
+
     // Apply both adjustments (multiplicative)
     base_confidence * clarity_adjustment * warning_adjustment
 }
@@ -299,8 +301,8 @@ fn compute_key_confidence(result: &AnalysisResult) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::result::{AnalysisResult, AnalysisMetadata, BeatGrid, Key};
-    
+    use crate::analysis::result::{AnalysisMetadata, AnalysisResult, BeatGrid, Key};
+
     fn create_test_result(
         bpm: f32,
         bpm_confidence: f32,
@@ -341,7 +343,7 @@ mod tests {
             },
         }
     }
-    
+
     #[test]
     fn test_compute_confidence_all_good() {
         let result = create_test_result(
@@ -352,17 +354,17 @@ mod tests {
             0.7, // High key clarity
             0.85,
         );
-        
+
         let confidence = compute_confidence(&result);
-        
+
         assert_eq!(confidence.bpm_confidence, 0.9);
         assert_eq!(confidence.key_confidence, 0.8);
         assert_eq!(confidence.grid_stability, 0.85);
-        
+
         // Overall: 0.9*0.4 + 0.8*0.3 + 0.85*0.3 = 0.36 + 0.24 + 0.255 = 0.855
         assert!((confidence.overall_confidence - 0.855).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_compute_confidence_bpm_failed() {
         let result = create_test_result(
@@ -373,18 +375,18 @@ mod tests {
             0.7, // High key clarity
             0.85,
         );
-        
+
         let confidence = compute_confidence(&result);
-        
+
         assert_eq!(confidence.bpm_confidence, 0.0);
         assert_eq!(confidence.key_confidence, 0.8);
         assert_eq!(confidence.grid_stability, 0.85);
-        
+
         // Overall: Only key and grid, but BPM failed so overall is reduced
         // Only key succeeded: 0.8 * 0.6 = 0.48
         assert!((confidence.overall_confidence - 0.48).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_compute_confidence_key_failed() {
         let result = create_test_result(
@@ -395,17 +397,17 @@ mod tests {
             0.0, // No key clarity when key failed
             0.85,
         );
-        
+
         let confidence = compute_confidence(&result);
-        
+
         assert_eq!(confidence.bpm_confidence, 0.9);
         assert_eq!(confidence.key_confidence, 0.0);
         assert_eq!(confidence.grid_stability, 0.85);
-        
+
         // Overall: Only BPM succeeded: 0.9 * 0.6 = 0.54
         assert!((confidence.overall_confidence - 0.54).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_compute_confidence_all_failed() {
         let result = create_test_result(
@@ -416,15 +418,15 @@ mod tests {
             0.0, // No key clarity
             0.0,
         );
-        
+
         let confidence = compute_confidence(&result);
-        
+
         assert_eq!(confidence.bpm_confidence, 0.0);
         assert_eq!(confidence.key_confidence, 0.0);
         assert_eq!(confidence.grid_stability, 0.0);
         assert_eq!(confidence.overall_confidence, 0.0);
     }
-    
+
     #[test]
     fn test_compute_confidence_with_warnings() {
         let mut result = create_test_result(
@@ -435,18 +437,19 @@ mod tests {
             0.7, // High key clarity
             0.85,
         );
-        
-        result.metadata.confidence_warnings.push(
-            "BPM detection failed: insufficient onsets".to_string()
-        );
-        
+
+        result
+            .metadata
+            .confidence_warnings
+            .push("BPM detection failed: insufficient onsets".to_string());
+
         let confidence = compute_confidence(&result);
-        
+
         // BPM confidence should be reduced due to warning
         assert!(confidence.bpm_confidence < 0.9);
         assert!(confidence.bpm_confidence > 0.0);
     }
-    
+
     #[test]
     fn test_compute_confidence_clamping() {
         // Test that confidences are clamped to [0, 1]
@@ -455,54 +458,40 @@ mod tests {
             1.5, // > 1.0
             Key::Major(0),
             -0.5, // < 0.0
-            0.7, // Normal key clarity
-            2.0, // > 1.0
+            0.7,  // Normal key clarity
+            2.0,  // > 1.0
         );
-        
+
         let confidence = compute_confidence(&result);
-        
+
         assert!(confidence.bpm_confidence <= 1.0);
         assert!(confidence.key_confidence >= 0.0);
         assert!(confidence.grid_stability <= 1.0);
         assert!(confidence.overall_confidence >= 0.0);
         assert!(confidence.overall_confidence <= 1.0);
     }
-    
+
     #[test]
     fn test_confidence_helper_methods() {
-        let result = create_test_result(
-            120.0,
-            0.9,
-            Key::Major(0),
-            0.8,
-            0.7,
-            0.85,
-        );
-        
+        let result = create_test_result(120.0, 0.9, Key::Major(0), 0.8, 0.7, 0.85);
+
         let confidence = compute_confidence(&result);
-        
+
         // Should be high confidence
         assert!(confidence.is_high_confidence());
         assert!(!confidence.is_low_confidence());
         assert!(!confidence.is_medium_confidence());
         assert_eq!(confidence.confidence_level(), "High");
-        
+
         // Test low confidence case
-        let low_result = create_test_result(
-            0.0,
-            0.0,
-            Key::Major(0),
-            0.0,
-            0.0,
-            0.0,
-        );
-        
+        let low_result = create_test_result(0.0, 0.0, Key::Major(0), 0.0, 0.0, 0.0);
+
         let low_confidence = compute_confidence(&low_result);
         assert!(low_confidence.is_low_confidence());
         assert!(!low_confidence.is_high_confidence());
         assert_eq!(low_confidence.confidence_level(), "Low");
     }
-    
+
     #[test]
     fn test_key_clarity_adjustment() {
         // Test that low key clarity reduces confidence
@@ -514,7 +503,7 @@ mod tests {
             0.7, // High clarity
             0.85,
         );
-        
+
         let low_clarity_result = create_test_result(
             120.0,
             0.9,
@@ -523,12 +512,11 @@ mod tests {
             0.1, // Low clarity
             0.85,
         );
-        
+
         let high_conf = compute_confidence(&high_clarity_result);
         let low_conf = compute_confidence(&low_clarity_result);
-        
+
         // Low clarity should result in lower key confidence
         assert!(low_conf.key_confidence < high_conf.key_confidence);
     }
 }
-

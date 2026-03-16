@@ -1275,7 +1275,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(db_token.is_empty(), "plaintext token should be cleared from SQLite");
+        assert!(
+            db_token.is_empty(),
+            "plaintext token should be cleared from SQLite"
+        );
 
         // Keychain should have the token.
         let kc_token = crate::keychain::get_session_token(url).unwrap();

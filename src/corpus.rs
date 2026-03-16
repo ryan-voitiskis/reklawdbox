@@ -347,7 +347,10 @@ fn to_repo_relative_doc_path(path: &str) -> Option<String> {
         return None;
     }
 
-    Some(format!("{REKORDBOX_DOCS_ROOT_RELATIVE}/{}", parts.join("/")))
+    Some(format!(
+        "{REKORDBOX_DOCS_ROOT_RELATIVE}/{}",
+        parts.join("/")
+    ))
 }
 
 fn looks_like_windows_drive_path(path: &str) -> bool {

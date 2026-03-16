@@ -116,8 +116,14 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         label: args.label,
         path: args.path,
         path_prefix: None,
-        added_after: args.added_after.map(|s| db::validate_iso_date(&s, "added_after")).transpose()?,
-        added_before: args.added_before.map(|s| db::validate_iso_date(&s, "added_before")).transpose()?,
+        added_after: args
+            .added_after
+            .map(|s| db::validate_iso_date(&s, "added_after"))
+            .transpose()?,
+        added_before: args
+            .added_before
+            .map(|s| db::validate_iso_date(&s, "added_before"))
+            .transpose()?,
         exclude_samples: true,
         limit: Some(args.max_tracks),
         offset: None,

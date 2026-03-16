@@ -50,31 +50,37 @@
 /// ```
 pub fn compute_key_clarity(scores: &[(crate::analysis::result::Key, f32)]) -> f32 {
     log::debug!("Computing key clarity from {} scores", scores.len());
-    
+
     if scores.is_empty() {
         return 0.0;
     }
-    
+
     if scores.len() < 2 {
         // Only one score - clarity is undefined, return 0
         return 0.0;
     }
-    
+
     // Extract just the scores (ignore keys)
     let score_values: Vec<f32> = scores.iter().map(|(_, score)| *score).collect();
-    
+
     // Find best (highest) score
     let best_score = score_values[0];
-    
+
     // Compute average
     let sum: f32 = score_values.iter().sum();
     let average_score = sum / score_values.len() as f32;
-    
+
     // Find range (max - min)
-    let min_score = *score_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-    let max_score = *score_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+    let min_score = *score_values
+        .iter()
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
+    let max_score = *score_values
+        .iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
     let range = max_score - min_score;
-    
+
     // Compute clarity: (best - average) / range
     if range > 1e-10 {
         let clarity = (best_score - average_score) / range;
@@ -90,20 +96,20 @@ pub fn compute_key_clarity(scores: &[(crate::analysis::result::Key, f32)]) -> f3
 mod tests {
     use super::*;
     use crate::analysis::result::Key;
-    
+
     #[test]
     fn test_compute_key_clarity_empty() {
         let clarity = compute_key_clarity(&[]);
         assert_eq!(clarity, 0.0);
     }
-    
+
     #[test]
     fn test_compute_key_clarity_single() {
         let scores = vec![(Key::Major(0), 0.8)];
         let clarity = compute_key_clarity(&scores);
         assert_eq!(clarity, 0.0);
     }
-    
+
     #[test]
     fn test_compute_key_clarity_high() {
         // High clarity: one score is much higher than others
@@ -116,7 +122,7 @@ mod tests {
         let clarity = compute_key_clarity(&scores);
         assert!(clarity > 0.5, "High clarity should be > 0.5");
     }
-    
+
     #[test]
     fn test_compute_key_clarity_low() {
         // Low clarity: scores are similar
@@ -129,7 +135,7 @@ mod tests {
         let clarity = compute_key_clarity(&scores);
         assert!(clarity < 0.5, "Low clarity should be < 0.5");
     }
-    
+
     #[test]
     fn test_compute_key_clarity_all_same() {
         // All scores the same - no clarity
@@ -141,14 +147,11 @@ mod tests {
         let clarity = compute_key_clarity(&scores);
         assert_eq!(clarity, 0.0);
     }
-    
+
     #[test]
     fn test_compute_key_clarity_clamped() {
         // Test that clarity is clamped to [0, 1]
-        let scores = vec![
-            (Key::Major(0), 1.0),
-            (Key::Major(1), 0.0),
-        ];
+        let scores = vec![(Key::Major(0), 1.0), (Key::Major(1), 0.0)];
         let clarity = compute_key_clarity(&scores);
         assert!(clarity >= 0.0 && clarity <= 1.0);
     }

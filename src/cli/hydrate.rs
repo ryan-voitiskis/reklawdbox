@@ -190,8 +190,14 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         label: args.label,
         path: args.path,
         path_prefix: None,
-        added_after: args.added_after.map(|s| db::validate_iso_date(&s, "added_after")).transpose()?,
-        added_before: args.added_before.map(|s| db::validate_iso_date(&s, "added_before")).transpose()?,
+        added_after: args
+            .added_after
+            .map(|s| db::validate_iso_date(&s, "added_after"))
+            .transpose()?,
+        added_before: args
+            .added_before
+            .map(|s| db::validate_iso_date(&s, "added_before"))
+            .transpose()?,
         exclude_samples: true,
         limit: args.max_tracks,
         offset: None,
@@ -300,10 +306,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         super::cpu_preset_summary(cpu_preset, analysis_concurrency)
     );
     if want_analysis {
-        println!(
-            "  {}",
-            super::memory_preset_summary(analysis_budget_mb)
-        );
+        println!("  {}", super::memory_preset_summary(analysis_budget_mb));
     }
     if want_discogs {
         let retry_note = if discogs_errors > 0 && retry_errors {
@@ -802,8 +805,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 if cancel.is_cancelled() {
                     break;
                 }
-                let cost_mb =
-                    super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+                let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
                 let cpu_permit = tokio::select! {
                     result = cpu_sem.clone().acquire_owned() => match result {
                         Ok(p) => p,
@@ -889,7 +891,11 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         println!(
             "  Discogs:  {} enriched, {} errors",
             style(enriched).green(),
-            if errors > 0 { style(errors).red() } else { style(errors).dim() },
+            if errors > 0 {
+                style(errors).red()
+            } else {
+                style(errors).dim()
+            },
         );
     }
     if want_beatport {
@@ -898,7 +904,11 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         println!(
             "  Beatport: {} enriched, {} errors",
             style(enriched).green(),
-            if errors > 0 { style(errors).red() } else { style(errors).dim() },
+            if errors > 0 {
+                style(errors).red()
+            } else {
+                style(errors).dim()
+            },
         );
     }
     if want_analysis {
@@ -907,7 +917,11 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         println!(
             "  Analysis: {} done, {} errors",
             style(done).green(),
-            if errors > 0 { style(errors).red() } else { style(errors).dim() },
+            if errors > 0 {
+                style(errors).red()
+            } else {
+                style(errors).dim()
+            },
         );
     }
 
@@ -1039,9 +1053,7 @@ async fn cli_discogs_lookup_with_retry(
             discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
         }
         Err(discogs::LookupError::Http {
-            status,
-            ref body,
-            ..
+            status, ref body, ..
         }) if (500..=599).contains(&status) => {
             tracing::warn!(status, "Discogs broker {status}, retrying: {body}");
             tokio::time::sleep(Duration::from_secs(5)).await;

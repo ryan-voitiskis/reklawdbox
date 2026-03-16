@@ -90,10 +90,7 @@ pub fn modulation_spectral_centroid(
         // Build amplitude envelope: sum of magnitudes per frame in this band
         let mut buffer: Vec<Complex<f64>> = Vec::with_capacity(fft_size);
         for frame in trimmed_frames {
-            let energy: f64 = frame[bin_start..bin_end]
-                .iter()
-                .map(|&x| x as f64)
-                .sum();
+            let energy: f64 = frame[bin_start..bin_end].iter().map(|&x| x as f64).sum();
             buffer.push(Complex::new(energy, 0.0));
         }
         // Zero-pad to fft_size
@@ -166,7 +163,10 @@ mod tests {
             .unwrap()
             .expect("should produce a value");
         // DC is excluded so centroid comes from spectral leakage — should be near 0
-        assert!(result < 10.0, "constant signal centroid should be low, got {result}");
+        assert!(
+            result < 10.0,
+            "constant signal centroid should be low, got {result}"
+        );
     }
 
     #[test]
@@ -182,7 +182,10 @@ mod tests {
             .unwrap()
             .expect("should produce a value");
         // Should be much higher than constant signal
-        assert!(result > 10.0, "alternating signal should have high centroid, got {result}");
+        assert!(
+            result > 10.0,
+            "alternating signal should have high centroid, got {result}"
+        );
     }
 
     #[test]

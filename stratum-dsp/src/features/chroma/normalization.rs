@@ -42,18 +42,15 @@ pub fn sharpen_chroma(chroma: &[f32], power: f32) -> Vec<f32> {
     if chroma.is_empty() {
         return vec![];
     }
-    
+
     log::debug!("Sharpening chroma with power {}", power);
-    
+
     // Apply power function element-wise
-    let mut sharpened: Vec<f32> = chroma
-        .iter()
-        .map(|&x| x.powf(power))
-        .collect();
-    
+    let mut sharpened: Vec<f32> = chroma.iter().map(|&x| x.powf(power)).collect();
+
     // L2 normalize
     let norm: f32 = sharpened.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    
+
     if norm > EPSILON {
         for x in &mut sharpened {
             *x /= norm;
@@ -63,7 +60,7 @@ pub fn sharpen_chroma(chroma: &[f32], power: f32) -> Vec<f32> {
         let uniform = 1.0 / (chroma.len() as f32).sqrt();
         sharpened.fill(uniform);
     }
-    
+
     sharpened
 }
 
@@ -82,9 +79,9 @@ pub fn l2_normalize_chroma(chroma: &[f32]) -> Vec<f32> {
     if chroma.is_empty() {
         return vec![];
     }
-    
+
     let norm: f32 = chroma.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    
+
     if norm > EPSILON {
         chroma.iter().map(|&x| x / norm).collect()
     } else {
@@ -97,67 +94,67 @@ pub fn l2_normalize_chroma(chroma: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_sharpen_chroma() {
         let chroma = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0];
         let sharpened = sharpen_chroma(&chroma, 2.0);
-        
+
         assert_eq!(sharpened.len(), 12);
-        
+
         // Check normalization
         let norm: f32 = sharpened.iter().map(|&x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 0.01);
-        
+
         // Check that stronger values are more prominent
         // The peak at index 5 (0.6) should be even stronger after sharpening
         assert!(sharpened[5] > chroma[5] || chroma[5] < 0.1);
     }
-    
+
     #[test]
     fn test_sharpen_chroma_power_one() {
         let chroma = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0];
         let sharpened = sharpen_chroma(&chroma, 1.0);
-        
+
         // Power 1.0 should preserve relative magnitudes (after normalization)
         let norm_orig: f32 = chroma.iter().map(|&x| x * x).sum::<f32>().sqrt();
         let normalized_orig: Vec<f32> = chroma.iter().map(|&x| x / norm_orig).collect();
-        
+
         // Should be approximately equal (within numerical precision)
         for (a, b) in normalized_orig.iter().zip(sharpened.iter()) {
             assert!((a - b).abs() < 0.01);
         }
     }
-    
+
     #[test]
     fn test_sharpen_chroma_empty() {
         let result = sharpen_chroma(&[], 2.0);
         assert_eq!(result.len(), 0);
     }
-    
+
     #[test]
     fn test_l2_normalize_chroma() {
         let chroma = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0];
         let normalized = l2_normalize_chroma(&chroma);
-        
+
         assert_eq!(normalized.len(), 12);
-        
+
         // Check L2 norm is 1.0
         let norm: f32 = normalized.iter().map(|&x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_l2_normalize_chroma_empty() {
         let result = l2_normalize_chroma(&[]);
         assert_eq!(result.len(), 0);
     }
-    
+
     #[test]
     fn test_l2_normalize_chroma_zero() {
         let chroma = vec![0.0; 12];
         let normalized = l2_normalize_chroma(&chroma);
-        
+
         // Should return uniform distribution when input is all zeros
         let expected = 1.0 / (12.0f32).sqrt();
         for &x in &normalized {

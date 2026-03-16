@@ -41,28 +41,28 @@ pub mod comb_filter;
 pub mod peak_picking;
 
 // New tempogram modules (Phase 1F)
+pub mod multi_resolution;
 pub mod novelty;
+pub mod tempogram;
 pub mod tempogram_autocorr;
 pub mod tempogram_fft;
-pub mod tempogram;
-pub mod multi_resolution;
 
 // Legacy exports (deprecated)
 pub use autocorrelation::estimate_bpm_from_autocorrelation;
-pub use comb_filter::{estimate_bpm_from_comb_filter, coarse_to_fine_search};
 pub use candidate_filter::merge_bpm_candidates;
+pub use comb_filter::{coarse_to_fine_search, estimate_bpm_from_comb_filter};
 pub use peak_picking::find_peaks;
 
 // New tempogram exports (Phase 1F)
-pub use tempogram::estimate_bpm_tempogram;
 pub use multi_resolution::multi_resolution_analysis;
+pub use tempogram::estimate_bpm_tempogram;
 
 /// BPM candidate with confidence
 #[derive(Debug, Clone)]
 pub struct BpmCandidate {
     /// BPM estimate
     pub bpm: f32,
-    
+
     /// Confidence score (0.0-1.0)
     pub confidence: f32,
 }
@@ -72,10 +72,10 @@ pub struct BpmCandidate {
 pub struct BpmEstimate {
     /// BPM estimate
     pub bpm: f32,
-    
+
     /// Confidence score
     pub confidence: f32,
-    
+
     /// Number of methods that agree
     pub method_agreement: u32,
 }
@@ -129,9 +129,21 @@ impl LegacyBpmGuardrails {
             preferred_max,
             soft_min,
             soft_max,
-            mul_preferred: if self.mul_preferred.is_finite() { self.mul_preferred.max(0.0) } else { 0.0 },
-            mul_soft: if self.mul_soft.is_finite() { self.mul_soft.max(0.0) } else { 0.0 },
-            mul_extreme: if self.mul_extreme.is_finite() { self.mul_extreme.max(0.0) } else { 0.0 },
+            mul_preferred: if self.mul_preferred.is_finite() {
+                self.mul_preferred.max(0.0)
+            } else {
+                0.0
+            },
+            mul_soft: if self.mul_soft.is_finite() {
+                self.mul_soft.max(0.0)
+            } else {
+                0.0
+            },
+            mul_extreme: if self.mul_extreme.is_finite() {
+                self.mul_extreme.max(0.0)
+            } else {
+                0.0
+            },
         }
     }
 }
@@ -211,7 +223,7 @@ fn estimate_bpm_internal(
     guardrails: Option<LegacyBpmGuardrails>,
 ) -> Result<Option<BpmEstimate>, crate::error::AnalysisError> {
     use candidate_filter::merge_bpm_candidates;
-    
+
     // Get candidates from both methods
     let autocorr_candidates = autocorrelation::estimate_bpm_from_autocorrelation(
         onsets,
@@ -234,11 +246,21 @@ fn estimate_bpm_internal(
     log::debug!("=== BPM CANDIDATES BEFORE MERGING ===");
     log::debug!("Autocorrelation top 5:");
     for (i, cand) in autocorr_candidates.iter().take(5).enumerate() {
-        log::debug!("  {}. {:.2} BPM (confidence: {:.3})", i + 1, cand.bpm, cand.confidence);
+        log::debug!(
+            "  {}. {:.2} BPM (confidence: {:.3})",
+            i + 1,
+            cand.bpm,
+            cand.confidence
+        );
     }
     log::debug!("Comb filter top 5:");
     for (i, cand) in comb_candidates.iter().take(5).enumerate() {
-        log::debug!("  {}. {:.2} BPM (confidence: {:.3})", i + 1, cand.bpm, cand.confidence);
+        log::debug!(
+            "  {}. {:.2} BPM (confidence: {:.3})",
+            i + 1,
+            cand.bpm,
+            cand.confidence
+        );
     }
 
     let guardrails = guardrails.map(|g| g.clamp_sane());
@@ -258,15 +280,20 @@ fn estimate_bpm_internal(
         preferred_max,
         autocorr_top_preferred
     );
-    
+
     // Merge candidates
     let merged = merge_bpm_candidates(autocorr_candidates, comb_candidates, 50.0)?;
-    
+
     // Debug: Show merged results
     log::debug!("=== MERGED BPM ESTIMATES ===");
     for (i, est) in merged.iter().take(5).enumerate() {
-        log::debug!("  {}. {:.2} BPM (confidence: {:.3}, agreement: {})", 
-                   i + 1, est.bpm, est.confidence, est.method_agreement);
+        log::debug!(
+            "  {}. {:.2} BPM (confidence: {:.3}, agreement: {})",
+            i + 1,
+            est.bpm,
+            est.confidence,
+            est.method_agreement
+        );
     }
 
     // Return best estimate (take first, then we'll log diagnostics)
@@ -293,7 +320,7 @@ fn estimate_bpm_internal(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
-    
+
     // Special case: If autocorrelation's top preferred result exists, prefer it
     // This fixes cases where autocorr finds the right answer but comb subharmonics win
     if let Some(autocorr_top_preferred_bpm) = autocorr_top_preferred {
@@ -310,22 +337,31 @@ fn estimate_bpm_internal(
             );
         }
     }
-    
+
     let best = merged_vec.first().cloned();
     if let Some(ref est) = best {
         log::debug!("=== FINAL BPM SELECTION ===");
-        log::debug!("Winner: {:.2} BPM (confidence: {:.3}, agreement: {})", 
-                   est.bpm, est.confidence, est.method_agreement);
-        
+        log::debug!(
+            "Winner: {:.2} BPM (confidence: {:.3}, agreement: {})",
+            est.bpm,
+            est.confidence,
+            est.method_agreement
+        );
+
         // Show runners-up for context
         if merged_vec.len() > 1 {
             log::debug!("Runners-up:");
             for (i, cand) in merged_vec.iter().take(4).enumerate().skip(1) {
-                log::debug!("  {}. {:.2} BPM (confidence: {:.3}, agreement: {})", 
-                           i + 1, cand.bpm, cand.confidence, cand.method_agreement);
+                log::debug!(
+                    "  {}. {:.2} BPM (confidence: {:.3}, agreement: {})",
+                    i + 1,
+                    cand.bpm,
+                    cand.confidence,
+                    cand.method_agreement
+                );
             }
         }
-        
+
         // Explain why it won
         let mut reasons = Vec::new();
         if let Some(g) = guardrails {
@@ -357,7 +393,7 @@ fn estimate_bpm_internal(
         if guardrails.is_none() && (est.bpm < 60.0 || est.bpm > 180.0) {
             reasons.push("OUT OF RANGE (penalized)".to_string());
         }
-        
+
         if !reasons.is_empty() {
             log::debug!("  → Won because: {}", reasons.join(", "));
         } else {
@@ -366,4 +402,3 @@ fn estimate_bpm_internal(
     }
     Ok(best)
 }
-

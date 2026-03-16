@@ -18,4 +18,3 @@ pub fn detect_edge_cases(_result: &AnalysisResult) -> Vec<String> {
     // Phase 2 placeholder: return no flags until edge-case classifier is implemented.
     Vec::new()
 }
-

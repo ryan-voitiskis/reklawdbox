@@ -15,10 +15,11 @@ impl OnnxModel {
     pub fn load(path: &str) -> Result<Self, crate::error::AnalysisError> {
         log::debug!("Loading ONNX model from: {}", path);
         Err(crate::error::AnalysisError::NotImplemented(
-            "Phase 2: ONNX model loading not yet implemented (enable during ML integration)".to_string(),
+            "Phase 2: ONNX model loading not yet implemented (enable during ML integration)"
+                .to_string(),
         ))
     }
-    
+
     /// Run inference on features
     ///
     /// # Arguments
@@ -32,8 +33,8 @@ impl OnnxModel {
         log::debug!("Running ONNX inference on {} features", features.len());
         let _ = features; // Suppress unused warning
         Err(crate::error::AnalysisError::NotImplemented(
-            "Phase 2: ONNX inference not yet implemented (enable during ML integration)".to_string(),
+            "Phase 2: ONNX inference not yet implemented (enable during ML integration)"
+                .to_string(),
         ))
     }
 }
-

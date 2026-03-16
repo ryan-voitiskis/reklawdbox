@@ -22,7 +22,9 @@ async fn run_pre_op_backup_if_configured() -> Result<(), String> {
     if !cfg!(test) {
         let root = crate::project_root();
         backup_script_candidates.extend([
-            root.join("scripts/backup.sh").to_string_lossy().into_owned(),
+            root.join("scripts/backup.sh")
+                .to_string_lossy()
+                .into_owned(),
             root.join("backup.sh").to_string_lossy().into_owned(),
         ]);
     }
@@ -82,10 +84,7 @@ pub(super) fn handle_update_tracks(
 ) -> Result<CallToolResult, McpError> {
     for c in &params.changes {
         if c.track_id.trim().is_empty() {
-            return Err(McpError::invalid_params(
-                "track_id must not be empty",
-                None,
-            ));
+            return Err(McpError::invalid_params("track_id must not be empty", None));
         }
         if let Some(r) = c.rating
             && (r == 0 || r > 5)
@@ -354,15 +353,12 @@ pub(super) async fn handle_write_xml(
         .collect();
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_path = params
-        .output_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("reklawdbox-exports")
-                .join(format!("reklawdbox-{timestamp}.xml"))
-        });
+    let output_path = params.output_path.map(PathBuf::from).unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("reklawdbox-exports")
+            .join(format!("reklawdbox-{timestamp}.xml"))
+    });
 
     if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
         server.state.changes.restore(snapshot);

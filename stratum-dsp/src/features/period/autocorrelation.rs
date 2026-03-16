@@ -36,8 +36,8 @@
 //! ```
 
 use super::BpmCandidate;
-use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
+use rustfft::FftPlanner;
 
 const EPSILON: f32 = 1e-10;
 
@@ -188,7 +188,7 @@ pub fn estimate_bpm_from_autocorrelation(
     let mut candidates = Vec::new();
     for (lag, value) in peaks {
         let bpm = (60.0 * sample_rate as f32) / ((lag as f32) * (hop_size as f32));
-        
+
         // Double-check BPM is in range (due to rounding)
         if bpm >= min_bpm && bpm <= max_bpm {
             // Normalize confidence by maximum ACF value
@@ -204,12 +204,13 @@ pub fn estimate_bpm_from_autocorrelation(
     }
 
     // Sort by confidence (highest first)
-    candidates.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    log::debug!(
-        "Autocorrelation found {} BPM candidates",
-        candidates.len()
-    );
+    log::debug!("Autocorrelation found {} BPM candidates", candidates.len());
 
     Ok(candidates)
 }
@@ -227,15 +228,12 @@ pub fn estimate_bpm_from_autocorrelation(
 /// Autocorrelation function (same length as input)
 fn compute_autocorrelation_fft(signal: &[f32]) -> Result<Vec<f32>, crate::error::AnalysisError> {
     let n = signal.len();
-    
+
     // FFT size: next power of 2 >= 2*n (for zero-padding)
     let fft_size = (2 * n).next_power_of_two();
-    
+
     // Convert to complex and zero-pad
-    let mut fft_input: Vec<Complex<f32>> = signal
-        .iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .collect();
+    let mut fft_input: Vec<Complex<f32>> = signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
     fft_input.resize(fft_size, Complex::new(0.0, 0.0));
 
     // Forward FFT
@@ -296,7 +294,7 @@ fn find_peaks_in_acf(
 
     // Minimum prominence: 10% of maximum
     let min_prominence = max_value * 0.1;
-    
+
     // Minimum distance: corresponds to ~5 BPM separation
     // For 120 BPM at 44.1kHz, 512 hop: lag ~= 43
     // 5 BPM difference ≈ 2 lag difference
@@ -307,18 +305,20 @@ fn find_peaks_in_acf(
     // Find local maxima
     for i in 1..(acf_slice.len() - 1) {
         let value = acf_slice[i];
-        
+
         // Check if local maximum
         if value > acf_slice[i - 1] && value > acf_slice[i + 1] {
             // Check prominence (height relative to neighbors)
             let left_val = acf_slice[i - 1];
             let right_val = acf_slice[i + 1];
             let prominence = value - (left_val.max(right_val));
-            
+
             if prominence >= min_prominence {
                 // Check minimum distance from previous peak
                 let lag = i + offset;
-                if peaks.is_empty() || (lag as i32 - peaks.last().unwrap().0 as i32).abs() >= min_distance as i32 {
+                if peaks.is_empty()
+                    || (lag as i32 - peaks.last().unwrap().0 as i32).abs() >= min_distance as i32
+                {
                     peaks.push((lag, value));
                 } else {
                     // Keep the higher peak if too close
@@ -360,17 +360,11 @@ mod tests {
             onsets.push(sample);
         }
 
-        let candidates = estimate_bpm_from_autocorrelation(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-        )
-        .unwrap();
+        let candidates =
+            estimate_bpm_from_autocorrelation(&onsets, sample_rate, hop_size, 60.0, 180.0).unwrap();
 
         assert!(!candidates.is_empty(), "Should find at least one candidate");
-        
+
         // Best candidate should be close to 120 BPM
         let best = &candidates[0];
         assert!(
@@ -399,15 +393,15 @@ mod tests {
     #[test]
     fn test_autocorrelation_invalid_params() {
         let onsets = vec![1000, 2000];
-        
+
         // Invalid sample rate
         let result = estimate_bpm_from_autocorrelation(&onsets, 0, 512, 60.0, 180.0);
         assert!(result.is_err());
-        
+
         // Invalid hop size
         let result = estimate_bpm_from_autocorrelation(&onsets, 44100, 0, 60.0, 180.0);
         assert!(result.is_err());
-        
+
         // Invalid BPM range
         let result = estimate_bpm_from_autocorrelation(&onsets, 44100, 512, 180.0, 60.0);
         assert!(result.is_err());
@@ -429,14 +423,8 @@ mod tests {
             onsets.push(sample);
         }
 
-        let candidates = estimate_bpm_from_autocorrelation(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-        )
-        .unwrap();
+        let candidates =
+            estimate_bpm_from_autocorrelation(&onsets, sample_rate, hop_size, 60.0, 180.0).unwrap();
 
         assert!(!candidates.is_empty());
         let best = &candidates[0];
@@ -454,10 +442,10 @@ mod tests {
         let acf = compute_autocorrelation_fft(&signal).unwrap();
 
         assert_eq!(acf.len(), signal.len());
-        
+
         // ACF[0] should be maximum (self-correlation)
         assert!(acf[0] > 0.0);
-        
+
         // ACF should be symmetric (approximately)
         // ACF[2] should be high (period of 2)
         if acf.len() > 2 {
@@ -476,4 +464,3 @@ mod tests {
         assert!(peaks.iter().any(|(idx, _)| *idx == 2 || *idx == 5));
     }
 }
-

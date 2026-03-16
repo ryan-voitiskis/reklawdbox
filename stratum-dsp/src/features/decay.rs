@@ -299,11 +299,11 @@ mod tests {
             .collect();
 
         let (tau, r2) = fit_decay(&envelope, ms_per_frame).expect("should fit");
+        assert!((tau - 200.0).abs() < 5.0, "tau should be ~200ms, got {tau}");
         assert!(
-            (tau - 200.0).abs() < 5.0,
-            "tau should be ~200ms, got {tau}"
+            r2 > 0.99,
+            "R² should be near 1.0 for clean exponential, got {r2}"
         );
-        assert!(r2 > 0.99, "R² should be near 1.0 for clean exponential, got {r2}");
     }
 
     #[test]

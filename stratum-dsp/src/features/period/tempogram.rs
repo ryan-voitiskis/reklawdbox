@@ -26,21 +26,15 @@
 //! # Ok::<(), stratum_dsp::AnalysisError>(())
 //! ```
 
-use crate::error::AnalysisError;
-use super::BpmEstimate;
 use super::novelty::{
-    superflux_novelty,
+    combined_novelty, combined_novelty_with_params, energy_flux_novelty, energy_flux_novelty_band,
+    hfc_novelty, hfc_novelty_band, mel_superflux_novelty, superflux_novelty,
     superflux_novelty_band,
-    mel_superflux_novelty,
-    energy_flux_novelty,
-    energy_flux_novelty_band,
-    hfc_novelty,
-    hfc_novelty_band,
-    combined_novelty,
-    combined_novelty_with_params,
 };
 use super::tempogram_autocorr::{autocorrelation_tempogram, find_best_bpm_autocorr};
 use super::tempogram_fft::{fft_tempogram, find_best_bpm_fft};
+use super::BpmEstimate;
+use crate::error::AnalysisError;
 
 /// Configuration for band-limited novelty fusion inside the tempogram BPM estimator.
 ///
@@ -166,18 +160,16 @@ pub fn estimate_bpm_tempogram(
     max_bpm: f32,
     bpm_resolution: f32,
 ) -> Result<BpmEstimate, AnalysisError> {
-    Ok(
-        estimate_bpm_tempogram_impl(
-            magnitude_spec_frames,
-            sample_rate,
-            hop_size,
-            min_bpm,
-            max_bpm,
-            bpm_resolution,
-            None,
-        )?
-        .0,
-    )
+    Ok(estimate_bpm_tempogram_impl(
+        magnitude_spec_frames,
+        sample_rate,
+        hop_size,
+        min_bpm,
+        max_bpm,
+        bpm_resolution,
+        None,
+    )?
+    .0)
 }
 
 /// Estimate BPM using tempogram approach with **band fusion** enabled.
@@ -190,18 +182,16 @@ pub fn estimate_bpm_tempogram_band_fusion(
     bpm_resolution: f32,
     band_cfg: TempogramBandFusionConfig,
 ) -> Result<BpmEstimate, AnalysisError> {
-    Ok(
-        estimate_bpm_tempogram_impl(
-            magnitude_spec_frames,
-            sample_rate,
-            hop_size,
-            min_bpm,
-            max_bpm,
-            bpm_resolution,
-            Some(band_cfg),
-        )?
-        .0,
-    )
+    Ok(estimate_bpm_tempogram_impl(
+        magnitude_spec_frames,
+        sample_rate,
+        hop_size,
+        min_bpm,
+        max_bpm,
+        bpm_resolution,
+        Some(band_cfg),
+    )?
+    .0)
 }
 
 /// Estimate BPM using tempogram analysis and return top-N candidates for diagnostics.
@@ -272,14 +262,13 @@ fn estimate_bpm_tempogram_impl(
 ) -> Result<(BpmEstimate, Vec<TempogramCandidateDebug>), AnalysisError> {
     log::debug!("Estimating BPM using tempogram: {} frames, sample_rate={}, hop_size={}, BPM range=[{:.1}, {:.1}]",
                 magnitude_spec_frames.len(), sample_rate, hop_size, min_bpm, max_bpm);
-    
+
     // --- Step 1: novelty extraction (full-band + optional multi-band) ---
-    let n_bins = magnitude_spec_frames
-        .first()
-        .map(|f| f.len())
-        .unwrap_or(0);
+    let n_bins = magnitude_spec_frames.first().map(|f| f.len()).unwrap_or(0);
     if n_bins == 0 {
-        return Err(AnalysisError::InvalidInput("Empty magnitude frames".to_string()));
+        return Err(AnalysisError::InvalidInput(
+            "Empty magnitude frames".to_string(),
+        ));
     }
 
     // Infer FFT size from the STFT magnitude width (compute_stft returns frame_size/2 + 1).
@@ -287,7 +276,9 @@ fn estimate_bpm_tempogram_impl(
     let freq_resolution = sample_rate as f32 / fft_size as f32;
 
     fn hz_to_bin(freq_hz: f32, freq_resolution: f32, n_bins: usize) -> usize {
-        if !(freq_hz.is_finite() && freq_hz > 0.0) || !(freq_resolution.is_finite() && freq_resolution > 0.0) {
+        if !(freq_hz.is_finite() && freq_hz > 0.0)
+            || !(freq_resolution.is_finite() && freq_resolution > 0.0)
+        {
             return 0;
         }
         let b = (freq_hz / freq_resolution).round() as isize;
@@ -333,8 +324,14 @@ fn estimate_bpm_tempogram_impl(
     }
 
     let fft_full = fft_tempogram(&novelty_full, sample_rate, hop_size, min_bpm, max_bpm)?;
-    let autocorr_full =
-        autocorrelation_tempogram(&novelty_full, sample_rate, hop_size, min_bpm, max_bpm, bpm_resolution)?;
+    let autocorr_full = autocorrelation_tempogram(
+        &novelty_full,
+        sample_rate,
+        hop_size,
+        min_bpm,
+        max_bpm,
+        bpm_resolution,
+    )?;
 
     let fft_best = find_best_bpm_fft(&fft_full);
     let autocorr_best = find_best_bpm_autocorr(&autocorr_full);
@@ -344,7 +341,11 @@ fn estimate_bpm_tempogram_impl(
         name: "full",
         w: band_cfg.as_ref().map(|c| c.w_full).unwrap_or(1.0),
         max_fft: fft_full.first().map(|(_, p)| *p).unwrap_or(1.0).max(1e-12),
-        max_autocorr: autocorr_full.first().map(|(_, s)| *s).unwrap_or(1.0).max(1e-12),
+        max_autocorr: autocorr_full
+            .first()
+            .map(|(_, s)| *s)
+            .unwrap_or(1.0)
+            .max(1e-12),
         fft: fft_full,
         autocorr: autocorr_full,
     });
@@ -403,8 +404,14 @@ fn estimate_bpm_tempogram_impl(
                 }
 
                 let fft = fft_tempogram(&novelty, sample_rate, hop_size, min_bpm, max_bpm)?;
-                let autocorr =
-                    autocorrelation_tempogram(&novelty, sample_rate, hop_size, min_bpm, max_bpm, bpm_resolution)?;
+                let autocorr = autocorrelation_tempogram(
+                    &novelty,
+                    sample_rate,
+                    hop_size,
+                    min_bpm,
+                    max_bpm,
+                    bpm_resolution,
+                )?;
 
                 seed_variants.push(Variant {
                     name,
@@ -431,8 +438,14 @@ fn estimate_bpm_tempogram_impl(
             )?;
             if !mel_curve.is_empty() {
                 let fft = fft_tempogram(&mel_curve, sample_rate, hop_size, min_bpm, max_bpm)?;
-                let autocorr =
-                    autocorrelation_tempogram(&mel_curve, sample_rate, hop_size, min_bpm, max_bpm, bpm_resolution)?;
+                let autocorr = autocorrelation_tempogram(
+                    &mel_curve,
+                    sample_rate,
+                    hop_size,
+                    min_bpm,
+                    max_bpm,
+                    bpm_resolution,
+                )?;
                 seed_variants.push(Variant {
                     name: "mel",
                     w: cfg.w_mel,
@@ -475,7 +488,7 @@ fn estimate_bpm_tempogram_impl(
         .map(|v| v.w.max(0.0))
         .sum::<f32>()
         .max(1e-6);
-    
+
     // Step 4: Metrical-level selection (tempo folding) + scoring
     //
     // Empirically, the dominant failure mode is tempo octave / metrical-level selection (e.g., 2×).
@@ -490,7 +503,9 @@ fn estimate_bpm_tempogram_impl(
         .unwrap_or((0.0, 0.0));
 
     // "Empty" guard: if all variants are empty in both representations, we failed.
-    let all_empty = seed_variants.iter().all(|v| v.fft.is_empty() && v.autocorr.is_empty());
+    let all_empty = seed_variants
+        .iter()
+        .all(|v| v.fft.is_empty() && v.autocorr.is_empty());
     if all_empty {
         return Err(AnalysisError::ProcessingError(
             "Both FFT and autocorrelation tempograms are empty".to_string(),
@@ -606,7 +621,8 @@ fn estimate_bpm_tempogram_impl(
                     continue;
                 }
                 let s_fft = (lookup_nearest(&v.fft, bpm, 0.75) / v.max_fft).clamp(0.0, 1.0);
-                let s_ac = (lookup_nearest(&v.autocorr, bpm, bpm_resolution.max(0.5)) / v.max_autocorr)
+                let s_ac = (lookup_nearest(&v.autocorr, bpm, bpm_resolution.max(0.5))
+                    / v.max_autocorr)
                     .clamp(0.0, 1.0);
                 let s = s_fft.max(s_ac);
                 if s >= support_threshold {
@@ -633,7 +649,11 @@ fn estimate_bpm_tempogram_impl(
         });
     }
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut best = scored.first().cloned().ok_or_else(|| {
         AnalysisError::ProcessingError("No BPM candidates could be scored".to_string())
     })?;
@@ -754,12 +774,12 @@ fn estimate_bpm_tempogram_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_estimate_bpm_tempogram_basic() {
         // Create spectrogram with periodic pattern
         let mut spectrogram = vec![vec![0.1f32; 1024]; 500];
-        
+
         // Add periodic pattern (simulating 120 BPM)
         let period = 43; // Approximate for 120 BPM at 44.1kHz, 512 hop
         for i in 0..spectrogram.len() {
@@ -769,29 +789,32 @@ mod tests {
                 }
             }
         }
-        
+
         let result = estimate_bpm_tempogram(&spectrogram, 44100, 512, 100.0, 140.0, 0.5).unwrap();
-        
+
         // Should find BPM around 120
-        assert!(result.bpm >= 115.0 && result.bpm <= 125.0,
-                "Expected BPM around 120, got {:.1}", result.bpm);
+        assert!(
+            result.bpm >= 115.0 && result.bpm <= 125.0,
+            "Expected BPM around 120, got {:.1}",
+            result.bpm
+        );
         assert!(result.confidence >= 0.0 && result.confidence <= 1.0);
     }
-    
+
     #[test]
     fn test_estimate_bpm_tempogram_empty() {
         let spectrogram = vec![];
         let result = estimate_bpm_tempogram(&spectrogram, 44100, 512, 40.0, 240.0, 0.5);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_estimate_bpm_tempogram_agreement() {
         // This test would require mocking the tempogram methods to ensure agreement
         // For now, we test that the function runs without error
         let spectrogram = vec![vec![0.5f32; 1024]; 200];
         let result = estimate_bpm_tempogram(&spectrogram, 44100, 512, 40.0, 240.0, 0.5);
-        
+
         // Should either succeed or fail gracefully
         match result {
             Ok(est) => {
@@ -804,4 +827,3 @@ mod tests {
         }
     }
 }
-

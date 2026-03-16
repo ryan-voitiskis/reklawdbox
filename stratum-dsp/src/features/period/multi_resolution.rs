@@ -27,16 +27,16 @@
 //! # Ok::<(), stratum_dsp::AnalysisError>(())
 //! ```
 
-use crate::error::AnalysisError;
-use super::BpmEstimate;
+use super::novelty::{
+    combined_novelty_with_params, energy_flux_novelty, hfc_novelty, superflux_novelty,
+};
 use super::tempogram::{
-    estimate_bpm_tempogram,
-    estimate_bpm_tempogram_with_candidates,
-    estimate_bpm_tempogram_with_candidates_band_fusion,
-    TempogramBandFusionConfig,
+    estimate_bpm_tempogram, estimate_bpm_tempogram_with_candidates,
+    estimate_bpm_tempogram_with_candidates_band_fusion, TempogramBandFusionConfig,
     TempogramCandidateDebug,
 };
-use super::novelty::{superflux_novelty, energy_flux_novelty, hfc_novelty, combined_novelty_with_params};
+use super::BpmEstimate;
+use crate::error::AnalysisError;
 use crate::features::chroma::extractor::compute_stft;
 
 /// Multi-resolution tempogram analysis (simplified wrapper)
@@ -81,18 +81,22 @@ pub fn multi_resolution_analysis(
     max_bpm: f32,
     bpm_resolution: f32,
 ) -> Result<BpmEstimate, AnalysisError> {
-    log::debug!("Multi-resolution tempogram analysis: {} frames, sample_rate={}, base_hop_size={}",
-                magnitude_spec_frames.len(), sample_rate, base_hop_size);
-    
+    log::debug!(
+        "Multi-resolution tempogram analysis: {} frames, sample_rate={}, base_hop_size={}",
+        magnitude_spec_frames.len(),
+        sample_rate,
+        base_hop_size
+    );
+
     // Run tempogram at multiple hop sizes
     // Note: In a full implementation, we would recompute STFT at each hop size.
     // For now, we use the same spectrogram but simulate different resolutions by
     // using different hop_size values in the tempogram computation.
     // This is a simplified approach - true multi-resolution would require recomputing STFT.
-    
+
     let hop_sizes = vec![256, 512, 1024];
     let mut results = Vec::new();
-    
+
     for &hop_size in &hop_sizes {
         match estimate_bpm_tempogram(
             magnitude_spec_frames,
@@ -103,8 +107,12 @@ pub fn multi_resolution_analysis(
             bpm_resolution,
         ) {
             Ok(est) => {
-                log::debug!("Hop size {}: BPM={:.1}, confidence={:.3}",
-                           hop_size, est.bpm, est.confidence);
+                log::debug!(
+                    "Hop size {}: BPM={:.1}, confidence={:.3}",
+                    hop_size,
+                    est.bpm,
+                    est.confidence
+                );
                 results.push((hop_size, est));
             }
             Err(e) => {
@@ -113,30 +121,38 @@ pub fn multi_resolution_analysis(
             }
         }
     }
-    
+
     if results.is_empty() {
         return Err(AnalysisError::ProcessingError(
-            "All multi-resolution tempogram analyses failed".to_string()
+            "All multi-resolution tempogram analyses failed".to_string(),
         ));
     }
-    
+
     // Check agreement across resolutions
     if results.len() >= 2 {
         // Check if all results agree within ±2 BPM
         let first_bpm = results[0].1.bpm;
-        let all_agree = results.iter().all(|(_, est)| (est.bpm - first_bpm).abs() < 2.0);
-        
+        let all_agree = results
+            .iter()
+            .all(|(_, est)| (est.bpm - first_bpm).abs() < 2.0);
+
         if all_agree {
             // All resolutions agree: use average with boosted confidence
-            let avg_bpm: f32 = results.iter().map(|(_, est)| est.bpm).sum::<f32>() / results.len() as f32;
-            let avg_confidence: f32 = results.iter().map(|(_, est)| est.confidence).sum::<f32>() / results.len() as f32;
-            
+            let avg_bpm: f32 =
+                results.iter().map(|(_, est)| est.bpm).sum::<f32>() / results.len() as f32;
+            let avg_confidence: f32 =
+                results.iter().map(|(_, est)| est.confidence).sum::<f32>() / results.len() as f32;
+
             // Boost confidence for agreement
             let boosted_confidence = (avg_confidence * 1.2).min(1.0);
-            
-            log::debug!("Multi-resolution agreement: all {} resolutions agree on {:.1} BPM (conf={:.3})",
-                       results.len(), avg_bpm, boosted_confidence);
-            
+
+            log::debug!(
+                "Multi-resolution agreement: all {} resolutions agree on {:.1} BPM (conf={:.3})",
+                results.len(),
+                avg_bpm,
+                boosted_confidence
+            );
+
             Ok(BpmEstimate {
                 bpm: avg_bpm,
                 confidence: boosted_confidence,
@@ -144,13 +160,22 @@ pub fn multi_resolution_analysis(
             })
         } else {
             // Resolutions disagree: use best confidence
-            let best = results.iter()
-                .max_by(|a, b| a.1.confidence.partial_cmp(&b.1.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            let best = results
+                .iter()
+                .max_by(|a, b| {
+                    a.1.confidence
+                        .partial_cmp(&b.1.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .unwrap();
-            
-            log::debug!("Multi-resolution disagreement: using best (hop_size={}, BPM={:.1}, conf={:.3})",
-                       best.0, best.1.bpm, best.1.confidence);
-            
+
+            log::debug!(
+                "Multi-resolution disagreement: using best (hop_size={}, BPM={:.1}, conf={:.3})",
+                best.0,
+                best.1.bpm,
+                best.1.confidence
+            );
+
             Ok(BpmEstimate {
                 bpm: best.1.bpm,
                 confidence: best.1.confidence * 0.9, // Slight penalty for disagreement
@@ -160,9 +185,13 @@ pub fn multi_resolution_analysis(
     } else {
         // Only one resolution succeeded
         let result = &results[0];
-        log::debug!("Single resolution result: hop_size={}, BPM={:.1}, conf={:.3}",
-                   result.0, result.1.bpm, result.1.confidence);
-        
+        log::debug!(
+            "Single resolution result: hop_size={}, BPM={:.1}, conf={:.3}",
+            result.0,
+            result.1.bpm,
+            result.1.confidence
+        );
+
         Ok(result.1.clone())
     }
 }
@@ -208,14 +237,34 @@ pub fn multi_resolution_tempogram_from_samples(
     let hop_512 = compute_stft(samples, frame_size, 512)?;
     let hop_1024 = compute_stft(samples, frame_size, 1024)?;
 
-    let call = |spec: &[Vec<f32>], hop: u32, k: usize| -> Result<(BpmEstimate, Vec<TempogramCandidateDebug>), AnalysisError> {
+    let call = |spec: &[Vec<f32>],
+                hop: u32,
+                k: usize|
+     -> Result<(BpmEstimate, Vec<TempogramCandidateDebug>), AnalysisError> {
         if let Some(cfg) = band_cfg
             .clone()
             .filter(|c| c.enabled || c.enable_mel || c.consensus_bonus > 0.0)
         {
-            estimate_bpm_tempogram_with_candidates_band_fusion(spec, sample_rate, hop, min_bpm, max_bpm, bpm_resolution, k, cfg)
+            estimate_bpm_tempogram_with_candidates_band_fusion(
+                spec,
+                sample_rate,
+                hop,
+                min_bpm,
+                max_bpm,
+                bpm_resolution,
+                k,
+                cfg,
+            )
         } else {
-            estimate_bpm_tempogram_with_candidates(spec, sample_rate, hop, min_bpm, max_bpm, bpm_resolution, k)
+            estimate_bpm_tempogram_with_candidates(
+                spec,
+                sample_rate,
+                hop,
+                min_bpm,
+                max_bpm,
+                bpm_resolution,
+                k,
+            )
         }
     };
 
@@ -223,14 +272,11 @@ pub fn multi_resolution_tempogram_from_samples(
     let (_e512, mut c512) = call(&hop_512, 512, top_k)?;
     let (_e1024, c1024) = call(&hop_1024, 1024, aux_k)?;
 
-    let dbg = band_cfg
-        .as_ref()
-        .and_then(|c| c.debug_track_id)
-        .map(|id| {
-            let gt = band_cfg.as_ref().and_then(|c| c.debug_gt_bpm);
-            let top_n = band_cfg.as_ref().map(|c| c.debug_top_n).unwrap_or(5).max(1);
-            (id, gt, top_n)
-        });
+    let dbg = band_cfg.as_ref().and_then(|c| c.debug_track_id).map(|id| {
+        let gt = band_cfg.as_ref().and_then(|c| c.debug_gt_bpm);
+        let top_n = band_cfg.as_ref().map(|c| c.debug_top_n).unwrap_or(5).max(1);
+        (id, gt, top_n)
+    });
 
     fn lookup_nearest(cands: &[TempogramCandidateDebug], bpm: f32, tol: f32) -> f32 {
         let mut best_d = f32::INFINITY;
@@ -281,12 +327,23 @@ pub fn multi_resolution_tempogram_from_samples(
             let s_half_1024 = lookup_nearest(&c1024, gt_bpm * 0.5, tol);
 
             eprintln!("Support near GT / family (lookup tol={:.2}):", tol);
-            eprintln!("  T     @512={:.4} @256={:.4} @1024={:.4}", s_t_512, s_t_256, s_t_1024);
-            eprintln!("  2T    @512={:.4} @256={:.4} @1024={:.4}", s_2t_512, s_2t_256, s_2t_1024);
-            eprintln!("  T/2   @512={:.4} @256={:.4} @1024={:.4}", s_half_512, s_half_256, s_half_1024);
+            eprintln!(
+                "  T     @512={:.4} @256={:.4} @1024={:.4}",
+                s_t_512, s_t_256, s_t_1024
+            );
+            eprintln!(
+                "  2T    @512={:.4} @256={:.4} @1024={:.4}",
+                s_2t_512, s_2t_256, s_2t_1024
+            );
+            eprintln!(
+                "  T/2   @512={:.4} @256={:.4} @1024={:.4}",
+                s_half_512, s_half_256, s_half_1024
+            );
 
             // Recompute hypothesis scores for T=GT using the same rules as the fusion.
-            let h_t = w512 * s_t_512 + w256 * s_t_256 + w1024 * (s_t_1024 + structural_discount * s_2t_1024);
+            let h_t = w512 * s_t_512
+                + w256 * s_t_256
+                + w1024 * (s_t_1024 + structural_discount * s_2t_1024);
             let mut h_2t = w512
                 * (double_time_512_factor * s_t_512 + (1.0 - double_time_512_factor) * s_2t_512)
                 + w256 * s_2t_256
@@ -341,8 +398,7 @@ pub fn multi_resolution_tempogram_from_samples(
             }
             eprintln!(
                 "  ratio_2T_256={:.3} ratio_half_1024={:.3} (guardrails)",
-                ratio_2t_256,
-                ratio_half_1024
+                ratio_2t_256, ratio_half_1024
             );
         }
     }
@@ -417,11 +473,8 @@ pub fn multi_resolution_tempogram_from_samples(
         }
 
         // Candidate hypotheses (clamp to allowed BPM range)
-        let mut local: Vec<(f32, f32)> = vec![
-            (t_bpm, h_t),
-            (t_bpm * 2.0, h_2t),
-            (t_bpm * 0.5, h_half),
-        ];
+        let mut local: Vec<(f32, f32)> =
+            vec![(t_bpm, h_t), (t_bpm * 2.0, h_2t), (t_bpm * 0.5, h_half)];
         local.retain(|(b, _)| *b >= min_bpm && *b <= max_bpm);
 
         // Mild tempo prior (applied uniformly to hypothesis score)
@@ -473,7 +526,11 @@ pub fn multi_resolution_tempogram_from_samples(
     }
 
     // Deduplicate hypotheses by BPM proximity; keep highest score per cluster.
-    hyps.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hyps.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut unique: Vec<Hyp> = Vec::new();
     for h in hyps {
         if unique.iter().any(|u| (u.bpm - h.bpm).abs() < 0.75) {
@@ -591,9 +648,21 @@ pub fn multi_resolution_tempogram_from_samples(
                 i += period;
             }
 
-            let beat_mean = if beat_n > 0 { beat_sum / beat_n as f32 } else { 0.0 };
-            let half_mean = if half_n > 0 { half_sum / half_n as f32 } else { 0.0 };
-            let third_mean = if third_n > 0 { third_sum / third_n as f32 } else { 0.0 };
+            let beat_mean = if beat_n > 0 {
+                beat_sum / beat_n as f32
+            } else {
+                0.0
+            };
+            let half_mean = if half_n > 0 {
+                half_sum / half_n as f32
+            } else {
+                0.0
+            };
+            let third_mean = if third_n > 0 {
+                third_sum / third_n as f32
+            } else {
+                0.0
+            };
 
             // Contrast: prefer strong beat alignment while penalizing equally strong offbeats/subdivisions.
             let contrast = beat_mean - 0.60 * half_mean - 0.40 * third_mean;
@@ -643,7 +712,10 @@ pub fn multi_resolution_tempogram_from_samples(
                         a_half
                     );
                 }
-                best = Hyp { bpm: half, score: s_half };
+                best = Hyp {
+                    bpm: half,
+                    score: s_half,
+                };
             }
         }
     }
@@ -667,7 +739,10 @@ pub fn multi_resolution_tempogram_from_samples(
                         a_dbl
                     );
                 }
-                best = Hyp { bpm: dbl, score: s_dbl };
+                best = Hyp {
+                    bpm: dbl,
+                    score: s_dbl,
+                };
             }
         }
     }
@@ -717,13 +792,22 @@ pub fn multi_resolution_tempogram_from_samples(
                         continue;
                     }
                     let align = beat_contrast_score(&novelty_512, sample_rate, 512, bpm);
-                    fams.push(Fam { bpm, support, align, label });
+                    fams.push(Fam {
+                        bpm,
+                        support,
+                        align,
+                        label,
+                    });
                 }
 
                 // Need at least 2 viable family candidates.
                 if fams.len() >= 2 {
                     // Check whether any non-T candidate has meaningful support.
-                    let best_support = fams.iter().map(|f| f.support).fold(0.0f32, f32::max).max(1e-6);
+                    let best_support = fams
+                        .iter()
+                        .map(|f| f.support)
+                        .fold(0.0f32, f32::max)
+                        .max(1e-6);
                     let max_alt_support = fams
                         .iter()
                         .filter(|f| (f.bpm - best.bpm).abs() > 0.75)
@@ -752,7 +836,9 @@ pub fn multi_resolution_tempogram_from_samples(
                             label: "T*",
                         };
 
-                        if (chosen.bpm - best.bpm).abs() > 0.75 && chosen.align >= current.align + 0.40 {
+                        if (chosen.bpm - best.bpm).abs() > 0.75
+                            && chosen.align >= current.align + 0.40
+                        {
                             if let Some(track_id) = cfg.debug_track_id {
                                 eprintln!(
                                     "DEBUG triplet-family (track_id={}): {:.2} -> {:.2} ({}, support {:.3}->{:.3}, align {:.3}->{:.3})",
@@ -766,7 +852,10 @@ pub fn multi_resolution_tempogram_from_samples(
                                     chosen.align
                                 );
                             }
-                            best = Hyp { bpm: chosen.bpm, score: chosen.support };
+                            best = Hyp {
+                                bpm: chosen.bpm,
+                                score: chosen.support,
+                            };
                         }
                     }
                 }
@@ -811,12 +900,12 @@ pub fn multi_resolution_tempogram_from_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_multi_resolution_analysis_basic() {
         // Create spectrogram with periodic pattern
         let mut spectrogram = vec![vec![0.1f32; 1024]; 500];
-        
+
         // Add periodic pattern
         let period = 43;
         for i in 0..spectrogram.len() {
@@ -826,9 +915,9 @@ mod tests {
                 }
             }
         }
-        
+
         let result = multi_resolution_analysis(&spectrogram, 44100, 512, 100.0, 140.0, 0.5);
-        
+
         // Should either succeed or fail gracefully
         match result {
             Ok(est) => {
@@ -840,7 +929,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_multi_resolution_analysis_empty() {
         let spectrogram = vec![];
@@ -848,4 +937,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

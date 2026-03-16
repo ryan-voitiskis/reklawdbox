@@ -28,4 +28,3 @@ pub fn refine_with_ml(
         "Phase 2: ML refinement not yet implemented (enable during ML integration)".to_string(),
     ))
 }
-

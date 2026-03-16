@@ -27,8 +27,8 @@
 //! # Ok::<(), stratum_dsp::AnalysisError>(())
 //! ```
 
-use crate::error::AnalysisError;
 use super::OnsetCandidate;
+use crate::error::AnalysisError;
 
 /// Onset detection results from all methods
 ///
@@ -103,7 +103,7 @@ pub struct OnsetConsensus {
 /// let candidates = vote_onsets(consensus, weights, 50, 44100)?;
 ///
 /// for candidate in candidates {
-///     println!("Onset at {:.3}s: confidence={:.2}, voted_by={}", 
+///     println!("Onset at {:.3}s: confidence={:.2}, voted_by={}",
 ///              candidate.time_seconds, candidate.confidence, candidate.voted_by);
 /// }
 /// # Ok::<(), stratum_dsp::AnalysisError>(())
@@ -116,27 +116,38 @@ pub fn vote_onsets(
 ) -> Result<Vec<OnsetCandidate>, AnalysisError> {
     // Validate inputs
     if sample_rate == 0 {
-        return Err(AnalysisError::InvalidInput("Sample rate must be > 0".to_string()));
+        return Err(AnalysisError::InvalidInput(
+            "Sample rate must be > 0".to_string(),
+        ));
     }
-    
+
     if tolerance_ms == 0 {
-        return Err(AnalysisError::InvalidInput("Tolerance must be > 0".to_string()));
+        return Err(AnalysisError::InvalidInput(
+            "Tolerance must be > 0".to_string(),
+        ));
     }
-    
+
     // Validate weights (should be non-negative, but don't require sum=1.0 for flexibility)
     for &w in &weights {
         if w < 0.0 {
-            return Err(AnalysisError::InvalidInput("Weights must be non-negative".to_string()));
+            return Err(AnalysisError::InvalidInput(
+                "Weights must be non-negative".to_string(),
+            ));
         }
     }
-    
-    log::debug!("Voting on onsets: energy_flux={}, spectral_flux={}, hfc={}, hpss={}, tolerance={}ms",
-                consensus.energy_flux.len(), consensus.spectral_flux.len(),
-                consensus.hfc.len(), consensus.hpss.len(), tolerance_ms);
-    
+
+    log::debug!(
+        "Voting on onsets: energy_flux={}, spectral_flux={}, hfc={}, hpss={}, tolerance={}ms",
+        consensus.energy_flux.len(),
+        consensus.spectral_flux.len(),
+        consensus.hfc.len(),
+        consensus.hpss.len(),
+        tolerance_ms
+    );
+
     // Convert tolerance from milliseconds to samples
     let tolerance_samples = (tolerance_ms as f32 / 1000.0 * sample_rate as f32) as usize;
-    
+
     // Step 1: Collect all onsets with their method indices
     // Method indices: 0=energy_flux, 1=spectral_flux, 2=hfc, 3=hpss
     #[derive(Debug, Clone)]
@@ -145,9 +156,9 @@ pub fn vote_onsets(
         method_idx: usize,
         weight: f32,
     }
-    
+
     let mut all_onsets = Vec::new();
-    
+
     // Add energy flux onsets
     for &sample in &consensus.energy_flux {
         all_onsets.push(OnsetWithMethod {
@@ -156,7 +167,7 @@ pub fn vote_onsets(
             weight: weights[0],
         });
     }
-    
+
     // Add spectral flux onsets
     for &sample in &consensus.spectral_flux {
         all_onsets.push(OnsetWithMethod {
@@ -165,7 +176,7 @@ pub fn vote_onsets(
             weight: weights[1],
         });
     }
-    
+
     // Add HFC onsets
     for &sample in &consensus.hfc {
         all_onsets.push(OnsetWithMethod {
@@ -174,7 +185,7 @@ pub fn vote_onsets(
             weight: weights[2],
         });
     }
-    
+
     // Add HPSS onsets
     for &sample in &consensus.hpss {
         all_onsets.push(OnsetWithMethod {
@@ -183,26 +194,28 @@ pub fn vote_onsets(
             weight: weights[3],
         });
     }
-    
+
     if all_onsets.is_empty() {
         return Ok(Vec::new());
     }
-    
+
     // Step 2: Sort all onsets by sample position
     all_onsets.sort_by_key(|o| o.sample);
-    
+
     // Step 3: Cluster onsets within tolerance windows
     // Use a simple greedy clustering algorithm
     // An onset is added to a cluster if it's within tolerance of ANY onset in that cluster
     let mut clusters: Vec<Vec<&OnsetWithMethod>> = Vec::new();
-    
+
     for onset in &all_onsets {
         // Try to add to existing cluster
         let mut added = false;
         for cluster in &mut clusters {
             // Check if this onset is within tolerance of any onset in the cluster
             for existing_onset in cluster.iter() {
-                if (onset.sample as i32 - existing_onset.sample as i32).abs() as usize <= tolerance_samples {
+                if (onset.sample as i32 - existing_onset.sample as i32).abs() as usize
+                    <= tolerance_samples
+                {
                     cluster.push(onset);
                     added = true;
                     break;
@@ -212,34 +225,32 @@ pub fn vote_onsets(
                 break;
             }
         }
-        
+
         // If not added to any cluster, create a new one
         if !added {
             clusters.push(vec![onset]);
         }
     }
-    
+
     // Step 4: For each cluster, compute confidence and create OnsetCandidate
     let mut candidates = Vec::with_capacity(clusters.len());
-    
+
     for cluster in &clusters {
         // Calculate cluster center (average of all onsets in cluster)
-        let cluster_center = cluster.iter()
-            .map(|o| o.sample)
-            .sum::<usize>() / cluster.len();
-        
+        let cluster_center = cluster.iter().map(|o| o.sample).sum::<usize>() / cluster.len();
+
         // Sum weights from methods that detected onsets in this cluster
         let mut total_weight = 0.0;
         let mut voted_by_methods = [false; 4]; // Track which methods voted
-        
+
         for onset in cluster {
             total_weight += onset.weight;
             voted_by_methods[onset.method_idx] = true;
         }
-        
+
         // Count number of unique methods that voted
         let voted_by = voted_by_methods.iter().filter(|&&v| v).count() as u32;
-        
+
         // Normalize confidence to [0, 1]
         // Maximum possible weight is sum of all weights
         let max_weight: f32 = weights.iter().sum();
@@ -248,10 +259,10 @@ pub fn vote_onsets(
         } else {
             0.0
         };
-        
+
         // Convert sample position to seconds
         let time_seconds = cluster_center as f32 / sample_rate as f32;
-        
+
         candidates.push(OnsetCandidate {
             time_samples: cluster_center,
             time_seconds,
@@ -259,22 +270,26 @@ pub fn vote_onsets(
             voted_by,
         });
     }
-    
+
     // Step 5: Sort by confidence (highest first)
     candidates.sort_by(|a, b| {
-        b.confidence.partial_cmp(&a.confidence)
+        b.confidence
+            .partial_cmp(&a.confidence)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    
-    log::debug!("Consensus voting produced {} onset candidates", candidates.len());
-    
+
+    log::debug!(
+        "Consensus voting produced {} onset candidates",
+        candidates.len()
+    );
+
     Ok(candidates)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_consensus_voting_basic() {
         // Simple test: all methods detect the same onset
@@ -284,16 +299,16 @@ mod tests {
             hfc: vec![1000],
             hpss: vec![1000],
         };
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].time_samples, 1000);
         assert_eq!(candidates[0].voted_by, 4);
         assert!((candidates[0].confidence - 1.0).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_consensus_voting_clustering() {
         // Test clustering: onsets within tolerance should be merged
@@ -303,17 +318,17 @@ mod tests {
             hfc: vec![980],
             hpss: vec![1020],
         };
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
         // 50ms tolerance at 44.1kHz = 2205 samples
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         // All should cluster into one
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].voted_by, 4);
         assert!((candidates[0].confidence - 1.0).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_consensus_voting_separate_onsets() {
         // Test: two separate onsets far apart
@@ -323,35 +338,35 @@ mod tests {
             hfc: vec![980, 50200],
             hpss: vec![1020, 49900],
         };
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         // Should have 2 clusters
         assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0].voted_by, 4);
         assert_eq!(candidates[1].voted_by, 4);
     }
-    
+
     #[test]
     fn test_consensus_voting_partial_agreement() {
         // Test: only some methods detect an onset
         let consensus = OnsetConsensus {
             energy_flux: vec![1000],
             spectral_flux: vec![1050],
-            hfc: vec![], // Doesn't detect
+            hfc: vec![],  // Doesn't detect
             hpss: vec![], // Doesn't detect
         };
-        
+
         let weights = [0.3, 0.3, 0.2, 0.2];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].voted_by, 2);
         // Confidence should be (0.3 + 0.3) / 1.0 = 0.6
         assert!((candidates[0].confidence - 0.6).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_consensus_voting_weighted() {
         // Test: different weights affect confidence
@@ -361,16 +376,16 @@ mod tests {
             hfc: vec![],
             hpss: vec![],
         };
-        
+
         let weights = [0.5, 0.2, 0.2, 0.1];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].voted_by, 1);
         // Confidence should be 0.5 / 1.0 = 0.5
         assert!((candidates[0].confidence - 0.5).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_consensus_voting_empty() {
         // Test: no onsets detected
@@ -380,13 +395,13 @@ mod tests {
             hfc: vec![],
             hpss: vec![],
         };
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         assert!(candidates.is_empty());
     }
-    
+
     #[test]
     fn test_consensus_voting_sorted_by_confidence() {
         // Test: results should be sorted by confidence (highest first)
@@ -397,27 +412,27 @@ mod tests {
             hpss: vec![1020, 19950],
             // Second: only one method
         };
-        
+
         // Add a third onset detected by 2 methods
         let mut consensus2 = consensus.clone();
         consensus2.energy_flux.push(50000);
         consensus2.spectral_flux.push(50500);
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
         let candidates = vote_onsets(consensus2, weights, 50, 44100).unwrap();
-        
+
         // Should have 3 candidates, sorted by confidence
         assert!(candidates.len() >= 2);
-        
+
         // First should have highest confidence (all 4 methods)
         assert_eq!(candidates[0].voted_by, 4);
-        
+
         // Confidence should be decreasing
         for i in 1..candidates.len() {
-            assert!(candidates[i].confidence <= candidates[i-1].confidence);
+            assert!(candidates[i].confidence <= candidates[i - 1].confidence);
         }
     }
-    
+
     #[test]
     fn test_consensus_voting_invalid_parameters() {
         let consensus = OnsetConsensus {
@@ -426,23 +441,23 @@ mod tests {
             hfc: vec![],
             hpss: vec![],
         };
-        
+
         let weights = [0.25, 0.25, 0.25, 0.25];
-        
+
         // Test zero sample rate
         let result = vote_onsets(consensus.clone(), weights, 50, 0);
         assert!(result.is_err());
-        
+
         // Test zero tolerance
         let result = vote_onsets(consensus.clone(), weights, 0, 44100);
         assert!(result.is_err());
-        
+
         // Test negative weights
         let negative_weights = [-0.1, 0.25, 0.25, 0.25];
         let result = vote_onsets(consensus, negative_weights, 50, 44100);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_consensus_voting_time_conversion() {
         // Test: verify time_seconds is calculated correctly
@@ -452,12 +467,11 @@ mod tests {
             hfc: vec![],
             hpss: vec![],
         };
-        
+
         let weights = [1.0, 0.0, 0.0, 0.0];
         let candidates = vote_onsets(consensus, weights, 50, 44100).unwrap();
-        
+
         assert_eq!(candidates.len(), 1);
         assert!((candidates[0].time_seconds - 1.0).abs() < 0.001);
     }
 }
-

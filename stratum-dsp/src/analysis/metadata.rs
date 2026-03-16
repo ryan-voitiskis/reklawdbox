@@ -7,13 +7,13 @@ use super::result::AnalysisFlag;
 pub struct AnalysisMetadata {
     /// Algorithm version
     pub algorithm_version: String,
-    
+
     /// Onset method consensus score
     pub onset_method_consensus: f32,
-    
+
     /// Methods used
     pub methods_used: Vec<String>,
-    
+
     /// Analysis flags
     pub flags: Vec<AnalysisFlag>,
 }
@@ -28,4 +28,3 @@ impl Default for AnalysisMetadata {
         }
     }
 }
-

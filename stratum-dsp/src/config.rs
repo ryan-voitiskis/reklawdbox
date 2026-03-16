@@ -1,7 +1,7 @@
 //! Configuration parameters for audio analysis
 
-use crate::preprocessing::normalization::NormalizationMethod;
 use crate::features::key::templates::TemplateSet;
+use crate::preprocessing::normalization::NormalizationMethod;
 
 /// Analysis configuration parameters
 #[derive(Debug, Clone)]
@@ -10,7 +10,7 @@ pub struct AnalysisConfig {
     /// Silence detection threshold in dB (default: -40.0)
     /// Frames with RMS below this threshold are considered silent
     pub min_amplitude_db: f32,
-    
+
     /// Normalization method to use (default: Peak)
     pub normalization: NormalizationMethod,
 
@@ -41,7 +41,7 @@ pub struct AnalysisConfig {
 
     /// HPSS median-filter margin (default: 10). Typical values: 5–20.
     pub hpss_margin: usize,
-    
+
     // BPM detection
     /// Force legacy BPM estimation (Phase 1B autocorrelation + comb filter) and skip tempogram.
     /// Default: false.
@@ -221,32 +221,32 @@ pub struct AnalysisConfig {
 
     /// Minimum BPM to consider (default: 60.0)
     pub min_bpm: f32,
-    
+
     /// Maximum BPM to consider (default: 180.0)
     pub max_bpm: f32,
-    
+
     /// BPM resolution for comb filterbank (default: 1.0)
     pub bpm_resolution: f32,
-    
+
     // STFT parameters
     /// Frame size for STFT (default: 2048)
     pub frame_size: usize,
-    
+
     /// Hop size for STFT (default: 512)
     pub hop_size: usize,
-    
+
     // Key detection
     /// Center frequency for chroma extraction (default: 440.0 Hz, A4)
     pub center_frequency: f32,
-    
+
     /// Enable soft chroma mapping (default: true)
     /// Soft mapping spreads frequency bins to neighboring semitones for robustness
     pub soft_chroma_mapping: bool,
-    
+
     /// Soft mapping standard deviation in semitones (default: 0.5)
     /// Lower values = sharper mapping, higher values = more spread
     pub soft_mapping_sigma: f32,
-    
+
     /// Chroma sharpening power (default: 1.0 = no sharpening, 1.5-2.0 recommended)
     /// Power > 1.0 emphasizes prominent semitones, improving key detection
     pub chroma_sharpening_power: f32,
@@ -584,7 +584,7 @@ pub struct AnalysisConfig {
     ///
     /// Default: 0.8.
     pub key_minor_leading_tone_bonus_weight: f32,
-    
+
     // ML refinement
     /// Enable ML refinement (requires ml feature)
     #[cfg(feature = "ml")]
@@ -660,7 +660,7 @@ impl Default for AnalysisConfig {
             legacy_bpm_conf_mul_preferred: 1.30,
             legacy_bpm_conf_mul_soft: 0.70,
             legacy_bpm_conf_mul_extreme: 0.01,
-            min_bpm: 40.0,  // Lowered from 60.0 to catch slower tracks (ballads, ambient, etc.)
+            min_bpm: 40.0, // Lowered from 60.0 to catch slower tracks (ballads, ambient, etc.)
             max_bpm: 240.0, // Raised from 180.0 to catch high-tempo tracks (drum & bass, etc.)
             bpm_resolution: 1.0,
             frame_size: 2048,
@@ -692,7 +692,7 @@ impl Default for AnalysisConfig {
             enable_key_beat_synchronous: false,
             enable_key_multi_scale: false,
             key_multi_scale_lengths: vec![120, 360, 720], // ~2s, 6s, 12s at typical frame rates
-            key_multi_scale_hop: 60, // ~1s
+            key_multi_scale_hop: 60,                      // ~1s
             key_multi_scale_min_clarity: 0.20,
             key_multi_scale_weights: vec![], // Equal weights by default
             key_template_set: TemplateSet::KrumhanslKessler,
@@ -701,7 +701,7 @@ impl Default for AnalysisConfig {
             key_ensemble_temperley_weight: 0.5,
             enable_key_median: false,
             key_median_segment_length_frames: 480, // ~4 seconds at typical frame rates
-            key_median_segment_hop_frames: 120, // ~1 second
+            key_median_segment_hop_frames: 120,    // ~1 second
             key_median_min_segments: 3,
             // Default: off. Tuning estimation can be unstable on real-world mixes without a more
             // peak/partial-aware frontend (HPCP/CQT). Keep available for experimentation.
@@ -742,4 +742,3 @@ impl Default for AnalysisConfig {
         }
     }
 }
-

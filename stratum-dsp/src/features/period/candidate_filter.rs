@@ -55,26 +55,26 @@ fn boost_consensus_candidates(
 ) {
     for estimate in estimates.iter_mut() {
         // Check if this estimate is close to any autocorr top 5 candidate (direct match)
-        let autocorr_direct_match = autocorr_top5.iter().any(|a| {
-            (a.bpm - estimate.bpm).abs() < CONSENSUS_TOLERANCE
-        });
-        
+        let autocorr_direct_match = autocorr_top5
+            .iter()
+            .any(|a| (a.bpm - estimate.bpm).abs() < CONSENSUS_TOLERANCE);
+
         // Check if this estimate is close to any comb top 5 candidate (direct match)
-        let comb_direct_match = comb_top5.iter().any(|c| {
-            (c.bpm - estimate.bpm).abs() < CONSENSUS_TOLERANCE
-        });
-        
+        let comb_direct_match = comb_top5
+            .iter()
+            .any(|c| (c.bpm - estimate.bpm).abs() < CONSENSUS_TOLERANCE);
+
         // Check for harmonic relationships (2x, 0.5x, 1.5x, 0.75x)
         let autocorr_harmonic_match = autocorr_top5.iter().any(|a| {
             let ratio = (a.bpm / estimate.bpm).max(estimate.bpm / a.bpm);
             (ratio - 2.0).abs() < 0.1 || (ratio - 1.5).abs() < 0.1 || (ratio - 0.75).abs() < 0.1
         });
-        
+
         let comb_harmonic_match = comb_top5.iter().any(|c| {
             let ratio = (c.bpm / estimate.bpm).max(estimate.bpm / c.bpm);
             (ratio - 2.0).abs() < 0.1 || (ratio - 1.5).abs() < 0.1 || (ratio - 0.75).abs() < 0.1
         });
-        
+
         // If both methods agree (direct match), strong boost
         if autocorr_direct_match && comb_direct_match {
             estimate.confidence *= 1.5; // 50% boost for direct consensus
@@ -86,7 +86,9 @@ fn boost_consensus_candidates(
             );
         }
         // If one method has direct match and other has harmonic, moderate boost
-        else if (autocorr_direct_match && comb_harmonic_match) || (comb_direct_match && autocorr_harmonic_match) {
+        else if (autocorr_direct_match && comb_harmonic_match)
+            || (comb_direct_match && autocorr_harmonic_match)
+        {
             estimate.confidence *= 1.3; // 30% boost for harmonic consensus
             log::debug!(
                 "Consensus boost (harmonic): {:.2} BPM (confidence: {:.3} → {:.3})",
@@ -167,7 +169,7 @@ pub fn merge_bpm_candidates(
     // This prevents correcting to subharmonics that comb filter found by accident
     let mut autocorr_corrected = autocorr;
     let comb_corrected = comb;
-    
+
     // Only consider comb filter top 3 for octave correction (most confident)
     let comb_top3: Vec<&BpmCandidate> = comb_corrected.iter().take(3).collect();
 
@@ -182,9 +184,9 @@ pub fn merge_bpm_candidates(
             if (ratio_to_target - 1.0).abs() < (octave_tolerance_ratio - 1.0) {
                 // Only correct if comb candidate is in reasonable range OR autocorr is way out
                 // This prevents correcting 161 BPM → 40 BPM when 40 is a subharmonic
-                let should_correct = (comb_candidate.bpm >= 60.0 && comb_candidate.bpm <= 180.0) ||
-                                     (autocorr_candidate.bpm > 200.0 || autocorr_candidate.bpm < 30.0);
-                
+                let should_correct = (comb_candidate.bpm >= 60.0 && comb_candidate.bpm <= 180.0)
+                    || (autocorr_candidate.bpm > 200.0 || autocorr_candidate.bpm < 30.0);
+
                 if should_correct {
                     log::debug!(
                         "Octave error detected (2x): autocorr={:.2}, comb={:.2}, ratio={:.3}, correcting to {:.2}",
@@ -245,12 +247,15 @@ pub fn merge_bpm_candidates(
         .take(MAX_CANDIDATES_PER_METHOD)
         .cloned()
         .collect();
-    
+
     // Add any reasonable-range candidates that weren't in top 10
     let mut added_reasonable = 0;
     for candidate in &autocorr_corrected {
         if candidate.bpm >= 60.0 && candidate.bpm <= 180.0 {
-            if !autocorr_limited.iter().any(|c| (c.bpm - candidate.bpm).abs() < 1.0) {
+            if !autocorr_limited
+                .iter()
+                .any(|c| (c.bpm - candidate.bpm).abs() < 1.0)
+            {
                 autocorr_limited.push(candidate.clone());
                 added_reasonable += 1;
             }
@@ -262,7 +267,7 @@ pub fn merge_bpm_candidates(
             added_reasonable
         );
     }
-    
+
     let comb_limited: Vec<BpmCandidate> = comb_corrected
         .into_iter()
         .take(MAX_CANDIDATES_PER_METHOD)
@@ -341,21 +346,16 @@ pub fn merge_bpm_candidates(
         .collect();
 
     // Step 6: Boost candidates that both methods agree on (consensus boost)
-    let autocorr_top5: Vec<BpmCandidate> = autocorr_limited
-        .iter()
-        .take(5)
-        .cloned()
-        .collect();
-    let comb_top5: Vec<BpmCandidate> = comb_limited
-        .iter()
-        .take(5)
-        .cloned()
-        .collect();
-    
+    let autocorr_top5: Vec<BpmCandidate> = autocorr_limited.iter().take(5).cloned().collect();
+    let comb_top5: Vec<BpmCandidate> = comb_limited.iter().take(5).cloned().collect();
+
     boost_consensus_candidates(&autocorr_top5, &comb_top5, &mut estimates);
 
     // Also check if reasonable candidates exist but aren't in top 5
-    let has_reasonable_in_top5 = estimates.iter().take(5).any(|e| e.bpm >= 60.0 && e.bpm <= 180.0);
+    let has_reasonable_in_top5 = estimates
+        .iter()
+        .take(5)
+        .any(|e| e.bpm >= 60.0 && e.bpm <= 180.0);
     log::debug!(
         "Safety check: {} reasonable candidates in top 5, {} total reasonable candidates in merged list",
         estimates.iter().take(5).filter(|e| e.bpm >= 60.0 && e.bpm <= 180.0).count(),
@@ -363,8 +363,10 @@ pub fn merge_bpm_candidates(
     );
     if !has_reasonable_in_top5 {
         // Find the best reasonable-range candidate (highest confidence in 60-180 range)
-        if let Some(best_reasonable_idx) = estimates.iter()
-            .position(|e| e.bpm >= 60.0 && e.bpm <= 180.0) {
+        if let Some(best_reasonable_idx) = estimates
+            .iter()
+            .position(|e| e.bpm >= 60.0 && e.bpm <= 180.0)
+        {
             let best_reasonable = &mut estimates[best_reasonable_idx];
             log::debug!(
                 "Safety boost: No reasonable-range candidate in top 5, boosting {:.2} BPM (was at position {}, confidence: {:.3})",
@@ -384,18 +386,26 @@ pub fn merge_bpm_candidates(
         // Prefer reasonable range (60-180 BPM) when confidence is close
         let a_in_range = a.bpm >= 60.0 && a.bpm <= 180.0;
         let b_in_range = b.bpm >= 60.0 && b.bpm <= 180.0;
-        
+
         // Strongly prefer reasonable range (60-180) when confidence is within 30%
         // This prevents subharmonics and very high BPM from winning
         // Also penalize out-of-range candidates by reducing their effective confidence
         // Use aggressive penalty: 0.5x for out-of-range (halves their confidence)
-        let a_effective_conf = if !a_in_range { a.confidence * 0.5 } else { a.confidence };
-        let b_effective_conf = if !b_in_range { b.confidence * 0.5 } else { b.confidence };
-        
+        let a_effective_conf = if !a_in_range {
+            a.confidence * 0.5
+        } else {
+            a.confidence
+        };
+        let b_effective_conf = if !b_in_range {
+            b.confidence * 0.5
+        } else {
+            b.confidence
+        };
+
         let effective_conf_cmp = b_effective_conf
             .partial_cmp(&a_effective_conf)
             .unwrap_or(std::cmp::Ordering::Equal);
-        
+
         // If effective confidence is close (within 50%), strongly prefer in-range
         // This ensures reasonable candidates win when available, even if slightly lower confidence
         if (a_effective_conf - b_effective_conf).abs() < 0.5 {
@@ -405,14 +415,16 @@ pub fn merge_bpm_candidates(
                 _ => {} // Both in or both out, use effective confidence
             }
         }
-        
+
         // Use effective confidence for primary sort
         if effective_conf_cmp != std::cmp::Ordering::Equal {
             return effective_conf_cmp;
         }
-        
+
         // Secondary sort: method agreement (when effective confidence is within 10%)
-        if effective_conf_cmp == std::cmp::Ordering::Equal || (a_effective_conf - b_effective_conf).abs() < 0.1 {
+        if effective_conf_cmp == std::cmp::Ordering::Equal
+            || (a_effective_conf - b_effective_conf).abs() < 0.1
+        {
             b.method_agreement.cmp(&a.method_agreement)
         } else {
             effective_conf_cmp
@@ -437,18 +449,14 @@ mod tests {
     #[test]
     fn test_merge_candidates_agreement() {
         // Both methods agree on 120 BPM
-        let autocorr = vec![
-            BpmCandidate {
-                bpm: 120.0,
-                confidence: 0.9,
-            },
-        ];
-        let comb = vec![
-            BpmCandidate {
-                bpm: 120.0,
-                confidence: 0.85,
-            },
-        ];
+        let autocorr = vec![BpmCandidate {
+            bpm: 120.0,
+            confidence: 0.9,
+        }];
+        let comb = vec![BpmCandidate {
+            bpm: 120.0,
+            confidence: 0.85,
+        }];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
 
@@ -462,18 +470,14 @@ mod tests {
     #[test]
     fn test_merge_candidates_octave_error() {
         // Autocorr finds 2x (octave error), comb finds correct
-        let autocorr = vec![
-            BpmCandidate {
-                bpm: 240.0, // 2x error
-                confidence: 0.8,
-            },
-        ];
-        let comb = vec![
-            BpmCandidate {
-                bpm: 120.0, // Correct
-                confidence: 0.9,
-            },
-        ];
+        let autocorr = vec![BpmCandidate {
+            bpm: 240.0, // 2x error
+            confidence: 0.8,
+        }];
+        let comb = vec![BpmCandidate {
+            bpm: 120.0, // Correct
+            confidence: 0.9,
+        }];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
 
@@ -486,18 +490,14 @@ mod tests {
     #[test]
     fn test_merge_candidates_octave_error_half() {
         // Autocorr finds 0.5x (octave error), comb finds correct
-        let autocorr = vec![
-            BpmCandidate {
-                bpm: 60.0, // 0.5x error
-                confidence: 0.8,
-            },
-        ];
-        let comb = vec![
-            BpmCandidate {
-                bpm: 120.0, // Correct
-                confidence: 0.9,
-            },
-        ];
+        let autocorr = vec![BpmCandidate {
+            bpm: 60.0, // 0.5x error
+            confidence: 0.8,
+        }];
+        let comb = vec![BpmCandidate {
+            bpm: 120.0, // Correct
+            confidence: 0.9,
+        }];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
 
@@ -520,12 +520,10 @@ mod tests {
                 confidence: 0.7,
             },
         ];
-        let comb = vec![
-            BpmCandidate {
-                bpm: 120.5, // Within ±2 BPM
-                confidence: 0.85,
-            },
-        ];
+        let comb = vec![BpmCandidate {
+            bpm: 120.5, // Within ±2 BPM
+            confidence: 0.85,
+        }];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
 
@@ -546,12 +544,10 @@ mod tests {
     #[test]
     fn test_merge_candidates_single_method() {
         // Only autocorr has candidates
-        let autocorr = vec![
-            BpmCandidate {
-                bpm: 120.0,
-                confidence: 0.8,
-            },
-        ];
+        let autocorr = vec![BpmCandidate {
+            bpm: 120.0,
+            confidence: 0.8,
+        }];
         let comb = vec![];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
@@ -575,12 +571,10 @@ mod tests {
                 confidence: 0.7,
             },
         ];
-        let comb = vec![
-            BpmCandidate {
-                bpm: 120.0,
-                confidence: 0.85,
-            },
-        ];
+        let comb = vec![BpmCandidate {
+            bpm: 120.0,
+            confidence: 0.85,
+        }];
 
         let merged = merge_bpm_candidates(autocorr, comb, 50.0).unwrap();
 
@@ -593,4 +587,3 @@ mod tests {
         }
     }
 }
-

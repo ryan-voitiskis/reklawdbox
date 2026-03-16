@@ -23,14 +23,13 @@ pub mod threshold;
 pub struct OnsetCandidate {
     /// Onset time in samples
     pub time_samples: usize,
-    
+
     /// Onset time in seconds
     pub time_seconds: f32,
-    
+
     /// Confidence score (0.0-1.0)
     pub confidence: f32,
-    
+
     /// Number of methods that detected this onset
     pub voted_by: u32,
 }
-

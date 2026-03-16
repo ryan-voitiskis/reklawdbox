@@ -150,6 +150,5 @@ pub(super) fn handle_backfill_labels(
 
     let json =
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)])
-    )
+    Ok(CallToolResult::success(vec![Content::text(json)]))
 }

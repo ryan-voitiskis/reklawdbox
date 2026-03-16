@@ -164,9 +164,9 @@ pub fn estimate_bpm_from_comb_filter(
         let adaptive_tolerance = (DEFAULT_TOLERANCE * (REFERENCE_BPM / bpm))
             .max(MIN_TOLERANCE)
             .min(MAX_TOLERANCE);
-        
+
         let score = score_bpm_candidate(&sorted_onsets, sample_rate, bpm, adaptive_tolerance)?;
-        
+
         if score > max_score {
             max_score = score;
         }
@@ -352,7 +352,7 @@ fn score_bpm_candidate(
 
     // Compute expected beat interval in samples
     let period_samples = (60.0 * sample_rate as f32) / bpm;
-    
+
     if period_samples < 1.0 {
         return Err(crate::error::AnalysisError::NumericalError(format!(
             "Invalid period: {:.2} samples for BPM {:.2}",
@@ -365,19 +365,17 @@ fn score_bpm_candidate(
     // Generate expected beat times up to the last onset
     let last_onset = onsets[onsets.len() - 1] as f32;
     let num_beats = (last_onset / period_samples).ceil() as usize + 1;
-    
+
     // Count aligned onsets
     let mut aligned_count = 0usize;
 
     for beat_idx in 0..num_beats {
         let expected_beat = (beat_idx as f32) * period_samples;
-        
+
         // Find nearest onset to this expected beat
         let nearest_onset = onsets
             .iter()
-            .min_by_key(|&&onset| {
-                ((onset as f32) - expected_beat).abs() as usize
-            })
+            .min_by_key(|&&onset| ((onset as f32) - expected_beat).abs() as usize)
             .copied();
 
         if let Some(onset) = nearest_onset {
@@ -418,18 +416,12 @@ mod tests {
             onsets.push(sample);
         }
 
-        let candidates = estimate_bpm_from_comb_filter(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-            1.0,
-        )
-        .unwrap();
+        let candidates =
+            estimate_bpm_from_comb_filter(&onsets, sample_rate, hop_size, 60.0, 180.0, 1.0)
+                .unwrap();
 
         assert!(!candidates.is_empty(), "Should find at least one candidate");
-        
+
         // Best candidate should be close to 120 BPM
         let best = &candidates[0];
         assert!(
@@ -457,15 +449,15 @@ mod tests {
     #[test]
     fn test_comb_filter_invalid_params() {
         let onsets = vec![1000, 2000];
-        
+
         // Invalid sample rate
         let result = estimate_bpm_from_comb_filter(&onsets, 0, 512, 60.0, 180.0, 1.0);
         assert!(result.is_err());
-        
+
         // Invalid BPM range
         let result = estimate_bpm_from_comb_filter(&onsets, 44100, 512, 180.0, 60.0, 1.0);
         assert!(result.is_err());
-        
+
         // Invalid resolution
         let result = estimate_bpm_from_comb_filter(&onsets, 44100, 512, 60.0, 180.0, 0.0);
         assert!(result.is_err());
@@ -484,15 +476,9 @@ mod tests {
             onsets.push(sample);
         }
 
-        let candidates = estimate_bpm_from_comb_filter(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-            1.0,
-        )
-        .unwrap();
+        let candidates =
+            estimate_bpm_from_comb_filter(&onsets, sample_rate, hop_size, 60.0, 180.0, 1.0)
+                .unwrap();
 
         assert!(!candidates.is_empty());
         let best = &candidates[0];
@@ -507,20 +493,28 @@ mod tests {
     fn test_score_bpm_candidate() {
         let sample_rate = 44100;
         let bpm = 120.0;
-        
+
         // Perfect alignment: onsets at exact beat intervals
         let period_samples = (60.0 * sample_rate as f32) / bpm;
         let perfect_onsets: Vec<usize> = (0..4)
             .map(|beat| (beat as f32 * period_samples).round() as usize)
             .collect();
-        
+
         let score = score_bpm_candidate(&perfect_onsets, sample_rate, bpm, 0.1).unwrap();
-        assert!(score > 0.8, "Perfect alignment should score high, got {:.3}", score);
-        
+        assert!(
+            score > 0.8,
+            "Perfect alignment should score high, got {:.3}",
+            score
+        );
+
         // Random onsets should score low
         let random_onsets = vec![1000, 5000, 12000, 25000];
         let score = score_bpm_candidate(&random_onsets, sample_rate, bpm, 0.1).unwrap();
-        assert!(score < 0.5, "Random onsets should score low, got {:.3}", score);
+        assert!(
+            score < 0.5,
+            "Random onsets should score low, got {:.3}",
+            score
+        );
     }
 
     #[test]
@@ -537,25 +531,13 @@ mod tests {
         }
 
         // Test with different resolutions
-        let candidates_1 = estimate_bpm_from_comb_filter(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-            1.0,
-        )
-        .unwrap();
+        let candidates_1 =
+            estimate_bpm_from_comb_filter(&onsets, sample_rate, hop_size, 60.0, 180.0, 1.0)
+                .unwrap();
 
-        let candidates_05 = estimate_bpm_from_comb_filter(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-            0.5,
-        )
-        .unwrap();
+        let candidates_05 =
+            estimate_bpm_from_comb_filter(&onsets, sample_rate, hop_size, 60.0, 180.0, 0.5)
+                .unwrap();
 
         // Higher resolution should find more candidates
         assert!(candidates_05.len() >= candidates_1.len());
@@ -585,7 +567,7 @@ mod tests {
         .unwrap();
 
         assert!(!candidates.is_empty(), "Should find at least one candidate");
-        
+
         // Best candidate should be close to 120 BPM
         let best = &candidates[0];
         assert!(
@@ -617,15 +599,8 @@ mod tests {
             onsets.push(sample);
         }
 
-        let candidates = coarse_to_fine_search(
-            &onsets,
-            sample_rate,
-            hop_size,
-            60.0,
-            180.0,
-            5.0,
-        )
-        .unwrap();
+        let candidates =
+            coarse_to_fine_search(&onsets, sample_rate, hop_size, 60.0, 180.0, 5.0).unwrap();
 
         assert!(!candidates.is_empty());
         let best = &candidates[0];
@@ -636,4 +611,3 @@ mod tests {
         );
     }
 }
-

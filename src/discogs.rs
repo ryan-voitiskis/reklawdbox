@@ -5,8 +5,7 @@ use std::fmt;
 pub const BROKER_URL_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_URL";
 pub const BROKER_TOKEN_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_TOKEN";
 
-pub const DEFAULT_BROKER_URL: &str =
-    "https://reklawdbox-discogs-broker.ryanvoitiskis.workers.dev";
+pub const DEFAULT_BROKER_URL: &str = "https://reklawdbox-discogs-broker.ryanvoitiskis.workers.dev";
 
 pub(crate) const DEFAULT_BROKER_TOKEN: &str =
     "7d5596122d56ba256cb40ed9b1a6fb0724e45eb9b17399c687fc3cd649ce67ef";

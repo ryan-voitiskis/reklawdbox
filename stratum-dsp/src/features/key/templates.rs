@@ -26,7 +26,7 @@ pub enum TemplateSet {
 pub struct KeyTemplates {
     /// Major key templates (12 keys: C, C#, D, ..., B)
     pub major: [Vec<f32>; 12],
-    
+
     /// Minor key templates (12 keys: C, C#, D, ..., B)
     pub minor: [Vec<f32>; 12],
 }
@@ -75,7 +75,7 @@ impl KeyTemplates {
         let c_minor = vec![
             6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
         ];
-        
+
         // Generate all 12 major keys by rotating C major
         let mut major: [Vec<f32>; 12] = [
             vec![0.0; 12],
@@ -91,7 +91,7 @@ impl KeyTemplates {
             vec![0.0; 12],
             vec![0.0; 12],
         ];
-        
+
         // Generate all 12 minor keys by rotating A minor
         let mut minor: [Vec<f32>; 12] = [
             vec![0.0; 12],
@@ -107,7 +107,7 @@ impl KeyTemplates {
             vec![0.0; 12],
             vec![0.0; 12],
         ];
-        
+
         // Rotate templates for all 12 keys
         for key_idx in 0..12 {
             // Major keys: rotate C major template
@@ -115,7 +115,7 @@ impl KeyTemplates {
             for semitone_idx in 0..12 {
                 major[key_idx][semitone_idx] = c_major[(semitone_idx + 12 - key_idx) % 12];
             }
-            
+
             // Minor keys: rotate C-minor base profile (tonic at index 0) the same way we rotate major.
             for semitone_idx in 0..12 {
                 let source_idx = (semitone_idx + 12 - key_idx) % 12;
@@ -137,7 +137,7 @@ impl KeyTemplates {
             l2_normalize(&mut major[k]);
             l2_normalize(&mut minor[k]);
         }
-        
+
         Self { major, minor }
     }
 
@@ -152,14 +152,10 @@ impl KeyTemplates {
         //
         // These values are commonly cited in MIR literature. They are derived from
         // corpus analysis rather than listening experiments.
-        let c_major = vec![
-            5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0,
-        ];
+        let c_major = vec![5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0];
 
-        let c_minor = vec![
-            5.0, 2.0, 3.5, 5.0, 2.0, 3.5, 2.0, 4.5, 3.5, 2.0, 4.0, 3.5,
-        ];
-        
+        let c_minor = vec![5.0, 2.0, 3.5, 5.0, 2.0, 3.5, 2.0, 4.5, 3.5, 2.0, 4.0, 3.5];
+
         // Generate all 12 major keys by rotating C major
         let mut major: [Vec<f32>; 12] = [
             vec![0.0; 12],
@@ -175,7 +171,7 @@ impl KeyTemplates {
             vec![0.0; 12],
             vec![0.0; 12],
         ];
-        
+
         // Generate all 12 minor keys by rotating C minor
         let mut minor: [Vec<f32>; 12] = [
             vec![0.0; 12],
@@ -191,14 +187,14 @@ impl KeyTemplates {
             vec![0.0; 12],
             vec![0.0; 12],
         ];
-        
+
         // Rotate templates for all 12 keys
         for key_idx in 0..12 {
             // Major keys: rotate C major template
             for semitone_idx in 0..12 {
                 major[key_idx][semitone_idx] = c_major[(semitone_idx + 12 - key_idx) % 12];
             }
-            
+
             // Minor keys: rotate C minor template
             for semitone_idx in 0..12 {
                 let source_idx = (semitone_idx + 12 - key_idx) % 12;
@@ -220,10 +216,10 @@ impl KeyTemplates {
             l2_normalize(&mut major[k]);
             l2_normalize(&mut minor[k]);
         }
-        
+
         Self { major, minor }
     }
-    
+
     /// Get template for a specific key
     ///
     /// # Arguments
@@ -240,7 +236,7 @@ impl KeyTemplates {
             &self.minor[(key_idx - 12) as usize]
         }
     }
-    
+
     /// Get template for major key
     ///
     /// # Arguments
@@ -253,7 +249,7 @@ impl KeyTemplates {
     pub fn get_major_template(&self, key_idx: u32) -> &[f32] {
         &self.major[key_idx as usize % 12]
     }
-    
+
     /// Get template for minor key
     ///
     /// # Arguments
@@ -277,23 +273,23 @@ impl Default for KeyTemplates {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_key_templates_creation() {
         let templates = KeyTemplates::new();
-        
+
         // Check that all templates have 12 elements
         for i in 0..12 {
             assert_eq!(templates.major[i].len(), 12);
             assert_eq!(templates.minor[i].len(), 12);
         }
     }
-    
+
     #[test]
     fn test_c_major_template() {
         let templates = KeyTemplates::new();
         let c_major = templates.get_major_template(0);
-        
+
         // C major should strongly emphasize C, E, G (tonic, major third, perfect fifth).
         // With canonical K-K profiles (L2-normalized), absolute values are not tiny, so we test *relative* structure.
         let tonic = c_major[0];
@@ -317,42 +313,42 @@ mod tests {
         assert!(third > chromatic_avg * 1.1);
         assert!(fifth > chromatic_avg * 1.2);
     }
-    
+
     #[test]
     fn test_a_minor_template() {
         let templates = KeyTemplates::new();
         let a_minor = templates.get_minor_template(9); // A is index 9
-        
+
         // A minor should have high values for A, C, E (tonic, minor third, perfect fifth)
         assert!(a_minor[9] > 0.1); // A (tonic)
         assert!(a_minor[0] > 0.1); // C (minor third)
         assert!(a_minor[4] > 0.1); // E (perfect fifth)
     }
-    
+
     #[test]
     fn test_get_template() {
         let templates = KeyTemplates::new();
-        
+
         // Test major keys (0-11)
         let c_major = templates.get_template(0);
         assert_eq!(c_major.len(), 12);
-        
+
         // Test minor keys (12-23)
         let a_minor = templates.get_template(21); // A minor is 12 + 9 = 21
         assert_eq!(a_minor.len(), 12);
     }
-    
+
     #[test]
     fn test_template_rotation() {
         let templates = KeyTemplates::new();
-        
+
         // C major and D major should be related by rotation
         let _c_major = templates.get_major_template(0);
         let d_major = templates.get_major_template(2); // D is 2 semitones above C
-        
+
         // D major should have high value at index 2 (D)
         assert!(d_major[2] > 0.1);
-        
+
         // The pattern should be rotated
         // C major's tonic (index 0) should correspond to D major's subdominant (index 10)
         // This is a simplified check - the full relationship is more complex
