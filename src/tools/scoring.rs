@@ -630,12 +630,20 @@ pub(super) fn build_track_profile(
         serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok()
     });
 
-    let bpm = stratum_json
-        .as_ref()
-        .and_then(|v| v.get("bpm"))
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(track.bpm)
-        .max(0.0);
+    // Prefer Rekordbox BPM — it's the value the DJ sees and can manually correct.
+    // Fall back to stratum-dsp's estimate for tracks Rekordbox hasn't analyzed.
+    // (Key uses the opposite strategy: stratum preferred, Rekordbox fallback.)
+    const BPM_PLAUSIBLE_MIN: f64 = 30.0;
+    let bpm = if track.bpm >= BPM_PLAUSIBLE_MIN {
+        track.bpm
+    } else {
+        stratum_json
+            .as_ref()
+            .and_then(|v| v.get("bpm"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0)
+            .max(0.0)
+    };
 
     let camelot_key = stratum_json
         .as_ref()
@@ -962,7 +970,7 @@ pub(super) fn score_key_axis(from: Option<CamelotKey>, to: Option<CamelotKey>) -
 }
 
 pub(super) fn score_bpm_axis(from_bpm: f64, to_bpm: f64) -> AxisScore {
-    if from_bpm <= 0.0 {
+    if from_bpm <= 0.0 || to_bpm <= 0.0 {
         return AxisScore {
             value: 0.5,
             label: "Unknown BPM".to_string(),

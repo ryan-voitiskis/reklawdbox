@@ -60,7 +60,7 @@ score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
 | 6-9%    | ~0.3  | Creative transition needed |
 | ≥9%     | <0.2  | Jarring                   |
 
-reklawdbox uses stratum-dsp analyzed BPM when available, falling back to Rekordbox metadata BPM.
+BPM is taken from Rekordbox metadata — it's the value the DJ sees, works with, and can manually correct. stratum-dsp's estimate is used as a fallback only when Rekordbox BPM is zero (unanalyzed tracks).
 
 ---
 
@@ -208,10 +208,10 @@ These ranges are guidelines. A 0.65 score with a perfect key match and a genre c
 
 The scoring system degrades gracefully based on available data:
 
-| Data available          | Axes used                                  |
-| ----------------------- | ------------------------------------------ |
-| Rekordbox metadata only | Key, BPM, genre                            |
-| + stratum-dsp analysis  | Key, BPM (improved), energy (proxy), genre |
-| + Essentia analysis     | All six axes                               |
+| Data available          | Axes used                                                         |
+| ----------------------- | ----------------------------------------------------------------- |
+| Rekordbox metadata only | Key, BPM, energy (proxy), genre                                   |
+| + stratum-dsp analysis  | Key (improved), BPM (fallback for unanalyzed), energy (proxy), genre |
+| + Essentia analysis     | All six axes                                                      |
 
 Run `analyze_audio_batch` on your tracks before building sets for the best scoring accuracy. Without Essentia, brightness and rhythm are excluded entirely, and energy falls back to the BPM-based proxy.

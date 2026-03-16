@@ -85,7 +85,7 @@ Two backends, cached per track in internal SQLite.
 
 ### stratum-dsp (always available)
 
-Rust library embedded in the binary. Provides BPM detection and key detection (Camelot notation). No setup required.
+Rust library embedded in the binary. Provides key detection (Camelot notation) and BPM detection. Key is preferred over Rekordbox; BPM is a fallback only (Rekordbox BPM is preferred because it's the value the DJ sees and can manually correct). No setup required.
 
 ### Essentia (optional)
 
