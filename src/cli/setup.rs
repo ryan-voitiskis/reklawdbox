@@ -60,8 +60,7 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
     // Create parent directories
     if let Some(parent) = venv_dir.parent() {
         let display = parent.display();
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {display}: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {display}: {e}"))?;
     }
 
     // Create venv (--clear ensures a fresh start if a broken venv exists)
