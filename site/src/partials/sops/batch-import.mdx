@@ -332,7 +332,9 @@ curl -sL -o "/path/to/cover_Artist - Title.jpg" "BANDCAMP_COVER_URL"
 embed_cover_art(image_path="/path/to/cover_Artist - Title.jpg", targets=["/path/to/Artist - Title.wav"])
 ```
 
-Clean up the downloaded image after embedding. If no Bandcamp page is available, try Discogs `cover_image`. Note any tracks without cover art in the report.
+**WAV files:** Keep the cover image file alongside the audio — Rekordbox cannot import cover art from WAV tags, so the user needs the image colocated for manual import. For other formats (FLAC, MP3, AIFF), clean up the downloaded image after embedding.
+
+If no Bandcamp page is available, try Discogs `cover_image`. Note any tracks without cover art in the report.
 
 ### Step 4: Move loose tracks
 
