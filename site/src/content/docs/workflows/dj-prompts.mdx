@@ -75,7 +75,7 @@ Analyze my collection for gaps and imbalances. I want to understand:
 3. Identify specific gaps:
    - Keys with < 3 tracks (harmonic dead ends)
    - BPM ranges with < 5 tracks (can't sustain a set there)
-   - Labels you buy from heavily that have releases you're missing
+   - Labels you buy from heavily — use `lookup_discogs` to check for recent releases you might be missing
 4. Present findings as actionable insights, not just charts
 
 ---
@@ -108,14 +108,14 @@ Use my collection to understand my taste and suggest directions.
 5. Suggest specific releases or tracks to check out, with reasoning
 
 <Aside type="tip">
-  This works well as a conversation — tell the agent what you found, what you liked, what missed, and it refines its suggestions.
+  This works well as a conversation — tell the agent what you found, what you liked, what you passed on, and it refines its suggestions.
 </Aside>
 
 ---
 
 ## Post-Gig Debrief
 
-Analyze what you actually played and learn from it. Requires [session history tools](/concepts/architecture/) (see issue #24).
+Analyze what you actually played and learn from it.
 
 **Paste into your agent:**
 
@@ -168,9 +168,9 @@ Plan a harmonic journey for my next set.
 1. Map the user's available tracks by Camelot position using `search_tracks`
 2. Identify the harmonic landscape — where are the dense clusters? Where are the gaps?
 3. Plan a key sequence based on the requested style:
-   - **Rising tension:** move clockwise around the wheel (6A → 7A → 8A → ...), each step adds energy
+   - **Rising tension:** move clockwise around the wheel (6A → 7A → 8A → ...), each step creates harmonic lift
    - **Major-minor shift:** move between inner and outer ring (6A → 6B → 7B → 7A) for emotional contrast
-   - **Full rotation:** visit all 12 positions and return to start — a complete harmonic journey
+   - **Full rotation:** traverse the full wheel (12 positions on the outer or inner ring) and return to start
    - **Stay close:** never move more than 1 step, maximize harmonic smoothness
 4. For each position in the journey, suggest specific tracks that fit, scored by `query_transition_candidates`
 5. Flag problems:
