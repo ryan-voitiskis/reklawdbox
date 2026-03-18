@@ -357,8 +357,24 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let discogs_secs = discogs_pending.len() as u64 / enrich_concurrency_est;
     // stratum-dsp ≈ 18s/track, essentia subprocess adds ≈ 30s/track
     let secs_per_analysis: u64 = if essentia_python.is_some() { 48 } else { 18 };
-    let analysis_secs =
-        (analysis_pending.len() as u64 * secs_per_analysis) / analysis_concurrency.max(1) as u64;
+    // Effective concurrency is min(CPU semaphore, memory semaphore). The memory
+    // semaphore is often tighter — e.g. a 6-min track costs ~3.8 GB, so a 7.2 GB
+    // background budget only fits ~1-2 concurrent despite 4+ CPU slots.
+    let effective_analysis_concurrency = if analysis_pending.is_empty() {
+        analysis_concurrency
+    } else {
+        let avg_cost_mb = analysis_pending
+            .iter()
+            .map(|(track, _, _)| {
+                super::track_memory_cost_mb(track.length).min(analysis_budget_mb) as u64
+            })
+            .sum::<u64>()
+            / analysis_pending.len() as u64;
+        let mem_concurrency = (analysis_budget_mb as u64 / avg_cost_mb.max(1)) as usize;
+        analysis_concurrency.min(mem_concurrency).max(1)
+    };
+    let analysis_secs = (analysis_pending.len() as u64 * secs_per_analysis)
+        / effective_analysis_concurrency.max(1) as u64;
     let estimated_secs = beatport_secs.max(discogs_secs).max(analysis_secs);
     if estimated_secs > 60 {
         let hours = estimated_secs / 3600;
