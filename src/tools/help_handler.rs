@@ -12,12 +12,13 @@ const SOP_GENRE_AUDIT: &str = include_str!("../../site/src/partials/sops/genre-a
 const SOP_SET_BUILDING: &str = include_str!("../../site/src/partials/sops/set-building.mdx");
 const SOP_COLLECTION_AUDIT: &str =
     include_str!("../../site/src/partials/sops/collection-audit.mdx");
-const SOP_LABEL_BACKFILL: &str = include_str!("../../site/src/partials/sops/label-backfill.mdx");
+const SOP_METADATA_BACKFILL: &str =
+    include_str!("../../site/src/partials/sops/metadata-backfill.mdx");
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     #[schemars(
-        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'audit', 'import', 'label'. Omit for the full menu."
+        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'audit', 'import', 'metadata', 'label', 'year'. Omit for the full menu."
     )]
     pub topic: Option<String>,
 }
@@ -84,11 +85,11 @@ const WORKFLOWS: &[Workflow] = &[
         sop: SOP_GENRE_AUDIT,
     },
     Workflow {
-        name: "Label Backfill",
-        keywords: &["label", "labels", "backfill", "publisher"],
-        summary: "Auto-fill empty labels from Discogs enrichment, then resolve conflicts.",
-        key_tools: &["cache_coverage", "backfill_labels", "update_tracks"],
-        sop: SOP_LABEL_BACKFILL,
+        name: "Metadata Backfill",
+        keywords: &["label", "labels", "backfill", "publisher", "year", "years", "metadata"],
+        summary: "Auto-fill empty labels and years from Discogs enrichment, then resolve conflicts.",
+        key_tools: &["cache_coverage", "backfill_labels", "backfill_years", "update_tracks"],
+        sop: SOP_METADATA_BACKFILL,
     },
 ];
 
@@ -115,7 +116,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "sop": w.sop,
             }),
             None => serde_json::json!({
-                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, audit, label."),
+                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, audit, metadata, label, year."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
             }),
         }
@@ -131,15 +132,16 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
             "recommended_order": concat!(
                 "For disorganized libraries, workflow order matters — each step's quality depends on the previous:\n",
                 "1. Collection Audit — fix artist/title naming (enrichment matches on these)\n",
-                "2. Genre Classification — classify ungenred tracks with classify_tracks\n",
-                "3. Genre Audit — verify existing genre tags with audit_genres\n",
-                "4. Set Building — build DJ sets from well-tagged tracks\n",
+                "2. Metadata Backfill — fill labels and years from Discogs enrichment\n",
+                "3. Genre Classification — classify ungenred tracks with classify_tracks\n",
+                "4. Genre Audit — verify existing genre tags with audit_genres\n",
+                "5. Set Building — build DJ sets from well-tagged tracks\n",
                 "Prerequisite: run `reklawdbox hydrate` from the CLI first to populate enrichment and analysis caches.\n",
                 "Full guide: https://reklawdbox.com/workflows/library-cleanup/",
             ),
             "getting_started": "https://reklawdbox.com/getting-started/",
             "reference": "https://reklawdbox.com/reference/tools/",
-            "tip": "Call help(topic='genre'|'import'|'set'|'audit'|'genre audit'|'label') for the full step-by-step SOP.",
+            "tip": "Call help(topic='genre'|'import'|'set'|'audit'|'genre audit'|'metadata'|'label'|'year') for the full step-by-step SOP.",
         })
     };
 

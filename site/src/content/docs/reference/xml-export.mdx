@@ -6,6 +6,7 @@ sidebar:
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
+import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
 ## XML structure
 
@@ -35,7 +36,7 @@ A minimal Rekordbox XML file looks like this:
 
 ## What reklawdbox exports
 
-**Editable fields** (actively written by `write_xml`): Genre, Comments, Rating (1-5), Colour, Label.
+**Editable fields** (actively written by `write_xml`): Genre, Comments, Rating (1-5), Colour, Label, Year.
 
 **Pass-through fields** (read from DB, included in export): title, artist, album, remixer, label, year, key, BPM, file location, file kind, bit rate, sample rate, play count, date added, total time.
 
@@ -51,27 +52,17 @@ Playlists are included when `write_xml` is called with the `playlists` parameter
 
 ## Importing into Rekordbox
 
-<Steps>
+<XmlImportSteps />
 
-1. **Close Rekordbox** before writing XML (avoids file lock conflicts).
-
-2. **Open Rekordbox** and go to **File > Import > Import Playlist/Collection**.
-
-3. **Select the XML file.** Tracks appear in the **rekordbox xml** sidebar section.
-
-</Steps>
-
-<Aside type="caution" title="The reimport bug">
-In Rekordbox 5.6.1+ (all RB6/RB7), existing tracks are **not** updated on standard import.
-
-**Workaround:** Right-click the imported playlist → **Import To Collection**, then select all tracks (Cmd+A), right-click → **Import To Collection** again. The second pass forces metadata overwrite for existing tracks.
+<Aside type="tip">
+  On the confirmation dialog, tick **"Don't ask me again"** if you're importing a large batch — it applies to every track that already exists in your collection.
 </Aside>
 
 ---
 
 ## What survives a round-trip
 
-**Preserved:** Genre, Comments, Rating, Colour, title, artist, album, remixer, label, key, BPM, playlist structure.
+**Preserved:** Genre, Comments, Rating, Colour, Label, Year, title, artist, album, remixer, key, BPM, playlist structure.
 
 **Not included:** Cue points, beat grids, My Tags, Hot Cue Banks, phrase analysis, smart playlist criteria, waveform data (ANLZ files). These remain in the Rekordbox database — reimport doesn't touch them.
 

@@ -1256,6 +1256,7 @@ async fn write_xml_deduplicates_playlist_and_staged_tracks() {
                 rating: Some(5),
                 color: None,
                 label: None,
+                year: None,
             }],
         }))
         .await
@@ -1367,6 +1368,7 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             }],
         }))
         .await
@@ -1443,6 +1445,7 @@ async fn update_tracks_includes_provenance() {
                 rating: Some(4),
                 color: None,
                 label: None,
+                year: None,
             }],
         }))
         .await
@@ -2706,6 +2709,7 @@ fn resolve_single_track_with_staged_changes() {
         rating: Some(5),
         color: None,
         label: None,
+        year: None,
     };
     let result = resolve_single_track(&track, None, None, None, None, false, Some(&staged));
 

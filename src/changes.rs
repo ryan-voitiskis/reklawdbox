@@ -137,6 +137,16 @@ impl ChangeManager {
                 });
             }
 
+            if let Some(new_year) = change.year
+                && new_year != track.year
+            {
+                field_diffs.push(FieldDiff {
+                    field: "year".to_string(),
+                    old_value: track.year.to_string(),
+                    new_value: new_year.to_string(),
+                });
+            }
+
             if !field_diffs.is_empty() {
                 field_diffs.sort_by(|a, b| a.field.cmp(&b.field));
                 result.push(TrackDiff {
@@ -217,6 +227,7 @@ impl ChangeManager {
                     rating: None,
                     color: None,
                     label: None,
+                    year: None,
                 });
             merge_untouched_fields(existing, &change, touched_fields);
         }
@@ -311,6 +322,7 @@ fn has_any_staged_field(change: &TrackChange) -> bool {
         || change.rating.is_some()
         || change.color.is_some()
         || change.label.is_some()
+        || change.year.is_some()
 }
 
 fn merge_track_change(existing: &mut TrackChange, incoming: &TrackChange) {
@@ -328,6 +340,9 @@ fn merge_track_change(existing: &mut TrackChange, incoming: &TrackChange) {
     }
     if incoming.label.is_some() {
         existing.label = incoming.label.clone();
+    }
+    if incoming.year.is_some() {
+        existing.year = incoming.year;
     }
 }
 
@@ -353,6 +368,9 @@ fn merge_untouched_fields(
     if existing.label.is_none() && !touched.contains(&EditableField::Label) {
         existing.label = incoming.label.clone();
     }
+    if existing.year.is_none() && !touched.contains(&EditableField::Year) {
+        existing.year = incoming.year;
+    }
 }
 
 /// Record which fields are set in `change` as touched for its track_id.
@@ -375,6 +393,9 @@ fn record_touched_fields(change: &TrackChange, touched: &mut TouchedFields) {
     }
     if change.label.is_some() {
         set.insert(EditableField::Label);
+    }
+    if change.year.is_some() {
+        set.insert(EditableField::Year);
     }
 }
 
@@ -399,6 +420,10 @@ fn clear_field(entry: &mut TrackChange, field: EditableField) -> bool {
         }
         EditableField::Label if entry.label.is_some() => {
             entry.label = None;
+            true
+        }
+        EditableField::Year if entry.year.is_some() => {
+            entry.year = None;
             true
         }
         _ => false,
@@ -429,6 +454,9 @@ fn apply_changes_with_map(
                 }
                 if let Some(ref label) = change.label {
                     modified.label = label.clone();
+                }
+                if let Some(year) = change.year {
+                    modified.year = year;
                 }
                 modified
             } else {
@@ -481,6 +509,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -489,6 +518,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
         assert_eq!(staged, 2);
@@ -506,6 +536,7 @@ mod tests {
             rating: Some(4),
             color: None,
             label: None,
+            year: None,
         }]);
         // Second stage for same track: genre updates, rating preserved from first stage
         cm.stage(vec![TrackChange {
@@ -515,6 +546,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
         assert_eq!(cm.pending_count(), 1);
 
@@ -551,6 +583,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
         assert_eq!(staged, 0);
         assert_eq!(total, 0);
@@ -568,6 +601,7 @@ mod tests {
             rating: Some(4),
             color: None,
             label: None,
+            year: None,
         }]);
 
         let (staged, total) = cm.stage(vec![TrackChange {
@@ -577,6 +611,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         assert_eq!(staged, 0);
@@ -597,6 +632,7 @@ mod tests {
             rating: Some(5),
             color: None,
             label: None,
+            year: None,
         }]);
 
         let diffs = cm.preview(&tracks);
@@ -631,6 +667,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
         let diffs = cm.preview(&tracks);
         assert!(diffs.is_empty()); // no actual change
@@ -647,6 +684,7 @@ mod tests {
             rating: Some(5),
             color: None,
             label: None,
+            year: None,
         }]);
 
         let modified = cm.apply_changes(&tracks);
@@ -667,6 +705,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -675,6 +714,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -694,6 +734,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -702,6 +743,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -720,6 +762,7 @@ mod tests {
             rating: Some(4),
             color: Some("Green".to_string()),
             label: None,
+            year: None,
         }]);
 
         // Clear just the color field
@@ -744,6 +787,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let (affected, remaining) =
@@ -764,6 +808,7 @@ mod tests {
                 rating: Some(3),
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -772,6 +817,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -797,6 +843,7 @@ mod tests {
                 rating: Some(5),
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -805,6 +852,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -829,6 +877,7 @@ mod tests {
             rating: None,
             color: Some("Green".to_string()),
             label: None,
+            year: None,
         }]);
 
         let modified = cm.apply_changes(&tracks);
@@ -852,6 +901,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let modified = cm.apply_changes(&tracks);
@@ -874,6 +924,7 @@ mod tests {
             rating: None,
             color: Some("Purple".to_string()),
             label: None,
+            year: None,
         }]);
 
         let modified = cm.apply_changes(&tracks);
@@ -892,6 +943,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t2".to_string(),
@@ -900,6 +952,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -919,6 +972,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t1".to_string(),
@@ -927,6 +981,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -944,6 +999,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
             TrackChange {
                 track_id: "t1".to_string(),
@@ -952,6 +1008,7 @@ mod tests {
                 rating: None,
                 color: None,
                 label: None,
+                year: None,
             },
         ]);
 
@@ -971,6 +1028,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -984,6 +1042,7 @@ mod tests {
             rating: Some(5),
             color: None,
             label: None,
+            year: None,
         }]);
 
         cm.restore(snapshot);
@@ -1003,6 +1062,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1016,6 +1076,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
         cm.clear_fields(Some(vec!["t1".to_string()]), &["genre".to_string()]);
 
@@ -1038,6 +1099,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1050,6 +1112,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
         cm.clear(Some(vec!["t1".to_string()]));
         assert!(cm.get("t1").is_none());
@@ -1072,6 +1135,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1099,6 +1163,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1127,6 +1192,7 @@ mod tests {
             rating: Some(4),
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1139,6 +1205,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         cm.restore(snapshot);
@@ -1160,6 +1227,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         }]);
 
         let snapshot = cm.take(None);
@@ -1216,6 +1284,7 @@ mod tests {
             rating: Some(4),
             color: None,
             label: None,
+            year: None,
         }]);
         assert_eq!(staged, 1);
         assert_eq!(total, 1);

@@ -132,6 +132,8 @@ pub struct TrackChangeInput {
     pub color: Option<String>,
     #[schemars(description = "New label (record label)")]
     pub label: Option<String>,
+    #[schemars(description = "Release year")]
+    pub year: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -166,7 +168,7 @@ pub struct ClearChangesParams {
     #[schemars(description = "Track IDs to clear (if empty, clears all)")]
     pub track_ids: Option<Vec<String>>,
     #[schemars(
-        description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\", \"label\". If omitted, clears all fields (removes entire entries)."
+        description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\", \"label\", \"year\". If omitted, clears all fields (removes entire entries)."
     )]
     pub fields: Option<Vec<String>>,
 }

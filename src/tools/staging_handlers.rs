@@ -94,6 +94,14 @@ pub(super) fn handle_update_tracks(
                 None,
             ));
         }
+        if let Some(y) = c.year
+            && !(1900..=2099).contains(&y)
+        {
+            return Err(McpError::invalid_params(
+                format!("year must be 1900-2099, got {y}"),
+                None,
+            ));
+        }
         if let Some(ref col) = c.color
             && !color::is_valid_color(col)
         {
@@ -132,6 +140,7 @@ pub(super) fn handle_update_tracks(
                     .unwrap_or(col)
             }),
             label: c.label,
+            year: c.year,
         })
         .collect();
 
@@ -145,6 +154,7 @@ pub(super) fn handle_update_tracks(
                 "rating": c.rating,
                 "color": c.color,
                 "label": c.label,
+                "year": c.year,
             })
         })
         .collect();

@@ -1,0 +1,123 @@
+## Constraints
+
+- **Enrichment-dependent.** Labels and years come from Discogs enrichment cache. Tracks without cached enrichment are skipped, not fetched.
+- **No auto-tagging without review.** The backfill tools stage non-conflicting values automatically, but conflicts require human approval before staging.
+- **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
+- **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
+- **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Beatport enrichment does not include year data — only Discogs is used.
+
+## Prerequisites
+
+```
+cache_coverage(has_label=false)
+```
+
+Check Discogs coverage for unlabeled tracks. If below 80%, hydrate first:
+
+```
+enrich_tracks(has_label=false, skip_cached=true, providers=["discogs"], max_tracks=50)
+```
+
+Repeat until Discogs coverage reaches 80%+. Report progress between batches.
+
+## Steps
+
+### 1. Backfill labels
+
+```
+backfill_labels()
+```
+
+The tool scans the entire collection (excluding samples), looks up each track's Discogs enrichment, and:
+- **Fills** empty labels from enrichment (auto-staged)
+- **Skips** tracks where current label matches enrichment
+- **Reports conflicts** where current label differs from enrichment (not staged)
+
+Report the summary: "Backfill complete: N labels staged, N already correct, N conflicts, N without enrichment."
+
+### 2. Resolve label conflicts
+
+Group conflicts by pattern for efficient review:
+
+#### Artist-name-as-label vs actual label
+
+When the current label is the artist's name and Discogs has an actual label, suggest the Discogs label — it provides a stronger signal than the artist name.
+
+```
+Artist-name-as-label conflicts (N):
+ #1  Fantastic Man — Antiboudi | Fantastic Man → Mule Musiq
+ #2  Fantastic Man — Diaspora | Fantastic Man → Mule Musiq
+ ...
+```
+
+Ask user: **"Approve all, or reject/change specific numbers."**
+
+Stage approved changes via `update_tracks`.
+
+#### Label name variations
+
+When both labels refer to the same entity with different formatting (e.g. "Palette" vs "Palette Recordings", "Loma Vista" vs "Loma Vista Recordings"), suggest keeping the current label — it was set intentionally.
+
+Present these for confirmation but recommend no change.
+
+#### Genuine disagreements
+
+When the Discogs label is a different entity entirely (e.g. different pressing, compilation, or wrong match), present individually with context:
+
+```
+ #N  Artist — Title | Current: Label A → Discogs: Label B
+```
+
+Ask user to pick one, or skip.
+
+Stage approved changes via `update_tracks`.
+
+### 3. Backfill years
+
+```
+backfill_years()
+```
+
+The tool scans the entire collection (excluding samples), looks up each track's Discogs enrichment year, and:
+- **Fills** missing years (year=0) from enrichment (auto-staged)
+- **Skips** tracks where current year matches enrichment
+- **Reports conflicts** where current year differs from enrichment (not staged)
+
+Report the summary: "Year backfill complete: N years staged, N already correct, N conflicts, N without enrichment."
+
+### 4. Resolve year conflicts
+
+Group year conflicts by pattern:
+
+#### Original vs reissue
+
+When the current year and Discogs year differ, it's often because one is the original release and the other is a reissue. Prefer the earlier year — it reflects the track's era more accurately for genre classification and set building.
+
+```
+Year conflicts (N):
+ #1  Artist — Title | Current: 2020 → Discogs: 1993
+ #2  Artist — Title | Current: 1995 → Discogs: 2018
+ ...
+```
+
+Ask user: **"Approve earlier year for all, or review individually?"**
+
+Stage approved changes via `update_tracks`.
+
+### 5. Export
+
+```
+preview_changes()
+```
+
+Ask user: "Export these changes to XML?"
+
+```
+write_xml()
+```
+
+Report output path, then walk the user through the Rekordbox import:
+
+1. **Add XML to Rekordbox** — Open Preferences → Advanced → rekordbox xml → **Imported Library** → Browse → select the exported XML file.
+2. **Open the XML view** — In the sidebar, click the **"Display rekordbox xml"** icon. The imported tracks appear under "All Tracks".
+3. **Import into collection** — Select all tracks (Cmd+A), right-click → **Import To Collection**. When prompted "Do you want to load information in the tag of the library being imported?", click **Yes** (tick "Don't ask me again" for bulk imports).

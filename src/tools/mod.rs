@@ -27,6 +27,7 @@ mod resolve_handlers;
 mod scoring;
 mod sequencing_handlers;
 mod staging_handlers;
+mod year_handlers;
 
 use analysis::*;
 use audio_handlers::*;
@@ -50,6 +51,7 @@ use resolve_handlers::*;
 use scoring::*;
 use sequencing_handlers::*;
 use staging_handlers::*;
+use year_handlers::*;
 
 use crate::changes::ChangeManager;
 use crate::db;
@@ -224,7 +226,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Stage changes to track metadata (genre, comments, rating, color, label). Changes are held in memory until write_xml is called."
+        description = "Stage changes to track metadata (genre, comments, rating, color, label, year). Changes are held in memory until write_xml is called."
     )]
     async fn update_tracks(
         &self,
@@ -277,6 +279,16 @@ impl ReklawdboxServer {
         params: Parameters<BackfillLabelsParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_backfill_labels(self, params.0)
+    }
+
+    #[tool(
+        description = "Auto-fill missing years (year=0) from Discogs enrichment. Stages non-conflicting years; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
+    )]
+    async fn backfill_years(
+        &self,
+        params: Parameters<BackfillYearsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_backfill_years(self, params.0)
     }
 
     #[tool(

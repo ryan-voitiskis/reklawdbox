@@ -119,6 +119,7 @@ pub struct TrackChange {
     pub rating: Option<u8>, // 1-5 stars
     pub color: Option<String>,
     pub label: Option<String>,
+    pub year: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,6 +129,7 @@ pub enum EditableField {
     Rating,
     Color,
     Label,
+    Year,
 }
 
 impl EditableField {
@@ -137,6 +139,7 @@ impl EditableField {
         Self::Rating,
         Self::Color,
         Self::Label,
+        Self::Year,
     ];
 
     pub const fn as_str(&self) -> &'static str {
@@ -146,6 +149,7 @@ impl EditableField {
             Self::Rating => "rating",
             Self::Color => "color",
             Self::Label => "label",
+            Self::Year => "year",
         }
     }
 
@@ -156,6 +160,7 @@ impl EditableField {
             "rating" => Some(Self::Rating),
             "color" => Some(Self::Color),
             "label" => Some(Self::Label),
+            "year" => Some(Self::Year),
             _ => None,
         }
     }
@@ -391,6 +396,7 @@ mod tests {
             rating: None,
             color: None,
             label: None,
+            year: None,
         })
         .unwrap();
         let field_count = json.as_object().unwrap().len() - 1; // minus track_id
