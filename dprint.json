@@ -20,7 +20,8 @@
     "**/broker/.wrangler",
     "**/Cargo.lock",
     "**/package-lock.json",
-    "**/broker/src/branding.ts"
+    "**/broker/src/branding.ts",
+    "docs/**"
   ],
   "plugins": [
     "https://plugins.dprint.dev/typescript-0.95.15.wasm",
