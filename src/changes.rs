@@ -495,6 +495,7 @@ mod tests {
             file_kind: FileKind::Flac,
             date_added: "2023-01-01".to_string(),
             position: None,
+            played_at: None,
         }
     }
 

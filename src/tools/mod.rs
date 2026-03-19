@@ -19,6 +19,7 @@ mod enrichment;
 pub(crate) mod essentia;
 mod file_tag_handlers;
 mod help_handler;
+mod history_handlers;
 mod label_handlers;
 mod library_handlers;
 mod params;
@@ -43,6 +44,7 @@ pub(crate) use essentia::probe_essentia_python_path;
 use essentia::*;
 use file_tag_handlers::*;
 use help_handler::*;
+use history_handlers::*;
 use label_handlers::*;
 use library_handlers::*;
 use params::*;
@@ -216,6 +218,32 @@ impl ReklawdboxServer {
     #[tool(description = "Get the configured genre taxonomy")]
     async fn get_genre_taxonomy(&self) -> Result<CallToolResult, McpError> {
         handle_get_genre_taxonomy()
+    }
+
+    #[tool(description = "List recent DJ sessions from Rekordbox play history")]
+    async fn get_sessions(
+        &self,
+        params: Parameters<GetSessionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_get_sessions(self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(description = "Get the ordered track list for a specific DJ session")]
+    async fn get_session_tracks(
+        &self,
+        params: Parameters<GetSessionTracksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_get_session_tracks(self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(
+        description = "Get per-track play statistics scoped by search filters. Shows play counts, last played dates, and session appearances. Use include_unplayed to find tracks that have never been played."
+    )]
+    async fn get_play_stats(
+        &self,
+        params: Parameters<GetPlayStatsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_get_play_stats(self.rekordbox_conn()?, params.0)
     }
 
     #[tool(

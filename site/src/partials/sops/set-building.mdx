@@ -32,7 +32,29 @@ Defaults: 60 min, balanced priority, warmup→build→peak→release, balanced h
 
 Confirm parameters with user before proceeding.
 
-### 2. Build candidate pool
+### 2. Review play history
+
+Check recent sessions to inform track selection:
+
+```
+get_sessions(limit=10)
+```
+
+Present sessions to user with date, track count, duration. Ask which were gigs vs practice, and how history should influence selection:
+- Avoid tracks from specific sessions?
+- Prefer battle-tested tracks (high play count)?
+- Prioritize unplayed tracks?
+- No preference?
+
+If the user wants history-aware selection, check play stats for the candidate pool's scope:
+
+```
+get_play_stats(genre="...", bpm_min=N, bpm_max=N, include_unplayed=true)
+```
+
+Use results to filter or annotate the candidate pool in the next step.
+
+### 3. Build candidate pool
 
 By genre/BPM search:
 
@@ -58,7 +80,7 @@ Present pool summary: track count, genre breakdown, BPM range, key spread.
 
 Ask user: "Proceed with this pool? / adjust filters / add from another playlist"
 
-### 3. Generate candidates
+### 4. Generate candidates
 
 ```
 build_set(
@@ -78,7 +100,7 @@ Present 2-3 candidates with: track order, key/BPM/genre per track, per-transitio
 
 Ask user: "pick A / pick B / compare position # / regenerate / adjust parameters"
 
-### 4. Refine selected set
+### 5. Refine selected set
 
 Interactive editing commands:
 
@@ -110,7 +132,7 @@ After each edit, use `score_transition()` to validate and show impact.
 
 Ask user after each edit: "Continue editing? / done"
 
-### 5. Export
+### 6. Export
 
 ```
 write_xml(playlists=[{"name": "Set Name", "track_ids": [...]}])

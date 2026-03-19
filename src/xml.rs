@@ -248,6 +248,7 @@ mod tests {
             file_kind: crate::types::FileKind::Flac,
             date_added: "2023-01-15".to_string(),
             position: None,
+            played_at: None,
         }
     }
 

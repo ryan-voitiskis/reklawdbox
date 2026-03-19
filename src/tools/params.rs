@@ -476,6 +476,36 @@ pub struct ScoreTransitionParams {
 }
 
 // ---------------------------------------------------------------------------
+// History / play stats params
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetSessionsParams {
+    #[schemars(description = "Max sessions to return (default 20, max 100)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Only sessions on or after this date (ISO date, e.g. '2024-01-01')")]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetSessionTracksParams {
+    #[schemars(description = "Session ID from get_sessions")]
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetPlayStatsParams {
+    #[serde(flatten)]
+    pub filters: SearchFilterParams,
+    #[schemars(
+        description = "Also return tracks matching filters that have never been played in any session (default false)"
+    )]
+    pub include_unplayed: Option<bool>,
+    #[schemars(description = "Max results (default 200, max 500)")]
+    pub limit: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
 // Native tag tool params
 // ---------------------------------------------------------------------------
 

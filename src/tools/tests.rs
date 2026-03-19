@@ -2641,6 +2641,7 @@ fn make_test_track(id: &str, genre: &str, bpm: f64, key: &str) -> crate::types::
         file_kind: crate::types::FileKind::Flac,
         date_added: "2023-01-15".to_string(),
         position: None,
+        played_at: None,
     }
 }
 
@@ -3219,6 +3220,7 @@ fn master_tempo_off_changes_key_scoring() {
             file_kind: crate::types::FileKind::Flac,
             date_added: String::new(),
             position: None,
+            played_at: None,
         },
         camelot_key: parse_camelot_key("8A"),
         key_display: "8A".to_string(),
@@ -3311,6 +3313,7 @@ fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) ->
             file_kind: crate::types::FileKind::Flac,
             date_added: String::new(),
             position: None,
+            played_at: None,
         },
         camelot_key: parse_camelot_key(key),
         key_display: key.to_string(),

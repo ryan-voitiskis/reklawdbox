@@ -61,6 +61,7 @@ mod tests {
                 file_kind: crate::types::FileKind::Flac,
                 date_added: String::new(),
                 position: None,
+                played_at: None,
             },
             camelot_key: parse_camelot_key(key),
             key_display: key.to_string(),

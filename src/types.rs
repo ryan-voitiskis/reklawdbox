@@ -99,6 +99,9 @@ pub struct Track {
     pub date_added: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
+    /// Timestamp when the track was loaded in a DJ session (only set in session track lists).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub played_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -109,6 +112,29 @@ pub struct Playlist {
     pub parent_id: String,
     pub is_folder: bool,
     pub is_smart: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Session {
+    pub id: String,
+    pub name: String,
+    pub date_created: String,
+    pub track_count: i32,
+    /// Wall-clock estimate in seconds, or null if < 2 tracks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrackPlayStats {
+    pub track_id: String,
+    pub title: String,
+    pub artist: String,
+    pub play_count: i32,
+    pub session_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<String>,
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -63,6 +63,8 @@ const WORKFLOWS: &[Workflow] = &[
         keywords: &["set", "mix", "sequence", "transition", "playlist"],
         summary: "Build transition-scored DJ set sequences.",
         key_tools: &[
+            "get_sessions",
+            "get_play_stats",
             "search_tracks",
             "resolve_tracks_data",
             "build_set",

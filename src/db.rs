@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, OpenFlags, params};
 
 use crate::types::{
-    FileKind, GenreCount, KeyCount, LibraryStats, Playlist, Track, rating_to_stars,
+    FileKind, GenreCount, KeyCount, LibraryStats, Playlist, Session, Track, TrackPlayStats,
+    rating_to_stars,
 };
 
 /// The universal Rekordbox 6/7 SQLCipher key (publicly known, same for all installations).
@@ -105,6 +106,7 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
         file_kind: FileKind::from_raw(file_type_raw),
         date_added: row.get::<_, String>("DateAdded")?.trim().to_string(),
         position: None,
+        played_at: None,
     })
 }
 
@@ -701,6 +703,231 @@ pub fn get_tracks_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Track>
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// DJ session history
+// ---------------------------------------------------------------------------
+
+pub fn get_sessions(
+    conn: &Connection,
+    limit: Option<u32>,
+    after: Option<&str>,
+) -> Result<Vec<Session>, rusqlite::Error> {
+    let limit = limit.unwrap_or(20).min(100);
+
+    let mut sql = String::from(
+        "SELECT h.ID, COALESCE(h.Name, '') AS Name, COALESCE(h.DateCreated, '') AS DateCreated,
+           (SELECT COUNT(*) FROM djmdSongHistory sh WHERE sh.HistoryID = h.ID AND sh.rb_local_deleted = 0) AS TrackCount
+         FROM djmdHistory h
+         WHERE h.rb_local_deleted = 0 AND COALESCE(h.Attribute, 0) != 1",
+    );
+    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+
+    if let Some(after_date) = after {
+        let idx = bind_values.len() + 1;
+        sql.push_str(&format!(" AND h.DateCreated >= ?{idx}"));
+        bind_values.push(Box::new(after_date.to_string()));
+    }
+
+    sql.push_str(&format!(" ORDER BY h.DateCreated DESC LIMIT {limit}"));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+        bind_values.iter().map(|b| b.as_ref()).collect();
+    let sessions: Vec<(String, String, String, i32)> = stmt
+        .query_map(bind_params.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>("ID")?,
+                row.get::<_, String>("Name")?,
+                row.get::<_, String>("DateCreated")?,
+                row.get::<_, i32>("TrackCount")?,
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+
+    if sessions.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Batch-compute durations for returned session IDs
+    let placeholders: Vec<String> = (1..=sessions.len()).map(|i| format!("?{i}")).collect();
+    let duration_sql = format!(
+        "SELECT sh.HistoryID,
+           CAST((julianday(MAX(sh.created_at)) - julianday(MIN(sh.created_at))) * 86400 AS INTEGER) AS span_seconds,
+           (SELECT c.Length FROM djmdContent c WHERE c.ID =
+             (SELECT sh2.ContentID FROM djmdSongHistory sh2 WHERE sh2.HistoryID = sh.HistoryID
+              AND sh2.rb_local_deleted = 0 ORDER BY sh2.TrackNo DESC LIMIT 1)
+           ) AS last_track_length
+         FROM djmdSongHistory sh
+         WHERE sh.HistoryID IN ({}) AND sh.rb_local_deleted = 0
+           AND sh.created_at IS NOT NULL AND sh.created_at != ''
+         GROUP BY sh.HistoryID",
+        placeholders.join(", ")
+    );
+    let mut dur_stmt = conn.prepare(&duration_sql)?;
+    let dur_refs: Vec<&dyn rusqlite::types::ToSql> = sessions
+        .iter()
+        .map(|(id, _, _, _)| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let duration_rows: Vec<(String, Option<i32>, Option<i32>)> = dur_stmt
+        .query_map(dur_refs.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let durations: HashMap<String, Option<i32>> = duration_rows
+        .into_iter()
+        .map(|(id, span, last_len)| {
+            let duration = match span {
+                Some(s) if s > 0 => Some(s + last_len.unwrap_or(0)),
+                _ => None,
+            };
+            (id, duration)
+        })
+        .collect();
+
+    Ok(sessions
+        .into_iter()
+        .map(|(id, name, date_created, track_count)| {
+            let duration_seconds = durations.get(&id).copied().flatten();
+            Session {
+                id,
+                name,
+                date_created,
+                track_count,
+                duration_seconds,
+            }
+        })
+        .collect())
+}
+
+pub fn get_session_tracks(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    let base_sql = TRACK_SELECT.replace(
+        "\nFROM djmdContent c",
+        ",\n    sh.TrackNo AS Position,\n    sh.created_at AS PlayedAt\nFROM djmdContent c",
+    );
+    if base_sql == TRACK_SELECT {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "TRACK_SELECT layout changed — Position/PlayedAt column injection failed".into(),
+        ));
+    }
+    let sql = format!(
+        "{base_sql}
+         INNER JOIN djmdSongHistory sh ON sh.ContentID = c.ID
+         WHERE sh.HistoryID = ?1 AND c.rb_local_deleted = 0 AND sh.rb_local_deleted = 0
+         ORDER BY sh.TrackNo"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![session_id], |row| {
+        let mut track = row_to_track(row)?;
+        track.position = Some(row.get::<_, u32>("Position")?);
+        track.played_at = row
+            .get::<_, Option<String>>("PlayedAt")?
+            .filter(|s| !s.is_empty());
+        Ok(track)
+    })?;
+    rows.collect()
+}
+
+pub fn get_play_stats(
+    conn: &Connection,
+    search: &SearchParams,
+    include_unplayed: bool,
+    limit: Option<u32>,
+) -> Result<Vec<TrackPlayStats>, rusqlite::Error> {
+    let limit = limit.unwrap_or(200).min(500);
+
+    // Played tracks
+    let mut sql = String::from(
+        "SELECT c.ID AS TrackID, COALESCE(c.Title, '') AS Title, COALESCE(a.Name, '') AS ArtistName,
+           COUNT(sh.ID) AS PlayCount, COUNT(DISTINCT sh.HistoryID) AS SessionCount,
+           MAX(sh.created_at) AS LastPlayed, GROUP_CONCAT(DISTINCT sh.HistoryID) AS SessionIDs
+         FROM djmdSongHistory sh
+         INNER JOIN djmdContent c ON c.ID = sh.ContentID
+         LEFT JOIN djmdArtist a ON c.ArtistID = a.ID
+         LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID
+         LEFT JOIN djmdGenre g ON c.GenreID = g.ID
+         LEFT JOIN djmdKey k ON c.KeyID = k.ID
+         LEFT JOIN djmdLabel l ON c.LabelID = l.ID
+         LEFT JOIN djmdColor col ON c.ColorID = col.ID
+         LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID
+         WHERE c.rb_local_deleted = 0 AND sh.rb_local_deleted = 0
+           AND sh.HistoryID IN (SELECT h.ID FROM djmdHistory h WHERE h.rb_local_deleted = 0)",
+    );
+    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+    apply_search_filters(&mut sql, search, &mut bind_values);
+    sql.push_str(&format!(
+        " GROUP BY c.ID ORDER BY PlayCount DESC, LastPlayed DESC LIMIT {limit}"
+    ));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+        bind_values.iter().map(|b| b.as_ref()).collect();
+    let mut results: Vec<TrackPlayStats> = stmt
+        .query_map(bind_params.as_slice(), |row| {
+            let session_ids_raw: Option<String> = row.get("SessionIDs")?;
+            let session_ids: Vec<String> = session_ids_raw
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            Ok(TrackPlayStats {
+                track_id: row.get("TrackID")?,
+                title: row.get::<_, String>("Title")?.trim().to_string(),
+                artist: row.get::<_, String>("ArtistName")?.trim().to_string(),
+                play_count: row.get("PlayCount")?,
+                session_count: row.get("SessionCount")?,
+                last_played: row.get("LastPlayed")?,
+                session_ids,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+
+    // Unplayed tracks
+    if include_unplayed {
+        let mut unplayed_sql = String::from(
+            "SELECT c.ID AS TrackID, COALESCE(c.Title, '') AS Title, COALESCE(a.Name, '') AS ArtistName
+             FROM djmdContent c
+             LEFT JOIN djmdArtist a ON c.ArtistID = a.ID
+             LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID
+             LEFT JOIN djmdGenre g ON c.GenreID = g.ID
+             LEFT JOIN djmdKey k ON c.KeyID = k.ID
+             LEFT JOIN djmdLabel l ON c.LabelID = l.ID
+             LEFT JOIN djmdColor col ON c.ColorID = col.ID
+             LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID
+             LEFT JOIN djmdSongHistory sh ON sh.ContentID = c.ID AND sh.rb_local_deleted = 0
+               AND sh.HistoryID IN (SELECT h.ID FROM djmdHistory h WHERE h.rb_local_deleted = 0)
+             WHERE c.rb_local_deleted = 0 AND sh.ID IS NULL",
+        );
+        let mut unplayed_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+        apply_search_filters(&mut unplayed_sql, search, &mut unplayed_bind);
+        let unplayed_limit = limit.saturating_sub(results.len() as u32);
+        unplayed_sql.push_str(&format!(" ORDER BY c.Title LIMIT {unplayed_limit}"));
+
+        let mut stmt = conn.prepare(&unplayed_sql)?;
+        let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+            unplayed_bind.iter().map(|b| b.as_ref()).collect();
+        let unplayed: Vec<TrackPlayStats> = stmt
+            .query_map(bind_params.as_slice(), |row| {
+                Ok(TrackPlayStats {
+                    track_id: row.get("TrackID")?,
+                    title: row.get::<_, String>("Title")?.trim().to_string(),
+                    artist: row.get::<_, String>("ArtistName")?.trim().to_string(),
+                    play_count: 0,
+                    session_count: 0,
+                    last_played: None,
+                    session_ids: vec![],
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        results.extend(unplayed);
+    }
+
+    Ok(results)
+}
+
 pub fn default_db_path() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let path = format!("{home}/Library/Pioneer/rekordbox/master.db");
@@ -910,6 +1137,36 @@ mod tests {
             INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID) VALUES ('p2', 2, 'Folders', 1, 'root');
             INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp1', 'p1', 't1', 1);
             INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) VALUES ('sp2', 'p1', 't3', 2);
+
+            -- History tables
+            CREATE TABLE djmdHistory (
+                ID VARCHAR(255) PRIMARY KEY,
+                Seq INTEGER,
+                Name VARCHAR(255),
+                Attribute INTEGER DEFAULT 0,
+                ParentID VARCHAR(255) DEFAULT '',
+                DateCreated TEXT DEFAULT '',
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongHistory (
+                ID VARCHAR(255) PRIMARY KEY,
+                HistoryID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER,
+                created_at TEXT DEFAULT '',
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+
+            -- Sessions: h1 (2025-03-01), h2 (2025-02-15), hf1 is a folder (Attribute=1)
+            INSERT INTO djmdHistory (ID, Seq, Name, Attribute, DateCreated) VALUES ('h1', 1, '2025-03-01', 0, '2025-03-01');
+            INSERT INTO djmdHistory (ID, Seq, Name, Attribute, DateCreated) VALUES ('h2', 2, '2025-02-15', 0, '2025-02-15');
+            INSERT INTO djmdHistory (ID, Seq, Name, Attribute, DateCreated) VALUES ('hf1', 3, 'History Folder', 1, '2025-01-01');
+
+            -- Song history: h1 has 3 tracks (t1, t3, t2) with 5min gaps; h2 has 1 track (t1)
+            INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, created_at) VALUES ('sh1', 'h1', 't1', 1, '2025-03-01 22:00:00');
+            INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, created_at) VALUES ('sh2', 'h1', 't3', 2, '2025-03-01 22:05:00');
+            INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, created_at) VALUES ('sh3', 'h1', 't2', 3, '2025-03-01 22:10:00');
+            INSERT INTO djmdSongHistory (ID, HistoryID, ContentID, TrackNo, created_at) VALUES ('sh4', 'h2', 't1', 1, '2025-02-15 20:00:00');
             ",
         )
         .unwrap();
@@ -1241,6 +1498,177 @@ mod tests {
         let tracks = get_tracks_by_ids(&conn, &ids).unwrap();
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].id, "t1");
+    }
+
+    // ==================== History / play stats tests ====================
+
+    #[test]
+    fn test_get_sessions() {
+        let conn = create_test_db();
+        let sessions = get_sessions(&conn, None, None).unwrap();
+        // Should return h1, h2 (not folder hf1), ordered by DateCreated desc
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].id, "h1"); // 2025-03-01
+        assert_eq!(sessions[1].id, "h2"); // 2025-02-15
+        assert_eq!(sessions[0].track_count, 3);
+        assert_eq!(sessions[1].track_count, 1);
+    }
+
+    #[test]
+    fn test_get_sessions_after_filter() {
+        let conn = create_test_db();
+        let sessions = get_sessions(&conn, None, Some("2025-03-01")).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "h1");
+    }
+
+    #[test]
+    fn test_get_sessions_limit() {
+        let conn = create_test_db();
+        let sessions = get_sessions(&conn, Some(1), None).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "h1"); // most recent
+    }
+
+    #[test]
+    fn test_get_sessions_duration() {
+        let conn = create_test_db();
+        let sessions = get_sessions(&conn, None, None).unwrap();
+        let h1 = &sessions[0];
+        // h1 span: 22:00 to 22:10 = 600s + last track length (t2=300s) = 900s
+        assert_eq!(h1.duration_seconds, Some(900));
+        // h2 has only 1 track — duration should be None
+        let h2 = &sessions[1];
+        assert_eq!(h2.duration_seconds, None);
+    }
+
+    #[test]
+    fn test_get_session_tracks() {
+        let conn = create_test_db();
+        let tracks = get_session_tracks(&conn, "h1").unwrap();
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(tracks[0].title, "Archangel");
+        assert_eq!(tracks[0].position, Some(1));
+        assert_eq!(
+            tracks[0].played_at.as_deref(),
+            Some("2025-03-01 22:00:00")
+        );
+        assert_eq!(tracks[1].title, "R.I.P.");
+        assert_eq!(tracks[1].position, Some(2));
+        assert_eq!(
+            tracks[1].played_at.as_deref(),
+            Some("2025-03-01 22:05:00")
+        );
+        assert_eq!(tracks[2].title, "Endorphin");
+        assert_eq!(tracks[2].position, Some(3));
+        assert_eq!(
+            tracks[2].played_at.as_deref(),
+            Some("2025-03-01 22:10:00")
+        );
+    }
+
+    #[test]
+    fn test_get_session_tracks_not_found() {
+        let conn = create_test_db();
+        let tracks = get_session_tracks(&conn, "nonexistent").unwrap();
+        assert!(tracks.is_empty());
+    }
+
+    #[test]
+    fn test_get_play_stats_counts() {
+        let conn = create_test_db();
+        let params = SearchParams::default();
+        let stats = get_play_stats(&conn, &params, false, None).unwrap();
+        // t1 played in h1 + h2 = 2 times, 2 sessions
+        let t1 = stats.iter().find(|s| s.track_id == "t1").unwrap();
+        assert_eq!(t1.play_count, 2);
+        assert_eq!(t1.session_count, 2);
+        // t3 played in h1 = 1 time
+        let t3 = stats.iter().find(|s| s.track_id == "t3").unwrap();
+        assert_eq!(t3.play_count, 1);
+        assert_eq!(t3.session_count, 1);
+    }
+
+    #[test]
+    fn test_get_play_stats_with_genre_filter() {
+        let conn = create_test_db();
+        let params = SearchParams {
+            genre: Some("Dubstep".to_string()),
+            ..Default::default()
+        };
+        let stats = get_play_stats(&conn, &params, false, None).unwrap();
+        // Only t1 and t2 are Dubstep; t2 is in h1, t1 is in h1+h2
+        assert_eq!(stats.len(), 2);
+        assert!(
+            stats
+                .iter()
+                .all(|s| s.track_id == "t1" || s.track_id == "t2")
+        );
+    }
+
+    #[test]
+    fn test_get_play_stats_include_unplayed() {
+        let conn = create_test_db();
+        let params = SearchParams {
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let stats = get_play_stats(&conn, &params, true, None).unwrap();
+        // Played: t1, t2, t3 (3 tracks). Unplayed (non-sampler): t4, t5 (2 tracks).
+        let unplayed: Vec<_> = stats.iter().filter(|s| s.play_count == 0).collect();
+        assert_eq!(unplayed.len(), 2);
+        assert!(unplayed.iter().any(|s| s.track_id == "t4"));
+        assert!(unplayed.iter().any(|s| s.track_id == "t5"));
+    }
+
+    #[test]
+    fn test_get_play_stats_session_ids() {
+        let conn = create_test_db();
+        let params = SearchParams::default();
+        let stats = get_play_stats(&conn, &params, false, None).unwrap();
+        let t1 = stats.iter().find(|s| s.track_id == "t1").unwrap();
+        assert_eq!(t1.session_ids.len(), 2);
+        assert!(t1.session_ids.contains(&"h1".to_string()));
+        assert!(t1.session_ids.contains(&"h2".to_string()));
+    }
+
+    // ==================== Integration tests (real DB) — history ====================
+
+    #[test]
+    #[ignore]
+    fn test_real_db_get_sessions() {
+        let conn = open_real_db().expect("backup tarball not found");
+        let sessions = get_sessions(&conn, Some(5), None).unwrap();
+        assert!(
+            !sessions.is_empty(),
+            "expected at least one session in real DB"
+        );
+        for s in &sessions {
+            assert!(!s.id.is_empty());
+            assert!(s.track_count >= 0);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_real_db_get_session_tracks() {
+        let conn = open_real_db().expect("backup tarball not found");
+        let sessions = get_sessions(&conn, Some(1), None).unwrap();
+        assert!(!sessions.is_empty(), "need at least one session");
+        let tracks = get_session_tracks(&conn, &sessions[0].id).unwrap();
+        assert!(
+            !tracks.is_empty(),
+            "session {} has no tracks",
+            sessions[0].id
+        );
+        // Verify positions are sequential
+        for (i, t) in tracks.iter().enumerate() {
+            assert_eq!(
+                t.position,
+                Some((i + 1) as u32),
+                "track position mismatch at index {i}"
+            );
+        }
     }
 
     /// Load all tracks from the DB by paging with OFFSET.
