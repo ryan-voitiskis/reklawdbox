@@ -676,15 +676,11 @@ pub(super) enum DuplicateDetectionLevel {
     /// Match by artist + title (case-insensitive)
     #[default]
     Metadata,
-    /// Audio fingerprint matching (not yet implemented)
-    Fingerprint,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(super) struct ScanDuplicatesParams {
-    #[schemars(
-        description = "Detection level: 'metadata' (default), 'exact' (SHA-256 hash), or 'fingerprint' (not yet implemented)"
-    )]
+    #[schemars(description = "Detection level: 'metadata' (default) or 'exact' (SHA-256 hash)")]
     pub detection_level: Option<DuplicateDetectionLevel>,
     #[schemars(description = "Scope to tracks whose file path starts with this prefix")]
     pub path_prefix: Option<String>,

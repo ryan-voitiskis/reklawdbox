@@ -288,15 +288,9 @@ pub(super) async fn handle_scan_duplicates(
     server: &ReklawdboxServer,
     params: ScanDuplicatesParams,
 ) -> Result<CallToolResult, McpError> {
-    let level = params.detection_level.unwrap_or_default();
-    match level {
+    match params.detection_level.unwrap_or_default() {
         DuplicateDetectionLevel::Metadata => handle_duplicates_metadata(server, params).await,
         DuplicateDetectionLevel::Exact => handle_duplicates_exact(server, params).await,
-        DuplicateDetectionLevel::Fingerprint => Err(mcp_internal_error(
-            "Fingerprint-level duplicate detection is not yet implemented. \
-             Use 'metadata' or 'exact' detection level."
-                .to_string(),
-        )),
     }
 }
 
