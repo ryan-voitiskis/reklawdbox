@@ -14,11 +14,12 @@ const SOP_COLLECTION_AUDIT: &str =
     include_str!("../../site/src/partials/sops/collection-audit.mdx");
 const SOP_METADATA_BACKFILL: &str =
     include_str!("../../site/src/partials/sops/metadata-backfill.mdx");
+const SOP_LIBRARY_HEALTH: &str = include_str!("../../site/src/partials/sops/library-health.mdx");
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     #[schemars(
-        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'audit', 'import', 'metadata', 'label', 'year'. Omit for the full menu."
+        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'audit', 'import', 'metadata', 'label', 'year', 'health'. Omit for the full menu."
     )]
     pub topic: Option<String>,
 }
@@ -106,6 +107,26 @@ const WORKFLOWS: &[Workflow] = &[
         ],
         sop: SOP_METADATA_BACKFILL,
     },
+    Workflow {
+        name: "Library Health",
+        keywords: &[
+            "health",
+            "broken",
+            "orphan",
+            "duplicate",
+            "coverage",
+            "missing",
+            "dead",
+        ],
+        summary: "Detect broken links, orphan files, duplicates, and playlist gaps.",
+        key_tools: &[
+            "scan_broken_links",
+            "scan_orphan_files",
+            "scan_playlist_coverage",
+            "scan_duplicates",
+        ],
+        sop: SOP_LIBRARY_HEALTH,
+    },
 ];
 
 pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError> {
@@ -131,7 +152,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "sop": w.sop,
             }),
             None => serde_json::json!({
-                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, audit, metadata, label, year."),
+                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, audit, metadata, label, year, health."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
             }),
         }
@@ -156,7 +177,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
             ),
             "getting_started": "https://reklawdbox.com/getting-started/",
             "reference": "https://reklawdbox.com/reference/tools/",
-            "tip": "Call help(topic='genre'|'import'|'set'|'audit'|'genre audit'|'metadata'|'label'|'year') for the full step-by-step SOP.",
+            "tip": "Call help(topic='genre'|'import'|'set'|'audit'|'genre audit'|'metadata'|'label'|'year'|'health') for the full step-by-step SOP.",
         })
     };
 

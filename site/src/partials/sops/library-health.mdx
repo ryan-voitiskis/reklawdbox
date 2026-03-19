@@ -1,0 +1,72 @@
+## Constraints
+
+- **Read-only scanning.** No files are modified, moved, or deleted by these tools.
+- **Results are point-in-time snapshots.** Run scans after any Rekordbox import/export or file system changes.
+- **Samplers excluded.** All scans ignore Rekordbox factory sampler files.
+
+## Prerequisites
+
+- reklawdbox MCP server connected
+- No external tools required — all scanning is built-in
+
+## Steps
+
+### 0. Start with read_library
+
+```
+read_library
+```
+
+Review `content_roots` and `total_tracks` to understand the library scope.
+
+### 1. Scan for broken links
+
+```
+scan_broken_links()
+```
+
+Checks every track in the database for missing files on disk. Reports suggested relocations when a file with the same name exists elsewhere in the content roots.
+
+**If broken links found:** Review suggested relocations. File moves must be done manually in Rekordbox (Preferences > Advanced > Database Management > Relocate) or by correcting the directory structure.
+
+### 2. Scan for orphan files
+
+```
+scan_orphan_files()
+```
+
+Finds audio files on disk that are not imported into Rekordbox. Groups results by directory.
+
+**If orphans found:** These files can be imported into Rekordbox via drag-and-drop, or deleted if no longer wanted.
+
+### 3. Check playlist coverage
+
+```
+scan_playlist_coverage()
+```
+
+Finds tracks not assigned to any playlist. Use filters to scope to specific genres, date ranges, or paths.
+
+**If uncovered tracks found:** Review and assign to playlists, or accept that some tracks are intentionally unplaylisted.
+
+### 4. Find duplicates
+
+```
+scan_duplicates(detection_level="metadata")
+```
+
+Groups tracks by matching artist + title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating).
+
+For higher confidence, run exact-level detection:
+
+```
+scan_duplicates(detection_level="exact")
+```
+
+This hashes actual audio files and only reports byte-identical duplicates.
+
+**If duplicates found:** Remove duplicates manually in Rekordbox. The `suggested_keep` field indicates which copy to retain.
+
+### 5. Summary
+
+Report findings across all four scans: broken link count, orphan count, playlist coverage percentage, and duplicate group count. Suggest next steps based on which issues were found.

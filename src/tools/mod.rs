@@ -18,6 +18,7 @@ mod enrich_handlers;
 mod enrichment;
 pub(crate) mod essentia;
 mod file_tag_handlers;
+mod health_handlers;
 mod help_handler;
 mod history_handlers;
 mod label_handlers;
@@ -43,6 +44,7 @@ use enrichment::*;
 pub(crate) use essentia::probe_essentia_python_path;
 use essentia::*;
 use file_tag_handlers::*;
+use health_handlers::*;
 use help_handler::*;
 use history_handlers::*;
 use label_handlers::*;
@@ -520,6 +522,50 @@ impl ReklawdboxServer {
     ) -> Result<CallToolResult, McpError> {
         let rb_db_path = self.state.db_path.clone().or_else(db::resolve_db_path);
         handle_audit_state(self.cache_store_path(), rb_db_path, params.0).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Library health tools
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        description = "Scan for tracks with missing audio files on disk. Optionally suggests relocated files by matching filenames across content roots."
+    )]
+    async fn scan_broken_links(
+        &self,
+        params: Parameters<ScanBrokenLinksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_scan_broken_links(self, params.0).await
+    }
+
+    #[tool(
+        description = "Find audio files on disk not imported into Rekordbox. Compares filesystem contents against the database for each content root."
+    )]
+    async fn scan_orphan_files(
+        &self,
+        params: Parameters<ScanOrphanFilesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_scan_orphan_files(self, params.0).await
+    }
+
+    #[tool(
+        description = "Find tracks not assigned to any playlist. Supports all search filters for scoping."
+    )]
+    async fn scan_playlist_coverage(
+        &self,
+        params: Parameters<ScanPlaylistCoverageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_scan_playlist_coverage(self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(
+        description = "Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256). Each group includes a suggested_keep recommendation based on audio quality."
+    )]
+    async fn scan_duplicates(
+        &self,
+        params: Parameters<ScanDuplicatesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_scan_duplicates(self, params.0).await
     }
 }
 

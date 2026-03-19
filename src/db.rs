@@ -466,7 +466,10 @@ pub fn get_playlist_tracks_unbounded(
 /// 3. If the common prefix is at least 2 segments deep (e.g. `/Users/testuser/Music/`),
 ///    return it as the single root.
 /// 4. Otherwise, collect the distinct directories at depth = common_depth + 1.
-fn content_roots(conn: &Connection, exclude_samples: bool) -> Result<Vec<String>, rusqlite::Error> {
+pub(crate) fn content_roots(
+    conn: &Connection,
+    exclude_samples: bool,
+) -> Result<Vec<String>, rusqlite::Error> {
     let sampler_pattern = sampler_path_like_pattern();
     let sample_filter = if exclude_samples {
         " AND FolderPath NOT LIKE ?1 ESCAPE '\\'"
@@ -964,6 +967,230 @@ pub fn resolve_db_path() -> Option<String> {
         return Some(path);
     }
     default_db_path()
+}
+
+// ---------------------------------------------------------------------------
+// Library health queries
+// ---------------------------------------------------------------------------
+
+/// A track's path info for broken link scanning.
+#[derive(Clone)]
+pub(crate) struct TrackPathEntry {
+    pub id: String,
+    pub artist: String,
+    pub title: String,
+    pub path: String,
+}
+
+/// Result of playlist coverage query.
+pub(crate) struct PlaylistCoverageResult {
+    pub tracks: Vec<Track>,
+    pub uncovered_count: i64,
+    pub total_tracks: i64,
+}
+
+/// A group of tracks sharing the same artist + title (metadata duplicates).
+pub(crate) struct DuplicateGroup {
+    pub artist: String,
+    pub title: String,
+    pub track_ids: Vec<String>,
+}
+
+/// Tracks not in any playlist.
+pub(crate) fn tracks_not_in_any_playlist(
+    conn: &Connection,
+    search: &SearchParams,
+) -> Result<PlaylistCoverageResult, rusqlite::Error> {
+    let filter_joins = "\
+         LEFT JOIN djmdArtist a ON c.ArtistID = a.ID \
+         LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID \
+         LEFT JOIN djmdGenre g ON c.GenreID = g.ID \
+         LEFT JOIN djmdKey k ON c.KeyID = k.ID \
+         LEFT JOIN djmdLabel l ON c.LabelID = l.ID \
+         LEFT JOIN djmdColor col ON c.ColorID = col.ID \
+         LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID";
+
+    // 1. Total tracks matching filters
+    let mut total_sql =
+        format!("SELECT COUNT(*) FROM djmdContent c {filter_joins} WHERE c.rb_local_deleted = 0");
+    let mut total_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+    apply_search_filters(&mut total_sql, search, &mut total_bind);
+    let total_params: Vec<&dyn rusqlite::types::ToSql> =
+        total_bind.iter().map(|b| b.as_ref()).collect();
+    let total_tracks: i64 =
+        conn.query_row(&total_sql, total_params.as_slice(), |row| row.get(0))?;
+
+    // 2. Count uncovered tracks
+    let mut uncov_sql = format!(
+        "SELECT COUNT(*) FROM djmdContent c {filter_joins} \
+         WHERE c.rb_local_deleted = 0 \
+         AND NOT EXISTS (SELECT 1 FROM djmdSongPlaylist sp WHERE sp.ContentID = c.ID)"
+    );
+    let mut uncov_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+    apply_search_filters(&mut uncov_sql, search, &mut uncov_bind);
+    let uncov_params: Vec<&dyn rusqlite::types::ToSql> =
+        uncov_bind.iter().map(|b| b.as_ref()).collect();
+    let uncovered_count: i64 =
+        conn.query_row(&uncov_sql, uncov_params.as_slice(), |row| row.get(0))?;
+
+    // 3. Fetch tracks page
+    let mut sql = format!(
+        "{TRACK_SELECT} WHERE c.rb_local_deleted = 0 \
+         AND NOT EXISTS (SELECT 1 FROM djmdSongPlaylist sp WHERE sp.ContentID = c.ID)"
+    );
+    let mut track_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+    apply_search_filters(&mut sql, search, &mut track_bind);
+    sql.push_str(" ORDER BY c.Title");
+    let limit = search.limit.unwrap_or(200).min(500);
+    sql.push_str(&format!(" LIMIT {limit}"));
+    if let Some(offset) = search.offset {
+        sql.push_str(&format!(" OFFSET {offset}"));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = track_bind.iter().map(|b| b.as_ref()).collect();
+    let tracks: Vec<Track> = stmt
+        .query_map(params.as_slice(), row_to_track)?
+        .collect::<Result<_, _>>()?;
+
+    Ok(PlaylistCoverageResult {
+        tracks,
+        uncovered_count,
+        total_tracks,
+    })
+}
+
+/// Find metadata duplicates: groups by LOWER(TRIM(artist)) + LOWER(TRIM(title)).
+/// Returns separate artist/title fields to avoid separator collision in display keys.
+pub(crate) fn find_metadata_duplicates(
+    conn: &Connection,
+    path_prefix: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<DuplicateGroup>, rusqlite::Error> {
+    let limit = limit.unwrap_or(50).min(200);
+    let mut sql = String::from(
+        "SELECT LOWER(TRIM(COALESCE(a.Name, ''))) AS dup_artist, \
+                LOWER(TRIM(COALESCE(c.Title, ''))) AS dup_title, \
+                GROUP_CONCAT(c.ID) AS track_ids \
+         FROM djmdContent c \
+         LEFT JOIN djmdArtist a ON c.ArtistID = a.ID \
+         WHERE c.rb_local_deleted = 0 \
+         AND c.FolderPath NOT LIKE ?1 ESCAPE '\\'",
+    );
+    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(sampler_path_like_pattern())];
+
+    if let Some(prefix) = path_prefix {
+        let idx = bind_values.len() + 1;
+        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
+    }
+
+    sql.push_str(
+        " GROUP BY LOWER(TRIM(COALESCE(a.Name, ''))), LOWER(TRIM(COALESCE(c.Title, ''))) \
+         HAVING COUNT(*) > 1 AND LOWER(TRIM(COALESCE(c.Title, ''))) != ''",
+    );
+    sql.push_str(&format!(" ORDER BY COUNT(*) DESC LIMIT {limit}"));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+        bind_values.iter().map(|b| b.as_ref()).collect();
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map(bind_params.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(artist, title, ids_str)| {
+            let track_ids: Vec<String> = ids_str.split(',').map(|s| s.to_string()).collect();
+            DuplicateGroup {
+                artist,
+                title,
+                track_ids,
+            }
+        })
+        .collect())
+}
+
+/// Get all track paths for broken link scanning.
+/// Excludes samplers. Optional path_prefix scope.
+pub(crate) fn all_track_paths(
+    conn: &Connection,
+    path_prefix: Option<&str>,
+) -> Result<Vec<TrackPathEntry>, rusqlite::Error> {
+    let mut sql = String::from(
+        "SELECT c.ID, COALESCE(a.Name, '') AS ArtistName, \
+                COALESCE(c.Title, '') AS Title, COALESCE(c.FolderPath, '') AS FolderPath \
+         FROM djmdContent c \
+         LEFT JOIN djmdArtist a ON c.ArtistID = a.ID \
+         WHERE c.rb_local_deleted = 0 \
+         AND c.FolderPath NOT LIKE ?1 ESCAPE '\\'",
+    );
+    let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(sampler_path_like_pattern())];
+
+    if let Some(prefix) = path_prefix {
+        let idx = bind_values.len() + 1;
+        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
+    }
+
+    sql.push_str(" ORDER BY c.FolderPath");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
+        bind_values.iter().map(|b| b.as_ref()).collect();
+    stmt.query_map(bind_params.as_slice(), |row| {
+        Ok(TrackPathEntry {
+            id: row.get::<_, String>(0)?,
+            artist: row.get::<_, String>(1)?.trim().to_string(),
+            title: row.get::<_, String>(2)?.trim().to_string(),
+            path: row.get::<_, String>(3)?,
+        })
+    })?
+    .collect()
+}
+
+/// Count playlist memberships for a set of track IDs.
+pub(crate) fn playlist_membership_counts(
+    conn: &Connection,
+    track_ids: &[String],
+) -> Result<HashMap<String, i32>, rusqlite::Error> {
+    if track_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    const MAX_BIND: usize = 900;
+    let mut result = HashMap::new();
+
+    for chunk in track_ids.chunks(MAX_BIND) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT ContentID, COUNT(DISTINCT PlaylistID) AS cnt \
+             FROM djmdSongPlaylist \
+             WHERE ContentID IN ({}) \
+             GROUP BY ContentID",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows: Vec<(String, i32)> = stmt
+            .query_map(refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (id, count) in rows {
+            result.insert(id, count);
+        }
+    }
+
+    Ok(result)
 }
 
 /// Open a real Rekordbox DB from the backup tarball for integration tests.
@@ -1549,22 +1776,13 @@ mod tests {
         assert_eq!(tracks.len(), 3);
         assert_eq!(tracks[0].title, "Archangel");
         assert_eq!(tracks[0].position, Some(1));
-        assert_eq!(
-            tracks[0].played_at.as_deref(),
-            Some("2025-03-01 22:00:00")
-        );
+        assert_eq!(tracks[0].played_at.as_deref(), Some("2025-03-01 22:00:00"));
         assert_eq!(tracks[1].title, "R.I.P.");
         assert_eq!(tracks[1].position, Some(2));
-        assert_eq!(
-            tracks[1].played_at.as_deref(),
-            Some("2025-03-01 22:05:00")
-        );
+        assert_eq!(tracks[1].played_at.as_deref(), Some("2025-03-01 22:05:00"));
         assert_eq!(tracks[2].title, "Endorphin");
         assert_eq!(tracks[2].position, Some(3));
-        assert_eq!(
-            tracks[2].played_at.as_deref(),
-            Some("2025-03-01 22:10:00")
-        );
+        assert_eq!(tracks[2].played_at.as_deref(), Some("2025-03-01 22:10:00"));
     }
 
     #[test]
@@ -1630,6 +1848,118 @@ mod tests {
         assert_eq!(t1.session_ids.len(), 2);
         assert!(t1.session_ids.contains(&"h1".to_string()));
         assert!(t1.session_ids.contains(&"h2".to_string()));
+    }
+
+    // ==================== Library health query tests ====================
+
+    #[test]
+    fn test_tracks_not_in_any_playlist() {
+        let conn = create_test_db();
+        let search = SearchParams {
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
+        // t1, t3 are in p1; t2, t4, t5 are not (t6 is sampler, excluded)
+        assert_eq!(result.total_tracks, 5);
+        assert_eq!(result.uncovered_count, 3);
+        assert_eq!(result.tracks.len(), 3);
+        let ids: Vec<&str> = result.tracks.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"t2"));
+        assert!(ids.contains(&"t4"));
+        assert!(ids.contains(&"t5"));
+    }
+
+    #[test]
+    fn test_tracks_not_in_any_playlist_with_samples() {
+        let conn = create_test_db();
+        let search = SearchParams::default();
+        let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
+        assert_eq!(result.total_tracks, 6); // includes sampler
+        assert_eq!(result.uncovered_count, 4); // t2, t4, t5, t6
+    }
+
+    #[test]
+    fn test_tracks_not_in_any_playlist_excludes_deleted() {
+        let conn = create_test_db();
+        conn.execute(
+            "UPDATE djmdContent SET rb_local_deleted = 1 WHERE ID = 't2'",
+            [],
+        )
+        .unwrap();
+        let search = SearchParams {
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
+        assert_eq!(result.total_tracks, 4); // was 5, t2 deleted
+        assert_eq!(result.uncovered_count, 2); // t4, t5 (t2 deleted)
+        assert!(!result.tracks.iter().any(|t| t.id == "t2"));
+    }
+
+    #[test]
+    fn test_all_track_paths() {
+        let conn = create_test_db();
+        let entries = all_track_paths(&conn, None).unwrap();
+        assert_eq!(entries.len(), 5); // excludes sampler t6
+        // Verify field mapping is correct
+        let t1 = entries.iter().find(|e| e.id == "t1").unwrap();
+        assert_eq!(t1.artist, "Burial");
+        assert_eq!(t1.title, "Archangel");
+        assert!(t1.path.contains("Archangel"));
+
+        let entries = all_track_paths(&conn, Some("/Users/testuser/Music/Burial/")).unwrap();
+        assert_eq!(entries.len(), 2); // t1, t2
+    }
+
+    #[test]
+    fn test_find_metadata_duplicates_none() {
+        let conn = create_test_db();
+        let groups = find_metadata_duplicates(&conn, None, None).unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_find_metadata_duplicates_with_dup() {
+        let conn = create_test_db();
+        conn.execute(
+            "INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at) \
+             VALUES ('t1_dup', 'Archangel', 'a1', 'g1', 13950, 240, '/Users/testuser/Music/Burial/Archangel_copy.flac', 320, 44100, 5, '2023-05-01')",
+            [],
+        ).unwrap();
+
+        let groups = find_metadata_duplicates(&conn, None, None).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "archangel");
+        assert_eq!(groups[0].artist, "burial");
+        assert!(groups[0].track_ids.contains(&"t1".to_string()));
+        assert!(groups[0].track_ids.contains(&"t1_dup".to_string()));
+    }
+
+    #[test]
+    fn test_find_metadata_duplicates_case_insensitive() {
+        let conn = create_test_db();
+        // Insert duplicate with different casing and whitespace
+        conn.execute(
+            "INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at) \
+             VALUES ('t1_dup', '  ARCHANGEL  ', 'a1', 'g1', 13950, 240, '/Users/testuser/Music/Burial/Archangel_copy.flac', 320, 44100, 5, '2023-05-01')",
+            [],
+        ).unwrap();
+
+        let groups = find_metadata_duplicates(&conn, None, None).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].track_ids.contains(&"t1".to_string()));
+        assert!(groups[0].track_ids.contains(&"t1_dup".to_string()));
+    }
+
+    #[test]
+    fn test_playlist_membership_counts() {
+        let conn = create_test_db();
+        let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        let counts = playlist_membership_counts(&conn, &ids).unwrap();
+        assert_eq!(counts.get("t1"), Some(&1)); // in p1
+        assert_eq!(counts.get("t3"), Some(&1)); // in p1
+        assert_eq!(counts.get("t2"), None); // not in any playlist
     }
 
     // ==================== Integration tests (real DB) — history ====================

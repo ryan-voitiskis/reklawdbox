@@ -633,6 +633,65 @@ pub(super) enum AuditOperation {
     },
 }
 
+// ---------------------------------------------------------------------------
+// Library health params
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct ScanBrokenLinksParams {
+    #[schemars(description = "Scope to tracks whose file path starts with this prefix")]
+    pub path_prefix: Option<String>,
+    #[schemars(description = "Attempt fuzzy filename matching for relocations (default true)")]
+    pub suggest_relocations: Option<bool>,
+    #[schemars(description = "Max broken links to report (default 200)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Offset for pagination")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct ScanOrphanFilesParams {
+    #[schemars(description = "Directory to scan (default: content roots from library)")]
+    pub path_prefix: Option<String>,
+    #[schemars(description = "Max orphan files to report (default 200)")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct ScanPlaylistCoverageParams {
+    #[serde(flatten)]
+    pub filters: SearchFilterParams,
+    #[schemars(description = "Max uncovered tracks to return (default 200)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Offset for pagination")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DuplicateDetectionLevel {
+    /// Byte-identical file matching via SHA-256 hash
+    Exact,
+    /// Match by artist + title (case-insensitive)
+    #[default]
+    Metadata,
+    /// Audio fingerprint matching (not yet implemented)
+    Fingerprint,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct ScanDuplicatesParams {
+    #[schemars(
+        description = "Detection level: 'metadata' (default), 'exact' (SHA-256 hash), or 'fingerprint' (not yet implemented)"
+    )]
+    pub detection_level: Option<DuplicateDetectionLevel>,
+    #[schemars(description = "Scope to tracks whose file path starts with this prefix")]
+    pub path_prefix: Option<String>,
+    #[schemars(description = "Max duplicate groups to report (default 50)")]
+    pub limit: Option<u32>,
+}
+
 impl schemars::JsonSchema for AuditOperation {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("AuditOperation")
