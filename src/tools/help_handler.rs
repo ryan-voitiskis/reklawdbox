@@ -86,9 +86,22 @@ const WORKFLOWS: &[Workflow] = &[
     },
     Workflow {
         name: "Metadata Backfill",
-        keywords: &["label", "labels", "backfill", "publisher", "year", "years", "metadata"],
+        keywords: &[
+            "label",
+            "labels",
+            "backfill",
+            "publisher",
+            "year",
+            "years",
+            "metadata",
+        ],
         summary: "Auto-fill empty labels and years from Discogs enrichment, then resolve conflicts.",
-        key_tools: &["cache_coverage", "backfill_labels", "backfill_years", "update_tracks"],
+        key_tools: &[
+            "cache_coverage",
+            "backfill_labels",
+            "backfill_years",
+            "update_tracks",
+        ],
         sop: SOP_METADATA_BACKFILL,
     },
 ];
