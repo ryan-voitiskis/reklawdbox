@@ -1,13 +1,13 @@
 ---
 title: MCP Tools
-description: All 34 MCP tools exposed by the reklawdbox server, grouped by function.
+description: All 37 MCP tools exposed by the reklawdbox server, grouped by function.
 sidebar:
   order: 0
 ---
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
-reklawdbox exposes **34 MCP tools** for reading your library, enriching metadata, analyzing audio, building sets, and exporting changes. All tools accept and return JSON.
+reklawdbox exposes **37 MCP tools** for reading your library, enriching metadata, analyzing audio, building sets, and exporting changes. All tools accept and return JSON.
 
 ## Tool pipeline
 
@@ -26,7 +26,7 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
 <CardGrid>
   <Card title="Library & Data" icon="magnifier">
     Search tracks, read playlists, resolve cached enrichment and analysis data.
-    [8 tools](/mcp-tools/library-data/)
+    [11 tools](/mcp-tools/library-data/)
   </Card>
   <Card title="Enrichment & Analysis" icon="rocket">
     Look up metadata on Discogs and Beatport. Analyze audio for BPM, key, and energy descriptors.
@@ -48,7 +48,7 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
 
 ## Shared search filters
 
-Many tools share a common set of **search filter parameters**. Used by `search_tracks`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
+Many tools share a common set of **search filter parameters**. Used by `search_tracks`, `get_play_stats`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, and `cache_coverage`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

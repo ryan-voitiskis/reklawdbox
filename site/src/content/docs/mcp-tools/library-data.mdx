@@ -72,6 +72,46 @@ List tracks in a specific playlist, in playlist order.
 
 ---
 
+## Play history tools
+
+---
+
+### `get_sessions`
+
+List recent DJ sessions from Rekordbox play history. Returns session ID, name, date, track count, and estimated wall-clock duration.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `limit` | integer | | Max sessions to return (default: `20`, max: `100`) |
+| `after` | string | | Only sessions on or after this ISO date (e.g., `"2024-01-01"`) |
+
+Duration is estimated from the timestamp span of tracks in the session plus the last track's length. Returns `null` for single-track sessions.
+
+---
+
+### `get_session_tracks`
+
+Get the ordered track list for a specific DJ session. Each track includes a `played_at` timestamp showing when it was loaded during the session.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `session_id` | string | **yes** | Session ID from `get_sessions` |
+
+---
+
+### `get_play_stats`
+
+Get per-track play statistics scoped by [shared search filters](/mcp-tools/#shared-search-filters). Shows play counts, last played dates, and which sessions each track appeared in.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `include_unplayed` | boolean | | Also return tracks matching filters that have never been played (default: `false`) |
+| `limit` | integer | | Max results (default: `200`, max: `500`) |
+
+Results are ordered by play count descending. When `include_unplayed` is `true`, unplayed tracks are appended after played tracks (ordered by title).
+
+---
+
 ## Data resolution tools
 
 Return locally-cached data without external API calls or analysis.
