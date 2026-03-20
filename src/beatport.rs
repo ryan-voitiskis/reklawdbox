@@ -42,6 +42,7 @@ pub struct BeatportResult {
     pub key: String,
     pub track_name: String,
     pub artists: Vec<String>,
+    pub release_date: Option<String>,
 }
 
 async fn wait_for_rate_limit() {
@@ -227,12 +228,21 @@ fn parse_beatport_html(
                     .unwrap_or("")
                     .to_string();
 
+                // Try publish_date first, then release_date.
+                // Format: "YYYY-MM-DDT00:00:00"
+                let release_date = track
+                    .get("publish_date")
+                    .or_else(|| track.get("release_date"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
                 return Ok(Some(BeatportResult {
                     genre,
                     bpm,
                     key,
                     track_name: track_name.to_string(),
                     artists,
+                    release_date,
                 }));
             }
         }
@@ -349,6 +359,51 @@ mod tests {
         assert_eq!(result.key, "Am");
         assert_eq!(result.track_name, "Archangel");
         assert_eq!(result.artists, vec!["Burial".to_string()]);
+        assert_eq!(result.release_date, None);
+    }
+
+    #[test]
+    fn test_parse_extracts_publish_date() {
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 1,
+                "track_name": "Archangel",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 140,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Bass / Club"}],
+                "publish_date": "2023-03-17T00:00:00",
+                "release_date": "2023-01-01T00:00:00"
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match");
+
+        // publish_date takes priority over release_date
+        assert_eq!(result.release_date, Some("2023-03-17T00:00:00".to_string()));
+    }
+
+    #[test]
+    fn test_parse_falls_back_to_release_date() {
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 1,
+                "track_name": "Archangel",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 140,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Bass / Club"}],
+                "release_date": "2010-12-06T00:00:00"
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match");
+
+        assert_eq!(result.release_date, Some("2010-12-06T00:00:00".to_string()));
     }
 
     #[test]

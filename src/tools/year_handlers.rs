@@ -346,9 +346,13 @@ fn discogs_year_for_track(
         &norm_title,
         norm_album.as_deref(),
     )
-    .ok()?;
+    .unwrap_or_else(|e| {
+        tracing::warn!(provider = "discogs", artist = %norm_artist, title = %norm_title,
+            "get_enrichment failed: {e}");
+        None
+    })?;
 
-    let discogs_val = classify_handler::parse_response_json(discogs_cache.as_ref());
+    let discogs_val = classify_handler::parse_response_json(Some(&discogs_cache));
     discogs_val
         .as_ref()
         .and_then(|v| v.get("year"))
@@ -370,10 +374,14 @@ fn beatport_year_for_track(
     let norm_artist = normalize::normalize_for_matching(&track.artist);
     let norm_title = normalize::normalize_for_matching(&track.title);
 
-    let beatport_cache =
-        store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None).ok()?;
+    let beatport_cache = store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
+        .unwrap_or_else(|e| {
+            tracing::warn!(provider = "beatport", artist = %norm_artist, title = %norm_title,
+                "get_enrichment failed: {e}");
+            None
+        })?;
 
-    let beatport_val = classify_handler::parse_response_json(beatport_cache.as_ref());
+    let beatport_val = classify_handler::parse_response_json(Some(&beatport_cache));
     beatport_val
         .as_ref()
         .and_then(|v| v.get("release_date"))
@@ -390,10 +398,14 @@ fn musicbrainz_year_for_track(
     let norm_artist = normalize::normalize_for_matching(&track.artist);
     let norm_title = normalize::normalize_for_matching(&track.title);
 
-    let mb_cache =
-        store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None).ok()?;
+    let mb_cache = store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
+        .unwrap_or_else(|e| {
+            tracing::warn!(provider = "musicbrainz", artist = %norm_artist, title = %norm_title,
+                "get_enrichment failed: {e}");
+            None
+        })?;
 
-    let mb_val = classify_handler::parse_response_json(mb_cache.as_ref());
+    let mb_val = classify_handler::parse_response_json(Some(&mb_cache));
     mb_val
         .as_ref()
         .and_then(|v| v.get("first_release_date"))
