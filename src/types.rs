@@ -265,6 +265,7 @@ pub enum Confidence {
 pub enum Provider {
     Discogs,
     Beatport,
+    Bandcamp,
 }
 
 impl Provider {
@@ -272,6 +273,7 @@ impl Provider {
         match self {
             Self::Discogs => "discogs",
             Self::Beatport => "beatport",
+            Self::Bandcamp => "bandcamp",
         }
     }
 }

@@ -1,7 +1,7 @@
 ## Constraints
 
-- **Labels are enrichment-dependent.** Labels come from Discogs enrichment cache, with MusicBrainz as a fallback. Tracks without cached enrichment from either source are skipped, not fetched.
-- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment. For tracks still missing years after the tool runs, the agent researches release dates.
+- **Labels are enrichment-dependent.** Labels come from Discogs enrichment cache, with MusicBrainz and Bandcamp as fallbacks. Tracks without cached enrichment from any source are skipped, not fetched.
+- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates.
 - **No auto-tagging without review.** The backfill tools stage non-conflicting values automatically, but conflicts require human approval before staging.
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
@@ -79,19 +79,20 @@ Stage approved changes via `update_tracks`.
 backfill_years()
 ```
 
-The tool scans the entire collection (excluding samples) and tries five sources in priority order for each track with year=0:
+The tool scans the entire collection (excluding samples) and tries six sources in priority order for each track with year=0:
 
 1. **File tags** — reads year from the audio file's metadata (ID3v2, Vorbis Comment, RIFF INFO). Most reliable since the user tagged it.
 2. **Folder path** — extracts year from a `(YYYY)` suffix in the parent directory name (e.g. `Album (2019)/`).
 3. **Discogs enrichment** — falls back to the cached Discogs release year.
 4. **Beatport enrichment** — falls back to the cached Beatport `publish_date`/`release_date`.
 5. **MusicBrainz enrichment** — falls back to the cached MusicBrainz `first-release-date`.
+6. **Bandcamp enrichment** — falls back to the cached Bandcamp `release_date`. Particularly effective for underground/independent electronic music.
 
 The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. Tracks where the current year differs from a source are reported as conflicts.
 
 Note: Beatport date extraction requires enrichment cache entries created after this feature was added. For tracks with older cache entries, re-enrich with `enrich_tracks(providers=["beatport"], force_refresh=true)` to populate the `release_date` field.
 
-Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz), N already correct, N conflicts, N without any source."
+Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source."
 
 ### 4. Resolve year conflicts
 
@@ -128,9 +129,21 @@ The tool searches MusicBrainz for the recording (score ≥ 90), extracts `first-
 
 Batch results and present for user approval, then stage via `update_tracks`.
 
-#### 5b. Web research for remaining gaps
+#### 5b. Bandcamp lookup
 
-For tracks MusicBrainz doesn't cover:
+For tracks MusicBrainz doesn't cover, try Bandcamp — it has a high hit rate for underground/independent electronic music:
+
+```
+lookup_bandcamp(track_id="...")
+```
+
+The tool searches Bandcamp for the track, fetches the detail page for structured metadata (JSON-LD), and extracts `release_date`, `label`, and `tags`. Results are cached. Rate limiting (1 req/1.5s, 2 requests per lookup) is handled automatically.
+
+Batch results and present for user approval, then stage via `update_tracks`.
+
+#### 5c. Web research for remaining gaps
+
+For tracks neither MusicBrainz nor Bandcamp cover:
 
 1. **Group by artist** for efficient lookup.
 2. **Search for release dates** — use web search, Discogs links, or label catalogs to find the original release year.

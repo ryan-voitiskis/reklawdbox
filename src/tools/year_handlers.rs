@@ -109,6 +109,7 @@ pub(super) fn handle_backfill_years(
     let mut filled_discogs = 0usize;
     let mut filled_beatport = 0usize;
     let mut filled_musicbrainz = 0usize;
+    let mut filled_bandcamp = 0usize;
     let mut already_set = 0usize;
     let mut conflicts = Vec::new();
     let mut remaining_year_zero = Vec::new();
@@ -190,6 +191,21 @@ pub(super) fn handle_backfill_years(
                 continue;
             }
 
+            // Fall back to Bandcamp enrichment.
+            if let Some(year) = bandcamp_year_for_track(&store_conn, track) {
+                filled_bandcamp += 1;
+                to_stage.push(TrackChange {
+                    track_id: track.id.clone(),
+                    genre: None,
+                    comments: None,
+                    rating: None,
+                    color: None,
+                    label: None,
+                    year: Some(year),
+                });
+                continue;
+            }
+
             remaining_year_zero.push(serde_json::json!({
                 "track_id": track.id,
                 "artist": track.artist,
@@ -220,7 +236,7 @@ pub(super) fn handle_backfill_years(
     drop(store_conn);
 
     let filled =
-        filled_file_tags + filled_folder_path + filled_discogs + filled_beatport + filled_musicbrainz;
+        filled_file_tags + filled_folder_path + filled_discogs + filled_beatport + filled_musicbrainz + filled_bandcamp;
 
     let staged_count = if !dry_run && !to_stage.is_empty() {
         let (staged, _) = server.state.changes.stage(to_stage);
@@ -241,6 +257,7 @@ pub(super) fn handle_backfill_years(
                 "discogs": filled_discogs,
                 "beatport": filled_beatport,
                 "musicbrainz": filled_musicbrainz,
+                "bandcamp": filled_bandcamp,
             },
             "already_set": already_set,
             "conflicts": conflicts.len(),
@@ -383,6 +400,30 @@ fn beatport_year_for_track(
 
     let beatport_val = classify_handler::parse_response_json(Some(&beatport_cache));
     beatport_val
+        .as_ref()
+        .and_then(|v| v.get("release_date"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| parse_year_str(s))
+}
+
+/// Look up the Bandcamp enrichment year for a track. Returns `None` if no
+/// enrichment is cached or the cached entry has no release date.
+fn bandcamp_year_for_track(
+    store_conn: &rusqlite::Connection,
+    track: &crate::types::Track,
+) -> Option<i32> {
+    let norm_artist = normalize::normalize_for_matching(&track.artist);
+    let norm_title = normalize::normalize_for_matching(&track.title);
+
+    let bc_cache = store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
+        .unwrap_or_else(|e| {
+            tracing::warn!(provider = "bandcamp", artist = %norm_artist, title = %norm_title,
+                "get_enrichment failed: {e}");
+            None
+        })?;
+
+    let bc_val = classify_handler::parse_response_json(Some(&bc_cache));
+    bc_val
         .as_ref()
         .and_then(|v| v.get("release_date"))
         .and_then(|v| v.as_str())

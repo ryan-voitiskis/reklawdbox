@@ -1,5 +1,6 @@
 mod audio;
 mod audit;
+mod bandcamp;
 mod beatport;
 mod changes;
 mod classify;

@@ -122,6 +122,33 @@ pub(super) fn handle_backfill_labels(
                 .and_then(normalize_label)
         });
 
+        // Fall back to Bandcamp if still no label
+        let enrichment_label = enrichment_label.or_else(|| {
+            let bc_cache = match store::get_enrichment(
+                &store_conn,
+                "bandcamp",
+                &norm_artist,
+                &norm_title,
+                None,
+            ) {
+                Ok(cache) => cache,
+                Err(e) => {
+                    tracing::warn!(
+                        track_id = track.id.as_str(),
+                        "Bandcamp enrichment cache lookup failed: {e}"
+                    );
+                    return None;
+                }
+            };
+            let bc_val = super::classify_handler::parse_response_json(bc_cache.as_ref());
+            bc_val
+                .as_ref()
+                .and_then(|v| v.get("label"))
+                .and_then(|v| v.as_str())
+                .filter(|l| !l.is_empty())
+                .and_then(normalize_label)
+        });
+
         let Some(enrich_label) = enrichment_label else {
             no_enrichment += 1;
             continue;

@@ -2,6 +2,7 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 
 use super::*;
+use crate::bandcamp;
 use crate::beatport;
 use crate::db;
 use crate::musicbrainz;
@@ -281,6 +282,91 @@ pub(super) async fn handle_lookup_musicbrainz(
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
+pub(super) async fn handle_lookup_bandcamp(
+    server: &ReklawdboxServer,
+    params: LookupBandcampParams,
+) -> Result<CallToolResult, McpError> {
+    let force_refresh = params.force_refresh.unwrap_or(false);
+
+    let (artist, title) = if let Some(ref track_id) = params.track_id {
+        let conn = server.rekordbox_conn()?;
+        let track = db::get_track(&conn, track_id)
+            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("Track '{track_id}' not found"), None)
+            })?;
+        (
+            params.artist.unwrap_or(track.artist),
+            params.title.unwrap_or(track.title),
+        )
+    } else {
+        let artist = params.artist.ok_or_else(|| {
+            McpError::invalid_params("artist is required when track_id is not provided", None)
+        })?;
+        let title = params.title.ok_or_else(|| {
+            McpError::invalid_params("title is required when track_id is not provided", None)
+        })?;
+        (artist, title)
+    };
+
+    let norm_artist = crate::normalize::normalize_for_matching(&artist);
+    let norm_title = crate::normalize::normalize_for_matching(&title);
+
+    if !force_refresh {
+        let store_conn = server.cache_store_conn()?;
+        if let Some(cached) =
+            store::get_enrichment(&store_conn, "bandcamp", &norm_artist, &norm_title, None)
+                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+        {
+            let result = match &cached.response_json {
+                Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
+                    .unwrap_or(serde_json::Value::Null),
+                None => serde_json::Value::Null,
+            };
+            let result =
+                lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
+    }
+
+    let result = lookup_bandcamp_remote(server, &artist, &title)
+        .await
+        .map_err(|e| mcp_internal_error(format!("Bandcamp error: {e}")))?;
+
+    let (match_quality, response_json) = match &result {
+        Some(r) => {
+            let quality = if r.score == 100 { "exact" } else { "fuzzy" };
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            (Some(quality), Some(json))
+        }
+        None => (Some("none"), None),
+    };
+    {
+        let store_conn = server.cache_store_conn()?;
+        store::set_enrichment(
+            &store_conn,
+            "bandcamp",
+            &norm_artist,
+            &norm_title,
+            None,
+            match_quality,
+            response_json.as_deref(),
+        )
+        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+    }
+
+    let output = lookup_output_with_cache_metadata(
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        false,
+        None,
+    );
+    let json =
+        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
 pub(super) async fn lookup_musicbrainz_remote(
     server: &ReklawdboxServer,
     artist: &str,
@@ -339,6 +425,7 @@ async fn enrich_single_track(
     store_path: String,
     cache_tx: tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>,
     beatport_sem: std::sync::Arc<tokio::sync::Semaphore>,
+    bandcamp_sem: std::sync::Arc<tokio::sync::Semaphore>,
     discogs_auth_failed: std::sync::Arc<tokio::sync::watch::Receiver<bool>>,
     auth_fail_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
 ) -> EnrichTrackResult {
@@ -366,9 +453,11 @@ async fn enrich_single_track(
     // Determine which providers need work vs are cached
     let want_discogs = providers.contains(&crate::types::Provider::Discogs);
     let want_beatport = providers.contains(&crate::types::Provider::Beatport);
+    let want_bandcamp = providers.contains(&crate::types::Provider::Bandcamp);
 
     let mut discogs_cached = false;
     let mut beatport_cached = false;
+    let mut bandcamp_cached = false;
 
     if let Some(ref conn) = cache_conn {
         if want_discogs
@@ -390,6 +479,13 @@ async fn enrich_single_track(
             result.cached += 1;
             beatport_cached = true;
         }
+        if want_bandcamp
+            && let Ok(Some(_)) =
+                store::get_enrichment(conn, "bandcamp", &norm_artist, &norm_title, None)
+        {
+            result.cached += 1;
+            bandcamp_cached = true;
+        }
     }
 
     // Drop the read connection before doing network I/O
@@ -397,6 +493,7 @@ async fn enrich_single_track(
 
     let need_discogs = want_discogs && !discogs_cached;
     let need_beatport = want_beatport && !beatport_cached;
+    let need_bandcamp = want_bandcamp && !bandcamp_cached;
 
     // Build futures for each provider
 
@@ -613,16 +710,108 @@ async fn enrich_single_track(
         }
     };
 
-    // Run Discogs + Beatport in parallel when both are requested
+    let bandcamp_fut = {
+        let server = server.clone();
+        let artist = artist.clone();
+        let title = title.clone();
+        let norm_artist = norm_artist.clone();
+        let norm_title = norm_title.clone();
+        let track_id = track_id.clone();
+        let cache_tx = cache_tx.clone();
+        let bandcamp_sem = bandcamp_sem.clone();
+        async move {
+            if !need_bandcamp {
+                return (0usize, 0usize, Vec::new());
+            }
+
+            let _permit = match bandcamp_sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    return (
+                        0,
+                        0,
+                        vec![serde_json::json!({
+                            "track_id": &track_id,
+                            "artist": &artist,
+                            "title": &title,
+                            "provider": "bandcamp",
+                            "error": "Bandcamp semaphore closed",
+                        })],
+                    );
+                }
+            };
+
+            match bandcamp::lookup(&server.state.http, &artist, &title).await {
+                Ok(Some(r)) => {
+                    let quality = if r.score == 100 { "exact" } else { "fuzzy" };
+                    let json_str = match serde_json::to_string(&r) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            return (
+                                0,
+                                0,
+                                vec![serde_json::json!({
+                                    "track_id": &track_id,
+                                    "artist": &artist,
+                                    "title": &title,
+                                    "provider": "bandcamp",
+                                    "error": format!("Serialize error: {e}"),
+                                })],
+                            );
+                        }
+                    };
+                    let _ = cache_tx
+                        .send(EnrichCacheWriteMsg::Enrichment {
+                            provider: "bandcamp".to_string(),
+                            norm_artist,
+                            norm_title,
+                            norm_album: None,
+                            match_quality: Some(quality.to_string()),
+                            response_json: Some(json_str),
+                        })
+                        .await;
+                    (1, 0, Vec::new())
+                }
+                Ok(None) => {
+                    let _ = cache_tx
+                        .send(EnrichCacheWriteMsg::Enrichment {
+                            provider: "bandcamp".to_string(),
+                            norm_artist,
+                            norm_title,
+                            norm_album: None,
+                            match_quality: Some("none".to_string()),
+                            response_json: None,
+                        })
+                        .await;
+                    (0, 1, Vec::new())
+                }
+                Err(e) => (
+                    0,
+                    0,
+                    vec![serde_json::json!({
+                        "track_id": &track_id,
+                        "artist": &artist,
+                        "title": &title,
+                        "provider": "bandcamp",
+                        "error": e.to_string(),
+                    })],
+                ),
+            }
+        }
+    };
+
+    // Run Discogs + Beatport + Bandcamp in parallel when requested
     let (
         (discogs_processed, discogs_skipped, discogs_failures, discogs_auth_err),
         (beatport_processed, beatport_skipped, beatport_failures),
-    ) = tokio::join!(discogs_fut, beatport_fut);
+        (bandcamp_processed, bandcamp_skipped, bandcamp_failures),
+    ) = tokio::join!(discogs_fut, beatport_fut, bandcamp_fut);
 
-    result.processed += discogs_processed + beatport_processed;
-    result.skipped += discogs_skipped + beatport_skipped;
+    result.processed += discogs_processed + beatport_processed + bandcamp_processed;
+    result.skipped += discogs_skipped + beatport_skipped + bandcamp_skipped;
     result.failures.extend(discogs_failures);
     result.failures.extend(beatport_failures);
+    result.failures.extend(bandcamp_failures);
     result.discogs_auth_error = discogs_auth_err;
 
     result
@@ -720,6 +909,7 @@ pub(super) async fn handle_enrich_tracks(
     // Semaphores
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let beatport_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+    let bandcamp_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
 
     // Spawn per-track tasks
     let mut handles = Vec::with_capacity(total_tracks);
@@ -743,6 +933,7 @@ pub(super) async fn handle_enrich_tracks(
         let store_path = store_path.clone();
         let cache_tx = cache_tx.clone();
         let beatport_sem = beatport_sem.clone();
+        let bandcamp_sem = bandcamp_sem.clone();
         let auth_fail_rx = auth_fail_rx.clone();
         let auth_fail_tx = auth_fail_tx.clone();
 
@@ -762,6 +953,7 @@ pub(super) async fn handle_enrich_tracks(
                 store_path,
                 cache_tx,
                 beatport_sem,
+                bandcamp_sem,
                 auth_fail_rx,
                 auth_fail_tx,
             )

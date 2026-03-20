@@ -1,4 +1,5 @@
 use super::*;
+use crate::bandcamp;
 use crate::beatport;
 use crate::discogs;
 use crate::store;
@@ -275,6 +276,16 @@ pub(super) async fn lookup_beatport_remote(
     }
 
     beatport::lookup(&server.state.http, artist, title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(super) async fn lookup_bandcamp_remote(
+    server: &ReklawdboxServer,
+    artist: &str,
+    title: &str,
+) -> Result<Option<bandcamp::BandcampResult>, String> {
+    bandcamp::lookup(&server.state.http, artist, title)
         .await
         .map_err(|e| e.to_string())
 }

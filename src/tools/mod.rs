@@ -302,7 +302,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from Discogs enrichment, with MusicBrainz fallback. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill empty labels from Discogs enrichment, with MusicBrainz and Bandcamp fallbacks. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
     )]
     async fn backfill_labels(
         &self,
@@ -312,7 +312,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Use preview_changes then write_xml to export."
     )]
     async fn backfill_years(
         &self,
@@ -359,7 +359,17 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Batch enrich tracks via Discogs/Beatport. Select tracks by IDs, playlist, or search filters. Results are cached."
+        description = "Look up a track on Bandcamp for year/label/tags data. Searches Bandcamp, then fetches the detail page for structured metadata. Particularly effective for underground/independent electronic music. Results are cached. Pass track_id to auto-fill artist/title from the library."
+    )]
+    async fn lookup_bandcamp(
+        &self,
+        params: Parameters<LookupBandcampParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_lookup_bandcamp(self, params.0).await
+    }
+
+    #[tool(
+        description = "Batch enrich tracks via Discogs/Beatport/Bandcamp. Select tracks by IDs, playlist, or search filters. Results are cached."
     )]
     async fn enrich_tracks(
         &self,

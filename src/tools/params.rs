@@ -219,6 +219,18 @@ pub struct LookupMusicBrainzParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct LookupBandcampParams {
+    #[schemars(description = "Track ID — auto-fills artist/title from library")]
+    pub track_id: Option<String>,
+    #[schemars(description = "Artist name (required if no track_id)")]
+    pub artist: Option<String>,
+    #[schemars(description = "Track title (required if no track_id)")]
+    pub title: Option<String>,
+    #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
+    pub force_refresh: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct EnrichTracksParams {
     #[serde(flatten)]
     pub filters: SearchFilterParams,
@@ -230,7 +242,7 @@ pub struct EnrichTracksParams {
     pub max_tracks: Option<u32>,
     #[schemars(description = "Offset for pagination (skip first N tracks in result set)")]
     pub offset: Option<u32>,
-    #[schemars(description = "Providers to use: 'discogs', 'beatport' (default ['discogs'])")]
+    #[schemars(description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])")]
     pub providers: Option<Vec<crate::types::Provider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
