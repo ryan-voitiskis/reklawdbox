@@ -4,6 +4,7 @@ use rmcp::model::{CallToolResult, Content};
 use super::*;
 use crate::beatport;
 use crate::db;
+use crate::musicbrainz;
 use crate::store;
 
 fn normalize_discogs_album_for_cache(album: Option<&str>) -> Option<String> {
@@ -194,6 +195,100 @@ pub(super) async fn handle_lookup_beatport(
     let json =
         serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+pub(super) async fn handle_lookup_musicbrainz(
+    server: &ReklawdboxServer,
+    params: LookupMusicBrainzParams,
+) -> Result<CallToolResult, McpError> {
+    let force_refresh = params.force_refresh.unwrap_or(false);
+
+    let (artist, title) = if let Some(ref track_id) = params.track_id {
+        let conn = server.rekordbox_conn()?;
+        let track = db::get_track(&conn, track_id)
+            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("Track '{track_id}' not found"), None)
+            })?;
+        (
+            params.artist.unwrap_or(track.artist),
+            params.title.unwrap_or(track.title),
+        )
+    } else {
+        let artist = params.artist.ok_or_else(|| {
+            McpError::invalid_params("artist is required when track_id is not provided", None)
+        })?;
+        let title = params.title.ok_or_else(|| {
+            McpError::invalid_params("title is required when track_id is not provided", None)
+        })?;
+        (artist, title)
+    };
+
+    let norm_artist = crate::normalize::normalize_for_matching(&artist);
+    let norm_title = crate::normalize::normalize_for_matching(&title);
+
+    if !force_refresh {
+        let store_conn = server.cache_store_conn()?;
+        if let Some(cached) =
+            store::get_enrichment(&store_conn, "musicbrainz", &norm_artist, &norm_title, None)
+                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+        {
+            let result = match &cached.response_json {
+                Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
+                    .unwrap_or(serde_json::Value::Null),
+                None => serde_json::Value::Null,
+            };
+            let result =
+                lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
+    }
+
+    let result = lookup_musicbrainz_remote(server, &artist, &title)
+        .await
+        .map_err(|e| mcp_internal_error(format!("MusicBrainz error: {e}")))?;
+
+    let (match_quality, response_json) = match &result {
+        Some(r) => {
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            (Some("exact"), Some(json))
+        }
+        None => (Some("none"), None),
+    };
+    {
+        let store_conn = server.cache_store_conn()?;
+        store::set_enrichment(
+            &store_conn,
+            "musicbrainz",
+            &norm_artist,
+            &norm_title,
+            None,
+            match_quality,
+            response_json.as_deref(),
+        )
+        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+    }
+
+    let output = lookup_output_with_cache_metadata(
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        false,
+        None,
+    );
+    let json =
+        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+pub(super) async fn lookup_musicbrainz_remote(
+    server: &ReklawdboxServer,
+    artist: &str,
+    title: &str,
+) -> Result<Option<musicbrainz::MusicBrainzResult>, String> {
+    musicbrainz::lookup(&server.state.http, artist, title)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

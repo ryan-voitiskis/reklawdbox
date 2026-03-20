@@ -1,10 +1,11 @@
 ## Constraints
 
-- **Enrichment-dependent.** Labels and years come from Discogs enrichment cache. Tracks without cached enrichment are skipped, not fetched.
+- **Labels are enrichment-dependent.** Labels come from Discogs enrichment cache, with MusicBrainz as a fallback. Tracks without cached enrichment from either source are skipped, not fetched.
+- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment. For tracks still missing years after the tool runs, the agent researches release dates.
 - **No auto-tagging without review.** The backfill tools stage non-conflicting values automatically, but conflicts require human approval before staging.
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
-- **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Beatport enrichment does not include year data — only Discogs is used.
+- **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Rekordbox often fails to import year tags from WAV files, so year=0 does not mean the file lacks a year tag — check before assuming it's missing.
 
 ## Prerequisites
 
@@ -78,12 +79,19 @@ Stage approved changes via `update_tracks`.
 backfill_years()
 ```
 
-The tool scans the entire collection (excluding samples), looks up each track's Discogs enrichment year, and:
-- **Fills** missing years (year=0) from enrichment (auto-staged)
-- **Skips** tracks where current year matches enrichment
-- **Reports conflicts** where current year differs from enrichment (not staged)
+The tool scans the entire collection (excluding samples) and tries five sources in priority order for each track with year=0:
 
-Report the summary: "Year backfill complete: N years staged, N already correct, N conflicts, N without enrichment."
+1. **File tags** — reads year from the audio file's metadata (ID3v2, Vorbis Comment, RIFF INFO). Most reliable since the user tagged it.
+2. **Folder path** — extracts year from a `(YYYY)` suffix in the parent directory name (e.g. `Album (2019)/`).
+3. **Discogs enrichment** — falls back to the cached Discogs release year.
+4. **Beatport enrichment** — falls back to the cached Beatport `publish_date`/`release_date`.
+5. **MusicBrainz enrichment** — falls back to the cached MusicBrainz `first-release-date`.
+
+The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. Tracks where the current year differs from a source are reported as conflicts.
+
+Note: Beatport date extraction requires enrichment cache entries created after this feature was added. For tracks with older cache entries, re-enrich with `enrich_tracks(providers=["beatport"], force_refresh=true)` to populate the `release_date` field.
+
+Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz), N already correct, N conflicts, N without any source."
 
 ### 4. Resolve year conflicts
 
@@ -104,7 +112,36 @@ Ask user: **"Approve earlier year for all, or review individually?"**
 
 Stage approved changes via `update_tracks`.
 
-### 5. Export
+### 5. Research remaining year gaps
+
+After `backfill_years`, some tracks may still have year=0 with no source data. The tool reports these as `remaining_year_zero`. For these tracks:
+
+#### 5a. MusicBrainz lookup
+
+Use the `lookup_musicbrainz` tool for each remaining track:
+
+```
+lookup_musicbrainz(track_id="...")
+```
+
+The tool searches MusicBrainz for the recording (score ≥ 90), extracts `first-release-date` as the year and the label from the best matching release, and caches the result. Rate limiting (1 req/sec) is handled automatically.
+
+Batch results and present for user approval, then stage via `update_tracks`.
+
+#### 5b. Web research for remaining gaps
+
+For tracks MusicBrainz doesn't cover:
+
+1. **Group by artist** for efficient lookup.
+2. **Search for release dates** — use web search, Discogs links, or label catalogs to find the original release year.
+3. **Present findings** grouped by confidence:
+   - **High confidence** (exact release found): present for bulk approval.
+   - **Uncertain** (multiple candidates or approximate): present individually with context.
+4. **Stage approved years** via `update_tracks`.
+
+Skip tracks where no release information can be found — some self-released or private tracks have no public date.
+
+### 6. Export
 
 ```
 preview_changes()

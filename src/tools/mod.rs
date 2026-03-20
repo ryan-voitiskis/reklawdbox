@@ -302,7 +302,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from Discogs enrichment. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill empty labels from Discogs enrichment, with MusicBrainz fallback. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
     )]
     async fn backfill_labels(
         &self,
@@ -312,7 +312,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill missing years (year=0) from Discogs enrichment. Stages non-conflicting years; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Use preview_changes then write_xml to export."
     )]
     async fn backfill_years(
         &self,
@@ -346,6 +346,16 @@ impl ReklawdboxServer {
         params: Parameters<LookupBeatportParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_lookup_beatport(self, params.0).await
+    }
+
+    #[tool(
+        description = "Look up a track on MusicBrainz for year/label data. Returns year from first-release-date and label from the best matching release. Results are cached. Pass track_id to auto-fill artist/title from the library."
+    )]
+    async fn lookup_musicbrainz(
+        &self,
+        params: Parameters<LookupMusicBrainzParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_lookup_musicbrainz(self, params.0).await
     }
 
     #[tool(

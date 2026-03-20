@@ -13,6 +13,7 @@ mod eval_routing;
 mod eval_tasks;
 mod genre;
 mod keychain;
+mod musicbrainz;
 mod normalize;
 mod store;
 mod tags;

@@ -207,6 +207,18 @@ pub struct LookupBeatportParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct LookupMusicBrainzParams {
+    #[schemars(description = "Track ID — auto-fills artist/title from library")]
+    pub track_id: Option<String>,
+    #[schemars(description = "Artist name (required if no track_id)")]
+    pub artist: Option<String>,
+    #[schemars(description = "Track title (required if no track_id)")]
+    pub title: Option<String>,
+    #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
+    pub force_refresh: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct EnrichTracksParams {
     #[serde(flatten)]
     pub filters: SearchFilterParams,
