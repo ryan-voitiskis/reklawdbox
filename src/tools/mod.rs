@@ -302,23 +302,23 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from Discogs enrichment, with MusicBrainz and Bandcamp fallbacks. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill empty labels from Discogs enrichment, with MusicBrainz and Bandcamp fallbacks. Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Set auto_enrich=true to automatically fetch Bandcamp data for uncached tracks before backfilling. Use preview_changes then write_xml to export."
     )]
     async fn backfill_labels(
         &self,
         params: Parameters<BackfillLabelsParams>,
     ) -> Result<CallToolResult, McpError> {
-        handle_backfill_labels(self, params.0)
+        handle_backfill_labels(self, params.0).await
     }
 
     #[tool(
-        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Use preview_changes then write_xml to export."
+        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Set auto_enrich=true to automatically fetch Bandcamp and MusicBrainz data for uncached year-zero tracks before re-scanning. Use preview_changes then write_xml to export."
     )]
     async fn backfill_years(
         &self,
         params: Parameters<BackfillYearsParams>,
     ) -> Result<CallToolResult, McpError> {
-        handle_backfill_years(self, params.0)
+        handle_backfill_years(self, params.0).await
     }
 
     #[tool(

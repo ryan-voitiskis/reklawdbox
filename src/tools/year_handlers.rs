@@ -16,6 +16,51 @@ use crate::types::TrackChange;
 pub(super) struct BackfillYearsParams {
     #[schemars(description = "Preview changes without staging (default false)")]
     pub dry_run: Option<bool>,
+    #[schemars(
+        description = "Automatically enrich remaining year-zero tracks via Bandcamp and MusicBrainz before re-scanning (default false). Fetches data for tracks missing from enrichment caches, then re-runs the year cascade."
+    )]
+    pub auto_enrich: Option<bool>,
+}
+
+/// Cache a lookup result (hit or miss). Returns 1 if the result had data, 0 if miss.
+fn cache_lookup_result<T: serde::Serialize + HasScore>(
+    server: &ReklawdboxServer,
+    provider: &str,
+    norm_artist: &str,
+    norm_title: &str,
+    result: Option<&T>,
+) -> Result<usize, McpError> {
+    let store_conn = server.cache_store_conn()?;
+    match result {
+        Some(r) => {
+            let json = serde_json::to_string(r).ok();
+            let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
+            let _ = store::set_enrichment(
+                &store_conn, provider, norm_artist, norm_title, None,
+                Some(quality), json.as_deref(),
+            );
+            Ok(1)
+        }
+        None => {
+            let _ = store::set_enrichment(
+                &store_conn, provider, norm_artist, norm_title, None,
+                Some("none"), None,
+            );
+            Ok(0)
+        }
+    }
+}
+
+trait HasScore {
+    fn score(&self) -> i32;
+}
+
+impl HasScore for crate::bandcamp::BandcampResult {
+    fn score(&self) -> i32 { self.score }
+}
+
+impl HasScore for crate::musicbrainz::MusicBrainzResult {
+    fn score(&self) -> i32 { self.score }
 }
 
 fn parse_year_str(s: &str) -> Option<i32> {
@@ -71,155 +116,108 @@ fn year_from_folder_path(file_path: &str) -> Option<i32> {
     None
 }
 
-pub(super) fn handle_backfill_years(
-    server: &ReklawdboxServer,
-    params: BackfillYearsParams,
-) -> Result<CallToolResult, McpError> {
-    let dry_run = params.dry_run.unwrap_or(false);
+#[derive(Default)]
+struct BackfillYearsScanResult {
+    filled_file_tags: usize,
+    filled_folder_path: usize,
+    filled_discogs: usize,
+    filled_beatport: usize,
+    filled_musicbrainz: usize,
+    filled_bandcamp: usize,
+    already_set: usize,
+    conflicts: Vec<serde_json::Value>,
+    remaining_year_zero: Vec<serde_json::Value>,
+    remaining_no_discogs: usize,
+    remaining_no_beatport: usize,
+    remaining_no_musicbrainz: usize,
+    remaining_no_bandcamp: usize,
+    to_stage: Vec<TrackChange>,
+    /// Tracks needing Bandcamp enrichment: (norm_artist, norm_title, raw_artist, raw_title).
+    uncached_bandcamp: Vec<(String, String, String, String)>,
+    /// Tracks needing MusicBrainz enrichment: (norm_artist, norm_title, raw_artist, raw_title).
+    uncached_musicbrainz: Vec<(String, String, String, String)>,
+}
 
-    let rb_conn = server.rekordbox_conn()?;
-    let search_params = db::SearchParams {
-        query: None,
-        artist: None,
-        genre: None,
-        rating_min: None,
-        bpm_min: None,
-        bpm_max: None,
-        key: None,
-        playlist: None,
-        has_genre: None,
-        has_label: None,
-        label: None,
-        path: None,
-        path_prefix: None,
-        added_after: None,
-        added_before: None,
-        exclude_samples: true,
-        limit: None,
-        offset: None,
+fn scan_years(
+    store_conn: &rusqlite::Connection,
+    tracks: &[crate::types::Track],
+) -> BackfillYearsScanResult {
+    let mut r = BackfillYearsScanResult::default();
+
+    let year_change = |track_id: String, year: i32| TrackChange {
+        track_id, genre: None, comments: None,
+        rating: None, color: None, label: None, year: Some(year),
     };
-    let tracks = db::search_tracks_unbounded(&rb_conn, &search_params)
-        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
-    drop(rb_conn);
 
-    let store_conn = server.cache_store_conn()?;
-
-    let mut filled_file_tags = 0usize;
-    let mut filled_folder_path = 0usize;
-    let mut filled_discogs = 0usize;
-    let mut filled_beatport = 0usize;
-    let mut filled_musicbrainz = 0usize;
-    let mut filled_bandcamp = 0usize;
-    let mut already_set = 0usize;
-    let mut conflicts = Vec::new();
-    let mut remaining_year_zero = Vec::new();
-    let mut to_stage = Vec::new();
-
-    for track in &tracks {
+    for track in tracks {
         if track.year == 0 {
-            // Priority cascade: file tags → folder path → Discogs → Beatport → MusicBrainz.
+            // Priority cascade: file tags → folder path → Discogs → Beatport → MusicBrainz → Bandcamp.
             if let Some(year) = year_from_file_tags(&track.file_path) {
-                filled_file_tags += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
+                r.filled_file_tags += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
-
             if let Some(year) = year_from_folder_path(&track.file_path) {
-                filled_folder_path += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
+                r.filled_folder_path += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
+                continue;
+            }
+            if let Some(year) = discogs_year_for_track(store_conn, track) {
+                r.filled_discogs += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
+                continue;
+            }
+            if let Some(year) = beatport_year_for_track(store_conn, track) {
+                r.filled_beatport += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
+                continue;
+            }
+            if let Some(year) = musicbrainz_year_for_track(store_conn, track) {
+                r.filled_musicbrainz += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
+                continue;
+            }
+            if let Some(year) = bandcamp_year_for_track(store_conn, track) {
+                r.filled_bandcamp += 1;
+                r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
 
-            // Fall back to Discogs enrichment.
-            if let Some(year) = discogs_year_for_track(&store_conn, track) {
-                filled_discogs += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
-                continue;
+            // Track provider cache gaps for remaining year-zero tracks.
+            let norm_artist = normalize::normalize_for_matching(&track.artist);
+            let norm_title = normalize::normalize_for_matching(&track.title);
+            let has_discogs = store::get_enrichment(store_conn, "discogs", &norm_artist, &norm_title, None)
+                .unwrap_or(None).is_some();
+            let has_beatport = store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
+                .unwrap_or(None).is_some();
+            let has_musicbrainz = store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
+                .unwrap_or(None).is_some();
+            let has_bandcamp = store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
+                .unwrap_or(None).is_some();
+            if !has_discogs { r.remaining_no_discogs += 1; }
+            if !has_beatport { r.remaining_no_beatport += 1; }
+            if !has_musicbrainz {
+                r.remaining_no_musicbrainz += 1;
+                r.uncached_musicbrainz.push((norm_artist.clone(), norm_title.clone(), track.artist.clone(), track.title.clone()));
+            }
+            if !has_bandcamp {
+                r.remaining_no_bandcamp += 1;
+                r.uncached_bandcamp.push((norm_artist.clone(), norm_title.clone(), track.artist.clone(), track.title.clone()));
             }
 
-            // Fall back to Beatport enrichment.
-            if let Some(year) = beatport_year_for_track(&store_conn, track) {
-                filled_beatport += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
-                continue;
-            }
-
-            // Fall back to MusicBrainz enrichment.
-            if let Some(year) = musicbrainz_year_for_track(&store_conn, track) {
-                filled_musicbrainz += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
-                continue;
-            }
-
-            // Fall back to Bandcamp enrichment.
-            if let Some(year) = bandcamp_year_for_track(&store_conn, track) {
-                filled_bandcamp += 1;
-                to_stage.push(TrackChange {
-                    track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: Some(year),
-                });
-                continue;
-            }
-
-            remaining_year_zero.push(serde_json::json!({
+            r.remaining_year_zero.push(serde_json::json!({
                 "track_id": track.id,
                 "artist": track.artist,
                 "title": track.title,
                 "file_path": track.file_path,
             }));
         } else {
-            // Track already has a year — compare against Discogs for conflicts.
-            let discogs_year = discogs_year_for_track(&store_conn, track);
+            let discogs_year = discogs_year_for_track(store_conn, track);
             if let Some(enrich_year) = discogs_year {
                 if track.year == enrich_year {
-                    already_set += 1;
+                    r.already_set += 1;
                 } else {
-                    conflicts.push(serde_json::json!({
+                    r.conflicts.push(serde_json::json!({
                         "track_id": track.id,
                         "artist": track.artist,
                         "title": track.title,
@@ -228,18 +226,87 @@ pub(super) fn handle_backfill_years(
                     }));
                 }
             } else {
-                already_set += 1;
+                r.already_set += 1;
             }
         }
     }
 
-    drop(store_conn);
+    r
+}
 
-    let filled =
-        filled_file_tags + filled_folder_path + filled_discogs + filled_beatport + filled_musicbrainz + filled_bandcamp;
+pub(super) async fn handle_backfill_years(
+    server: &ReklawdboxServer,
+    params: BackfillYearsParams,
+) -> Result<CallToolResult, McpError> {
+    let dry_run = params.dry_run.unwrap_or(false);
+    let auto_enrich = params.auto_enrich.unwrap_or(false);
 
-    let staged_count = if !dry_run && !to_stage.is_empty() {
-        let (staged, _) = server.state.changes.stage(to_stage);
+    // Synchronous DB + cache work in a block to drop MutexGuard before any .await.
+    let (tracks, mut scan) = {
+        let rb_conn = server.rekordbox_conn()?;
+        let search_params = db::SearchParams {
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let tracks = db::search_tracks_unbounded(&rb_conn, &search_params)
+            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        drop(rb_conn);
+
+        let store_conn = server.cache_store_conn()?;
+        let scan = scan_years(&store_conn, &tracks);
+        drop(store_conn);
+        (tracks, scan)
+    };
+
+    let mut auto_enriched = 0usize;
+
+    // Auto-enrich: fetch Bandcamp + MusicBrainz for uncached remaining year-zero tracks.
+    if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty()) {
+        let bc_tracks: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
+        let mb_tracks: Vec<_> = std::mem::take(&mut scan.uncached_musicbrainz);
+        let total = bc_tracks.len() + mb_tracks.len();
+        tracing::info!(bandcamp = bc_tracks.len(), musicbrainz = mb_tracks.len(),
+            "auto_enrich: fetching for {total} uncached year-zero tracks");
+
+        // Fetch Bandcamp.
+        for (norm_artist, norm_title, raw_artist, raw_title) in &bc_tracks {
+            match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
+                Ok(result) => {
+                    auto_enriched += cache_lookup_result(
+                        server, "bandcamp", norm_artist, norm_title, result.as_ref(),
+                    )?;
+                }
+                Err(e) => {
+                    tracing::warn!(artist = raw_artist.as_str(), "Bandcamp auto-enrich failed: {e}");
+                }
+            }
+        }
+
+        // Fetch MusicBrainz.
+        for (norm_artist, norm_title, raw_artist, raw_title) in &mb_tracks {
+            match lookup_musicbrainz_remote(server, raw_artist, raw_title).await {
+                Ok(result) => {
+                    auto_enriched += cache_lookup_result(
+                        server, "musicbrainz", norm_artist, norm_title, result.as_ref(),
+                    )?;
+                }
+                Err(e) => {
+                    tracing::warn!(artist = raw_artist.as_str(), "MusicBrainz auto-enrich failed: {e}");
+                }
+            }
+        }
+
+        // Second pass: re-scan with updated cache.
+        let store_conn = server.cache_store_conn()?;
+        scan = scan_years(&store_conn, &tracks);
+        drop(store_conn);
+    }
+
+    let filled = scan.filled_file_tags + scan.filled_folder_path + scan.filled_discogs
+        + scan.filled_beatport + scan.filled_musicbrainz + scan.filled_bandcamp;
+
+    let staged_count = if !dry_run && !scan.to_stage.is_empty() {
+        let (staged, _) = server.state.changes.stage(scan.to_stage);
         staged
     } else {
         0
@@ -247,28 +314,41 @@ pub(super) fn handle_backfill_years(
 
     let pending = server.state.changes.pending_ids().len();
 
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "summary": {
             "total_scanned": tracks.len(),
             "filled": filled,
             "filled_by_source": {
-                "file_tags": filled_file_tags,
-                "folder_path": filled_folder_path,
-                "discogs": filled_discogs,
-                "beatport": filled_beatport,
-                "musicbrainz": filled_musicbrainz,
-                "bandcamp": filled_bandcamp,
+                "file_tags": scan.filled_file_tags,
+                "folder_path": scan.filled_folder_path,
+                "discogs": scan.filled_discogs,
+                "beatport": scan.filled_beatport,
+                "musicbrainz": scan.filled_musicbrainz,
+                "bandcamp": scan.filled_bandcamp,
             },
-            "already_set": already_set,
-            "conflicts": conflicts.len(),
-            "remaining_year_zero": remaining_year_zero.len(),
+            "already_set": scan.already_set,
+            "conflicts": scan.conflicts.len(),
+            "remaining_year_zero": scan.remaining_year_zero.len(),
+            "remaining_uncached_providers": {
+                "no_discogs": scan.remaining_no_discogs,
+                "no_beatport": scan.remaining_no_beatport,
+                "no_musicbrainz": scan.remaining_no_musicbrainz,
+                "no_bandcamp": scan.remaining_no_bandcamp,
+            },
         },
         "staged": staged_count,
         "total_pending": pending,
         "dry_run": dry_run,
-        "conflicts": conflicts,
-        "remaining_year_zero": remaining_year_zero,
+        "conflicts": scan.conflicts,
+        "remaining_year_zero": scan.remaining_year_zero,
     });
+
+    if auto_enrich {
+        result.as_object_mut().unwrap().insert(
+            "auto_enriched".to_string(),
+            serde_json::json!(auto_enriched),
+        );
+    }
 
     let json =
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;

@@ -173,6 +173,7 @@ pub struct SearchParams {
     pub playlist: Option<String>,
     pub has_genre: Option<bool>,
     pub has_label: Option<bool>,
+    pub year_zero: Option<bool>,
     pub label: Option<String>,
     pub path: Option<String>,
     pub path_prefix: Option<String>,
@@ -250,6 +251,14 @@ fn apply_search_filters(
             sql.push_str(" AND l.Name IS NOT NULL AND l.Name != ''");
         } else {
             sql.push_str(" AND (l.Name IS NULL OR l.Name = '')");
+        }
+    }
+
+    if let Some(year_zero) = params.year_zero {
+        if year_zero {
+            sql.push_str(" AND COALESCE(c.ReleaseYear, 0) = 0");
+        } else {
+            sql.push_str(" AND COALESCE(c.ReleaseYear, 0) != 0");
         }
     }
 

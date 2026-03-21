@@ -113,6 +113,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         playlist: args.playlist,
         has_genre: None,
         has_label: None,
+        year_zero: None,
         label: args.label,
         path: args.path,
         path_prefix: None,

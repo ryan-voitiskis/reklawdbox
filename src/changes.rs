@@ -1262,6 +1262,7 @@ mod tests {
             playlist: None,
             has_genre: None,
             has_label: None,
+            year_zero: None,
             label: None,
             path: None,
             path_prefix: None,

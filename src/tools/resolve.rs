@@ -128,6 +128,9 @@ pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String
     if let Some(has_label) = params.filters.has_label {
         filters.push(format!("has_label = {has_label}"));
     }
+    if let Some(year_zero) = params.filters.year_zero {
+        filters.push(format!("year_zero = {year_zero}"));
+    }
     if let Some(bpm_min) = params.filters.bpm_min {
         filters.push(format!("bpm_min = {bpm_min}"));
     }

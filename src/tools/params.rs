@@ -26,6 +26,8 @@ pub struct SearchFilterParams {
     pub has_genre: Option<bool>,
     #[schemars(description = "Filter by whether track has a label set")]
     pub has_label: Option<bool>,
+    #[schemars(description = "Filter to tracks with year = 0 (unset). Useful for targeting year-zero tracks for enrichment.")]
+    pub year_zero: Option<bool>,
     #[schemars(description = "Filter by label name (partial match)")]
     pub label: Option<String>,
     #[schemars(description = "Filter by file path/folder (substring match)")]
@@ -71,6 +73,7 @@ impl SearchFilterParams {
             playlist: None,
             has_genre: self.has_genre,
             has_label: self.has_label,
+            year_zero: self.year_zero,
             label: self.label,
             path: self.path,
             path_prefix: self.path_prefix,
