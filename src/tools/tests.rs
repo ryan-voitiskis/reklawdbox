@@ -3281,10 +3281,265 @@ fn master_tempo_off_changes_key_scoring() {
         Some("1A".to_string()),
         "8A shifted -1 semitone = 1A"
     );
-    assert_eq!(scores_mt_off.key.value, 0.1, "8A→1A is a clash (score 0.1)");
+    // With continuous detuning: shift is -0.909 semitones (not exactly -1),
+    // so the key score blends between score_at_0 (Perfect=1.0) and
+    // score_at_-1 (Clash=0.1). The blend should be close to 0.1 but not
+    // exactly, because 9% weight goes to the native key.
+    assert!(
+        scores_mt_off.key.value > 0.1 && scores_mt_off.key.value < 0.25,
+        "128→135: key score should be slightly above 0.1 due to detuning blend, got {}",
+        scores_mt_off.key.value,
+    );
     assert_eq!(
         scores_mt_on.key.value, 1.0,
         "master_tempo on: same key is perfect (1.0)"
+    );
+}
+
+#[test]
+fn detuning_eliminates_cliff_at_rounding_boundary() {
+    // The cliff bug: at 0.49 semitones the old code scored 1.0 (Perfect),
+    // at 0.51 semitones it scored 0.1 (Clash). With continuous detuning,
+    // these should produce similar scores.
+
+    // 128 → ~131.5 BPM: shift ≈ -0.46 semitones (rounds to 0 in old code)
+    let from = make_test_profile("cliff-from", "8A", 128.0, 0.5, "House");
+    let to_under = make_test_profile("cliff-under", "8A", 131.5, 0.5, "House");
+    // 128 → ~132.0 BPM: shift ≈ -0.53 semitones (rounds to -1 in old code)
+    let to_over = make_test_profile("cliff-over", "8A", 132.0, 0.5, "House");
+
+    let ctx = ScoringContext::default();
+
+    let scores_under = score_transition_profiles(
+        &from,
+        &to_under,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        None,
+    );
+    let scores_over = score_transition_profiles(
+        &from,
+        &to_over,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        None,
+    );
+
+    // Old behavior: scores_under.key.value = 1.0, scores_over.key.value = 0.1
+    // New behavior: both should be in a similar range (no 10x cliff)
+    let diff = (scores_under.key.value - scores_over.key.value).abs();
+    assert!(
+        diff < 0.15,
+        "Key scores across the rounding boundary should be similar: \
+         under={:.3} (shift {:.3}), over={:.3} (shift {:.3}), diff={:.3}",
+        scores_under.key.value,
+        12.0 * (128.0_f64 / 131.5).log2(),
+        scores_over.key.value,
+        12.0 * (128.0_f64 / 132.0).log2(),
+        diff,
+    );
+
+    // Both should be degraded from the perfect score of 1.0
+    assert!(
+        scores_under.key.value < 0.85,
+        "~0.46 semitone detuning should noticeably reduce key score, got {}",
+        scores_under.key.value,
+    );
+}
+
+#[test]
+fn detuning_smooth_degradation_with_increasing_shift() {
+    // Key scores should degrade smoothly as BPM difference increases
+    let from = make_test_profile("smooth-from", "8A", 128.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let bpms = [128.0, 129.0, 130.0, 131.0, 132.0, 133.0, 134.0, 135.0];
+    let mut prev_score = 1.1_f64;
+
+    for &bpm in &bpms {
+        let to = make_test_profile("smooth-to", "8A", bpm, 0.5, "House");
+        let scores = score_transition_profiles(
+            &from,
+            &to,
+            None,
+            None,
+            SequencingPriority::Balanced,
+            false,
+            None,
+            &ctx,
+            None,
+        );
+
+        // Each step should produce an equal or lower key score
+        assert!(
+            scores.key.value <= prev_score + 0.01,
+            "Key score should not increase: at {bpm} BPM got {:.3}, prev was {:.3}",
+            scores.key.value,
+            prev_score,
+        );
+        prev_score = scores.key.value;
+    }
+
+    // The first (same BPM) should be perfect
+    let same = make_test_profile("smooth-same", "8A", 128.0, 0.5, "House");
+    let scores_same = score_transition_profiles(
+        &from,
+        &same,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        None,
+    );
+    assert_eq!(scores_same.key.value, 1.0, "Same BPM should be perfect");
+}
+
+#[test]
+fn detuning_master_tempo_on_unchanged() {
+    // With master tempo ON, key scores should be unaffected by BPM difference
+    let from = make_test_profile("mt-on-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("mt-on-to", "8A", 135.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        true,
+        None,
+        &ctx,
+        None,
+    );
+
+    assert_eq!(
+        scores.key.value, 1.0,
+        "Master tempo ON: same key should always be perfect regardless of BPM"
+    );
+}
+
+#[test]
+fn detuning_label_shows_cents_when_audible() {
+    // At significant detuning (>10 cents), the label should indicate detuning
+    let from = make_test_profile("label-from", "8A", 128.0, 0.5, "House");
+    // ~2% BPM diff = ~0.34 semitones = 34 cents detuning
+    let to = make_test_profile("label-to", "8A", 130.5, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        None,
+    );
+
+    assert!(
+        scores.key.label.contains("detuned"),
+        "Label should mention detuning for ~34 cents shift, got: {}",
+        scores.key.label,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_bilinear_interpolation() {
+    // Test the play_bpms path where BOTH tracks have fractional pitch shifts.
+    // from: native 128 BPM, playing at 130 → shift ≈ +0.27 semitones
+    // to: native 132 BPM, playing at 130 → shift ≈ -0.26 semitones
+    // Both are fractional, exercising all 4 combinations in bilinear blend.
+    let from = make_test_profile("pb-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("pb-to", "8A", 132.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        Some((130.0, 130.0)), // both pitched to 130
+    );
+
+    // Both shifts are ~0.27 semitones each in opposite directions, so the
+    // total relative shift is ~0.53 semitones. The bilinear blend includes
+    // some "clash" key combinations (e.g., 3A vs 1A), so the score is
+    // noticeably degraded but not terrible.
+    assert!(
+        scores.key.value > 0.5 && scores.key.value < 0.85,
+        "Bilinear blend with ~0.53 total shift should score moderately, got {}",
+        scores.key.value,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
+    // With master tempo ON, play_bpms should not cause detuning
+    let from = make_test_profile("pb-mt-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("pb-mt-to", "8A", 135.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        true, // master tempo ON
+        None,
+        &ctx,
+        Some((130.0, 130.0)),
+    );
+
+    assert_eq!(
+        scores.key.value, 1.0,
+        "Master tempo ON with play_bpms: same key should be perfect, got {}",
+        scores.key.value,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_asymmetric_one_zero_shift() {
+    // One track at native BPM (zero shift), other with fractional shift
+    let from = make_test_profile("pb-asym-from", "8A", 130.0, 0.5, "House");
+    let to = make_test_profile("pb-asym-to", "8A", 132.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        SequencingPriority::Balanced,
+        false,
+        None,
+        &ctx,
+        Some((130.0, 130.0)), // from at native, to pitched down 2 BPM
+    );
+
+    // from shift = 0 (native), to shift ≈ -0.26 semitones
+    // Score blends 73.5% Perfect (1.0) + 26.5% Clash (0.1) ≈ 0.76
+    assert!(
+        scores.key.value > 0.7 && scores.key.value < 0.9,
+        "One-sided ~0.26 semitone shift should score ~0.76, got {}",
+        scores.key.value,
     );
 }
 

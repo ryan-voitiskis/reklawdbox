@@ -699,19 +699,21 @@ pub(super) fn score_transition_profiles(
     // When play_bpms is set, both tracks are pitched to target BPMs.
     // Compute effective keys based on the pitch shift from native BPM to play BPM.
     // When play_bpms is None, fall back to the existing master_tempo logic.
-    let (effective_to_key, pitch_shift_semitones, scoring_from_key, scoring_to_key, bpm) =
+    let (effective_to_key, pitch_shift_semitones, scoring_from_key, scoring_to_key, bpm, exact_from_shift, exact_to_shift) =
         if let Some((from_play_bpm, to_play_bpm)) = play_bpms {
             // Compute effective keys for both tracks based on play BPMs
-            let from_shift = if from.bpm > 0.0 && from_play_bpm > 0.0 {
-                (12.0 * (from_play_bpm / from.bpm).log2()).round() as i32
+            let exact_from = if from.bpm > 0.0 && from_play_bpm > 0.0 {
+                12.0 * (from_play_bpm / from.bpm).log2()
             } else {
-                0
+                0.0
             };
-            let to_shift = if to.bpm > 0.0 && to_play_bpm > 0.0 {
-                (12.0 * (to_play_bpm / to.bpm).log2()).round() as i32
+            let exact_to = if to.bpm > 0.0 && to_play_bpm > 0.0 {
+                12.0 * (to_play_bpm / to.bpm).log2()
             } else {
-                0
+                0.0
             };
+            let from_shift = exact_from.round() as i32;
+            let to_shift = exact_to.round() as i32;
 
             let effective_from_key = if !master_tempo && from_shift != 0 {
                 from.camelot_key
@@ -740,20 +742,25 @@ pub(super) fn score_transition_profiles(
                 effective_from_key,
                 effective_to_key,
                 bpm_score,
+                if master_tempo { 0.0 } else { exact_from },
+                if master_tempo { 0.0 } else { exact_to },
             )
         } else {
             // Original master_tempo logic
-            let (eff_to_key, shift) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
-                let shift = (12.0 * (from.bpm / to.bpm).log2()).round() as i32;
-                if shift != 0 {
-                    let transposed = to.camelot_key.map(|k| transpose_camelot_key(k, shift));
-                    (transposed.map(format_camelot), shift)
+            let (eff_to_key, shift, exact_to) =
+                if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
+                    let exact = 12.0 * (from.bpm / to.bpm).log2();
+                    let integer_shift = exact.round() as i32;
+                    if integer_shift != 0 {
+                        let transposed =
+                            to.camelot_key.map(|k| transpose_camelot_key(k, integer_shift));
+                        (transposed.map(format_camelot), integer_shift, exact)
+                    } else {
+                        (None, 0, exact)
+                    }
                 } else {
-                    (None, 0)
-                }
-            } else {
-                (None, 0)
-            };
+                    (None, 0, 0.0)
+                };
 
             let scoring_to = if let Some(ref ek) = eff_to_key {
                 parse_camelot_key(ek)
@@ -763,10 +770,31 @@ pub(super) fn score_transition_profiles(
 
             let bpm_score = score_bpm_axis(from.bpm, to.bpm);
 
-            (eff_to_key, shift, from.camelot_key, scoring_to, bpm_score)
+            (
+                eff_to_key,
+                shift,
+                from.camelot_key,
+                scoring_to,
+                bpm_score,
+                0.0,
+                exact_to,
+            )
         };
 
-    let key = score_key_axis(scoring_from_key, scoring_to_key);
+    // Use continuous pitch-shift-aware key scoring when master tempo is off
+    // and there's a nonzero shift. This interpolates between the two bracketing
+    // integer transpositions to avoid the cliff effect where rounding a
+    // fractional semitone shift causes a 7-position Camelot wheel jump.
+    let key = if exact_from_shift.abs() > 0.01 || exact_to_shift.abs() > 0.01 {
+        score_key_with_pitch_shifts(
+            from.camelot_key,
+            to.camelot_key,
+            exact_from_shift,
+            exact_to_shift,
+        )
+    } else {
+        score_key_axis(scoring_from_key, scoring_to_key)
+    };
     let energy = score_energy_axis(
         from.energy,
         to.energy,
@@ -1485,6 +1513,97 @@ pub(super) fn transpose_camelot_key(key: CamelotKey, semitones: i32) -> CamelotK
     CamelotKey {
         number: new_number,
         letter: key.letter,
+    }
+}
+
+/// Compute the two bracketing Camelot keys for a fractional semitone shift,
+/// with interpolation weights.
+///
+/// For an exact integer shift, returns the transposed key with weight 1.0
+/// and a dummy entry with weight 0.0.
+/// For a fractional shift, returns (floor_key, 1-frac) and (ceil_key, frac).
+fn bracketed_keys(key: CamelotKey, exact_shift: f64) -> [(CamelotKey, f64); 2] {
+    if !exact_shift.is_finite() || exact_shift.abs() < 0.01 {
+        return [(key, 1.0), (key, 0.0)];
+    }
+    let floor_s = exact_shift.floor() as i32;
+    let ceil_s = exact_shift.ceil() as i32;
+    if floor_s == ceil_s {
+        let t = transpose_camelot_key(key, floor_s);
+        return [(t, 1.0), (t, 0.0)];
+    }
+    let frac = exact_shift - floor_s as f64;
+    let floor_k = transpose_camelot_key(key, floor_s);
+    let ceil_k = transpose_camelot_key(key, ceil_s);
+    [(floor_k, 1.0 - frac), (ceil_k, frac)]
+}
+
+/// Score key compatibility with continuous pitch shift handling.
+///
+/// Instead of rounding a fractional semitone shift to the nearest integer
+/// (which causes a cliff: +1 chromatic semitone = 7 Camelot positions),
+/// this function interpolates between the two bracketing integer transpositions.
+///
+/// For example, a 0.51 semitone shift scores as:
+///   0.49 × score(floor_key) + 0.51 × score(ceil_key)
+/// instead of rounding to 1 semitone and scoring only the transposed key.
+///
+/// Handles both from and to shifts (for the play_bpms path where both tracks
+/// may be pitched). Uses bilinear interpolation across all 4 key combinations.
+pub(super) fn score_key_with_pitch_shifts(
+    from: Option<CamelotKey>,
+    to: Option<CamelotKey>,
+    from_shift: f64,
+    to_shift: f64,
+) -> AxisScore {
+    let Some(from_key) = from else {
+        return score_key_axis(from, to);
+    };
+    let Some(to_key) = to else {
+        return score_key_axis(from, to);
+    };
+
+    // No shift at all — use standard scoring
+    if from_shift.abs() < 0.01 && to_shift.abs() < 0.01 {
+        return score_key_axis(Some(from_key), Some(to_key));
+    }
+
+    let from_keys = bracketed_keys(from_key, from_shift);
+    let to_keys = bracketed_keys(to_key, to_shift);
+
+    // Bilinear interpolation across all key combinations
+    let mut blended = 0.0;
+    let mut best_label = String::new();
+    let mut best_weight = 0.0_f64;
+
+    for &(from_t, from_w) in &from_keys {
+        for &(to_t, to_w) in &to_keys {
+            let w = from_w * to_w;
+            if w < 1e-6 {
+                continue;
+            }
+            let score = score_key_axis(Some(from_t), Some(to_t));
+            blended += w * score.value;
+            if w > best_weight {
+                best_weight = w;
+                best_label = score.label;
+            }
+        }
+    }
+
+    // Report detuning in the label when audible (>10 cents from nearest integer)
+    let from_cents = (from_shift - from_shift.round()).abs() * 100.0;
+    let to_cents = (to_shift - to_shift.round()).abs() * 100.0;
+    let max_cents = from_cents.max(to_cents);
+    let label = if max_cents > 10.0 {
+        format!("{best_label} (~{:.0}\u{00a2} detuned)", max_cents)
+    } else {
+        best_label
+    };
+
+    AxisScore {
+        value: blended,
+        label,
     }
 }
 
