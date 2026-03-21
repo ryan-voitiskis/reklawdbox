@@ -127,7 +127,12 @@ pub async fn lookup(
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(url = %matched.url, "Bandcamp detail fetch failed, returning search-only data: {e}");
-            DetailResult { artist: None, label: None, date_published: None, tags: None }
+            DetailResult {
+                artist: None,
+                label: None,
+                date_published: None,
+                tags: None,
+            }
         }
     };
 
@@ -166,9 +171,15 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
     let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.len() >= 3 {
         if let (Some(day), Some(month_num), Some(year)) = (
-            parts[0].parse::<u32>().ok().filter(|d| (1..=31).contains(d)),
+            parts[0]
+                .parse::<u32>()
+                .ok()
+                .filter(|d| (1..=31).contains(d)),
             month_abbrev_to_num(parts[1]),
-            parts[2].parse::<i32>().ok().filter(|y| (1900..=2099).contains(y)),
+            parts[2]
+                .parse::<i32>()
+                .ok()
+                .filter(|y| (1900..=2099).contains(y)),
         ) {
             return Some(format!("{year:04}-{month_num:02}-{day:02}"));
         }
@@ -181,7 +192,10 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
         if let (Some(month_num), Some(day), Some(year)) = (
             month_name_to_num(parts[0]),
             day_str.parse::<u32>().ok().filter(|d| (1..=31).contains(d)),
-            parts[2].parse::<i32>().ok().filter(|y| (1900..=2099).contains(y)),
+            parts[2]
+                .parse::<i32>()
+                .ok()
+                .filter(|y| (1900..=2099).contains(y)),
         ) {
             return Some(format!("{year:04}-{month_num:02}-{day:02}"));
         }
@@ -197,20 +211,36 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
 
 fn month_abbrev_to_num(s: &str) -> Option<u32> {
     match s.to_lowercase().as_str() {
-        "jan" => Some(1),  "feb" => Some(2),  "mar" => Some(3),
-        "apr" => Some(4),  "may" => Some(5),  "jun" => Some(6),
-        "jul" => Some(7),  "aug" => Some(8),  "sep" => Some(9),
-        "oct" => Some(10), "nov" => Some(11), "dec" => Some(12),
+        "jan" => Some(1),
+        "feb" => Some(2),
+        "mar" => Some(3),
+        "apr" => Some(4),
+        "may" => Some(5),
+        "jun" => Some(6),
+        "jul" => Some(7),
+        "aug" => Some(8),
+        "sep" => Some(9),
+        "oct" => Some(10),
+        "nov" => Some(11),
+        "dec" => Some(12),
         _ => None,
     }
 }
 
 fn month_name_to_num(s: &str) -> Option<u32> {
     match s.to_lowercase().as_str() {
-        "january" => Some(1),   "february" => Some(2),  "march" => Some(3),
-        "april" => Some(4),     "may" => Some(5),       "june" => Some(6),
-        "july" => Some(7),      "august" => Some(8),     "september" => Some(9),
-        "october" => Some(10),  "november" => Some(11), "december" => Some(12),
+        "january" => Some(1),
+        "february" => Some(2),
+        "march" => Some(3),
+        "april" => Some(4),
+        "may" => Some(5),
+        "june" => Some(6),
+        "july" => Some(7),
+        "august" => Some(8),
+        "september" => Some(9),
+        "october" => Some(10),
+        "november" => Some(11),
+        "december" => Some(12),
         _ => month_abbrev_to_num(s),
     }
 }
@@ -258,22 +288,31 @@ fn parse_search_results(html: &str) -> Vec<SearchResult> {
     // Split into result blocks — each starts with class="searchresult
     let blocks: Vec<&str> = html.split("class=\"searchresult").skip(1).collect();
 
-    blocks.iter().filter_map(|block| {
-        // Extract track URL from heading link
-        let url = url_re().captures(block)?.get(1)?.as_str().to_string();
+    blocks
+        .iter()
+        .filter_map(|block| {
+            // Extract track URL from heading link
+            let url = url_re().captures(block)?.get(1)?.as_str().to_string();
 
-        // Extract title: text between > and </a> after the heading href
-        let title = extract_heading_text(block)?;
+            // Extract title: text between > and </a> after the heading href
+            let title = extract_heading_text(block)?;
 
-        // Extract artist from subhead ("by Artist" or "from Album by Artist")
-        let (artist, album) = extract_artist_album(block);
-        let artist = artist?;
+            // Extract artist from subhead ("by Artist" or "from Album by Artist")
+            let (artist, album) = extract_artist_album(block);
+            let artist = artist?;
 
-        // Extract release date
-        let date = extract_released_date(block);
+            // Extract release date
+            let date = extract_released_date(block);
 
-        Some(SearchResult { url, title, artist, album, date })
-    }).collect()
+            Some(SearchResult {
+                url,
+                title,
+                artist,
+                album,
+                date,
+            })
+        })
+        .collect()
 }
 
 /// Extract the track title from the heading link text.
@@ -403,7 +442,9 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
     let json_str = match extract_json_ld(html) {
         Some(s) => s,
         None => {
-            tracing::warn!("Bandcamp detail page has no JSON-LD block — page structure may have changed");
+            tracing::warn!(
+                "Bandcamp detail page has no JSON-LD block — page structure may have changed"
+            );
             return Ok(DetailResult {
                 artist: None,
                 label: None,
@@ -457,7 +498,12 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
         }
     });
 
-    Ok(DetailResult { artist, label, date_published, tags })
+    Ok(DetailResult {
+        artist,
+        label,
+        date_published,
+        tags,
+    })
 }
 
 /// Extract the first JSON-LD script block from HTML.
@@ -474,7 +520,12 @@ fn extract_json_ld(html: &str) -> Option<&str> {
 // ── Fuzzy matching ───────────────────────────────────────────────────────
 
 /// Score a candidate match against the query. Returns 0–100.
-fn score_match(query_artist: &str, query_title: &str, result_artist: &str, result_title: &str) -> i32 {
+fn score_match(
+    query_artist: &str,
+    query_title: &str,
+    result_artist: &str,
+    result_title: &str,
+) -> i32 {
     let norm_qa = normalize_for_comparison(query_artist);
     let norm_ra = normalize_for_comparison(result_artist);
 
@@ -567,9 +618,7 @@ fn normalized_levenshtein(a: &str, b: &str) -> f64 {
         curr[0] = i + 1;
         for (j, &cb) in b_chars.iter().enumerate() {
             let cost = if ca == cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -596,7 +645,10 @@ mod tests {
 
     #[test]
     fn strip_original_mix() {
-        assert_eq!(strip_title_noise("Energy Soul (Original Mix)"), "Energy Soul");
+        assert_eq!(
+            strip_title_noise("Energy Soul (Original Mix)"),
+            "Energy Soul"
+        );
     }
 
     #[test]
@@ -608,7 +660,10 @@ mod tests {
 
     #[test]
     fn normalize_strips_feat() {
-        assert_eq!(normalize_for_comparison("Nina Kraviz feat. King Aus"), "nina kraviz");
+        assert_eq!(
+            normalize_for_comparison("Nina Kraviz feat. King Aus"),
+            "nina kraviz"
+        );
         assert_eq!(normalize_for_comparison("Le Motel ft. Flowdan"), "le motel");
     }
 
@@ -647,7 +702,10 @@ mod tests {
 
     #[test]
     fn score_exact_match() {
-        assert_eq!(score_match("Fred P", "Energy Soul", "Fred P", "Energy Soul"), 100);
+        assert_eq!(
+            score_match("Fred P", "Energy Soul", "Fred P", "Energy Soul"),
+            100
+        );
     }
 
     #[test]
@@ -706,13 +764,19 @@ mod tests {
     #[test]
     fn extract_date() {
         let block = "released October 28, 2016\n";
-        assert_eq!(extract_released_date(block).as_deref(), Some("October 28, 2016"));
+        assert_eq!(
+            extract_released_date(block).as_deref(),
+            Some("October 28, 2016")
+        );
     }
 
     #[test]
     fn extract_date_with_html() {
         let block = "released January 1, 2015<br/>";
-        assert_eq!(extract_released_date(block).as_deref(), Some("January 1, 2015"));
+        assert_eq!(
+            extract_released_date(block).as_deref(),
+            Some("January 1, 2015")
+        );
     }
 
     // ── extract_json_ld ──────────────────────────────────────────────
@@ -725,7 +789,12 @@ mod tests {
         let json = extract_json_ld(html).unwrap();
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
         assert_eq!(
-            v.get("byArtist").unwrap().get("name").unwrap().as_str().unwrap(),
+            v.get("byArtist")
+                .unwrap()
+                .get("name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "Fred P"
         );
     }
@@ -792,10 +861,7 @@ mod tests {
             normalize_date_to_iso("2016-10-28").as_deref(),
             Some("2016-10-28")
         );
-        assert_eq!(
-            normalize_date_to_iso("2019").as_deref(),
-            Some("2019")
-        );
+        assert_eq!(normalize_date_to_iso("2019").as_deref(), Some("2019"));
     }
 
     #[test]
@@ -815,10 +881,7 @@ mod tests {
             }</script>
             </head></html>"#;
         let detail = parse_detail_json_ld(html).unwrap();
-        assert_eq!(
-            detail.tags.unwrap(),
-            vec!["deep house", "techno", "Berlin"]
-        );
+        assert_eq!(detail.tags.unwrap(), vec!["deep house", "techno", "Berlin"]);
     }
 
     #[test]
@@ -830,7 +893,10 @@ mod tests {
             }</script>
             </head></html>"#;
         let detail = parse_detail_json_ld(html).unwrap();
-        assert!(detail.label.is_none(), "self-released should be filtered out");
+        assert!(
+            detail.label.is_none(),
+            "self-released should be filtered out"
+        );
     }
 
     #[test]
@@ -860,7 +926,10 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Energy Soul");
         assert_eq!(results[0].artist, "Fred P");
-        assert_eq!(results[0].url, "https://fred-p.bandcamp.com/track/energy-soul");
+        assert_eq!(
+            results[0].url,
+            "https://fred-p.bandcamp.com/track/energy-soul"
+        );
         assert_eq!(results[0].date.as_deref(), Some("October 28, 2016"));
     }
 
@@ -897,7 +966,10 @@ mod tests {
             </div>
         "#;
         let results = parse_search_results(html);
-        assert!(results.is_empty(), "album URLs should not match track regex");
+        assert!(
+            results.is_empty(),
+            "album URLs should not match track regex"
+        );
     }
 
     // ── rate limiter ─────────────────────────────────────────────────

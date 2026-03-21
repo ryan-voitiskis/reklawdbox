@@ -26,7 +26,9 @@ pub struct SearchFilterParams {
     pub has_genre: Option<bool>,
     #[schemars(description = "Filter by whether track has a label set")]
     pub has_label: Option<bool>,
-    #[schemars(description = "Filter to tracks with year = 0 (unset). Useful for targeting year-zero tracks for enrichment.")]
+    #[schemars(
+        description = "Filter to tracks with year = 0 (unset). Useful for targeting year-zero tracks for enrichment."
+    )]
     pub year_zero: Option<bool>,
     #[schemars(description = "Filter by label name (partial match)")]
     pub label: Option<String>,
@@ -245,7 +247,9 @@ pub struct EnrichTracksParams {
     pub max_tracks: Option<u32>,
     #[schemars(description = "Offset for pagination (skip first N tracks in result set)")]
     pub offset: Option<u32>,
-    #[schemars(description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])")]
+    #[schemars(
+        description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])"
+    )]
     pub providers: Option<Vec<crate::types::Provider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,

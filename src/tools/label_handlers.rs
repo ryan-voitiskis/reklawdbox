@@ -42,15 +42,25 @@ fn cache_lookup_result<T: serde::Serialize + HasScore>(
             let json = serde_json::to_string(r).ok();
             let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
             let _ = store::set_enrichment(
-                &store_conn, provider, norm_artist, norm_title, None,
-                Some(quality), json.as_deref(),
+                &store_conn,
+                provider,
+                norm_artist,
+                norm_title,
+                None,
+                Some(quality),
+                json.as_deref(),
             );
             Ok(1)
         }
         None => {
             let _ = store::set_enrichment(
-                &store_conn, provider, norm_artist, norm_title, None,
-                Some("none"), None,
+                &store_conn,
+                provider,
+                norm_artist,
+                norm_title,
+                None,
+                Some("none"),
+                None,
             );
             Ok(0)
         }
@@ -62,7 +72,9 @@ trait HasScore {
 }
 
 impl HasScore for crate::bandcamp::BandcampResult {
-    fn score(&self) -> i32 { self.score }
+    fn score(&self) -> i32 {
+        self.score
+    }
 }
 
 /// Try to extract a label from the enrichment cache for a single provider.
@@ -75,7 +87,12 @@ fn label_from_cache(
 ) -> (bool, Option<String>) {
     let cache = store::get_enrichment(store_conn, provider, norm_artist, norm_title, norm_album)
         .unwrap_or_else(|e| {
-            tracing::warn!(provider, artist = norm_artist, title = norm_title, "cache lookup failed: {e}");
+            tracing::warn!(
+                provider,
+                artist = norm_artist,
+                title = norm_title,
+                "cache lookup failed: {e}"
+            );
             None
         });
     let has_cache = cache.is_some();
@@ -114,8 +131,13 @@ fn scan_labels(
         let norm_album = normalize::normalize_for_matching(&track.album);
         let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
-        let (has_discogs, discogs_label) =
-            label_from_cache(store_conn, "discogs", &norm_artist, &norm_title, norm_album.as_deref());
+        let (has_discogs, discogs_label) = label_from_cache(
+            store_conn,
+            "discogs",
+            &norm_artist,
+            &norm_title,
+            norm_album.as_deref(),
+        );
         let (has_mb, mb_label) =
             label_from_cache(store_conn, "musicbrainz", &norm_artist, &norm_title, None);
         let (has_bc, bc_label) =
@@ -125,8 +147,12 @@ fn scan_labels(
 
         let Some(enrich_label) = enrichment_label else {
             result.no_enrichment += 1;
-            if !has_discogs { result.no_discogs += 1; }
-            if !has_mb { result.no_musicbrainz += 1; }
+            if !has_discogs {
+                result.no_discogs += 1;
+            }
+            if !has_mb {
+                result.no_musicbrainz += 1;
+            }
             if !has_bc {
                 result.no_bandcamp += 1;
                 result.uncached_bandcamp.push((
@@ -196,17 +222,27 @@ pub(super) async fn handle_backfill_labels(
     if auto_enrich && !scan.uncached_bandcamp.is_empty() {
         let to_enrich: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
         let total = to_enrich.len();
-        tracing::info!(count = total, "auto_enrich: fetching Bandcamp for uncached label tracks");
+        tracing::info!(
+            count = total,
+            "auto_enrich: fetching Bandcamp for uncached label tracks"
+        );
 
         for (norm_artist, norm_title, raw_artist, raw_title) in &to_enrich {
             match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
                 Ok(result) => {
                     auto_enriched += cache_lookup_result(
-                        server, "bandcamp", norm_artist, norm_title, result.as_ref(),
+                        server,
+                        "bandcamp",
+                        norm_artist,
+                        norm_title,
+                        result.as_ref(),
                     )?;
                 }
                 Err(e) => {
-                    tracing::warn!(artist = raw_artist.as_str(), "Bandcamp auto-enrich failed: {e}");
+                    tracing::warn!(
+                        artist = raw_artist.as_str(),
+                        "Bandcamp auto-enrich failed: {e}"
+                    );
                 }
             }
         }

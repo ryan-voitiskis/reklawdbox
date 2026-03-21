@@ -10,13 +10,19 @@ use crate::discogs::urlencoding;
 
 static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
 
-const USER_AGENT: &str =
-    concat!("reklawdbox/", env!("CARGO_PKG_VERSION"), " (https://github.com/ryan-voitiskis/reklawdbox)");
+const USER_AGENT: &str = concat!(
+    "reklawdbox/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/ryan-voitiskis/reklawdbox)"
+);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MusicBrainzError {
     #[error("MusicBrainz HTTP {status}")]
-    Http { status: reqwest::StatusCode, body: String },
+    Http {
+        status: reqwest::StatusCode,
+        body: String,
+    },
     #[error("{0}")]
     Parse(String),
     #[error("{0}")]
@@ -116,10 +122,7 @@ pub async fn lookup(
         return Ok(None);
     };
 
-    let score = recording
-        .get("score")
-        .and_then(|s| s.as_i64())
-        .unwrap_or(0) as i32;
+    let score = recording.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
 
     let recording_title = recording
         .get("title")
@@ -251,10 +254,7 @@ fn score_release(release: &serde_json::Value) -> i32 {
     }
 
     // Prefer Official status
-    let status = release
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let status = release.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
     if status == "Official" {
         score += 15;
@@ -397,7 +397,11 @@ mod tests {
             "Archangel"
         );
         assert_eq!(
-            recording.get("first-release-date").unwrap().as_str().unwrap(),
+            recording
+                .get("first-release-date")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "2007-11-12"
         );
     }
@@ -456,8 +460,7 @@ mod tests {
     #[test]
     fn label_passes_valid() {
         let label = "Giegling";
-        let filtered =
-            Some(label.to_string()).filter(|l| l != "[no label]" && !l.is_empty());
+        let filtered = Some(label.to_string()).filter(|l| l != "[no label]" && !l.is_empty());
         assert_eq!(filtered.as_deref(), Some("Giegling"));
     }
 

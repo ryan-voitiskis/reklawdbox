@@ -36,15 +36,25 @@ fn cache_lookup_result<T: serde::Serialize + HasScore>(
             let json = serde_json::to_string(r).ok();
             let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
             let _ = store::set_enrichment(
-                &store_conn, provider, norm_artist, norm_title, None,
-                Some(quality), json.as_deref(),
+                &store_conn,
+                provider,
+                norm_artist,
+                norm_title,
+                None,
+                Some(quality),
+                json.as_deref(),
             );
             Ok(1)
         }
         None => {
             let _ = store::set_enrichment(
-                &store_conn, provider, norm_artist, norm_title, None,
-                Some("none"), None,
+                &store_conn,
+                provider,
+                norm_artist,
+                norm_title,
+                None,
+                Some("none"),
+                None,
             );
             Ok(0)
         }
@@ -56,11 +66,15 @@ trait HasScore {
 }
 
 impl HasScore for crate::bandcamp::BandcampResult {
-    fn score(&self) -> i32 { self.score }
+    fn score(&self) -> i32 {
+        self.score
+    }
 }
 
 impl HasScore for crate::musicbrainz::MusicBrainzResult {
-    fn score(&self) -> i32 { self.score }
+    fn score(&self) -> i32 {
+        self.score
+    }
 }
 
 fn parse_year_str(s: &str) -> Option<i32> {
@@ -84,10 +98,7 @@ fn year_from_file_tags(path: &str) -> Option<i32> {
             ref id3v2,
             ref riff_info,
             ..
-        } => id3v2
-            .get("year")
-            .or_else(|| riff_info.get("year"))?
-            .clone(),
+        } => id3v2.get("year").or_else(|| riff_info.get("year"))?.clone(),
         tags::FileReadResult::Error { .. } => return None,
     };
     year_str.and_then(|s| parse_year_str(&s))
@@ -145,8 +156,13 @@ fn scan_years(
     let mut r = BackfillYearsScanResult::default();
 
     let year_change = |track_id: String, year: i32| TrackChange {
-        track_id, genre: None, comments: None,
-        rating: None, color: None, label: None, year: Some(year),
+        track_id,
+        genre: None,
+        comments: None,
+        rating: None,
+        color: None,
+        label: None,
+        year: Some(year),
     };
 
     for track in tracks {
@@ -186,23 +202,45 @@ fn scan_years(
             // Track provider cache gaps for remaining year-zero tracks.
             let norm_artist = normalize::normalize_for_matching(&track.artist);
             let norm_title = normalize::normalize_for_matching(&track.title);
-            let has_discogs = store::get_enrichment(store_conn, "discogs", &norm_artist, &norm_title, None)
-                .unwrap_or(None).is_some();
-            let has_beatport = store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
-                .unwrap_or(None).is_some();
-            let has_musicbrainz = store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-                .unwrap_or(None).is_some();
-            let has_bandcamp = store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
-                .unwrap_or(None).is_some();
-            if !has_discogs { r.remaining_no_discogs += 1; }
-            if !has_beatport { r.remaining_no_beatport += 1; }
+            let has_discogs =
+                store::get_enrichment(store_conn, "discogs", &norm_artist, &norm_title, None)
+                    .unwrap_or(None)
+                    .is_some();
+            let has_beatport =
+                store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
+                    .unwrap_or(None)
+                    .is_some();
+            let has_musicbrainz =
+                store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
+                    .unwrap_or(None)
+                    .is_some();
+            let has_bandcamp =
+                store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
+                    .unwrap_or(None)
+                    .is_some();
+            if !has_discogs {
+                r.remaining_no_discogs += 1;
+            }
+            if !has_beatport {
+                r.remaining_no_beatport += 1;
+            }
             if !has_musicbrainz {
                 r.remaining_no_musicbrainz += 1;
-                r.uncached_musicbrainz.push((norm_artist.clone(), norm_title.clone(), track.artist.clone(), track.title.clone()));
+                r.uncached_musicbrainz.push((
+                    norm_artist.clone(),
+                    norm_title.clone(),
+                    track.artist.clone(),
+                    track.title.clone(),
+                ));
             }
             if !has_bandcamp {
                 r.remaining_no_bandcamp += 1;
-                r.uncached_bandcamp.push((norm_artist.clone(), norm_title.clone(), track.artist.clone(), track.title.clone()));
+                r.uncached_bandcamp.push((
+                    norm_artist.clone(),
+                    norm_title.clone(),
+                    track.artist.clone(),
+                    track.title.clone(),
+                ));
             }
 
             r.remaining_year_zero.push(serde_json::json!({
@@ -261,23 +299,34 @@ pub(super) async fn handle_backfill_years(
     let mut auto_enriched = 0usize;
 
     // Auto-enrich: fetch Bandcamp + MusicBrainz for uncached remaining year-zero tracks.
-    if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty()) {
+    if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty())
+    {
         let bc_tracks: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
         let mb_tracks: Vec<_> = std::mem::take(&mut scan.uncached_musicbrainz);
         let total = bc_tracks.len() + mb_tracks.len();
-        tracing::info!(bandcamp = bc_tracks.len(), musicbrainz = mb_tracks.len(),
-            "auto_enrich: fetching for {total} uncached year-zero tracks");
+        tracing::info!(
+            bandcamp = bc_tracks.len(),
+            musicbrainz = mb_tracks.len(),
+            "auto_enrich: fetching for {total} uncached year-zero tracks"
+        );
 
         // Fetch Bandcamp.
         for (norm_artist, norm_title, raw_artist, raw_title) in &bc_tracks {
             match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
                 Ok(result) => {
                     auto_enriched += cache_lookup_result(
-                        server, "bandcamp", norm_artist, norm_title, result.as_ref(),
+                        server,
+                        "bandcamp",
+                        norm_artist,
+                        norm_title,
+                        result.as_ref(),
                     )?;
                 }
                 Err(e) => {
-                    tracing::warn!(artist = raw_artist.as_str(), "Bandcamp auto-enrich failed: {e}");
+                    tracing::warn!(
+                        artist = raw_artist.as_str(),
+                        "Bandcamp auto-enrich failed: {e}"
+                    );
                 }
             }
         }
@@ -287,11 +336,18 @@ pub(super) async fn handle_backfill_years(
             match lookup_musicbrainz_remote(server, raw_artist, raw_title).await {
                 Ok(result) => {
                     auto_enriched += cache_lookup_result(
-                        server, "musicbrainz", norm_artist, norm_title, result.as_ref(),
+                        server,
+                        "musicbrainz",
+                        norm_artist,
+                        norm_title,
+                        result.as_ref(),
                     )?;
                 }
                 Err(e) => {
-                    tracing::warn!(artist = raw_artist.as_str(), "MusicBrainz auto-enrich failed: {e}");
+                    tracing::warn!(
+                        artist = raw_artist.as_str(),
+                        "MusicBrainz auto-enrich failed: {e}"
+                    );
                 }
             }
         }
@@ -302,8 +358,12 @@ pub(super) async fn handle_backfill_years(
         drop(store_conn);
     }
 
-    let filled = scan.filled_file_tags + scan.filled_folder_path + scan.filled_discogs
-        + scan.filled_beatport + scan.filled_musicbrainz + scan.filled_bandcamp;
+    let filled = scan.filled_file_tags
+        + scan.filled_folder_path
+        + scan.filled_discogs
+        + scan.filled_beatport
+        + scan.filled_musicbrainz
+        + scan.filled_bandcamp;
 
     let staged_count = if !dry_run && !scan.to_stage.is_empty() {
         let (staged, _) = server.state.changes.stage(scan.to_stage);
@@ -471,12 +531,13 @@ fn beatport_year_for_track(
     let norm_artist = normalize::normalize_for_matching(&track.artist);
     let norm_title = normalize::normalize_for_matching(&track.title);
 
-    let beatport_cache = store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
-        .unwrap_or_else(|e| {
-            tracing::warn!(provider = "beatport", artist = %norm_artist, title = %norm_title,
+    let beatport_cache =
+        store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
+            .unwrap_or_else(|e| {
+                tracing::warn!(provider = "beatport", artist = %norm_artist, title = %norm_title,
                 "get_enrichment failed: {e}");
-            None
-        })?;
+                None
+            })?;
 
     let beatport_val = classify_handler::parse_response_json(Some(&beatport_cache));
     beatport_val
@@ -497,10 +558,10 @@ fn bandcamp_year_for_track(
 
     let bc_cache = store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
         .unwrap_or_else(|e| {
-            tracing::warn!(provider = "bandcamp", artist = %norm_artist, title = %norm_title,
+        tracing::warn!(provider = "bandcamp", artist = %norm_artist, title = %norm_title,
                 "get_enrichment failed: {e}");
-            None
-        })?;
+        None
+    })?;
 
     let bc_val = classify_handler::parse_response_json(Some(&bc_cache));
     bc_val
@@ -519,12 +580,13 @@ fn musicbrainz_year_for_track(
     let norm_artist = normalize::normalize_for_matching(&track.artist);
     let norm_title = normalize::normalize_for_matching(&track.title);
 
-    let mb_cache = store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-        .unwrap_or_else(|e| {
-            tracing::warn!(provider = "musicbrainz", artist = %norm_artist, title = %norm_title,
+    let mb_cache =
+        store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
+            .unwrap_or_else(|e| {
+                tracing::warn!(provider = "musicbrainz", artist = %norm_artist, title = %norm_title,
                 "get_enrichment failed: {e}");
-            None
-        })?;
+                None
+            })?;
 
     let mb_val = classify_handler::parse_response_json(Some(&mb_cache));
     mb_val
