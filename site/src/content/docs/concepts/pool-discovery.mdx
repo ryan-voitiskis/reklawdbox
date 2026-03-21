@@ -1,0 +1,123 @@
+---
+title: Pool Discovery
+description: How reklawdbox discovers groups of mutually compatible tracks using symmetric pool scoring.
+sidebar:
+  order: 3
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+Pool discovery finds groups of tracks that all work well together — tracks you can throw into a crate and improvise from live, knowing any transition within the pool will sound good.
+
+## Pools vs sequences
+
+A **pool** is an unordered set. A **sequence** (from [Set Building](/workflows/set-building/)) is an ordered list. Most DJs prep pools, not sequences — they read the room and choose the next track in the moment.
+
+| Concern | Set Building | Pool Discovery |
+|---------|-------------|----------------|
+| Output | Ordered tracklist | Unordered crate |
+| Scoring | Directional (A→B ≠ B→A) | Symmetric (A↔B always) |
+| Context | Energy phases, genre streaks | None — just pairwise compatibility |
+| Use case | Pre-planned set | Live improvisation |
+
+## The symmetric kernel
+
+Pool scoring answers "do these tracks belong in the same crate?" — not "should B follow A?"
+
+Key properties:
+- **Symmetric**: `score(A,B) == score(B,A)` always
+- **No sequential context**: no energy phases, genre streaks, or BPM drift penalties
+- **Seven axes**: BPM, energy, key, genre, timbral, brightness, rhythm
+
+## Scoring axes
+
+### Always available
+
+| Axis | What it measures | Pool scoring |
+|:-----|:-----------------|:-------------|
+| **BPM** | Tempo proximity | Gaussian decay on % difference (symmetric denominator) |
+| **Energy** | Energy band similarity | Gaussian decay on absolute distance |
+| **Key** | Harmonic compatibility | Camelot distance with continuous detuning |
+| **Genre** | Genre/family match | Same=1.0, same family=0.7, different=0.3 |
+
+### Require Essentia analysis
+
+| Axis | What it measures | Pool scoring |
+|:-----|:-----------------|:-------------|
+| **Timbral** | Sonic texture similarity | z-score normalized Euclidean distance |
+| **Brightness** | Spectral centroid delta | Same thresholds as transition scorer |
+| **Rhythm** | Groove regularity delta | Same thresholds as transition scorer |
+
+<Aside type="tip">
+  Tracks without Essentia data are scored on non-timbral axes only. The composite is renormalized — they aren't penalized for missing data, but may rank higher than they deserve. Run `analyze_audio_batch` for best results.
+</Aside>
+
+### The timbral axis
+
+The discovery axis — "sounds like it belongs." Concatenates five Essentia descriptors into a 34-dimensional feature vector:
+
+- **MFCC mean** (13-dim): overall spectral envelope / timbral color
+- **MFCC std** (13-dim): timbral variation within the track
+- **Spectral contrast mean** (6-dim): frequency band energy distribution
+- **Spectral centroid CV**: brightness variation over time
+- **Dissonance mean**: harmonic roughness
+
+Each dimension is z-score normalized across the library before computing distance. This prevents dimensions on different scales from dominating.
+
+## Weight presets
+
+| Axis | Balanced | Timbral |
+|:-----|:--------:|:-------:|
+| BPM | 0.25 | 0.20 |
+| Energy | 0.20 | 0.15 |
+| Timbral | 0.18 | **0.35** |
+| Key | 0.12 | 0.10 |
+| Genre | 0.10 | 0.05 |
+| Brightness | 0.08 | 0.08 |
+| Rhythm | 0.07 | 0.07 |
+
+**Balanced** (default): BPM and energy lead. Timbral is the discovery axis but doesn't dominate.
+
+**Timbral**: upweights timbral to 0.35 for cross-genre sonic discovery — "what in my library sounds like these regardless of tags."
+
+## Master tempo and reference BPM
+
+With master tempo off, pitching a track to match BPM shifts its key — just like vinyl. A 3% BPM change shifts the key by ~0.5 semitones.
+
+Pool tools handle this via a **reference BPM**: all tracks' effective keys are computed at the reference BPM using a continuous detuning model. The choice of reference BPM can change which harmonic relationships exist.
+
+`describe_pool` sweeps reference BPMs and reports the **optimal reference BPM** — the one that maximizes key compatibility across the pool.
+
+<Aside type="caution">
+  If a pool spans too wide a BPM range (>1 semitone of shift per track from any reference), no single reference BPM works. The tool reports this as a warning.
+</Aside>
+
+## Iterative greedy expansion
+
+`expand_pool` doesn't just rank candidates from a flat list. It uses iterative greedy expansion:
+
+1. Score all candidates against the seed pool. Pick the single best.
+2. Add it to the pool. Re-score remaining candidates against the expanded pool.
+3. Repeat until the requested number of additions is reached or quality drops below threshold.
+
+Each addition is guaranteed compatible with the full pool at the time it's added — including prior additions. This prevents the failure mode where multiple additions are each compatible with seeds but incompatible with each other.
+
+## Chapters and set plans
+
+Pools become **chapters** when the DJ validates and locks them. Two chapter types:
+
+- **Sequenced**: fixed track order (the DJ tested the transitions)
+- **Unordered**: the DJ trusts internal compatibility and will improvise order live
+
+**Bridges** connect chapters — tracks compatible with both the tail of one chapter and the head of the next. The [Chapter Set Planning](/workflows/chapter-set-planning/) workflow handles this.
+
+<CardGrid>
+  <Card title="Pool Building" icon="puzzle">
+    Step-by-step workflow for building pools.
+    [Get started](/workflows/pool-building/)
+  </Card>
+  <Card title="MCP Tools" icon="bars-ascending">
+    Full parameter reference for pool tools.
+    [Tool reference](/mcp-tools/mixing/#pool-discovery-tools)
+  </Card>
+</CardGrid>

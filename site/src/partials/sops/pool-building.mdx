@@ -1,0 +1,121 @@
+## Constraints
+
+- **Read-only.** Pool building never modifies track metadata. It discovers compatible groupings.
+- **Human controls the result.** Agent proposes pools and additions. User approves, removes, or adjusts.
+- **Cache-first.** All pool scoring uses cached audio analysis and enrichment. No external API calls.
+- **Master tempo default.** Default `master_tempo=false` — accounts for pitch shift when scoring key compatibility. Override to `true` only if user confirms they play with master tempo on.
+- **Symmetric scoring.** Pool compatibility is symmetric: score(A,B) == score(B,A). No directional context.
+
+## Prerequisites
+
+```
+cache_coverage()
+```
+
+All providers must be at 100%. If not, hydrate first (audio analysis, then enrichment). Essentia analysis is especially important — tracks without it lose the timbral axis and brightness/rhythm axes in pool scoring.
+
+## Steps
+
+### 1. Collect seed tracks
+
+Ask user for 2-5 seed tracks that define the pool's character. Sources:
+
+- Specific track IDs the user already has in mind
+- A playlist the user wants to expand from
+- Tracks from a recent session (`get_sessions`, `get_session_tracks`)
+- Search results (`search_tracks`)
+
+Confirm seeds with user before proceeding. Present each seed's key, BPM, energy, genre.
+
+### 2. Expand the pool
+
+```
+expand_pool(
+  seed_track_ids=[...],
+  additions=5,
+  master_tempo=false
+)
+```
+
+Adjust parameters based on user goals:
+- `cross_genre=true` for timbral discovery across genre boundaries
+- `preset="timbral"` to prioritize sonic similarity over metadata matching
+- `playlist_id` to restrict candidates to a specific playlist
+- Search filters (`genre`, `bpm_min`, `bpm_max`, `rating_min`) to scope candidates
+
+Present each addition with:
+- Track info (title, artist, BPM, key, genre)
+- `min_score` — worst compatibility with any pool member (the guarantee)
+- `mean_score` — average compatibility across the pool
+- `rationale` — strongest/weakest axes, most compatible member
+
+If `stopped_early=true`, explain that remaining candidates scored below the quality threshold. Suggest widening filters or adjusting seeds.
+
+Ask user: "Keep all additions? / remove specific ones / expand further / adjust seeds"
+
+### 3. Iterate
+
+If user removes tracks or wants more:
+
+```
+expand_pool(
+  seed_track_ids=[...all current pool members...],
+  additions=3,
+  master_tempo=false
+)
+```
+
+Use the full current pool as seeds for the next expansion round. This ensures new additions are compatible with everything already approved.
+
+Repeat until user is satisfied with pool size and composition.
+
+### 4. Describe the pool
+
+```
+describe_pool(
+  pool_track_ids=[...],
+  master_tempo=false
+)
+```
+
+Present the analysis:
+- **Cohesion** — mean/min pairwise compatibility scores
+- **Energy band** — energy range across the pool
+- **BPM center/spread** — tempo characteristics
+- **Key neighborhood** — effective keys at reference BPM
+- **Dominant genre** — most common genre
+- **Analysis coverage** — % of tracks with full Essentia data
+- **Weak members** — tracks with low min-compatibility (candidates for removal)
+- **Optimal reference BPM** (master_tempo=false only) — the BPM that maximizes key compatibility across the pool
+
+If weak members are flagged, ask user: "Remove weak members? / keep them / see pairwise scores"
+
+If `bpm_range_warning` appears, explain that the pool spans too wide a BPM range for reliable harmonic evaluation at a single reference BPM.
+
+### 5. Validate specific pairs (optional)
+
+For tracks the user is uncertain about:
+
+```
+score_pool_compatibility(
+  track_a="...",
+  track_b="...",
+  master_tempo=false
+)
+```
+
+Show per-axis scores to help the user understand why tracks do or don't fit.
+
+### 6. Lock the pool
+
+Once the user approves the pool, save it as a playlist:
+
+```
+write_xml(playlists=[{"name": "Pool: Deep House 126", "track_ids": [...]}])
+```
+
+Note: `write_xml` also exports and clears any staged metadata changes. Use `preview_changes` first if other workflows have pending edits.
+
+Report output path. Remind user: File → Import Collection in Rekordbox.
+
+The pool is now a locked **chapter** — ready for live performance or further set planning.

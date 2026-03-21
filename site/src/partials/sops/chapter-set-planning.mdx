@@ -1,0 +1,156 @@
+## Constraints
+
+- **Read-only.** Chapter set planning never modifies track metadata.
+- **Human controls the result.** Agent proposes chapter order and bridges. User approves all decisions.
+- **Cache-first.** All scoring uses cached data. No external API calls.
+- **Chapters first.** This workflow assumes the user has already built and locked chapters (pools saved as playlists) using the Pool Building workflow.
+
+## Prerequisites
+
+- At least 2 locked chapters (playlists) from the Pool Building workflow
+- User must identify each chapter as **sequenced** (fixed order) or **unordered** (improvise order live)
+
+```
+cache_coverage()
+```
+
+All providers at 100%.
+
+## Steps
+
+### 1. Gather chapters
+
+Ask user for:
+- Chapter playlist IDs (from `get_playlists`)
+- Whether each chapter is **sequenced** or **unordered**
+- Target set duration and overall energy arc preference
+
+### 2. Analyze each chapter
+
+For each chapter:
+
+```
+describe_pool(
+  playlist_id="...",
+  master_tempo=false
+)
+```
+
+Summarize per chapter:
+- Energy band, BPM center, dominant genre, key neighborhood
+- Cohesion score
+- For unordered chapters: optimal reference BPM
+
+Present a table of all chapters side by side.
+
+### 3. Propose chapter order
+
+Based on the user's energy arc preference, propose an ordering that creates a coherent energy progression across the night:
+
+- **Warmup** — lowest energy chapters first
+- **Build** — ascending energy
+- **Peak** — highest energy chapters
+- **Release** — descending energy to close
+
+Consider BPM progression — avoid large BPM jumps between adjacent chapters.
+
+Present the proposed order with energy flow visualization. Ask user: "Approve order? / reorder / swap chapters"
+
+### 4. Find bridge tracks
+
+For each chapter boundary (transition between chapters), find 1-3 bridge tracks that connect them:
+
+**Step 4a: Identify boundary tracks**
+
+- For **sequenced chapters**: the last 2-3 tracks of the outgoing chapter and first 2-3 of the incoming chapter
+- For **unordered chapters**: all members are potential boundary tracks
+
+**Step 4b: Search for bridges**
+
+Use `expand_pool` with seeds from both chapters' boundary tracks:
+
+```
+expand_pool(
+  seed_track_ids=[...outgoing_boundary, ...incoming_boundary],
+  additions=5,
+  master_tempo=false
+)
+```
+
+Tracks compatible with both sets of boundary tracks are natural bridges.
+
+**Step 4c: Score bridge candidates**
+
+For each candidate, score against both chapters:
+
+```
+score_pool_compatibility(
+  track_id="candidate",
+  pool_track_ids=[...outgoing_boundary],
+  master_tempo=false
+)
+```
+
+```
+score_pool_compatibility(
+  track_id="candidate",
+  pool_track_ids=[...incoming_boundary],
+  master_tempo=false
+)
+```
+
+Rank by the minimum of the two min-scores (must work with both sides).
+
+**Step 4d: Present bridge options**
+
+Present 3-5 bridge candidates per boundary with:
+- Compatibility scores to both chapters
+- BPM/energy position relative to the two chapters
+- Why each works (strongest axes)
+
+Ask user: "Pick bridge(s) / skip this boundary / search with different parameters"
+
+### 5. Sequence unordered chapters
+
+For unordered chapters, propose internal sequence:
+
+```
+build_set(
+  track_ids=[...chapter_track_ids],
+  target_tracks=N,
+  priority="balanced",
+  energy_curve="flat",
+  master_tempo=false,
+  beam_width=3
+)
+```
+
+Or use `score_transition` for pairwise evaluation if the chapter is small (≤5 tracks).
+
+Present ordering options. Ask user: "Pick sequence / keep unordered / adjust"
+
+### 6. Present full set plan
+
+Display the complete set plan:
+- Chapter order with bridge tracks between them
+- Per-chapter: track list, energy band, BPM range
+- Overall energy arc visualization
+- Total track count and estimated duration
+- Any gaps or weak transitions flagged
+
+Ask user: "Approve plan? / swap chapters / change bridges / adjust sequences"
+
+### 7. Export
+
+Export the full set as a single ordered playlist:
+
+```
+write_xml(playlists=[{
+  "name": "Set Plan: Venue Date",
+  "track_ids": [...chapter1, ...bridge1, ...chapter2, ...bridge2, ...]
+}])
+```
+
+Optionally export each chapter as a separate playlist too.
+
+Report output path. Remind user: File → Import Collection in Rekordbox.

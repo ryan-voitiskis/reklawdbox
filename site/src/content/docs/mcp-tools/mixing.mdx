@@ -1,13 +1,13 @@
 ---
 title: Mixing & Sequencing
-description: Tools for scoring transitions between tracks and building optimized DJ set sequences.
+description: Tools for scoring transitions, building set sequences, and discovering compatible track pools.
 sidebar:
   order: 4
 ---
 
 import { Aside, Badge } from '@astrojs/starlight/components';
 
-Score transitions and build DJ sets using six-axis scoring (key, BPM, energy, genre, brightness, rhythm). See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model, Camelot wheel, energy curves, and priority weights.
+Score transitions and build DJ sets using six-axis scoring (key, BPM, energy, genre, brightness, rhythm), plus discover compatible track pools using the symmetric seven-axis pool kernel. See [Harmonic Mixing](/concepts/harmonic-mixing/) for the transition scoring model and [Pool Building](/workflows/pool-building/) for the pool discovery workflow.
 
 ---
 
@@ -81,3 +81,84 @@ Returns candidate sequences with per-transition scores, overall set score, and e
 | Harmonic coherence | &ge; 50% | Fraction of transitions with key &ge; 0.8 |
 | Energy fidelity | &ge; 40% | Fraction of transitions with perfect energy |
 | Max pitch adjustment | &le; 8% | Maximum BPM deviation across set |
+
+---
+
+## Pool Discovery Tools
+
+The pool tools use a **symmetric** scoring kernel — `score(A,B) == score(B,A)` always. No energy phases, genre streaks, or BPM drift. Seven axes: BPM, energy, key, genre, timbral, brightness, rhythm. Two presets: `balanced` (default) and `timbral`.
+
+<Aside type="tip">
+  Pool scoring defaults to `master_tempo=false` — it accounts for pitch shift when evaluating key compatibility. Set `master_tempo=true` only if you play with Rekordbox's master tempo on.
+</Aside>
+
+## `score_pool_compatibility`
+
+Score pool compatibility between tracks. Three modes determined by which parameters are provided:
+
+**Pairwise mode** — score two tracks:
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_a` | string | **yes** | First track ID |
+| `track_b` | string | **yes** | Second track ID |
+
+**One-vs-pool mode** — score a candidate against a pool:
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | **yes** | Candidate track ID |
+| `pool_track_ids` | string[] | **yes** | Pool member track IDs |
+
+**Cohesion mode** — analyze a pool's internal compatibility:
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `pool_track_ids` | string[] | **yes** | Pool track IDs (at least 2) |
+
+**Common parameters (all modes):**
+
+| Parameter | Type | Default | Description |
+|-----------|------|:-------:|-------------|
+| `master_tempo` | boolean | `false` | Master Tempo mode |
+| `reference_bpm` | number | median | Reference BPM for key evaluation |
+| `preset` | string | `"balanced"` | `"balanced"` or `"timbral"` |
+
+---
+
+## `expand_pool`
+
+Find tracks compatible with an existing pool via iterative greedy expansion. Each addition is guaranteed compatible with the full pool at the time it's added.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `seed_track_ids` | string[] | **yes** | Seed tracks defining the initial pool |
+| `additions` | integer | | Tracks to add (default: `3`) |
+| `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
+| `reference_bpm` | number | | Reference BPM (default: median of seeds) |
+| `cross_genre` | boolean | | Disable genre family pre-filter (default: `false`) |
+| `preset` | string | | `"balanced"` or `"timbral"` |
+| `playlist_id` | string | | Restrict candidates to a playlist |
+| `max_tracks` | integer | | Cap on candidate universe size |
+
+Also accepts all [search filter parameters](/mcp-tools/#shared-search-filters) for scoping the candidate universe.
+
+Returns additions with `min_score` (worst compatibility to any member), `mean_score`, and `rationale` (strongest/weakest axes, most compatible member). Stops early if no candidate meets the 0.4 quality threshold.
+
+---
+
+## `describe_pool`
+
+Analyze a pool's cohesion, coverage, and structure.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `pool_track_ids` | string[] | | Track IDs in the pool |
+| `playlist_id` | string | | Playlist ID to use as the pool |
+| `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
+| `reference_bpm` | number | | Reference BPM (default: median) |
+| `preset` | string | | `"balanced"` or `"timbral"` |
+
+Provide either `pool_track_ids` or `playlist_id`.
+
+Returns: cohesion (mean/min pairwise), medoid track, weak members, energy band, BPM center/spread, key neighborhood, dominant genre, analysis coverage. When `master_tempo=false`, also reports `optimal_reference_bpm` and key stability comparison.

@@ -68,6 +68,16 @@ export default defineConfig({
               paths: ['agent/set-building'],
               description: 'Agent SOP for DJ set building',
             },
+            {
+              label: 'Pool Building SOP',
+              paths: ['agent/pool-building'],
+              description: 'Agent SOP for pool building',
+            },
+            {
+              label: 'Chapter Set Planning SOP',
+              paths: ['agent/chapter-set-planning'],
+              description: 'Agent SOP for chapter set planning',
+            },
           ],
         }),
       ],

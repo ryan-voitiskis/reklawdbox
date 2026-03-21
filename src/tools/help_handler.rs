@@ -15,11 +15,14 @@ const SOP_COLLECTION_AUDIT: &str =
 const SOP_METADATA_BACKFILL: &str =
     include_str!("../../site/src/partials/sops/metadata-backfill.mdx");
 const SOP_LIBRARY_HEALTH: &str = include_str!("../../site/src/partials/sops/library-health.mdx");
+const SOP_POOL_BUILDING: &str = include_str!("../../site/src/partials/sops/pool-building.mdx");
+const SOP_CHAPTER_SET_PLANNING: &str =
+    include_str!("../../site/src/partials/sops/chapter-set-planning.mdx");
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     #[schemars(
-        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'audit', 'import', 'metadata', 'label', 'year', 'health'. Omit for the full menu."
+        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'pool', 'chapter', 'audit', 'import', 'metadata', 'label', 'year', 'health'. Omit for the full menu."
     )]
     pub topic: Option<String>,
 }
@@ -72,6 +75,32 @@ const WORKFLOWS: &[Workflow] = &[
             "score_transition",
         ],
         sop: SOP_SET_BUILDING,
+    },
+    Workflow {
+        name: "Pool Building",
+        keywords: &["pool", "crate", "expand", "discover"],
+        summary: "Build compatible track pools for live improvisation using symmetric pool scoring.",
+        key_tools: &[
+            "expand_pool",
+            "describe_pool",
+            "score_pool_compatibility",
+            "write_xml",
+        ],
+        sop: SOP_POOL_BUILDING,
+    },
+    Workflow {
+        name: "Chapter Set Planning",
+        keywords: &["chapter", "set plan", "bridge", "gig prep", "night plan"],
+        summary: "Plan a full set from locked chapters with bridge tracks between them.",
+        key_tools: &[
+            "describe_pool",
+            "expand_pool",
+            "score_pool_compatibility",
+            "build_set",
+            "score_transition",
+            "write_xml",
+        ],
+        sop: SOP_CHAPTER_SET_PLANNING,
     },
     Workflow {
         name: "Collection Audit",
@@ -152,7 +181,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "sop": w.sop,
             }),
             None => serde_json::json!({
-                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, audit, metadata, label, year, health."),
+                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, pool, chapter, audit, metadata, label, year, health."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
             }),
         }
@@ -172,12 +201,14 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "3. Genre Classification — classify ungenred tracks with classify_tracks\n",
                 "4. Genre Audit — verify existing genre tags with audit_genres\n",
                 "5. Set Building — build DJ sets from well-tagged tracks\n",
+                "6. Pool Building — discover compatible track pools for live improvisation\n",
+                "7. Chapter Set Planning — plan a full night from locked chapters (requires pools)\n",
                 "Prerequisite: run `reklawdbox hydrate` from the CLI first to populate enrichment and analysis caches.\n",
                 "Full guide: https://reklawdbox.com/workflows/library-cleanup/",
             ),
             "getting_started": "https://reklawdbox.com/getting-started/",
             "reference": "https://reklawdbox.com/reference/tools/",
-            "tip": "Call help(topic='genre'|'import'|'set'|'audit'|'genre audit'|'metadata'|'label'|'year'|'health') for the full step-by-step SOP.",
+            "tip": "Call help(topic='genre'|'import'|'set'|'pool'|'chapter'|'audit'|'genre audit'|'metadata'|'label'|'year'|'health') for the full step-by-step SOP.",
         })
     };
 
