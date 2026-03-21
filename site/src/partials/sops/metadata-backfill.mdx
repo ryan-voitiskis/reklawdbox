@@ -62,38 +62,69 @@ Report the summary: "Backfill complete: N labels staged, N already correct, N co
 
 ### 2. Resolve label conflicts
 
-Group conflicts by pattern for efficient review:
+Deduplicate conflicts before presenting — a track must appear in exactly one group.
 
-#### Artist-name-as-label vs actual label
+Group conflicts by pattern and present each group as a table with columns: **#**, **Artist — Title**, **Current**, **Enrichment**, **Rec** (recommendation). Follow each table with a clear bulk-action prompt.
 
-When the current label is the artist's name and Discogs has an actual label, suggest the Discogs label — it provides a stronger signal than the artist name.
+#### Group A: Artist-name-as-label → actual label
 
-```
-Artist-name-as-label conflicts (N):
- #1  Fantastic Man — Antiboudi | Fantastic Man → Mule Musiq
- #2  Fantastic Man — Diaspora | Fantastic Man → Mule Musiq
- ...
-```
-
-Ask user: **"Approve all, or reject/change specific numbers."**
-
-Stage approved changes via `update_tracks`.
-
-#### Label name variations
-
-When both labels refer to the same entity with different formatting (e.g. "Palette" vs "Palette Recordings", "Loma Vista" vs "Loma Vista Recordings"), suggest keeping the current label — it was set intentionally.
-
-Present these for confirmation but recommend no change.
-
-#### Genuine disagreements
-
-When the Discogs label is a different entity entirely (e.g. different pressing, compilation, or wrong match), present individually with context:
+When the current label is the artist's name and enrichment has an actual label, recommend the enrichment label — it provides a stronger signal than the artist name.
 
 ```
- #N  Artist — Title | Current: Label A → Discogs: Label B
+Group A: Artist-name-as-label → actual label (N tracks) — recommend: use enrichment
+
+| #  | Artist — Title              | Current       | Enrichment | Rec            |
+|----|-----------------------------|---------------|------------|----------------|
+| 1  | Fantastic Man — Antiboudi   | Fantastic Man | Mule Musiq | use enrichment |
+| 2  | Fantastic Man — Diaspora    | Fantastic Man | Mule Musiq | use enrichment |
 ```
 
-Ask user to pick one, or skip.
+**→ "Approve all Group A, reject all, or specify numbers to change (e.g. 'approve all except 2')."**
+
+#### Group B: Label name variations
+
+When both labels refer to the same entity with different formatting (e.g. "Palette" vs "Palette Recordings", "трип" vs "trip recordings"), recommend keeping the current label — it was set intentionally.
+
+```
+Group B: Label name variations (N tracks) — recommend: keep current
+
+| #  | Artist — Title             | Current | Enrichment         | Rec          |
+|----|----------------------------|---------|--------------------|--------------|
+| 3  | Dauwd — Kindlinn           | Palette | Palette Recordings | keep current |
+| 4  | Lone — Abraxas             | трип    | trip recordings    | keep current |
+```
+
+**→ "Skip all Group B (keep current labels), or specify numbers to change."**
+
+#### Group C: Wrong enrichment
+
+When enrichment returned nonsense — artist names as labels, gibberish, or clearly incorrect data — recommend keeping the current label.
+
+```
+Group C: Wrong enrichment (N tracks) — recommend: keep current
+
+| #  | Artist — Title                    | Current           | Enrichment    | Rec          |
+|----|-----------------------------------|--------------------|--------------|--------------|
+| 5  | Beat Movement — X                 | WarinD Records     | BEAT MOVEMENT | keep current |
+| 6  | Chaka Demus and Pliers — Murder   | Soul Jazz Records  | Alex Di Ciò   | keep current |
+```
+
+**→ "Skip all Group C, or specify numbers to change."**
+
+#### Group D: Genuine disagreements
+
+When the enrichment label is a different entity entirely (e.g. different pressing, compilation, or wrong match), present for individual review with no default recommendation.
+
+```
+Group D: Genuine disagreements (N tracks) — review individually
+
+| #  | Artist — Title                 | Current          | Enrichment         | Rec    |
+|----|--------------------------------|------------------|--------------------|--------|
+| 7  | Rick Wade — Authentideep       | Harmonie Park    | Unknown Season     | review |
+| 8  | Vril — Haus (Rework)           | Giegling         | Delsin             | review |
+```
+
+**→ "For each, reply 'keep' or 'use enrichment', or skip. You can also bulk-skip: 'skip all Group D'."**
 
 Stage approved changes via `update_tracks`.
 
@@ -128,20 +159,38 @@ Report the summary: "Year backfill complete: N years staged (N file tags, N fold
 
 ### 4. Resolve year conflicts
 
-Group year conflicts by pattern:
+Deduplicate conflicts before presenting — a track must appear in exactly one group.
 
-#### Original vs reissue
+Group year conflicts by pattern and present each group as a table with columns: **#**, **Artist — Title**, **Current**, **Enrichment**, **Rec** (recommendation).
 
-When the current year and Discogs year differ, it's often because one is the original release and the other is a reissue. Prefer the earlier year — it reflects the track's era more accurately for genre classification and set building.
+#### Group A: Original vs reissue
+
+When the current year and enrichment year differ, it's often because one is the original release and the other is a reissue. Recommend the earlier year — it reflects the track's era more accurately for genre classification and set building.
 
 ```
-Year conflicts (N):
- #1  Artist — Title | Current: 2020 → Discogs: 1993
- #2  Artist — Title | Current: 1995 → Discogs: 2018
- ...
+Group A: Original vs reissue (N tracks) — recommend: use earlier year
+
+| #  | Artist — Title              | Current | Enrichment | Rec       |
+|----|-----------------------------|---------|------------|-----------|
+| 1  | Chez Damier — Can You Feel It   | 2020    | 1993       | use 1993  |
+| 2  | Moodymann — Shades of Jae       | 1995    | 2018       | keep 1995 |
 ```
 
-Ask user: **"Approve earlier year for all, or review individually?"**
+**→ "Approve all Group A (use earlier year), or specify numbers to change."**
+
+#### Group B: Small discrepancies
+
+When years differ by 1 (e.g. late-year release listed as following year), recommend keeping the current year.
+
+```
+Group B: Small discrepancies (N tracks) — recommend: keep current
+
+| #  | Artist — Title              | Current | Enrichment | Rec          |
+|----|-----------------------------|---------|------------|--------------|
+| 3  | Karenn — Grapefruit Regret  | 2019    | 2020       | keep current |
+```
+
+**→ "Skip all Group B, or specify numbers to change."**
 
 Stage approved changes via `update_tracks`.
 
