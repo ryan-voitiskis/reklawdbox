@@ -24,6 +24,7 @@ mod history_handlers;
 mod label_handlers;
 mod library_handlers;
 mod params;
+mod pool_handlers;
 mod resolve;
 mod resolve_handlers;
 mod scoring;
@@ -50,6 +51,7 @@ use history_handlers::*;
 use label_handlers::*;
 use library_handlers::*;
 use params::*;
+use pool_handlers::*;
 use resolve::*;
 use resolve_handlers::*;
 use scoring::*;
@@ -433,6 +435,36 @@ impl ReklawdboxServer {
         params: Parameters<BuildSetParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_build_set(self, params.0)
+    }
+
+    #[tool(
+        description = "Score pool compatibility between tracks. Three modes: pairwise (track_a + track_b), one-vs-pool (track_id + pool_track_ids), or cohesion (pool_track_ids only). Symmetric kernel — score(A,B) == score(B,A). Uses BPM, energy, key, genre, timbral, brightness, rhythm axes."
+    )]
+    async fn score_pool_compatibility(
+        &self,
+        params: Parameters<ScorePoolCompatibilityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_score_pool_compatibility(self, params.0)
+    }
+
+    #[tool(
+        description = "Expand a track pool by finding compatible additions from the library. Iterative greedy expansion — each addition is guaranteed compatible with the full pool. Returns additions with rationale and pool cohesion stats."
+    )]
+    async fn expand_pool(
+        &self,
+        params: Parameters<ExpandPoolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_expand_pool(self, params.0)
+    }
+
+    #[tool(
+        description = "Analyze a pool's internal compatibility, coverage, and structure. Reports cohesion, medoid, weak members, energy/BPM/key stats, and (when master_tempo=false) optimal reference BPM."
+    )]
+    async fn describe_pool(
+        &self,
+        params: Parameters<DescribePoolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_describe_pool(self, params.0)
     }
 
     #[tool(

@@ -38,6 +38,12 @@ pub(super) struct TrackProfile {
     pub(super) loudness_range: Option<f64>,
     pub(super) canonical_genre: Option<String>,
     pub(super) genre_family: GenreFamily,
+    // Timbral fields (from Essentia, used by pool compatibility kernel)
+    pub(super) mfcc_mean: Option<Vec<f64>>,
+    pub(super) mfcc_std: Option<Vec<f64>>,
+    pub(super) spectral_contrast_mean: Option<Vec<f64>>,
+    pub(super) spectral_centroid_cv: Option<f64>,
+    pub(super) dissonance_mean: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -670,6 +676,14 @@ pub(super) fn build_track_profile(
         .map(genre_family_for)
         .unwrap_or(GenreFamily::Other);
 
+    let mfcc_mean = essentia_data.as_ref().and_then(|e| e.mfcc_mean.clone());
+    let mfcc_std = essentia_data.as_ref().and_then(|e| e.mfcc_std.clone());
+    let spectral_contrast_mean = essentia_data
+        .as_ref()
+        .and_then(|e| e.spectral_contrast_mean.clone());
+    let spectral_centroid_cv = essentia_data.as_ref().and_then(|e| e.spectral_centroid_cv);
+    let dissonance_mean = essentia_data.as_ref().and_then(|e| e.dissonance_mean);
+
     Ok(TrackProfile {
         track,
         camelot_key,
@@ -681,6 +695,11 @@ pub(super) fn build_track_profile(
         loudness_range,
         canonical_genre,
         genre_family,
+        mfcc_mean,
+        mfcc_std,
+        spectral_contrast_mean,
+        spectral_centroid_cv,
+        dissonance_mean,
     })
 }
 
@@ -699,87 +718,94 @@ pub(super) fn score_transition_profiles(
     // When play_bpms is set, both tracks are pitched to target BPMs.
     // Compute effective keys based on the pitch shift from native BPM to play BPM.
     // When play_bpms is None, fall back to the existing master_tempo logic.
-    let (effective_to_key, pitch_shift_semitones, scoring_from_key, scoring_to_key, bpm, exact_from_shift, exact_to_shift) =
-        if let Some((from_play_bpm, to_play_bpm)) = play_bpms {
-            // Compute effective keys for both tracks based on play BPMs
-            let exact_from = if from.bpm > 0.0 && from_play_bpm > 0.0 {
-                12.0 * (from_play_bpm / from.bpm).log2()
-            } else {
-                0.0
-            };
-            let exact_to = if to.bpm > 0.0 && to_play_bpm > 0.0 {
-                12.0 * (to_play_bpm / to.bpm).log2()
-            } else {
-                0.0
-            };
-            let from_shift = exact_from.round() as i32;
-            let to_shift = exact_to.round() as i32;
-
-            let effective_from_key = if !master_tempo && from_shift != 0 {
-                from.camelot_key
-                    .map(|k| transpose_camelot_key(k, from_shift))
-            } else {
-                from.camelot_key
-            };
-            let effective_to_key = if !master_tempo && to_shift != 0 {
-                to.camelot_key.map(|k| transpose_camelot_key(k, to_shift))
-            } else {
-                to.camelot_key
-            };
-
-            let effective_to_key_display = if !master_tempo && to_shift != 0 {
-                effective_to_key.map(format_camelot)
-            } else {
-                None
-            };
-
-            // BPM axis scores how close the candidate's native BPM is to its target
-            let bpm_score = score_bpm_axis(to_play_bpm, to.bpm);
-
-            (
-                effective_to_key_display,
-                to_shift,
-                effective_from_key,
-                effective_to_key,
-                bpm_score,
-                if master_tempo { 0.0 } else { exact_from },
-                if master_tempo { 0.0 } else { exact_to },
-            )
+    let (
+        effective_to_key,
+        pitch_shift_semitones,
+        scoring_from_key,
+        scoring_to_key,
+        bpm,
+        exact_from_shift,
+        exact_to_shift,
+    ) = if let Some((from_play_bpm, to_play_bpm)) = play_bpms {
+        // Compute effective keys for both tracks based on play BPMs
+        let exact_from = if from.bpm > 0.0 && from_play_bpm > 0.0 {
+            12.0 * (from_play_bpm / from.bpm).log2()
         } else {
-            // Original master_tempo logic
-            let (eff_to_key, shift, exact_to) =
-                if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
-                    let exact = 12.0 * (from.bpm / to.bpm).log2();
-                    let integer_shift = exact.round() as i32;
-                    if integer_shift != 0 {
-                        let transposed =
-                            to.camelot_key.map(|k| transpose_camelot_key(k, integer_shift));
-                        (transposed.map(format_camelot), integer_shift, exact)
-                    } else {
-                        (None, 0, exact)
-                    }
-                } else {
-                    (None, 0, 0.0)
-                };
-
-            let scoring_to = if let Some(ref ek) = eff_to_key {
-                parse_camelot_key(ek)
-            } else {
-                to.camelot_key
-            };
-
-            let bpm_score = score_bpm_axis(from.bpm, to.bpm);
-
-            (
-                eff_to_key,
-                shift,
-                from.camelot_key,
-                scoring_to,
-                bpm_score,
-                0.0,
-                exact_to,
-            )
+            0.0
         };
+        let exact_to = if to.bpm > 0.0 && to_play_bpm > 0.0 {
+            12.0 * (to_play_bpm / to.bpm).log2()
+        } else {
+            0.0
+        };
+        let from_shift = exact_from.round() as i32;
+        let to_shift = exact_to.round() as i32;
+
+        let effective_from_key = if !master_tempo && from_shift != 0 {
+            from.camelot_key
+                .map(|k| transpose_camelot_key(k, from_shift))
+        } else {
+            from.camelot_key
+        };
+        let effective_to_key = if !master_tempo && to_shift != 0 {
+            to.camelot_key.map(|k| transpose_camelot_key(k, to_shift))
+        } else {
+            to.camelot_key
+        };
+
+        let effective_to_key_display = if !master_tempo && to_shift != 0 {
+            effective_to_key.map(format_camelot)
+        } else {
+            None
+        };
+
+        // BPM axis scores how close the candidate's native BPM is to its target
+        let bpm_score = score_bpm_axis(to_play_bpm, to.bpm);
+
+        (
+            effective_to_key_display,
+            to_shift,
+            effective_from_key,
+            effective_to_key,
+            bpm_score,
+            if master_tempo { 0.0 } else { exact_from },
+            if master_tempo { 0.0 } else { exact_to },
+        )
+    } else {
+        // Original master_tempo logic
+        let (eff_to_key, shift, exact_to) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
+            let exact = 12.0 * (from.bpm / to.bpm).log2();
+            let integer_shift = exact.round() as i32;
+            if integer_shift != 0 {
+                let transposed = to
+                    .camelot_key
+                    .map(|k| transpose_camelot_key(k, integer_shift));
+                (transposed.map(format_camelot), integer_shift, exact)
+            } else {
+                (None, 0, exact)
+            }
+        } else {
+            (None, 0, 0.0)
+        };
+
+        let scoring_to = if let Some(ref ek) = eff_to_key {
+            parse_camelot_key(ek)
+        } else {
+            to.camelot_key
+        };
+
+        let bpm_score = score_bpm_axis(from.bpm, to.bpm);
+
+        (
+            eff_to_key,
+            shift,
+            from.camelot_key,
+            scoring_to,
+            bpm_score,
+            0.0,
+            exact_to,
+        )
+    };
 
     // Use continuous pitch-shift-aware key scoring when master tempo is off
     // and there's a nonzero shift. This interpolates between the two bracketing
@@ -939,6 +965,14 @@ pub(super) fn score_transition_profiles(
 
 pub(super) fn round_to_3_decimals(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+pub(super) fn bpm_pitch_shift(native_bpm: f64, ref_bpm: f64) -> f64 {
+    if native_bpm > 0.0 {
+        12.0 * (ref_bpm / native_bpm).log2()
+    } else {
+        0.0
+    }
 }
 
 pub(super) fn score_key_axis(from: Option<CamelotKey>, to: Option<CamelotKey>) -> AxisScore {
@@ -1235,6 +1269,140 @@ fn score_rhythm_axis(from_regularity: Option<f64>, to_regularity: Option<f64>) -
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pool-specific axis functions (symmetric, no sequential context)
+// ---------------------------------------------------------------------------
+
+/// Pool BPM axis: symmetric variant using max(a, b) as denominator.
+/// The transition scorer's `score_bpm_axis` uses `from_bpm` as denominator,
+/// which is asymmetric. For pools we need score(A,B) == score(B,A).
+pub(super) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
+    if a_bpm <= 0.0 || b_bpm <= 0.0 {
+        return AxisScore {
+            value: 0.5,
+            label: "Unknown BPM".to_string(),
+        };
+    }
+    let delta = (a_bpm - b_bpm).abs();
+    let denom = a_bpm.max(b_bpm);
+    let pct = delta / denom * 100.0;
+    let value = (-0.019 * pct * pct).exp();
+    let label_category = if pct < 2.0 {
+        "Seamless"
+    } else if pct < 4.0 {
+        "Comfortable"
+    } else if pct < 6.0 {
+        "Noticeable"
+    } else if pct < 9.0 {
+        "Creative transition needed"
+    } else {
+        "Jarring"
+    };
+    AxisScore {
+        value,
+        label: format!("{label_category} ({:.1}%, {:.1} BPM)", pct, delta),
+    }
+}
+
+/// Pool energy axis: Gaussian decay on absolute energy distance.
+/// Tracks at similar energy levels score high.
+pub(super) fn score_pool_energy_axis(a_energy: f64, b_energy: f64) -> AxisScore {
+    let delta = (a_energy - b_energy).abs();
+    // exp(-25 * delta^2): 0.0 → 1.0, 0.1 → 0.78, 0.2 → 0.37, 0.3 → 0.11
+    let value = (-25.0 * delta * delta).exp();
+    let label = if delta < 0.05 {
+        format!("Same energy band (delta {delta:.2})")
+    } else if delta < 0.15 {
+        format!("Close energy (delta {delta:.2})")
+    } else if delta < 0.25 {
+        format!("Moderate energy gap (delta {delta:.2})")
+    } else {
+        format!("Wide energy gap (delta {delta:.2})")
+    };
+    AxisScore { value, label }
+}
+
+/// Pool genre axis: simple match without streak logic.
+/// Same genre = 1.0, same family = 0.7, different = 0.3.
+pub(super) fn score_pool_genre_axis(
+    genre_a: Option<&str>,
+    genre_b: Option<&str>,
+    family_a: GenreFamily,
+    family_b: GenreFamily,
+) -> AxisScore {
+    let Some(genre_a) = genre_a else {
+        return AxisScore {
+            value: 0.5,
+            label: "Unknown genre".to_string(),
+        };
+    };
+    let Some(genre_b) = genre_b else {
+        return AxisScore {
+            value: 0.5,
+            label: "Unknown genre".to_string(),
+        };
+    };
+
+    if genre_a.eq_ignore_ascii_case(genre_b) {
+        AxisScore {
+            value: 1.0,
+            label: "Same genre".to_string(),
+        }
+    } else if family_a == family_b && family_a != GenreFamily::Other {
+        AxisScore {
+            value: 0.7,
+            label: "Same family".to_string(),
+        }
+    } else {
+        AxisScore {
+            value: 0.3,
+            label: "Different families".to_string(),
+        }
+    }
+}
+
+/// Pool timbral axis: Euclidean distance on z-score-normalized vectors.
+/// Returns None if either track lacks timbral data.
+pub(super) fn score_pool_timbral_axis(
+    a: &TrackProfile,
+    b: &TrackProfile,
+    norm_stats: &crate::store::TimbralNormStats,
+) -> Option<AxisScore> {
+    let raw_a = build_timbral_vector(a)?;
+    let raw_b = build_timbral_vector(b)?;
+
+    if raw_a.len() != raw_b.len() || raw_a.len() != norm_stats.means.len() {
+        return None;
+    }
+
+    let norm_a = normalize_timbral_vector(&raw_a, norm_stats)?;
+    let norm_b = normalize_timbral_vector(&raw_b, norm_stats)?;
+
+    let dist_sq: f64 = norm_a
+        .iter()
+        .zip(norm_b.iter())
+        .map(|(a, b)| (a - b).powi(2))
+        .sum();
+    let dist = dist_sq.sqrt();
+
+    // Map to [0,1] via exp(-k * dist^2). k chosen so that dist=4 → ~0.45
+    // (typical "different but not extreme" in z-score space)
+    let k = 0.05;
+    let value = (-k * dist_sq).exp();
+
+    let label = if value > 0.8 {
+        format!("Very similar timbre (dist {dist:.1})")
+    } else if value > 0.5 {
+        format!("Similar timbre (dist {dist:.1})")
+    } else if value > 0.3 {
+        format!("Moderate timbral distance (dist {dist:.1})")
+    } else {
+        format!("Distant timbre (dist {dist:.1})")
+    };
+
+    Some(AxisScore { value, label })
+}
+
 fn harmonic_penalty_factor(style: HarmonicMixingStyle) -> f64 {
     match style {
         HarmonicMixingStyle::Conservative => 0.1,
@@ -1372,6 +1540,174 @@ pub(super) fn compute_track_energy(
         }
         _ => bpm_proxy,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Timbral vector construction and z-score normalization (pool kernel)
+// ---------------------------------------------------------------------------
+
+/// Build a timbral feature vector from raw components.
+/// Returns None if any slice is empty (indicating missing data).
+fn assemble_timbral_vector(
+    mfcc_mean: &[f64],
+    mfcc_std: &[f64],
+    spectral_contrast: &[f64],
+    centroid_cv: f64,
+    dissonance: f64,
+) -> Vec<f64> {
+    let mut vec =
+        Vec::with_capacity(mfcc_mean.len() + mfcc_std.len() + spectral_contrast.len() + 2);
+    vec.extend_from_slice(mfcc_mean);
+    vec.extend_from_slice(mfcc_std);
+    vec.extend_from_slice(spectral_contrast);
+    vec.push(centroid_cv);
+    vec.push(dissonance);
+    vec
+}
+
+/// Concatenate timbral fields into a single feature vector.
+/// Returns None if any required component is missing.
+pub(super) fn build_timbral_vector(profile: &TrackProfile) -> Option<Vec<f64>> {
+    Some(assemble_timbral_vector(
+        profile.mfcc_mean.as_ref()?,
+        profile.mfcc_std.as_ref()?,
+        profile.spectral_contrast_mean.as_ref()?,
+        profile.spectral_centroid_cv?,
+        profile.dissonance_mean?,
+    ))
+}
+
+fn build_timbral_vector_from_essentia(essentia: &crate::audio::EssentiaOutput) -> Option<Vec<f64>> {
+    Some(assemble_timbral_vector(
+        essentia.mfcc_mean.as_ref()?,
+        essentia.mfcc_std.as_ref()?,
+        essentia.spectral_contrast_mean.as_ref()?,
+        essentia.spectral_centroid_cv?,
+        essentia.dissonance_mean?,
+    ))
+}
+
+/// Compute per-dimension mean and stddev for timbral vectors across all
+/// Essentia cache entries using Welford's online algorithm.
+pub(super) fn compute_timbral_norm_stats(
+    store_conn: &Connection,
+) -> Result<crate::store::TimbralNormStats, String> {
+    let mut stmt = store_conn
+        .prepare("SELECT features_json FROM audio_analysis_cache WHERE analyzer = ?1")
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![crate::audio::ANALYZER_ESSENTIA], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    let mut count: i64 = 0;
+    let mut means: Vec<f64> = Vec::new();
+    let mut m2s: Vec<f64> = Vec::new();
+
+    for row in rows {
+        let json_str = row.map_err(|e| format!("Row error: {e}"))?;
+        let essentia: crate::audio::EssentiaOutput = match serde_json::from_str(&json_str) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let Some(vec) = build_timbral_vector_from_essentia(&essentia) else {
+            continue;
+        };
+
+        if means.is_empty() {
+            means = vec![0.0; vec.len()];
+            m2s = vec![0.0; vec.len()];
+        }
+        if vec.len() != means.len() {
+            continue; // Dimension mismatch, skip
+        }
+        count += 1;
+
+        // Welford's online update
+        for (i, &x) in vec.iter().enumerate() {
+            let delta = x - means[i];
+            means[i] += delta / count as f64;
+            let delta2 = x - means[i];
+            m2s[i] += delta * delta2;
+        }
+    }
+
+    if count < 2 {
+        return Err("Need at least 2 Essentia entries to compute normalization stats".to_string());
+    }
+
+    let stddevs: Vec<f64> = m2s
+        .iter()
+        .map(|m2| (m2 / (count - 1) as f64).sqrt().max(1e-10))
+        .collect();
+
+    Ok(crate::store::TimbralNormStats {
+        means,
+        stddevs,
+        sample_count: count,
+    })
+}
+
+/// Z-score normalize a raw timbral vector using precomputed stats.
+/// Returns None on dimension mismatch.
+pub(super) fn normalize_timbral_vector(
+    raw: &[f64],
+    stats: &crate::store::TimbralNormStats,
+) -> Option<Vec<f64>> {
+    if raw.len() != stats.means.len() || raw.len() != stats.stddevs.len() {
+        return None;
+    }
+    Some(
+        raw.iter()
+            .enumerate()
+            .map(|(i, &x)| (x - stats.means[i]) / stats.stddevs[i])
+            .collect(),
+    )
+}
+
+/// Get or recompute timbral norm stats. Recomputes if missing or cache has
+/// grown by >10% since last computation.
+pub(super) fn ensure_timbral_norm_stats(
+    store_conn: &Connection,
+) -> Result<Option<crate::store::TimbralNormStats>, String> {
+    // Count only entries with complete timbral data (all 5 fields present),
+    // matching what compute_timbral_norm_stats actually processes.
+    let current_count: i64 = store_conn
+        .query_row(
+            "SELECT COUNT(*) FROM audio_analysis_cache \
+             WHERE analyzer = ?1 \
+               AND json_extract(features_json, '$.mfcc_mean') IS NOT NULL \
+               AND json_extract(features_json, '$.mfcc_std') IS NOT NULL \
+               AND json_extract(features_json, '$.spectral_contrast_mean') IS NOT NULL \
+               AND json_extract(features_json, '$.spectral_centroid_cv') IS NOT NULL \
+               AND json_extract(features_json, '$.dissonance_mean') IS NOT NULL",
+            rusqlite::params![crate::audio::ANALYZER_ESSENTIA],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+    if current_count < 2 {
+        return Ok(None);
+    }
+
+    let existing =
+        crate::store::get_timbral_norm_stats(store_conn).map_err(|e| format!("DB error: {e}"))?;
+
+    if let Some(ref stats) = existing {
+        let drift = (current_count - stats.sample_count).abs() as f64 / stats.sample_count as f64;
+        if drift <= 0.10 {
+            return Ok(existing);
+        }
+    }
+
+    // Recompute
+    let stats = compute_timbral_norm_stats(store_conn)?;
+    crate::store::save_timbral_norm_stats(store_conn, &stats)
+        .map_err(|e| format!("Failed to save norm stats: {e}"))?;
+    Ok(Some(stats))
 }
 
 fn canonicalize_genre(raw_genre: &str) -> Option<String> {
@@ -1604,6 +1940,319 @@ pub(super) fn score_key_with_pitch_shifts(
     AxisScore {
         value: blended,
         label,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pool compatibility kernel (symmetric, no sequential context)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PoolWeights {
+    pub bpm: f64,
+    pub energy: f64,
+    pub timbral: f64,
+    pub key: f64,
+    pub genre: f64,
+    pub brightness: f64,
+    pub rhythm: f64,
+}
+
+pub(super) fn pool_weights(preset: PoolPreset) -> PoolWeights {
+    let w = match preset {
+        PoolPreset::Balanced => PoolWeights {
+            bpm: 0.25,
+            energy: 0.20,
+            timbral: 0.18,
+            key: 0.12,
+            genre: 0.10,
+            brightness: 0.08,
+            rhythm: 0.07,
+        },
+        PoolPreset::Timbral => PoolWeights {
+            bpm: 0.20,
+            energy: 0.15,
+            timbral: 0.35,
+            key: 0.10,
+            genre: 0.05,
+            brightness: 0.08,
+            rhythm: 0.07,
+        },
+    };
+    debug_assert!(
+        (w.bpm + w.energy + w.timbral + w.key + w.genre + w.brightness + w.rhythm - 1.0).abs()
+            < 1e-10,
+        "pool weights must sum to 1.0"
+    );
+    w
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PoolAxisScores {
+    pub key: AxisScore,
+    pub bpm: AxisScore,
+    pub energy: AxisScore,
+    pub genre: AxisScore,
+    pub brightness: AxisScore,
+    pub rhythm: AxisScore,
+    pub timbral: Option<AxisScore>,
+    pub composite: f64,
+}
+
+impl PoolAxisScores {
+    pub(super) fn to_json(&self) -> serde_json::Value {
+        let mut json = serde_json::json!({
+            "key": { "value": round_to_3_decimals(self.key.value), "label": self.key.label },
+            "bpm": { "value": round_to_3_decimals(self.bpm.value), "label": self.bpm.label },
+            "energy": { "value": round_to_3_decimals(self.energy.value), "label": self.energy.label },
+            "genre": { "value": round_to_3_decimals(self.genre.value), "label": self.genre.label },
+            "brightness": { "value": round_to_3_decimals(self.brightness.value), "label": self.brightness.label },
+            "rhythm": { "value": round_to_3_decimals(self.rhythm.value), "label": self.rhythm.label },
+            "composite": round_to_3_decimals(self.composite),
+        });
+        if let Some(ref t) = self.timbral {
+            json["timbral"] = serde_json::json!({
+                "value": round_to_3_decimals(t.value),
+                "label": t.label,
+            });
+        }
+        json
+    }
+}
+
+/// Score pool compatibility between two tracks (symmetric).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn score_pool_compatibility_pair(
+    a: &TrackProfile,
+    b: &TrackProfile,
+    master_tempo: bool,
+    ref_bpm: f64,
+    preset: PoolPreset,
+    norm_stats: Option<&crate::store::TimbralNormStats>,
+) -> PoolAxisScores {
+    let weights = pool_weights(preset);
+
+    // Key scoring: use continuous detuning model when master tempo is off
+    let key = if !master_tempo && ref_bpm > 0.0 {
+        score_key_with_pitch_shifts(
+            a.camelot_key,
+            b.camelot_key,
+            bpm_pitch_shift(a.bpm, ref_bpm),
+            bpm_pitch_shift(b.bpm, ref_bpm),
+        )
+    } else {
+        score_key_axis(a.camelot_key, b.camelot_key)
+    };
+
+    let bpm = score_pool_bpm_axis(a.bpm, b.bpm);
+    let energy = score_pool_energy_axis(a.energy, b.energy);
+    let genre = score_pool_genre_axis(
+        a.canonical_genre.as_deref(),
+        b.canonical_genre.as_deref(),
+        a.genre_family,
+        b.genre_family,
+    );
+    let brightness = score_brightness_axis(a.brightness, b.brightness);
+    let rhythm = score_rhythm_axis(a.rhythm_regularity, b.rhythm_regularity);
+
+    let timbral = norm_stats.and_then(|stats| score_pool_timbral_axis(a, b, stats));
+
+    // Dynamic weight renormalization (same pattern as composite_score)
+    let brightness_available = a.brightness.is_some() && b.brightness.is_some();
+    let rhythm_available = a.rhythm_regularity.is_some() && b.rhythm_regularity.is_some();
+    let mut weighted_sum = (weights.bpm * bpm.value)
+        + (weights.energy * energy.value)
+        + (weights.key * key.value)
+        + (weights.genre * genre.value);
+    let mut total_weight = weights.bpm + weights.energy + weights.key + weights.genre;
+
+    if brightness_available {
+        weighted_sum += weights.brightness * brightness.value;
+        total_weight += weights.brightness;
+    }
+    if rhythm_available {
+        weighted_sum += weights.rhythm * rhythm.value;
+        total_weight += weights.rhythm;
+    }
+    if let Some(ref t) = timbral {
+        weighted_sum += weights.timbral * t.value;
+        total_weight += weights.timbral;
+    }
+
+    let composite = if total_weight > f64::EPSILON {
+        weighted_sum / total_weight
+    } else {
+        0.0
+    };
+
+    PoolAxisScores {
+        key,
+        bpm,
+        energy,
+        genre,
+        brightness,
+        rhythm,
+        timbral,
+        composite,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CandidatePoolScore {
+    pub min_score: f64,
+    pub mean_score: f64,
+    pub per_member: Vec<(String, PoolAxisScores)>,
+}
+
+/// Score one candidate against every member of a pool.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn score_candidate_vs_pool(
+    candidate: &TrackProfile,
+    pool: &[&TrackProfile],
+    master_tempo: bool,
+    ref_bpm: f64,
+    preset: PoolPreset,
+    norm_stats: Option<&crate::store::TimbralNormStats>,
+) -> CandidatePoolScore {
+    let mut min_score = f64::INFINITY;
+    let mut sum = 0.0;
+    let mut per_member = Vec::with_capacity(pool.len());
+
+    for member in pool {
+        let scores = score_pool_compatibility_pair(
+            candidate,
+            member,
+            master_tempo,
+            ref_bpm,
+            preset,
+            norm_stats,
+        );
+        if scores.composite < min_score {
+            min_score = scores.composite;
+        }
+        sum += scores.composite;
+        per_member.push((member.track.id.clone(), scores));
+    }
+
+    let mean_score = if pool.is_empty() {
+        0.0
+    } else {
+        sum / pool.len() as f64
+    };
+
+    CandidatePoolScore {
+        min_score: if min_score.is_infinite() {
+            0.0
+        } else {
+            min_score
+        },
+        mean_score,
+        per_member,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PoolCohesionResult {
+    pub mean_pairwise: f64,
+    pub min_pairwise: f64,
+    pub weakest_member_id: Option<String>,
+    pub medoid_id: Option<String>,
+    pub per_pair: Vec<(String, String, PoolAxisScores)>,
+}
+
+/// Compute all-pairs pool cohesion.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compute_pool_cohesion(
+    profiles: &[&TrackProfile],
+    master_tempo: bool,
+    ref_bpm: f64,
+    preset: PoolPreset,
+    norm_stats: Option<&crate::store::TimbralNormStats>,
+) -> PoolCohesionResult {
+    let n = profiles.len();
+    if n < 2 {
+        return PoolCohesionResult {
+            mean_pairwise: 1.0,
+            min_pairwise: 1.0,
+            weakest_member_id: None,
+            medoid_id: profiles.first().map(|p| p.track.id.clone()),
+            per_pair: Vec::new(),
+        };
+    }
+
+    let mut per_pair = Vec::with_capacity(n * (n - 1) / 2);
+    let mut global_min = f64::INFINITY;
+    let mut global_sum = 0.0;
+    let pair_count = n * (n - 1) / 2;
+
+    // Per-member: track min and mean scores to others
+    let mut member_min: Vec<f64> = vec![f64::INFINITY; n];
+    let mut member_sum: Vec<f64> = vec![0.0; n];
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let scores = score_pool_compatibility_pair(
+                profiles[i],
+                profiles[j],
+                master_tempo,
+                ref_bpm,
+                preset,
+                norm_stats,
+            );
+            let c = scores.composite;
+
+            if c < global_min {
+                global_min = c;
+            }
+            global_sum += c;
+
+            if c < member_min[i] {
+                member_min[i] = c;
+            }
+            if c < member_min[j] {
+                member_min[j] = c;
+            }
+            member_sum[i] += c;
+            member_sum[j] += c;
+
+            per_pair.push((
+                profiles[i].track.id.clone(),
+                profiles[j].track.id.clone(),
+                scores,
+            ));
+        }
+    }
+
+    let mean_pairwise = if pair_count > 0 {
+        global_sum / pair_count as f64
+    } else {
+        0.0
+    };
+
+    // Weakest member: lowest min-score to any other member
+    let weakest_idx = member_min
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i);
+
+    // Medoid: highest mean-score to others
+    let medoid_idx = member_sum
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i);
+
+    PoolCohesionResult {
+        mean_pairwise,
+        min_pairwise: if global_min.is_infinite() {
+            0.0
+        } else {
+            global_min
+        },
+        weakest_member_id: weakest_idx.map(|i| profiles[i].track.id.clone()),
+        medoid_id: medoid_idx.map(|i| profiles[i].track.id.clone()),
+        per_pair,
     }
 }
 

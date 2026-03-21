@@ -3231,6 +3231,11 @@ fn master_tempo_off_changes_key_scoring() {
         loudness_range: None,
         canonical_genre: Some("House".to_string()),
         genre_family: GenreFamily::House,
+        mfcc_mean: None,
+        mfcc_std: None,
+        spectral_contrast_mean: None,
+        spectral_centroid_cv: None,
+        dissonance_mean: None,
     };
 
     // to track at 135 BPM → when played at 128, pitch drops.
@@ -3579,6 +3584,11 @@ fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) ->
         loudness_range: None,
         canonical_genre: Some(genre.to_string()),
         genre_family: genre_family_for(genre),
+        mfcc_mean: None,
+        mfcc_std: None,
+        spectral_contrast_mean: None,
+        spectral_centroid_cv: None,
+        dissonance_mean: None,
     }
 }
 

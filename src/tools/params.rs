@@ -507,6 +507,97 @@ pub struct ScoreTransitionParams {
 }
 
 // ---------------------------------------------------------------------------
+// Pool discovery params
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum PoolPreset {
+    #[default]
+    Balanced,
+    Timbral,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScorePoolCompatibilityParams {
+    #[schemars(
+        description = "First track ID (pairwise mode). Provide track_a + track_b for pairwise scoring."
+    )]
+    pub track_a: Option<String>,
+    #[schemars(description = "Second track ID (pairwise mode)")]
+    pub track_b: Option<String>,
+    #[schemars(
+        description = "Single track ID to score against a pool (one-vs-pool mode). Provide with pool_track_ids."
+    )]
+    pub track_id: Option<String>,
+    #[schemars(
+        description = "Pool track IDs. Used with track_id for one-vs-pool mode, or alone for cohesion mode."
+    )]
+    pub pool_track_ids: Option<Vec<String>>,
+    #[schemars(
+        description = "Master Tempo mode (default false). When true, keys are fixed regardless of BPM adjustment."
+    )]
+    pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM of tracks being scored."
+    )]
+    pub reference_bpm: Option<f64>,
+    #[schemars(description = "Weight preset: balanced (default) or timbral")]
+    pub preset: Option<PoolPreset>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExpandPoolParams {
+    #[schemars(description = "Seed track IDs that define the initial pool")]
+    pub seed_track_ids: Vec<String>,
+    #[schemars(description = "Number of tracks to add (default 3)")]
+    pub additions: Option<u32>,
+    #[schemars(
+        description = "Master Tempo mode (default false). When true, keys are fixed regardless of BPM adjustment."
+    )]
+    pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM of seeds."
+    )]
+    pub reference_bpm: Option<f64>,
+    #[schemars(
+        description = "Allow cross-genre discovery (default false). When true, disables genre family pre-filter."
+    )]
+    pub cross_genre: Option<bool>,
+    #[schemars(description = "Weight preset: balanced (default) or timbral")]
+    pub preset: Option<PoolPreset>,
+    #[schemars(description = "Use tracks from this playlist as candidate universe")]
+    pub playlist_id: Option<String>,
+    #[serde(flatten)]
+    pub filters: SearchFilterParams,
+    #[schemars(description = "Max candidate tracks to consider from search (default: no limit)")]
+    pub max_tracks: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DescribePoolParams {
+    #[schemars(
+        description = "Track IDs in the pool (takes precedence over playlist_id if both provided)"
+    )]
+    pub pool_track_ids: Option<Vec<String>>,
+    #[schemars(
+        description = "Playlist ID to use as the pool (ignored if pool_track_ids provided)"
+    )]
+    pub playlist_id: Option<String>,
+    #[schemars(
+        description = "Master Tempo mode (default false). When true, keys are fixed regardless of BPM adjustment."
+    )]
+    pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM."
+    )]
+    pub reference_bpm: Option<f64>,
+    #[schemars(description = "Weight preset: balanced (default) or timbral")]
+    pub preset: Option<PoolPreset>,
+}
+
+// ---------------------------------------------------------------------------
 // History / play stats params
 // ---------------------------------------------------------------------------
 

@@ -299,7 +299,7 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GenreFamily {
     House,
     Techno,

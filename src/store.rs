@@ -6,7 +6,7 @@ use crate::db::escape_like;
 
 /// (id, path, issue_type, detail)
 pub type AuditIssueRow = (i64, String, String, Option<String>);
-const STORE_SCHEMA_VERSION: i32 = 4;
+const STORE_SCHEMA_VERSION: i32 = 5;
 
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
@@ -100,6 +100,13 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_audit_issues_status ON audit_issues(status);
         CREATE INDEX IF NOT EXISTS idx_audit_issues_path ON audit_issues(path);
+        CREATE TABLE IF NOT EXISTS timbral_norm_stats (
+            dimension_index INTEGER PRIMARY KEY,
+            mean REAL NOT NULL,
+            stddev REAL NOT NULL,
+            sample_count INTEGER NOT NULL,
+            computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         ",
     )?;
     migrate_enrichment_cache(conn)?;
@@ -425,6 +432,63 @@ pub fn set_audio_analysis(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Timbral normalization stats (for pool compatibility z-score normalization)
+// ---------------------------------------------------------------------------
+
+pub struct TimbralNormStats {
+    pub means: Vec<f64>,
+    pub stddevs: Vec<f64>,
+    pub sample_count: i64,
+}
+
+pub fn get_timbral_norm_stats(
+    conn: &Connection,
+) -> Result<Option<TimbralNormStats>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT dimension_index, mean, stddev, sample_count
+         FROM timbral_norm_stats
+         ORDER BY dimension_index",
+    )?;
+    let rows: Vec<(i64, f64, f64, i64)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let sample_count = rows[0].3;
+    let means: Vec<f64> = rows.iter().map(|r| r.1).collect();
+    let stddevs: Vec<f64> = rows.iter().map(|r| r.2).collect();
+
+    Ok(Some(TimbralNormStats {
+        means,
+        stddevs,
+        sample_count,
+    }))
+}
+
+pub fn save_timbral_norm_stats(
+    conn: &Connection,
+    stats: &TimbralNormStats,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM timbral_norm_stats", [])?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO timbral_norm_stats (dimension_index, mean, stddev, sample_count)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for (i, (mean, stddev)) in stats.means.iter().zip(stats.stddevs.iter()).enumerate() {
+        stmt.execute(params![i as i64, mean, stddev, stats.sample_count])?;
+    }
+    drop(stmt);
+    tx.commit()?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub struct BrokerDiscogsSession {
     pub broker_url: String,
@@ -516,6 +580,7 @@ pub fn clear_caches(conn: &Connection) -> Result<ClearCachesResult, rusqlite::Er
     // (ON DELETE CASCADE would handle it, but then audit_issues count would be 0)
     let audit_issues = tx.execute("DELETE FROM audit_issues", [])?;
     let audit_files = tx.execute("DELETE FROM audit_files", [])?;
+    tx.execute("DELETE FROM timbral_norm_stats", [])?;
     tx.commit()?;
     Ok(ClearCachesResult {
         enrichment,
