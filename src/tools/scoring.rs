@@ -27,6 +27,15 @@ const RHYTHM_MANAGEABLE_DELTA: f64 = 0.25;
 const RHYTHM_CHALLENGING_DELTA: f64 = 0.5;
 
 #[derive(Debug, Clone)]
+pub(super) struct TimbralFeatures {
+    pub(super) mfcc_mean: Vec<f64>,
+    pub(super) mfcc_std: Vec<f64>,
+    pub(super) spectral_contrast_mean: Vec<f64>,
+    pub(super) spectral_centroid_cv: f64,
+    pub(super) dissonance_mean: f64,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct TrackProfile {
     pub(super) track: crate::types::Track,
     pub(super) camelot_key: Option<CamelotKey>,
@@ -38,12 +47,9 @@ pub(super) struct TrackProfile {
     pub(super) loudness_range: Option<f64>,
     pub(super) canonical_genre: Option<String>,
     pub(super) genre_family: GenreFamily,
-    // Timbral fields (from Essentia, used by pool compatibility kernel)
-    pub(super) mfcc_mean: Option<Vec<f64>>,
-    pub(super) mfcc_std: Option<Vec<f64>>,
-    pub(super) spectral_contrast_mean: Option<Vec<f64>>,
-    pub(super) spectral_centroid_cv: Option<f64>,
-    pub(super) dissonance_mean: Option<f64>,
+    /// Timbral features from Essentia (used by pool compatibility kernel).
+    /// All-or-nothing: present only when all 5 components are available.
+    pub(super) timbral: Option<TimbralFeatures>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -676,13 +682,15 @@ pub(super) fn build_track_profile(
         .map(genre_family_for)
         .unwrap_or(GenreFamily::Other);
 
-    let mfcc_mean = essentia_data.as_ref().and_then(|e| e.mfcc_mean.clone());
-    let mfcc_std = essentia_data.as_ref().and_then(|e| e.mfcc_std.clone());
-    let spectral_contrast_mean = essentia_data
-        .as_ref()
-        .and_then(|e| e.spectral_contrast_mean.clone());
-    let spectral_centroid_cv = essentia_data.as_ref().and_then(|e| e.spectral_centroid_cv);
-    let dissonance_mean = essentia_data.as_ref().and_then(|e| e.dissonance_mean);
+    let timbral = essentia_data.as_ref().and_then(|e| {
+        Some(TimbralFeatures {
+            mfcc_mean: e.mfcc_mean.clone()?,
+            mfcc_std: e.mfcc_std.clone()?,
+            spectral_contrast_mean: e.spectral_contrast_mean.clone()?,
+            spectral_centroid_cv: e.spectral_centroid_cv?,
+            dissonance_mean: e.dissonance_mean?,
+        })
+    });
 
     Ok(TrackProfile {
         track,
@@ -695,11 +703,7 @@ pub(super) fn build_track_profile(
         loudness_range,
         canonical_genre,
         genre_family,
-        mfcc_mean,
-        mfcc_std,
-        spectral_contrast_mean,
-        spectral_centroid_cv,
-        dissonance_mean,
+        timbral,
     })
 }
 
@@ -1371,7 +1375,7 @@ pub(super) fn score_pool_timbral_axis(
     let raw_a = build_timbral_vector(a)?;
     let raw_b = build_timbral_vector(b)?;
 
-    if raw_a.len() != raw_b.len() || raw_a.len() != norm_stats.means.len() {
+    if raw_a.len() != raw_b.len() || raw_a.len() != norm_stats.dims.len() {
         return None;
     }
 
@@ -1566,14 +1570,15 @@ fn assemble_timbral_vector(
 }
 
 /// Concatenate timbral fields into a single feature vector.
-/// Returns None if any required component is missing.
+/// Returns None if timbral features are missing.
 pub(super) fn build_timbral_vector(profile: &TrackProfile) -> Option<Vec<f64>> {
+    let t = profile.timbral.as_ref()?;
     Some(assemble_timbral_vector(
-        profile.mfcc_mean.as_ref()?,
-        profile.mfcc_std.as_ref()?,
-        profile.spectral_contrast_mean.as_ref()?,
-        profile.spectral_centroid_cv?,
-        profile.dissonance_mean?,
+        &t.mfcc_mean,
+        &t.mfcc_std,
+        &t.spectral_contrast_mean,
+        t.spectral_centroid_cv,
+        t.dissonance_mean,
     ))
 }
 
@@ -1593,13 +1598,20 @@ pub(super) fn compute_timbral_norm_stats(
     store_conn: &Connection,
 ) -> Result<crate::store::TimbralNormStats, String> {
     let mut stmt = store_conn
-        .prepare("SELECT features_json FROM audio_analysis_cache WHERE analyzer = ?1")
+        .prepare(
+            "SELECT features_json FROM audio_analysis_cache \
+             WHERE analyzer = ?1 AND analysis_version = ?2",
+        )
         .map_err(|e| format!("DB error: {e}"))?;
 
     let rows = stmt
-        .query_map(rusqlite::params![crate::audio::ANALYZER_ESSENTIA], |row| {
-            row.get::<_, String>(0)
-        })
+        .query_map(
+            rusqlite::params![
+                crate::audio::ANALYZER_ESSENTIA,
+                crate::audio::ESSENTIA_SCHEMA_VERSION
+            ],
+            |row| row.get::<_, String>(0),
+        )
         .map_err(|e| format!("DB error: {e}"))?;
 
     let mut count: i64 = 0;
@@ -1639,14 +1651,14 @@ pub(super) fn compute_timbral_norm_stats(
         return Err("Need at least 2 Essentia entries to compute normalization stats".to_string());
     }
 
-    let stddevs: Vec<f64> = m2s
+    let dims: Vec<(f64, f64)> = means
         .iter()
-        .map(|m2| (m2 / (count - 1) as f64).sqrt().max(1e-10))
+        .zip(m2s.iter())
+        .map(|(&mean, &m2)| (mean, (m2 / (count - 1) as f64).sqrt().max(1e-10)))
         .collect();
 
     Ok(crate::store::TimbralNormStats {
-        means,
-        stddevs,
+        dims,
         sample_count: count,
     })
 }
@@ -1657,13 +1669,13 @@ pub(super) fn normalize_timbral_vector(
     raw: &[f64],
     stats: &crate::store::TimbralNormStats,
 ) -> Option<Vec<f64>> {
-    if raw.len() != stats.means.len() || raw.len() != stats.stddevs.len() {
+    if raw.len() != stats.dims.len() {
         return None;
     }
     Some(
         raw.iter()
-            .enumerate()
-            .map(|(i, &x)| (x - stats.means[i]) / stats.stddevs[i])
+            .zip(stats.dims.iter())
+            .map(|(&x, &(mean, stddev))| (x - mean) / stddev)
             .collect(),
     )
 }
@@ -1678,13 +1690,16 @@ pub(super) fn ensure_timbral_norm_stats(
     let current_count: i64 = store_conn
         .query_row(
             "SELECT COUNT(*) FROM audio_analysis_cache \
-             WHERE analyzer = ?1 \
+             WHERE analyzer = ?1 AND analysis_version = ?2 \
                AND json_extract(features_json, '$.mfcc_mean') IS NOT NULL \
                AND json_extract(features_json, '$.mfcc_std') IS NOT NULL \
                AND json_extract(features_json, '$.spectral_contrast_mean') IS NOT NULL \
                AND json_extract(features_json, '$.spectral_centroid_cv') IS NOT NULL \
                AND json_extract(features_json, '$.dissonance_mean') IS NOT NULL",
-            rusqlite::params![crate::audio::ANALYZER_ESSENTIA],
+            rusqlite::params![
+                crate::audio::ANALYZER_ESSENTIA,
+                crate::audio::ESSENTIA_SCHEMA_VERSION
+            ],
             |row| row.get(0),
         )
         .map_err(|e| format!("DB error: {e}"))?;
@@ -2254,6 +2269,241 @@ pub(super) fn compute_pool_cohesion(
         medoid_id: medoid_idx.map(|i| profiles[i].track.id.clone()),
         per_pair,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pool discovery — Bron-Kerbosch maximal clique enumeration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub(super) struct DiscoveredPool {
+    pub track_ids: Vec<String>,
+    pub mean_compatibility: f64,
+    pub min_compatibility: f64,
+    pub core_members: Vec<String>,
+    pub edge_members: Vec<String>,
+    pub score: f64,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn discover_pools(
+    profiles: &[&TrackProfile],
+    master_tempo: bool,
+    ref_bpm: f64,
+    preset: PoolPreset,
+    norm_stats: Option<&crate::store::TimbralNormStats>,
+    threshold: f64,
+    min_size: usize,
+    max_size: usize,
+    max_pools: usize,
+) -> Vec<DiscoveredPool> {
+    let n = profiles.len();
+    if n < min_size {
+        return Vec::new();
+    }
+
+    // Build pairwise compatibility matrix
+    let mut compat: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let s = score_pool_compatibility_pair(
+                profiles[i],
+                profiles[j],
+                master_tempo,
+                ref_bpm,
+                preset,
+                norm_stats,
+            );
+            compat[i][j] = s.composite;
+            compat[j][i] = s.composite;
+        }
+    }
+
+    // Build adjacency list from thresholded graph
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if compat[i][j] >= threshold {
+                adj[i].insert(j);
+                adj[j].insert(i);
+            }
+        }
+    }
+
+    // Enumerate maximal cliques
+    let mut cliques: Vec<Vec<usize>> = Vec::new();
+    let all: HashSet<usize> = (0..n).collect();
+    bron_kerbosch_pivot(
+        &adj,
+        &mut HashSet::new(),
+        &mut all.clone(),
+        &mut HashSet::new(),
+        &mut cliques,
+        max_size,
+    );
+
+    // Filter, score, rank
+    let mut pools: Vec<DiscoveredPool> = cliques
+        .into_iter()
+        .filter(|c| c.len() >= min_size && c.len() <= max_size)
+        .map(|c| build_discovered_pool(&c, profiles, &compat))
+        .collect();
+
+    pools.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.track_ids.len().cmp(&a.track_ids.len()))
+    });
+
+    // Greedy dedup — skip subsets of already-selected pools
+    let mut selected: Vec<DiscoveredPool> = Vec::new();
+    for pool in pools {
+        if selected.len() >= max_pools {
+            break;
+        }
+        let set: HashSet<&str> = pool.track_ids.iter().map(|s| s.as_str()).collect();
+        let is_subset = selected.iter().any(|s| {
+            let ss: HashSet<&str> = s.track_ids.iter().map(|s| s.as_str()).collect();
+            set.is_subset(&ss)
+        });
+        if !is_subset {
+            selected.push(pool);
+        }
+    }
+    selected
+}
+
+fn build_discovered_pool(
+    clique: &[usize],
+    profiles: &[&TrackProfile],
+    compat: &[Vec<f64>],
+) -> DiscoveredPool {
+    let (mean_c, min_c) = clique_compatibility(clique, compat);
+    let size_bonus = match clique.len() {
+        2..=3 => 0.85,
+        4..=8 => 1.0,
+        _ => 0.90,
+    };
+
+    let mut member_means: Vec<(usize, f64)> = clique
+        .iter()
+        .map(|&i| {
+            let sum: f64 = clique
+                .iter()
+                .filter(|&&j| j != i)
+                .map(|&j| compat[i][j])
+                .sum();
+            (i, sum / (clique.len() - 1).max(1) as f64)
+        })
+        .collect();
+    member_means.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let median_mean = member_means
+        .get((member_means.len().saturating_sub(1)) / 2)
+        .map(|m| m.1)
+        .unwrap_or(0.0);
+
+    DiscoveredPool {
+        track_ids: clique
+            .iter()
+            .map(|&i| profiles[i].track.id.clone())
+            .collect(),
+        mean_compatibility: mean_c,
+        min_compatibility: min_c,
+        core_members: member_means
+            .iter()
+            .filter(|(_, m)| *m >= median_mean)
+            .map(|(i, _)| profiles[*i].track.id.clone())
+            .collect(),
+        edge_members: member_means
+            .iter()
+            .filter(|(_, m)| *m < median_mean)
+            .map(|(i, _)| profiles[*i].track.id.clone())
+            .collect(),
+        score: mean_c * size_bonus,
+    }
+}
+
+const MAX_CLIQUES: usize = 50_000;
+
+fn bron_kerbosch_pivot(
+    adj: &[HashSet<usize>],
+    r: &mut HashSet<usize>,
+    p: &mut HashSet<usize>,
+    x: &mut HashSet<usize>,
+    cliques: &mut Vec<Vec<usize>>,
+    max_size: usize,
+) {
+    if cliques.len() >= MAX_CLIQUES {
+        return;
+    }
+    if p.is_empty() && x.is_empty() {
+        if r.len() >= 2 {
+            let mut c: Vec<usize> = r.iter().copied().collect();
+            c.sort_unstable();
+            cliques.push(c);
+        }
+        return;
+    }
+    if r.len() >= max_size {
+        let mut c: Vec<usize> = r.iter().copied().collect();
+        c.sort_unstable();
+        cliques.push(c);
+        return;
+    }
+
+    let pivot = p
+        .union(x)
+        .max_by_key(|&&v| adj[v].intersection(p).count())
+        .copied();
+    let Some(pivot) = pivot else { return };
+
+    let candidates: Vec<usize> = p.difference(&adj[pivot]).copied().collect();
+    for v in candidates {
+        r.insert(v);
+        let mut new_p: HashSet<usize> = p.intersection(&adj[v]).copied().collect();
+        let mut new_x: HashSet<usize> = x.intersection(&adj[v]).copied().collect();
+        bron_kerbosch_pivot(adj, r, &mut new_p, &mut new_x, cliques, max_size);
+        r.remove(&v);
+        p.remove(&v);
+        x.insert(v);
+    }
+}
+
+fn clique_compatibility(clique: &[usize], compat: &[Vec<f64>]) -> (f64, f64) {
+    let mut sum = 0.0;
+    let mut min = f64::INFINITY;
+    let mut count = 0u32;
+    for (idx, &i) in clique.iter().enumerate() {
+        for &j in &clique[idx + 1..] {
+            sum += compat[i][j];
+            if compat[i][j] < min {
+                min = compat[i][j];
+            }
+            count += 1;
+        }
+    }
+    if count > 0 {
+        (sum / count as f64, min)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+pub(super) fn find_bridge_tracks(pools: &[DiscoveredPool]) -> Vec<(String, Vec<usize>)> {
+    let mut track_pools: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, pool) in pools.iter().enumerate() {
+        for id in &pool.track_ids {
+            track_pools.entry(id.clone()).or_default().push(idx);
+        }
+    }
+    let mut bridges: Vec<(String, Vec<usize>)> = track_pools
+        .into_iter()
+        .filter(|(_, p)| p.len() >= 2)
+        .collect();
+    bridges.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    bridges
 }
 
 /// Map a genre/style string through the taxonomy.

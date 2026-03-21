@@ -1,0 +1,179 @@
+---
+// SVG compatibility graph: 6 example tracks as nodes with score-colored edges
+
+const w = 440;
+const h = 340;
+
+interface Track {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  weak?: boolean;
+}
+
+const tracks: Track[] = [
+  { id: 'A', label: 'Track A',  x: 140, y: 60 },
+  { id: 'B', label: 'Track B',  x: 300, y: 60 },
+  { id: 'C', label: 'Track C',  x: 370, y: 170 },
+  { id: 'D', label: 'Track D',  x: 280, y: 280 },
+  { id: 'E', label: 'Track E',  x: 120, y: 280 },
+  { id: 'F', label: 'Track F',  x: 70,  y: 170, weak: true },
+];
+
+interface Edge {
+  from: string;
+  to: string;
+  score: number;
+}
+
+const edges: Edge[] = [
+  // Strong edges (>0.8) among core tracks
+  { from: 'A', to: 'B', score: 0.92 },
+  { from: 'A', to: 'C', score: 0.85 },
+  { from: 'B', to: 'C', score: 0.88 },
+  { from: 'B', to: 'D', score: 0.83 },
+  { from: 'C', to: 'D', score: 0.91 },
+  { from: 'D', to: 'E', score: 0.86 },
+  { from: 'A', to: 'E', score: 0.82 },
+  // Moderate edges
+  { from: 'C', to: 'E', score: 0.68 },
+  { from: 'E', to: 'F', score: 0.55 },
+  // Weak edges to F
+  { from: 'A', to: 'F', score: 0.42 },
+  { from: 'B', to: 'F', score: 0.38 },
+  { from: 'C', to: 'F', score: 0.35 },
+  { from: 'D', to: 'F', score: 0.44 },
+];
+
+function edgeColor(score: number): string {
+  if (score >= 0.8) return '#22c55e';
+  if (score >= 0.5) return '#eab308';
+  return '#ef4444';
+}
+
+function edgeWidth(score: number): number {
+  if (score >= 0.8) return 2.5;
+  if (score >= 0.5) return 1.8;
+  return 1.0;
+}
+
+function edgeOpacity(score: number): number {
+  if (score >= 0.8) return 0.8;
+  if (score >= 0.5) return 0.6;
+  return 0.4;
+}
+
+const trackMap = Object.fromEntries(tracks.map(t => [t.id, t]));
+
+const nodeR = 22;
+---
+
+<figure class="pool-graph">
+  <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Pool compatibility graph showing 6 tracks with score-colored edges">
+
+    <!-- edges -->
+    {edges.map(e => {
+      const a = trackMap[e.from];
+      const b = trackMap[e.to];
+      return (
+        <g>
+          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                stroke={edgeColor(e.score)} stroke-width={edgeWidth(e.score)}
+                opacity={edgeOpacity(e.score)} stroke-linecap="round" />
+          <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 5}
+                text-anchor="middle" class="edge-score"
+                fill={edgeColor(e.score)} opacity={edgeOpacity(e.score) + 0.15}>
+            {e.score.toFixed(2)}
+          </text>
+        </g>
+      );
+    })}
+
+    <!-- nodes -->
+    {tracks.map(t => (
+      <g>
+        <circle cx={t.x} cy={t.y} r={nodeR}
+                fill={t.weak ? 'var(--sl-color-gray-7)' : 'var(--sl-color-gray-6)'}
+                stroke={t.weak ? '#eab308' : '#3b82f6'}
+                stroke-width={t.weak ? 1.5 : 2}
+                stroke-dasharray={t.weak ? '4 3' : 'none'} />
+        <text x={t.x} y={t.y} text-anchor="middle" dominant-baseline="central"
+              class="node-label">{t.id}</text>
+        <text x={t.x} y={t.y + nodeR + 14} text-anchor="middle" class="track-label">
+          {t.label}{t.weak ? ' (weak)' : ''}
+        </text>
+      </g>
+    ))}
+  </svg>
+
+  <figcaption class="graph-legend">
+    <span class="legend-item"><span class="swatch" style="background:#22c55e"></span> High (&ge;0.8)</span>
+    <span class="legend-item"><span class="swatch" style="background:#eab308"></span> Moderate (0.5&ndash;0.8)</span>
+    <span class="legend-item"><span class="swatch" style="background:#ef4444"></span> Low (&lt;0.5)</span>
+    <span class="legend-item"><span class="dot-dashed"></span> Weak member</span>
+  </figcaption>
+</figure>
+
+<style>
+  .pool-graph {
+    max-width: 460px;
+    margin: 1.5rem auto;
+  }
+  .pool-graph svg {
+    width: 100%;
+    height: auto;
+  }
+  .node-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    fill: var(--sl-color-text);
+  }
+  .track-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9.5px;
+    fill: var(--sl-color-text);
+    opacity: 0.65;
+    font-weight: 500;
+  }
+  .edge-score {
+    font-family: ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 600;
+  }
+  .graph-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem 1.2rem;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-text);
+    opacity: 0.85;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .swatch {
+    width: 18px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .dot-dashed {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    border: 1.5px dashed #eab308;
+    background: transparent;
+    box-sizing: border-box;
+  }
+</style>

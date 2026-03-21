@@ -1,0 +1,225 @@
+---
+// Step-by-step diagram showing iterative greedy pool expansion
+// 3 steps: seed pool, +1 candidate added, +1 candidate added
+
+const w = 560;
+const h = 380;
+const stepH = 110;
+const stepY = (i: number) => 28 + i * (stepH + 10);
+
+const nodeR = 16;
+const qualityThreshold = 0.4;
+
+interface Node {
+  label: string;
+  x: number;
+  y: number;
+  isNew?: boolean;
+}
+
+interface Candidate {
+  label: string;
+  x: number;
+  y: number;
+  score: number;
+  best?: boolean;
+  eliminated?: boolean;
+}
+
+// Step 1: seed pool with 3 tracks, 3 candidates
+const step1Nodes: Node[] = [
+  { label: 'S1', x: 100, y: 55 },
+  { label: 'S2', x: 160, y: 55 },
+  { label: 'S3', x: 130, y: 95 },
+];
+const step1Candidates: Candidate[] = [
+  { label: 'C1', x: 310, y: 40, score: 0.78, best: true },
+  { label: 'C2', x: 310, y: 75, score: 0.62 },
+  { label: 'C3', x: 310, y: 110, score: 0.33, eliminated: true },
+];
+
+// Step 2: C1 added to pool, re-score remaining
+const step2Nodes: Node[] = [
+  { label: 'S1', x: 80,  y: 55 },
+  { label: 'S2', x: 140, y: 55 },
+  { label: 'S3', x: 110, y: 95 },
+  { label: 'C1', x: 170, y: 95, isNew: true },
+];
+const step2Candidates: Candidate[] = [
+  { label: 'C2', x: 310, y: 55, score: 0.71, best: true },
+  { label: 'C3', x: 310, y: 95, score: 0.31, eliminated: true },
+];
+
+// Step 3: C2 added, C3 below threshold — stop
+const step3Nodes: Node[] = [
+  { label: 'S1', x: 70,  y: 55 },
+  { label: 'S2', x: 130, y: 55 },
+  { label: 'S3', x: 100, y: 95 },
+  { label: 'C1', x: 160, y: 95, isNew: true },
+  { label: 'C2', x: 130, y: 55 + 65, isNew: true },
+];
+const step3Candidates: Candidate[] = [
+  { label: 'C3', x: 310, y: 75, score: 0.28, eliminated: true },
+];
+
+const steps = [
+  { title: 'Step 1: Score candidates against seed pool', nodes: step1Nodes, candidates: step1Candidates, yOff: stepY(0) },
+  { title: 'Step 2: Add best, re-score against expanded pool', nodes: step2Nodes, candidates: step2Candidates, yOff: stepY(1) },
+  { title: 'Step 3: Add best, remaining below threshold — stop', nodes: step3Nodes, candidates: step3Candidates, yOff: stepY(2) },
+];
+
+const thresholdX = 370;
+---
+
+<figure class="greedy-expansion">
+  <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Three-step greedy pool expansion: seed, add best candidate, repeat">
+
+    {steps.map((step, si) => (
+      <g transform={`translate(0, ${step.yOff})`}>
+        <!-- step title -->
+        <text x="12" y="-4" class="step-title">{step.title}</text>
+
+        <!-- step background -->
+        <rect x="4" y="4" width={w - 8} height={stepH - 8} rx="6"
+              fill="var(--sl-color-gray-7)" opacity="0.4" stroke="var(--sl-color-gray-5)"
+              stroke-width="0.5" />
+
+        <!-- pool boundary -->
+        <rect x="50" y="20" width="170" height={stepH - 40} rx="8"
+              fill="none" stroke="var(--sl-color-gray-4)" stroke-width="1"
+              stroke-dasharray="4 3" />
+        <text x="135" y={stepH - 14} text-anchor="middle" class="area-label">Pool</text>
+
+        <!-- pool nodes -->
+        {step.nodes.map(n => (
+          <g>
+            <circle cx={n.x} cy={n.y} r={nodeR}
+                    fill={n.isNew ? '#22c55e' : 'var(--sl-color-gray-5)'}
+                    opacity={n.isNew ? 0.25 : 0.5}
+                    stroke={n.isNew ? '#22c55e' : '#3b82f6'}
+                    stroke-width={n.isNew ? 2 : 1.5} />
+            <text x={n.x} y={n.y} text-anchor="middle" dominant-baseline="central"
+                  class="node-label">{n.label}</text>
+          </g>
+        ))}
+
+        <!-- arrow from pool to candidates area -->
+        <line x1="230" y1={stepH / 2} x2="270" y2={stepH / 2}
+              stroke="var(--sl-color-gray-4)" stroke-width="1" marker-end="url(#arrowhead)" />
+
+        <!-- candidates -->
+        {step.candidates.map(c => (
+          <g>
+            <circle cx={c.x} cy={c.y} r={nodeR - 2}
+                    fill={c.eliminated ? '#ef4444' : c.best ? '#22c55e' : 'var(--sl-color-gray-5)'}
+                    opacity={c.eliminated ? 0.12 : c.best ? 0.2 : 0.15}
+                    stroke={c.eliminated ? '#ef4444' : c.best ? '#22c55e' : 'var(--sl-color-gray-4)'}
+                    stroke-width={c.best ? 2 : 1}
+                    stroke-dasharray={c.eliminated ? '3 2' : 'none'} />
+            <text x={c.x} y={c.y} text-anchor="middle" dominant-baseline="central"
+                  class={`node-label ${c.eliminated ? 'dimmed' : ''}`}>{c.label}</text>
+
+            <!-- score badge -->
+            <rect x={c.x + nodeR} y={c.y - 8} width="38" height="16" rx="3"
+                  fill={c.eliminated ? '#ef4444' : c.best ? '#22c55e' : '#eab308'}
+                  opacity={c.eliminated ? 0.15 : 0.2} />
+            <text x={c.x + nodeR + 19} y={c.y} text-anchor="middle" dominant-baseline="central"
+                  class="score-label"
+                  fill={c.eliminated ? '#ef4444' : c.best ? '#22c55e' : '#eab308'}>
+              {c.score.toFixed(2)}
+            </text>
+
+            <!-- best arrow -->
+            {c.best && (
+              <text x={c.x + nodeR + 44} y={c.y} dominant-baseline="central"
+                    class="best-arrow" fill="#22c55e">&#x2190; best</text>
+            )}
+          </g>
+        ))}
+
+        <!-- threshold line -->
+        <line x1={thresholdX} y1="20" x2={thresholdX} y2={stepH - 16}
+              stroke="#ef4444" stroke-width="1" stroke-dasharray="3 2" opacity="0.5" />
+        {si === 0 && (
+          <text x={thresholdX + 4} y="32" class="threshold-label">
+            threshold {qualityThreshold.toFixed(1)}
+          </text>
+        )}
+      </g>
+    ))}
+
+    <!-- arrowhead marker -->
+    <defs>
+      <marker id="arrowhead" viewBox="0 0 10 7" refX="9" refY="3.5"
+              markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+        <polygon points="0 0, 10 3.5, 0 7" fill="var(--sl-color-gray-4)" />
+      </marker>
+    </defs>
+  </svg>
+
+  <figcaption class="expansion-caption">
+    Each addition is scored against the full pool including prior additions.
+    Candidates below the quality threshold are rejected.
+  </figcaption>
+</figure>
+
+<style>
+  .greedy-expansion {
+    max-width: 580px;
+    margin: 1.5rem auto;
+  }
+  .greedy-expansion svg {
+    width: 100%;
+    height: auto;
+  }
+  .step-title {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10.5px;
+    font-weight: 600;
+    fill: var(--sl-color-text);
+    opacity: 0.8;
+  }
+  .area-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9px;
+    fill: var(--sl-color-text);
+    opacity: 0.45;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .node-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    fill: var(--sl-color-text);
+  }
+  .node-label.dimmed {
+    opacity: 0.4;
+  }
+  .score-label {
+    font-family: ui-monospace, monospace;
+    font-size: 9.5px;
+    font-weight: 600;
+  }
+  .best-arrow {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9px;
+    font-weight: 600;
+  }
+  .threshold-label {
+    font-family: ui-monospace, monospace;
+    font-size: 8.5px;
+    fill: #ef4444;
+    opacity: 0.6;
+  }
+  .expansion-caption {
+    text-align: center;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-text);
+    opacity: 0.7;
+    font-style: italic;
+  }
+</style>

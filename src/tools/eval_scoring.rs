@@ -72,11 +72,7 @@ mod tests {
             loudness_range,
             canonical_genre: Some(genre.to_string()),
             genre_family: genre_family_for(genre),
-            mfcc_mean: None,
-            mfcc_std: None,
-            spectral_contrast_mean: None,
-            spectral_centroid_cv: None,
-            dissonance_mean: None,
+            timbral: None,
         }
     }
 
@@ -1064,11 +1060,23 @@ mod tests {
             rhythm,
             loudness_range,
         );
-        p.mfcc_mean = mfcc_mean;
-        p.mfcc_std = mfcc_std;
-        p.spectral_contrast_mean = spectral_contrast_mean;
-        p.spectral_centroid_cv = spectral_centroid_cv;
-        p.dissonance_mean = dissonance_mean;
+        // Construct TimbralFeatures only when all 5 fields are present
+        p.timbral = match (
+            mfcc_mean,
+            mfcc_std,
+            spectral_contrast_mean,
+            spectral_centroid_cv,
+            dissonance_mean,
+        ) {
+            (Some(mm), Some(ms), Some(sc), Some(cv), Some(dm)) => Some(TimbralFeatures {
+                mfcc_mean: mm,
+                mfcc_std: ms,
+                spectral_contrast_mean: sc,
+                spectral_centroid_cv: cv,
+                dissonance_mean: dm,
+            }),
+            _ => None,
+        };
         p
     }
 
@@ -1339,8 +1347,7 @@ mod tests {
 
     fn dummy_norm_stats(dims: usize) -> crate::store::TimbralNormStats {
         crate::store::TimbralNormStats {
-            means: vec![0.0; dims],
-            stddevs: vec![1.0; dims],
+            dims: vec![(0.0, 1.0); dims],
             sample_count: 100,
         }
     }
@@ -1367,28 +1374,19 @@ mod tests {
         );
         assert_eq!(vec.unwrap().len(), 13 + 13 + 6 + 1 + 1, "expected 34 dims");
 
-        // Missing mfcc_mean → None
-        let mut missing_mfcc = full.clone();
-        missing_mfcc.mfcc_mean = None;
+        // Missing timbral → None (structural invariant: all-or-nothing)
+        let mut missing = full.clone();
+        missing.timbral = None;
         assert!(
-            build_timbral_vector(&missing_mfcc).is_none(),
-            "missing mfcc_mean should return None",
-        );
-
-        // Missing dissonance → None
-        let mut missing_diss = full.clone();
-        missing_diss.dissonance_mean = None;
-        assert!(
-            build_timbral_vector(&missing_diss).is_none(),
-            "missing dissonance should return None",
+            build_timbral_vector(&missing).is_none(),
+            "missing timbral should return None",
         );
     }
 
     #[test]
     fn eval_normalize_timbral_vector_zscore() {
         let stats = crate::store::TimbralNormStats {
-            means: vec![10.0, 20.0, 30.0],
-            stddevs: vec![2.0, 5.0, 10.0],
+            dims: vec![(10.0, 2.0), (20.0, 5.0), (30.0, 10.0)],
             sample_count: 50,
         };
         let raw = vec![12.0, 25.0, 30.0];
@@ -1403,8 +1401,7 @@ mod tests {
     #[test]
     fn eval_normalize_timbral_vector_dimension_mismatch() {
         let stats = crate::store::TimbralNormStats {
-            means: vec![0.0; 3],
-            stddevs: vec![1.0; 3],
+            dims: vec![(0.0, 1.0); 3],
             sample_count: 50,
         };
         // Too long
@@ -1877,5 +1874,319 @@ mod tests {
             "two Other-family genres should score 0.3, got {:.3}",
             score.value,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // discover_pools (Bron-Kerbosch) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn eval_discover_pools_finds_planted_clusters() {
+        // Two distinct clusters with no cross-cluster edges at threshold 0.7
+        let cluster_a = vec![
+            simple_profile("da1", "8A", 126.0, 0.55, "Deep House"),
+            simple_profile("da2", "9A", 126.5, 0.58, "Deep House"),
+            simple_profile("da3", "8A", 127.0, 0.60, "House"),
+            simple_profile("da4", "8B", 126.0, 0.56, "Deep House"),
+        ];
+        let cluster_b = vec![
+            simple_profile("db1", "2A", 140.0, 0.85, "Techno"),
+            simple_profile("db2", "3A", 139.0, 0.82, "Techno"),
+            simple_profile("db3", "2A", 141.0, 0.88, "Techno"),
+        ];
+
+        let mut all: Vec<TrackProfile> = cluster_a;
+        all.extend(cluster_b);
+        let refs: Vec<&TrackProfile> = all.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            130.0,
+            PoolPreset::Balanced,
+            None,
+            0.65,
+            3,
+            12,
+            10,
+        );
+
+        assert!(
+            pools.len() >= 2,
+            "should find at least 2 pools from 2 planted clusters, got {}",
+            pools.len(),
+        );
+
+        // Each pool should have members primarily from one cluster
+        let a_ids: HashSet<&str> = ["da1", "da2", "da3", "da4"].into();
+        let b_ids: HashSet<&str> = ["db1", "db2", "db3"].into();
+
+        let mut found_a = false;
+        let mut found_b = false;
+        for pool in &pools {
+            let pool_ids: HashSet<&str> = pool.track_ids.iter().map(|s| s.as_str()).collect();
+            let a_overlap = pool_ids.intersection(&a_ids).count();
+            let b_overlap = pool_ids.intersection(&b_ids).count();
+            if a_overlap >= 3 && b_overlap == 0 {
+                found_a = true;
+            }
+            if b_overlap >= 3 && a_overlap == 0 {
+                found_b = true;
+            }
+        }
+        assert!(found_a, "should find a pool from cluster A");
+        assert!(found_b, "should find a pool from cluster B");
+    }
+
+    #[test]
+    fn eval_discover_pools_respects_min_max_size() {
+        let profiles: Vec<TrackProfile> = (0..8)
+            .map(|i| simple_profile(&format!("sz{i}"), "8A", 126.0, 0.5, "House"))
+            .collect();
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        // min_size=4, max_size=6
+        let pools = discover_pools(
+            &refs,
+            true,
+            126.0,
+            PoolPreset::Balanced,
+            None,
+            0.5,
+            4,
+            6,
+            10,
+        );
+
+        assert!(!pools.is_empty(), "should find at least one pool");
+        for pool in &pools {
+            assert!(
+                pool.track_ids.len() >= 4 && pool.track_ids.len() <= 6,
+                "pool size {} should be in [4, 6]",
+                pool.track_ids.len(),
+            );
+        }
+    }
+
+    #[test]
+    fn eval_discover_pools_empty_below_min_size() {
+        let profiles = vec![simple_profile("small1", "8A", 126.0, 0.5, "House")];
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            126.0,
+            PoolPreset::Balanced,
+            None,
+            0.7,
+            3,
+            12,
+            10,
+        );
+        assert!(
+            pools.is_empty(),
+            "should return no pools for 1 track with min_size=3"
+        );
+    }
+
+    #[test]
+    fn eval_discover_pools_high_threshold_yields_fewer_pools() {
+        let profiles: Vec<TrackProfile> = vec![
+            simple_profile("ht1", "8A", 126.0, 0.55, "House"),
+            simple_profile("ht2", "9A", 126.5, 0.58, "House"),
+            simple_profile("ht3", "8A", 127.0, 0.60, "Deep House"),
+            simple_profile("ht4", "10A", 128.0, 0.65, "Tech House"),
+            simple_profile("ht5", "11A", 130.0, 0.70, "Techno"),
+        ];
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools_low = discover_pools(
+            &refs,
+            true,
+            127.0,
+            PoolPreset::Balanced,
+            None,
+            0.5,
+            2,
+            12,
+            10,
+        );
+        let pools_high = discover_pools(
+            &refs,
+            true,
+            127.0,
+            PoolPreset::Balanced,
+            None,
+            0.85,
+            2,
+            12,
+            10,
+        );
+
+        // Higher threshold produces tighter pools with higher min compatibility
+        if let (Some(best_low), Some(best_high)) = (pools_low.first(), pools_high.first()) {
+            assert!(
+                best_high.min_compatibility >= best_low.min_compatibility - 0.05,
+                "higher threshold pools should be at least as tight: low_min={:.3} high_min={:.3}",
+                best_low.min_compatibility,
+                best_high.min_compatibility,
+            );
+        }
+    }
+
+    #[test]
+    fn eval_find_bridge_tracks() {
+        let pools = vec![
+            DiscoveredPool {
+                track_ids: vec!["a".into(), "b".into(), "c".into()],
+                mean_compatibility: 0.8,
+                min_compatibility: 0.7,
+                core_members: vec!["a".into(), "b".into()],
+                edge_members: vec!["c".into()],
+                score: 0.8,
+            },
+            DiscoveredPool {
+                track_ids: vec!["c".into(), "d".into(), "e".into()],
+                mean_compatibility: 0.75,
+                min_compatibility: 0.65,
+                core_members: vec!["d".into()],
+                edge_members: vec!["c".into(), "e".into()],
+                score: 0.75,
+            },
+        ];
+
+        let bridges = find_bridge_tracks(&pools);
+        assert_eq!(bridges.len(), 1, "track 'c' should be the only bridge");
+        assert_eq!(bridges[0].0, "c");
+        assert_eq!(bridges[0].1, vec![0, 1]);
+    }
+
+    #[test]
+    fn eval_discover_pools_max_pools_cap() {
+        // 8 identical tracks → many cliques. Cap at 2.
+        let profiles: Vec<TrackProfile> = (0..8)
+            .map(|i| simple_profile(&format!("mc{i}"), "8A", 126.0, 0.5, "House"))
+            .collect();
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            126.0,
+            PoolPreset::Balanced,
+            None,
+            0.5,
+            2,
+            12,
+            2, // max_pools = 2
+        );
+        assert!(
+            pools.len() <= 2,
+            "max_pools=2 should cap output, got {}",
+            pools.len(),
+        );
+        assert!(!pools.is_empty(), "should find at least one pool");
+    }
+
+    #[test]
+    fn eval_discover_pools_no_subset_duplicates() {
+        // All returned pools should not be subsets of each other
+        let profiles: Vec<TrackProfile> = (0..8)
+            .map(|i| simple_profile(&format!("sd{i}"), "8A", 126.0, 0.5, "House"))
+            .collect();
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            126.0,
+            PoolPreset::Balanced,
+            None,
+            0.5,
+            2,
+            8,
+            20,
+        );
+
+        for (i, a) in pools.iter().enumerate() {
+            let a_set: HashSet<&str> = a.track_ids.iter().map(|s| s.as_str()).collect();
+            for (j, b) in pools.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let b_set: HashSet<&str> = b.track_ids.iter().map(|s| s.as_str()).collect();
+                assert!(
+                    !a_set.is_subset(&b_set),
+                    "pool {i} should not be a subset of pool {j}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eval_discover_pools_all_incompatible() {
+        // 5 tracks that are all wildly incompatible — no edges at threshold 0.8
+        let profiles = vec![
+            simple_profile("inc1", "1A", 100.0, 0.2, "Ambient"),
+            simple_profile("inc2", "5B", 140.0, 0.9, "Drum & Bass"),
+            simple_profile("inc3", "9A", 80.0, 0.5, "Dub"),
+            simple_profile("inc4", "3B", 160.0, 0.95, "Hardcore"),
+            simple_profile("inc5", "7A", 110.0, 0.3, "Downtempo"),
+        ];
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            120.0,
+            PoolPreset::Balanced,
+            None,
+            0.8,
+            2,
+            12,
+            10,
+        );
+        assert!(
+            pools.is_empty(),
+            "all-incompatible tracks should produce no pools at threshold 0.8, got {}",
+            pools.len(),
+        );
+    }
+
+    #[test]
+    fn eval_discover_pools_core_edge_classification() {
+        // 4 tight tracks + 1 marginal track
+        let profiles = vec![
+            simple_profile("ce1", "8A", 126.0, 0.55, "House"),
+            simple_profile("ce2", "9A", 126.5, 0.57, "House"),
+            simple_profile("ce3", "8A", 127.0, 0.56, "House"),
+            simple_profile("ce4", "8B", 126.0, 0.58, "House"),
+            // Marginal: different BPM range + key
+            simple_profile("ce5", "3A", 130.0, 0.70, "Techno"),
+        ];
+        let refs: Vec<&TrackProfile> = profiles.iter().collect();
+
+        let pools = discover_pools(
+            &refs,
+            true,
+            127.0,
+            PoolPreset::Balanced,
+            None,
+            0.5,
+            3,
+            12,
+            10,
+        );
+
+        // Find the pool containing ce5 (if any)
+        for pool in &pools {
+            if pool.track_ids.contains(&"ce5".to_string()) {
+                assert!(
+                    pool.edge_members.contains(&"ce5".to_string()),
+                    "ce5 (marginal track) should be an edge member, not core",
+                );
+            }
+        }
     }
 }

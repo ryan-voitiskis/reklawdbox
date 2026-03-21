@@ -597,6 +597,38 @@ pub struct DescribePoolParams {
     pub preset: Option<PoolPreset>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiscoverPoolsParams {
+    #[serde(flatten)]
+    pub filters: SearchFilterParams,
+    #[schemars(description = "Specific track IDs to analyze (highest priority selector)")]
+    pub track_ids: Option<Vec<String>>,
+    #[schemars(description = "Analyze tracks in this playlist")]
+    pub playlist_id: Option<String>,
+    #[schemars(description = "Max tracks to analyze (default 200)")]
+    pub max_tracks: Option<u32>,
+    #[schemars(
+        description = "Compatibility threshold for graph edges (0.0-1.0, default 0.7). Higher = tighter pools, fewer results."
+    )]
+    pub threshold: Option<f64>,
+    #[schemars(description = "Min pool size (default 3, min 2)")]
+    pub min_pool_size: Option<u32>,
+    #[schemars(description = "Max pool size (default 12)")]
+    pub max_pool_size: Option<u32>,
+    #[schemars(description = "Max pools to return (default 10)")]
+    pub max_pools: Option<u32>,
+    #[schemars(
+        description = "Master Tempo mode (default false). When true, keys are fixed regardless of BPM adjustment."
+    )]
+    pub master_tempo: Option<bool>,
+    #[schemars(
+        description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM."
+    )]
+    pub reference_bpm: Option<f64>,
+    #[schemars(description = "Weight preset: balanced (default) or timbral")]
+    pub preset: Option<PoolPreset>,
+}
+
 // ---------------------------------------------------------------------------
 // History / play stats params
 // ---------------------------------------------------------------------------

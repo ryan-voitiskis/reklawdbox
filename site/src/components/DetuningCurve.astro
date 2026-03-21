@@ -1,0 +1,168 @@
+---
+// SVG line chart: bilinear interpolation key scoring from 0 to 50 cents detuning
+// For a same-key pair: score = (1 - cents/100) * 1.0 + (cents/100) * 0.1
+
+const w = 480;
+const h = 220;
+const pad = { top: 24, right: 24, bottom: 36, left: 48 };
+const plotW = w - pad.left - pad.right;
+const plotH = h - pad.top - pad.bottom;
+
+const maxCents = 50;
+const sameKeyScore = 1.0;
+const clashScore = 0.1;
+
+function sx(cents: number) { return pad.left + (cents / maxCents) * plotW; }
+function sy(val: number) { return pad.top + (1 - val) * plotH; }
+
+function score(cents: number) {
+  return (1 - cents / 100) * sameKeyScore + (cents / 100) * clashScore;
+}
+
+// Generate smooth curve points
+const curvePoints = Array.from({ length: 51 }, (_, i) => i)
+  .map(c => `${sx(c).toFixed(1)},${sy(score(c)).toFixed(1)}`)
+  .join(' ');
+
+// Grid / tick values
+const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+const xTicks = [0, 10, 20, 30, 40, 50];
+
+// Zone boundaries
+const jndCents = 10;
+const noticeCents = 25;
+
+// Annotation points
+const jndScore = score(jndCents);
+const noticeScore = score(noticeCents);
+---
+
+<figure class="detuning-curve">
+  <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Key score degradation as detuning increases from 0 to 50 cents">
+
+    <!-- zone fills -->
+    <rect x={pad.left} y={pad.top}
+          width={sx(jndCents) - pad.left} height={plotH}
+          fill="#22c55e" opacity="0.06" />
+    <rect x={sx(jndCents)} y={pad.top}
+          width={sx(noticeCents) - sx(jndCents)} height={plotH}
+          fill="#eab308" opacity="0.06" />
+    <rect x={sx(noticeCents)} y={pad.top}
+          width={sx(maxCents) - sx(noticeCents)} height={plotH}
+          fill="#ef4444" opacity="0.06" />
+
+    <!-- horizontal grid lines -->
+    {yTicks.map(v => (
+      <line x1={pad.left} y1={sy(v)} x2={w - pad.right} y2={sy(v)}
+            stroke="var(--sl-color-gray-5)" stroke-width="0.5" />
+    ))}
+
+    <!-- zone boundary verticals -->
+    <line x1={sx(jndCents)} y1={pad.top} x2={sx(jndCents)} y2={pad.top + plotH}
+          stroke="#22c55e" stroke-width="1" stroke-dasharray="4 3" opacity="0.6" />
+    <line x1={sx(noticeCents)} y1={pad.top} x2={sx(noticeCents)} y2={pad.top + plotH}
+          stroke="#eab308" stroke-width="1" stroke-dasharray="4 3" opacity="0.6" />
+
+    <!-- zone labels -->
+    <text x={sx(jndCents / 2)} y={pad.top + 14} text-anchor="middle" class="zone-label" fill="#22c55e">
+      Sub-JND
+    </text>
+    <text x={sx((jndCents + noticeCents) / 2)} y={pad.top + 14} text-anchor="middle" class="zone-label" fill="#eab308">
+      Noticeable
+    </text>
+    <text x={sx((noticeCents + maxCents) / 2)} y={pad.top + 14} text-anchor="middle" class="zone-label" fill="#ef4444">
+      Ambiguous
+    </text>
+
+    <!-- y-axis labels -->
+    {yTicks.map(v => (
+      <text x={pad.left - 6} y={sy(v)} text-anchor="end" dominant-baseline="central"
+            class="axis-label">{v.toFixed(1)}</text>
+    ))}
+
+    <!-- x-axis labels -->
+    {xTicks.map(v => (
+      <text x={sx(v)} y={h - pad.bottom + 16} text-anchor="middle" class="axis-label">
+        {v}
+      </text>
+    ))}
+
+    <!-- the curve -->
+    <polyline points={curvePoints} fill="none" stroke="#3b82f6" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- JND annotation dot -->
+    <circle cx={sx(jndCents)} cy={sy(jndScore)} r="3.5" fill="#3b82f6" />
+    <text x={sx(jndCents) + 6} y={sy(jndScore) - 8} class="annot-label">
+      {jndScore.toFixed(2)} @ 10c
+    </text>
+
+    <!-- 25-cent annotation dot -->
+    <circle cx={sx(noticeCents)} cy={sy(noticeScore)} r="3.5" fill="#3b82f6" />
+    <text x={sx(noticeCents) + 6} y={sy(noticeScore) - 8} class="annot-label">
+      {noticeScore.toFixed(2)} @ 25c
+    </text>
+
+    <!-- 50-cent annotation dot -->
+    <circle cx={sx(maxCents)} cy={sy(score(maxCents))} r="3.5" fill="#3b82f6" />
+    <text x={sx(maxCents) - 6} y={sy(score(maxCents)) - 8} text-anchor="end" class="annot-label">
+      {score(maxCents).toFixed(2)} @ 50c
+    </text>
+
+    <!-- axis titles -->
+    <text x={pad.left - 36} y={pad.top + plotH / 2} text-anchor="middle"
+          dominant-baseline="central" transform={`rotate(-90, ${pad.left - 36}, ${pad.top + plotH / 2})`}
+          class="axis-title">Key score</text>
+    <text x={pad.left + plotW / 2} y={h - 2} text-anchor="middle" class="axis-title">Detuning (cents)</text>
+  </svg>
+
+  <figcaption class="curve-caption">
+    Same-key example: bilinear interpolation blends between the native key (1.0) and the +1 semitone transposition (0.1 for a 7-position Camelot jump). Actual scores vary by starting key relationship.
+  </figcaption>
+</figure>
+
+<style>
+  .detuning-curve {
+    max-width: 520px;
+    margin: 1.5rem auto;
+  }
+  .detuning-curve svg {
+    width: 100%;
+    height: auto;
+  }
+  .axis-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10px;
+    fill: var(--sl-color-text);
+    opacity: 0.6;
+  }
+  .axis-title {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 10.5px;
+    fill: var(--sl-color-text);
+    opacity: 0.7;
+    font-weight: 500;
+  }
+  .zone-label {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 9px;
+    font-weight: 600;
+    opacity: 0.8;
+  }
+  .annot-label {
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    fill: var(--sl-color-text);
+    opacity: 0.75;
+    font-weight: 500;
+  }
+  .curve-caption {
+    text-align: center;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--sl-color-text);
+    opacity: 0.7;
+    font-style: italic;
+  }
+</style>

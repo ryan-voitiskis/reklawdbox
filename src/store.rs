@@ -437,8 +437,7 @@ pub fn set_audio_analysis(
 // ---------------------------------------------------------------------------
 
 pub struct TimbralNormStats {
-    pub means: Vec<f64>,
-    pub stddevs: Vec<f64>,
+    pub dims: Vec<(f64, f64)>, // (mean, stddev) per dimension
     pub sample_count: i64,
 }
 
@@ -461,14 +460,9 @@ pub fn get_timbral_norm_stats(
     }
 
     let sample_count = rows[0].3;
-    let means: Vec<f64> = rows.iter().map(|r| r.1).collect();
-    let stddevs: Vec<f64> = rows.iter().map(|r| r.2).collect();
+    let dims: Vec<(f64, f64)> = rows.iter().map(|r| (r.1, r.2)).collect();
 
-    Ok(Some(TimbralNormStats {
-        means,
-        stddevs,
-        sample_count,
-    }))
+    Ok(Some(TimbralNormStats { dims, sample_count }))
 }
 
 pub fn save_timbral_norm_stats(
@@ -481,7 +475,7 @@ pub fn save_timbral_norm_stats(
         "INSERT INTO timbral_norm_stats (dimension_index, mean, stddev, sample_count)
          VALUES (?1, ?2, ?3, ?4)",
     )?;
-    for (i, (mean, stddev)) in stats.means.iter().zip(stats.stddevs.iter()).enumerate() {
+    for (i, (mean, stddev)) in stats.dims.iter().enumerate() {
         stmt.execute(params![i as i64, mean, stddev, stats.sample_count])?;
     }
     drop(stmt);

@@ -57,7 +57,10 @@ pub(super) fn handle_score_pool_compatibility(
             let profile_b = build_track_profile(track_b, &store)
                 .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
 
-            let norm_stats = ensure_timbral_norm_stats(&store).map_err(mcp_internal_error)?;
+            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+                None
+            });
 
             let ref_bpm = params
                 .reference_bpm
@@ -122,7 +125,10 @@ pub(super) fn handle_score_pool_compatibility(
                 ));
             }
 
-            let norm_stats = ensure_timbral_norm_stats(&store).map_err(mcp_internal_error)?;
+            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+                None
+            });
 
             let mut all_bpms: Vec<f64> = pool_profiles.iter().map(|p| p.bpm).collect();
             all_bpms.push(candidate_profile.bpm);
@@ -196,7 +202,10 @@ pub(super) fn handle_score_pool_compatibility(
                 ));
             }
 
-            let norm_stats = ensure_timbral_norm_stats(&store).map_err(mcp_internal_error)?;
+            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+                None
+            });
 
             let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
             let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
@@ -272,7 +281,10 @@ pub(super) fn handle_expand_pool(
         .reference_bpm
         .unwrap_or_else(|| median_bpm(&seed_bpms));
 
-    let norm_stats = ensure_timbral_norm_stats(&store).map_err(mcp_internal_error)?;
+    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+        None
+    });
 
     // Compute BPM pre-filter range (seed_bpms guaranteed non-empty)
     let min_seed_bpm = seed_bpms.iter().copied().reduce(f64::min).unwrap();
@@ -480,10 +492,7 @@ pub(super) fn handle_describe_pool(
     let store = server.cache_store_conn()?;
     let built = build_profiles(pool_tracks, &store);
     let profiles = built.profiles;
-    let essentia_count = profiles
-        .iter()
-        .filter(|p| build_timbral_vector(p).is_some())
-        .count();
+    let essentia_count = profiles.iter().filter(|p| p.timbral.is_some()).count();
 
     if profiles.len() < 2 {
         return Err(mcp_internal_error(
@@ -491,7 +500,10 @@ pub(super) fn handle_describe_pool(
         ));
     }
 
-    let norm_stats = ensure_timbral_norm_stats(&store).map_err(mcp_internal_error)?;
+    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+        None
+    });
 
     let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
     let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
@@ -863,4 +875,171 @@ fn compute_key_stability_at_bpm(profiles: &[TrackProfile], ref_bpm: f64) -> f64 
     }
 
     if count > 0 { sum / count as f64 } else { 1.0 }
+}
+
+// ---------------------------------------------------------------------------
+// discover_pools
+// ---------------------------------------------------------------------------
+
+pub(super) fn handle_discover_pools(
+    server: &ReklawdboxServer,
+    params: DiscoverPoolsParams,
+) -> Result<CallToolResult, McpError> {
+    let master_tempo = params.master_tempo.unwrap_or(false);
+    let preset = params.preset.unwrap_or_default();
+    let threshold = params.threshold.unwrap_or(0.7).clamp(0.3, 0.95);
+    let min_size = params.min_pool_size.unwrap_or(3).max(2) as usize;
+    let max_size = params
+        .max_pool_size
+        .unwrap_or(12)
+        .clamp(min_size as u32, 20) as usize;
+    let max_pools = params.max_pools.unwrap_or(10).min(50) as usize;
+
+    let tracks = {
+        let conn = server.rekordbox_conn()?;
+        resolve_tracks(
+            &conn,
+            params.track_ids.as_deref(),
+            params.playlist_id.as_deref(),
+            params.filters,
+            params.max_tracks,
+            None,
+            &ResolveTracksOpts {
+                default_max_tracks: Some(200),
+                max_tracks_cap: Some(500),
+                exclude_samplers: true,
+            },
+        )?
+    };
+
+    if tracks.len() < min_size {
+        return Err(McpError::invalid_params(
+            format!("Need at least {min_size} tracks, got {}", tracks.len()),
+            None,
+        ));
+    }
+
+    let store = server.cache_store_conn()?;
+    let built = build_profiles(tracks, &store);
+    let profiles = built.profiles;
+
+    if profiles.len() < min_size {
+        return Err(mcp_internal_error(format!(
+            "Only {} profiles built (need {min_size})",
+            profiles.len()
+        )));
+    }
+
+    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
+        None
+    });
+
+    let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
+    let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
+
+    let profile_refs: Vec<&TrackProfile> = profiles.iter().collect();
+    let pools = discover_pools(
+        &profile_refs,
+        master_tempo,
+        ref_bpm,
+        preset,
+        norm_stats.as_ref(),
+        threshold,
+        min_size,
+        max_size,
+        max_pools,
+    );
+
+    let bridges = find_bridge_tracks(&pools);
+
+    let pools_json: Vec<serde_json::Value> = pools
+        .iter()
+        .enumerate()
+        .map(|(idx, pool)| {
+            let pool_profiles: Vec<&TrackProfile> = pool
+                .track_ids
+                .iter()
+                .filter_map(|id| profiles.iter().find(|p| p.track.id == *id))
+                .collect();
+
+            let bpm_min = pool_profiles
+                .iter()
+                .map(|p| p.bpm)
+                .reduce(f64::min)
+                .unwrap_or(0.0);
+            let bpm_max = pool_profiles
+                .iter()
+                .map(|p| p.bpm)
+                .reduce(f64::max)
+                .unwrap_or(0.0);
+            let energy_min = pool_profiles
+                .iter()
+                .map(|p| p.energy)
+                .reduce(f64::min)
+                .unwrap_or(0.0);
+            let energy_max = pool_profiles
+                .iter()
+                .map(|p| p.energy)
+                .reduce(f64::max)
+                .unwrap_or(0.0);
+
+            let mut genre_counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            for p in &pool_profiles {
+                if let Some(ref g) = p.canonical_genre {
+                    *genre_counts.entry(g.as_str()).or_default() += 1;
+                }
+            }
+            let dominant_genre = genre_counts
+                .into_iter()
+                .max_by_key(|(_, c)| *c)
+                .map(|(g, _)| g.to_string());
+
+            let tracks_json: Vec<serde_json::Value> =
+                pool_profiles.iter().map(|p| track_summary(p)).collect();
+
+            serde_json::json!({
+                "pool_index": idx,
+                "size": pool.track_ids.len(),
+                "mean_compatibility": round_to_3_decimals(pool.mean_compatibility),
+                "min_compatibility": round_to_3_decimals(pool.min_compatibility),
+                "score": round_to_3_decimals(pool.score),
+                "core_members": pool.core_members,
+                "edge_members": pool.edge_members,
+                "bpm_range": [round_to_3_decimals(bpm_min), round_to_3_decimals(bpm_max)],
+                "energy_range": [round_to_3_decimals(energy_min), round_to_3_decimals(energy_max)],
+                "dominant_genre": dominant_genre,
+                "tracks": tracks_json,
+            })
+        })
+        .collect();
+
+    let bridges_json: Vec<serde_json::Value> = bridges
+        .iter()
+        .filter_map(|(id, pool_indices)| {
+            profiles.iter().find(|p| p.track.id == *id).map(|p| {
+                serde_json::json!({
+                    "track": track_summary(p),
+                    "appears_in_pools": pool_indices,
+                })
+            })
+        })
+        .collect();
+
+    let mut result = serde_json::json!({
+        "pools": pools_json,
+        "bridge_tracks": bridges_json,
+        "tracks_analyzed": profiles.len(),
+        "threshold": threshold,
+        "master_tempo": master_tempo,
+        "reference_bpm": round_to_3_decimals(ref_bpm),
+    });
+    if !built.skipped.is_empty() {
+        result["skipped_tracks"] = serde_json::json!(built.skipped);
+    }
+
+    let json =
+        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
 }

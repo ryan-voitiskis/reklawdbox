@@ -468,6 +468,16 @@ impl ReklawdboxServer {
     }
 
     #[tool(
+        description = "Discover natural track pools in a library subset. Uses Bron-Kerbosch clique enumeration on a thresholded compatibility graph. Returns overlapping pools with core/edge members and bridge tracks. Adjust threshold (0.3-0.95) to control pool tightness."
+    )]
+    async fn discover_pools(
+        &self,
+        params: Parameters<DiscoverPoolsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_discover_pools(self, params.0)
+    }
+
+    #[tool(
         description = "Get all available data for a track in one call: Rekordbox metadata, cached audio analysis, cached enrichment, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
     )]
     async fn resolve_track_data(
