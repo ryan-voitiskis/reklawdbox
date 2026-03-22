@@ -244,7 +244,7 @@ pub(super) fn build_candidate_plan(
     start_track_id: &str,
     target_tracks: usize,
     phases: &[EnergyPhase],
-    priority: SequencingPriority,
+    weights: &PriorityWeights,
     variation_index: usize,
     master_tempo: bool,
     harmonic_style: Option<HarmonicMixingStyle>,
@@ -295,7 +295,7 @@ pub(super) fn build_candidate_plan(
                             to_profile,
                             from_phase,
                             to_phase,
-                            priority,
+                            weights,
                             master_tempo,
                             harmonic_style,
                             &scoring_context,
@@ -411,7 +411,7 @@ pub(super) fn build_candidate_plan_beam(
     start_track_id: &str,
     target_tracks: usize,
     phases: &[EnergyPhase],
-    priority: SequencingPriority,
+    weights: &PriorityWeights,
     beam_width: usize,
     master_tempo: bool,
     harmonic_style: Option<HarmonicMixingStyle>,
@@ -474,7 +474,7 @@ pub(super) fn build_candidate_plan_beam(
                     to_profile,
                     from_phase,
                     to_phase,
-                    priority,
+                    weights,
                     master_tempo,
                     harmonic_style,
                     &scoring_context,
@@ -713,7 +713,7 @@ pub(super) fn score_transition_profiles(
     to: &TrackProfile,
     from_phase: Option<EnergyPhase>,
     to_phase: Option<EnergyPhase>,
-    priority: SequencingPriority,
+    weights: &PriorityWeights,
     master_tempo: bool,
     harmonic_style: Option<HarmonicMixingStyle>,
     ctx: &ScoringContext,
@@ -858,7 +858,7 @@ pub(super) fn score_transition_profiles(
         } else {
             None
         },
-        priority,
+        weights,
     );
 
     let mut adjustments = Vec::new();
@@ -866,7 +866,6 @@ pub(super) fn score_transition_profiles(
     // Report axis-level bonuses/penalties as composite adjustments.
     // These were already applied to the axis scores above; compute their
     // weighted impact on the composite for transparency.
-    let weights = priority_weights(priority);
     let mut total_weight = weights.key + weights.bpm + weights.energy + weights.genre;
     if brightness_available {
         total_weight += weights.brightness;
@@ -1478,9 +1477,8 @@ pub(super) fn composite_score(
     genre_score: f64,
     brightness_score: Option<f64>,
     rhythm_score: Option<f64>,
-    priority: SequencingPriority,
+    weights: &PriorityWeights,
 ) -> f64 {
-    let weights = priority_weights(priority);
     let mut weighted_sum = (weights.key * key_score)
         + (weights.bpm * bpm_score)
         + (weights.energy * energy_score)
@@ -2042,11 +2040,9 @@ pub(super) fn score_pool_compatibility_pair(
     b: &TrackProfile,
     master_tempo: bool,
     ref_bpm: f64,
-    preset: PoolPreset,
+    weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> PoolAxisScores {
-    let weights = pool_weights(preset);
-
     // Key scoring: use continuous detuning model when master tempo is off
     let key = if !master_tempo && ref_bpm > 0.0 {
         score_key_with_pitch_shifts(
@@ -2126,7 +2122,7 @@ pub(super) fn score_candidate_vs_pool(
     pool: &[&TrackProfile],
     master_tempo: bool,
     ref_bpm: f64,
-    preset: PoolPreset,
+    weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> CandidatePoolScore {
     let mut min_score = f64::INFINITY;
@@ -2139,7 +2135,7 @@ pub(super) fn score_candidate_vs_pool(
             member,
             master_tempo,
             ref_bpm,
-            preset,
+            weights,
             norm_stats,
         );
         if scores.composite < min_score {
@@ -2181,7 +2177,7 @@ pub(super) fn compute_pool_cohesion(
     profiles: &[&TrackProfile],
     master_tempo: bool,
     ref_bpm: f64,
-    preset: PoolPreset,
+    weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> PoolCohesionResult {
     let n = profiles.len();
@@ -2211,7 +2207,7 @@ pub(super) fn compute_pool_cohesion(
                 profiles[j],
                 master_tempo,
                 ref_bpm,
-                preset,
+                weights,
                 norm_stats,
             );
             let c = scores.composite;
@@ -2290,7 +2286,7 @@ pub(super) fn discover_pools(
     profiles: &[&TrackProfile],
     master_tempo: bool,
     ref_bpm: f64,
-    preset: PoolPreset,
+    weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
     threshold: f64,
     min_size: usize,
@@ -2311,7 +2307,7 @@ pub(super) fn discover_pools(
                 profiles[j],
                 master_tempo,
                 ref_bpm,
-                preset,
+                weights,
                 norm_stats,
             );
             compat[i][j] = s.composite;

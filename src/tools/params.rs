@@ -416,8 +416,10 @@ pub struct BuildSetParams {
     pub track_ids: Vec<String>,
     #[schemars(description = "Desired number of tracks in each candidate set")]
     pub target_tracks: u32,
-    #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
-    pub priority: Option<SequencingPriority>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'harmonic', 'energy', 'genre'), preset with overrides ({preset: 'harmonic', overrides: {energy: 0.25}}), or full custom weights ({key: 0.3, bpm: 0.2, ...}). Default: balanced."
+    )]
+    pub priority: Option<TransitionWeightSpec>,
     #[schemars(
         description = "Energy curve: preset name ('warmup_build_peak_release', 'flat', 'peak_only') or an array of phase strings (warmup/build/peak/release), one per target position."
     )]
@@ -468,8 +470,10 @@ pub struct QueryTransitionCandidatesParams {
     pub target_bpm: Option<f64>,
     #[schemars(description = "Energy phase preference (warmup, build, peak, release)")]
     pub energy_phase: Option<EnergyPhase>,
-    #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
-    pub priority: Option<SequencingPriority>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'harmonic', 'energy', 'genre'), preset with overrides, or custom weights. Default: balanced."
+    )]
+    pub priority: Option<TransitionWeightSpec>,
     #[schemars(
         description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
     )]
@@ -493,8 +497,10 @@ pub struct ScoreTransitionParams {
     pub target_track_id: String,
     #[schemars(description = "Energy phase preference (warmup, build, peak, release)")]
     pub energy_phase: Option<EnergyPhase>,
-    #[schemars(description = "Weighting axis (balanced, harmonic, energy, genre)")]
-    pub priority: Option<SequencingPriority>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'harmonic', 'energy', 'genre'), preset with overrides, or custom weights. Default: balanced."
+    )]
+    pub priority: Option<TransitionWeightSpec>,
     #[schemars(
         description = "Master Tempo mode (default true). When false, accounts for pitch shift from BPM adjustment when scoring key compatibility."
     )]
@@ -517,6 +523,84 @@ pub enum PoolPreset {
     #[default]
     Balanced,
     Timbral,
+}
+
+// ---------------------------------------------------------------------------
+// Tunable weight specs (preset name, preset+overrides, or custom weights)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum ScorerType {
+    #[default]
+    Pool,
+    Transition,
+}
+
+/// Weight input for transition scoring axes. All fields optional —
+/// missing fields inherit from the base preset. Auto-renormalized.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionWeightInput {
+    pub key: Option<f64>,
+    pub bpm: Option<f64>,
+    pub energy: Option<f64>,
+    pub genre: Option<f64>,
+    pub brightness: Option<f64>,
+    pub rhythm: Option<f64>,
+}
+
+/// Weight input for pool scoring axes. All fields optional —
+/// missing fields inherit from the base preset. Auto-renormalized.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(deny_unknown_fields)]
+pub struct PoolWeightInput {
+    pub bpm: Option<f64>,
+    pub energy: Option<f64>,
+    pub timbral: Option<f64>,
+    pub key: Option<f64>,
+    pub genre: Option<f64>,
+    pub brightness: Option<f64>,
+    pub rhythm: Option<f64>,
+}
+
+/// Flexible weight specification: a preset name, preset with overrides, or full custom weights.
+///
+/// Examples:
+/// - `"balanced"` — built-in or saved preset by name
+/// - `{"preset": "balanced", "overrides": {"timbral": 0.35}}` — preset with axis overrides
+/// - `{"bpm": 0.25, "energy": 0.20, ...}` — fully custom weights
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(untagged)]
+pub enum TransitionWeightSpec {
+    WithOverrides {
+        preset: String,
+        overrides: Option<TransitionWeightInput>,
+    },
+    Custom(TransitionWeightInput),
+    Named(String),
+}
+
+/// Flexible weight specification for pool scoring.
+///
+/// Examples:
+/// - `"balanced"` — built-in or saved preset by name
+/// - `{"preset": "timbral", "overrides": {"timbral": 0.4}}` — preset with axis overrides
+/// - `{"bpm": 0.25, "energy": 0.20, ...}` — fully custom weights
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(untagged)]
+pub enum PoolWeightSpec {
+    WithOverrides {
+        preset: String,
+        overrides: Option<PoolWeightInput>,
+    },
+    Custom(PoolWeightInput),
+    Named(String),
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -543,8 +627,10 @@ pub struct ScorePoolCompatibilityParams {
         description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM of tracks being scored."
     )]
     pub reference_bpm: Option<f64>,
-    #[schemars(description = "Weight preset: balanced (default) or timbral")]
-    pub preset: Option<PoolPreset>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'timbral'), preset with overrides ({preset: 'timbral', overrides: {timbral: 0.4}}), or custom weights. Default: balanced."
+    )]
+    pub preset: Option<PoolWeightSpec>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -565,8 +651,10 @@ pub struct ExpandPoolParams {
         description = "Allow cross-genre discovery (default false). When true, disables genre family pre-filter."
     )]
     pub cross_genre: Option<bool>,
-    #[schemars(description = "Weight preset: balanced (default) or timbral")]
-    pub preset: Option<PoolPreset>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'timbral'), preset with overrides ({preset: 'timbral', overrides: {timbral: 0.4}}), or custom weights. Default: balanced."
+    )]
+    pub preset: Option<PoolWeightSpec>,
     #[schemars(description = "Use tracks from this playlist as candidate universe")]
     pub playlist_id: Option<String>,
     #[serde(flatten)]
@@ -593,8 +681,10 @@ pub struct DescribePoolParams {
         description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM."
     )]
     pub reference_bpm: Option<f64>,
-    #[schemars(description = "Weight preset: balanced (default) or timbral")]
-    pub preset: Option<PoolPreset>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'timbral'), preset with overrides ({preset: 'timbral', overrides: {timbral: 0.4}}), or custom weights. Default: balanced."
+    )]
+    pub preset: Option<PoolWeightSpec>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -625,8 +715,40 @@ pub struct DiscoverPoolsParams {
         description = "Reference BPM for key evaluation when master_tempo=false. Defaults to median BPM."
     )]
     pub reference_bpm: Option<f64>,
-    #[schemars(description = "Weight preset: balanced (default) or timbral")]
-    pub preset: Option<PoolPreset>,
+    #[schemars(
+        description = "Scoring weights. Named preset ('balanced', 'timbral'), preset with overrides ({preset: 'timbral', overrides: {timbral: 0.4}}), or custom weights. Default: balanced."
+    )]
+    pub preset: Option<PoolWeightSpec>,
+}
+
+// ---------------------------------------------------------------------------
+// Weight preset management params
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SaveWeightPresetParams {
+    #[schemars(description = "Name for the preset (e.g. 'deep_techno_pool')")]
+    pub name: String,
+    #[schemars(description = "Scorer type: 'pool' or 'transition'")]
+    pub scorer_type: ScorerType,
+    #[schemars(
+        description = "Weight values. For pool: {bpm, energy, timbral, key, genre, brightness, rhythm}. For transition: {key, bpm, energy, genre, brightness, rhythm}. Auto-renormalized to sum to 1.0."
+    )]
+    pub weights: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListWeightPresetsParams {
+    #[schemars(description = "Filter by scorer type: 'pool' or 'transition'. Omit for all.")]
+    pub scorer_type: Option<ScorerType>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteWeightPresetParams {
+    #[schemars(description = "Name of the preset to delete")]
+    pub name: String,
+    #[schemars(description = "Scorer type: 'pool' or 'transition'")]
+    pub scorer_type: ScorerType,
 }
 
 // ---------------------------------------------------------------------------

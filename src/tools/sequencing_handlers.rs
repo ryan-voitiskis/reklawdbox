@@ -10,7 +10,11 @@ pub(super) fn handle_score_transition(
     server: &ReklawdboxServer,
     params: ScoreTransitionParams,
 ) -> Result<CallToolResult, McpError> {
-    let priority = params.priority.unwrap_or(SequencingPriority::Balanced);
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_transition_weights(params.priority.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
 
     let (from_track, to_track) = {
         let conn = server.rekordbox_conn()?;
@@ -55,7 +59,7 @@ pub(super) fn handle_score_transition(
         &to_profile,
         params.energy_phase,
         params.energy_phase,
-        priority,
+        &weights,
         master_tempo,
         harmonic_style,
         &ScoringContext::default(),
@@ -109,7 +113,11 @@ pub(super) fn handle_query_transition_candidates(
         ));
     }
 
-    let priority = params.priority.unwrap_or(SequencingPriority::Balanced);
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_transition_weights(params.priority.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
     let master_tempo = params.use_master_tempo.unwrap_or(true);
     let harmonic_style = Some(
         params
@@ -190,7 +198,7 @@ pub(super) fn handle_query_transition_candidates(
                 &to_profile,
                 params.energy_phase,
                 params.energy_phase,
-                priority,
+                &weights,
                 master_tempo,
                 harmonic_style,
                 &ctx,
@@ -313,7 +321,11 @@ pub(super) fn handle_build_set(
         .unwrap_or_else(|| params.candidates.unwrap_or(3))
         .clamp(1, 8) as usize;
     let requested_target = params.target_tracks as usize;
-    let priority = params.priority.unwrap_or(SequencingPriority::Balanced);
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_transition_weights(params.priority.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
 
     let tracks = {
         let conn = server.rekordbox_conn()?;
@@ -399,7 +411,7 @@ pub(super) fn handle_build_set(
                     &start_id,
                     actual_target,
                     &phases,
-                    priority,
+                    &weights,
                     i,
                     master_tempo,
                     harmonic_style,
@@ -417,7 +429,7 @@ pub(super) fn handle_build_set(
                 start_id,
                 actual_target,
                 &phases,
-                priority,
+                &weights,
                 effective_beam_width,
                 master_tempo,
                 harmonic_style,

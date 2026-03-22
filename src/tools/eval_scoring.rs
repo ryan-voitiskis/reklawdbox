@@ -213,7 +213,7 @@ mod tests {
             "cw1",
             8,
             &phases,
-            SequencingPriority::Harmonic,
+            &priority_weights(SequencingPriority::Harmonic),
             0,
             true,
             Some(HarmonicMixingStyle::Conservative),
@@ -248,7 +248,7 @@ mod tests {
             "cw1",
             8,
             &phases,
-            SequencingPriority::Harmonic,
+            &priority_weights(SequencingPriority::Harmonic),
             3,
             true,
             Some(HarmonicMixingStyle::Conservative),
@@ -294,7 +294,7 @@ mod tests {
             "adv1",
             6,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -421,7 +421,7 @@ mod tests {
             "iso1",
             8,
             &phases,
-            SequencingPriority::Energy,
+            &priority_weights(SequencingPriority::Energy),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -669,7 +669,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -696,7 +696,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             5,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -730,7 +730,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -744,7 +744,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             5,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -783,7 +783,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -795,7 +795,7 @@ mod tests {
             "rc01",
             16,
             &phases,
-            SequencingPriority::Harmonic,
+            &priority_weights(SequencingPriority::Harmonic),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -842,7 +842,7 @@ mod tests {
             "cw1",
             8,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -854,7 +854,7 @@ mod tests {
             "cw1",
             8,
             &phases,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
@@ -915,7 +915,7 @@ mod tests {
             &to,
             Some(EnergyPhase::Peak),
             Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             true,
             Some(HarmonicMixingStyle::Conservative),
             &ScoringContext::default(),
@@ -926,7 +926,7 @@ mod tests {
             &to,
             Some(EnergyPhase::Peak),
             Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             true,
             Some(HarmonicMixingStyle::Balanced),
             &ScoringContext::default(),
@@ -955,7 +955,7 @@ mod tests {
             &to,
             Some(EnergyPhase::Build),
             Some(EnergyPhase::Build),
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             true,
             Some(HarmonicMixingStyle::Balanced),
             &ScoringContext::default(),
@@ -982,7 +982,7 @@ mod tests {
             &to,
             Some(EnergyPhase::Peak),
             Some(EnergyPhase::Peak),
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             true,
             Some(HarmonicMixingStyle::Conservative),
             &ScoringContext::default(),
@@ -1016,7 +1016,7 @@ mod tests {
             &to,
             None,
             None,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             true,
             None,
             &ScoringContext {
@@ -1085,8 +1085,22 @@ mod tests {
         let a = simple_profile("sym-a", "8A", 126.0, 0.6, "House");
         let b = simple_profile("sym-b", "10A", 128.0, 0.7, "Tech House");
 
-        let ab = score_pool_compatibility_pair(&a, &b, true, 127.0, PoolPreset::Balanced, None);
-        let ba = score_pool_compatibility_pair(&b, &a, true, 127.0, PoolPreset::Balanced, None);
+        let ab = score_pool_compatibility_pair(
+            &a,
+            &b,
+            true,
+            127.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
+        let ba = score_pool_compatibility_pair(
+            &b,
+            &a,
+            true,
+            127.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
 
         assert!(
             (ab.composite - ba.composite).abs() < 1e-10,
@@ -1134,8 +1148,13 @@ mod tests {
 
         // Mean internal compatibility of tight cluster should be high
         let tight_refs: Vec<&TrackProfile> = tight.iter().collect();
-        let tight_cohesion =
-            compute_pool_cohesion(&tight_refs, true, 127.0, PoolPreset::Balanced, None);
+        let tight_cohesion = compute_pool_cohesion(
+            &tight_refs,
+            true,
+            127.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
 
         assert!(
             tight_cohesion.mean_pairwise >= 0.65,
@@ -1147,8 +1166,14 @@ mod tests {
         let mut cross_scores = Vec::new();
         for t in &tight {
             for d in &distractors {
-                let score =
-                    score_pool_compatibility_pair(t, d, true, 127.0, PoolPreset::Balanced, None);
+                let score = score_pool_compatibility_pair(
+                    t,
+                    d,
+                    true,
+                    127.0,
+                    &pool_weights(PoolPreset::Balanced),
+                    None,
+                );
                 cross_scores.push(score.composite);
             }
         }
@@ -1214,7 +1239,7 @@ mod tests {
                     &pool_refs,
                     true,
                     ref_bpm,
-                    PoolPreset::Balanced,
+                    &pool_weights(PoolPreset::Balanced),
                     None,
                 );
                 if result.min_score > best_min {
@@ -1564,7 +1589,7 @@ mod tests {
             &b_timbral,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             Some(&stats),
         );
         let without_timbral = score_pool_compatibility_pair(
@@ -1572,7 +1597,7 @@ mod tests {
             &b_timbral,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
         );
 
@@ -1624,10 +1649,22 @@ mod tests {
             0.2,
         );
 
-        let balanced =
-            score_pool_compatibility_pair(&a, &b, true, 126.0, PoolPreset::Balanced, Some(&stats));
-        let timbral =
-            score_pool_compatibility_pair(&a, &b, true, 126.0, PoolPreset::Timbral, Some(&stats));
+        let balanced = score_pool_compatibility_pair(
+            &a,
+            &b,
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            Some(&stats),
+        );
+        let timbral = score_pool_compatibility_pair(
+            &a,
+            &b,
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Timbral),
+            Some(&stats),
+        );
 
         // Timbral preset should score higher because timbral match is perfect
         // but key clashes — timbral preset downweights key
@@ -1678,7 +1715,7 @@ mod tests {
                     &pool_refs,
                     true,
                     ref_bpm,
-                    PoolPreset::Balanced,
+                    &pool_weights(PoolPreset::Balanced),
                     None,
                 );
                 if result.min_score > best_min {
@@ -1772,7 +1809,13 @@ mod tests {
     fn eval_pool_cohesion_single_track() {
         let profiles = vec![simple_profile("single", "8A", 126.0, 0.5, "House")];
         let refs: Vec<&TrackProfile> = profiles.iter().collect();
-        let result = compute_pool_cohesion(&refs, true, 126.0, PoolPreset::Balanced, None);
+        let result = compute_pool_cohesion(
+            &refs,
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
 
         assert!(
             (result.mean_pairwise - 1.0).abs() < 1e-10,
@@ -1789,8 +1832,14 @@ mod tests {
     #[test]
     fn eval_candidate_vs_empty_pool() {
         let candidate = simple_profile("c", "8A", 126.0, 0.5, "House");
-        let result =
-            score_candidate_vs_pool(&candidate, &[], true, 126.0, PoolPreset::Balanced, None);
+        let result = score_candidate_vs_pool(
+            &candidate,
+            &[],
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
         assert!(
             (result.mean_score - 0.0).abs() < 1e-10,
             "empty pool should give mean 0.0",
@@ -1809,7 +1858,14 @@ mod tests {
         let b = simple_profile("mto-b", "8A", 132.0, 0.5, "House");
 
         // With master tempo ON: same key → key score should be 1.0
-        let mt_on = score_pool_compatibility_pair(&a, &b, true, 129.0, PoolPreset::Balanced, None);
+        let mt_on = score_pool_compatibility_pair(
+            &a,
+            &b,
+            true,
+            129.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
         assert!(
             mt_on.key.value > 0.9,
             "master_tempo ON, same key should score high: {:.3}",
@@ -1817,8 +1873,14 @@ mod tests {
         );
 
         // With master tempo OFF: pitch shift affects key scoring
-        let mt_off =
-            score_pool_compatibility_pair(&a, &b, false, 129.0, PoolPreset::Balanced, None);
+        let mt_off = score_pool_compatibility_pair(
+            &a,
+            &b,
+            false,
+            129.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
 
         // The key scores should differ because pitch shifting changes effective keys
         assert!(
@@ -1834,8 +1896,22 @@ mod tests {
         let a = simple_profile("mts-a", "8A", 124.0, 0.5, "House");
         let b = simple_profile("mts-b", "10A", 128.0, 0.55, "Deep House");
 
-        let ab = score_pool_compatibility_pair(&a, &b, false, 126.0, PoolPreset::Balanced, None);
-        let ba = score_pool_compatibility_pair(&b, &a, false, 126.0, PoolPreset::Balanced, None);
+        let ab = score_pool_compatibility_pair(
+            &a,
+            &b,
+            false,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
+        let ba = score_pool_compatibility_pair(
+            &b,
+            &a,
+            false,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            None,
+        );
 
         assert!(
             (ab.composite - ba.composite).abs() < 0.01,
@@ -1903,7 +1979,7 @@ mod tests {
             &refs,
             true,
             130.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.65,
             3,
@@ -1950,7 +2026,7 @@ mod tests {
             &refs,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.5,
             4,
@@ -1977,7 +2053,7 @@ mod tests {
             &refs,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.7,
             3,
@@ -2005,7 +2081,7 @@ mod tests {
             &refs,
             true,
             127.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.5,
             2,
@@ -2016,7 +2092,7 @@ mod tests {
             &refs,
             true,
             127.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.85,
             2,
@@ -2074,7 +2150,7 @@ mod tests {
             &refs,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.5,
             2,
@@ -2101,7 +2177,7 @@ mod tests {
             &refs,
             true,
             126.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.5,
             2,
@@ -2140,7 +2216,7 @@ mod tests {
             &refs,
             true,
             120.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.8,
             2,
@@ -2171,7 +2247,7 @@ mod tests {
             &refs,
             true,
             127.0,
-            PoolPreset::Balanced,
+            &pool_weights(PoolPreset::Balanced),
             None,
             0.5,
             3,

@@ -15,7 +15,11 @@ pub(super) fn handle_score_pool_compatibility(
     params: ScorePoolCompatibilityParams,
 ) -> Result<CallToolResult, McpError> {
     let master_tempo = params.master_tempo.unwrap_or(false);
-    let preset = params.preset.unwrap_or_default();
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_pool_weights(params.preset.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
 
     // Detect mode from params
     let mode = if params.track_a.is_some() && params.track_b.is_some() {
@@ -71,7 +75,7 @@ pub(super) fn handle_score_pool_compatibility(
                 &profile_b,
                 master_tempo,
                 ref_bpm,
-                preset,
+                &weights,
                 norm_stats.as_ref(),
             );
 
@@ -142,7 +146,7 @@ pub(super) fn handle_score_pool_compatibility(
                 &pool_refs,
                 master_tempo,
                 ref_bpm,
-                preset,
+                &weights,
                 norm_stats.as_ref(),
             );
 
@@ -215,7 +219,7 @@ pub(super) fn handle_score_pool_compatibility(
                 &profile_refs,
                 master_tempo,
                 ref_bpm,
-                preset,
+                &weights,
                 norm_stats.as_ref(),
             );
 
@@ -240,7 +244,11 @@ pub(super) fn handle_expand_pool(
     params: ExpandPoolParams,
 ) -> Result<CallToolResult, McpError> {
     let master_tempo = params.master_tempo.unwrap_or(false);
-    let preset = params.preset.unwrap_or_default();
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_pool_weights(params.preset.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
     let additions = params.additions.unwrap_or(3).min(20) as usize;
     let cross_genre = params.cross_genre.unwrap_or(false);
 
@@ -368,7 +376,7 @@ pub(super) fn handle_expand_pool(
                 &pool_refs,
                 master_tempo,
                 ref_bpm,
-                preset,
+                &weights,
                 norm_stats.as_ref(),
             );
 
@@ -413,7 +421,7 @@ pub(super) fn handle_expand_pool(
         &pool_refs,
         master_tempo,
         ref_bpm,
-        preset,
+        &weights,
         norm_stats.as_ref(),
     );
 
@@ -460,7 +468,11 @@ pub(super) fn handle_describe_pool(
     params: DescribePoolParams,
 ) -> Result<CallToolResult, McpError> {
     let master_tempo = params.master_tempo.unwrap_or(false);
-    let preset = params.preset.unwrap_or_default();
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_pool_weights(params.preset.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
 
     if params.pool_track_ids.is_none() && params.playlist_id.is_none() {
         return Err(McpError::invalid_params(
@@ -514,7 +526,7 @@ pub(super) fn handle_describe_pool(
         &profile_refs,
         master_tempo,
         ref_bpm,
-        preset,
+        &weights,
         norm_stats.as_ref(),
     );
 
@@ -886,7 +898,11 @@ pub(super) fn handle_discover_pools(
     params: DiscoverPoolsParams,
 ) -> Result<CallToolResult, McpError> {
     let master_tempo = params.master_tempo.unwrap_or(false);
-    let preset = params.preset.unwrap_or_default();
+    let weights = {
+        let store = server.cache_store_conn()?;
+        resolve_pool_weights(params.preset.as_ref(), &store)
+            .map_err(|e| McpError::invalid_params(e, None))?
+    };
     let threshold = params.threshold.unwrap_or(0.7).clamp(0.3, 0.95);
     let min_size = params.min_pool_size.unwrap_or(3).max(2) as usize;
     let max_size = params
@@ -943,7 +959,7 @@ pub(super) fn handle_discover_pools(
         &profile_refs,
         master_tempo,
         ref_bpm,
-        preset,
+        &weights,
         norm_stats.as_ref(),
         threshold,
         min_size,

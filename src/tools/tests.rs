@@ -510,7 +510,7 @@ async fn build_set_generates_candidates_and_transition_scores() {
         .build_set(Parameters(BuildSetParams {
             track_ids,
             target_tracks: 4,
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             energy_curve: Some(EnergyCurveInput::Preset(
                 EnergyCurvePreset::WarmupBuildPeakRelease,
             )),
@@ -626,7 +626,7 @@ async fn build_set_adapts_energy_curve_to_single_track_pool() {
         .build_set(Parameters(BuildSetParams {
             track_ids: vec!["single-set-1".to_string()],
             target_tracks: 4,
-            priority: Some(SequencingPriority::Energy),
+            priority: Some(TransitionWeightSpec::Named("energy".into())),
             energy_curve: Some(EnergyCurveInput::Custom(vec![
                 EnergyPhase::Warmup,
                 EnergyPhase::Build,
@@ -711,7 +711,7 @@ async fn build_set_produces_candidates_from_homogeneous_key_pool() {
                 "same-key-3".to_string(),
             ],
             target_tracks: 3,
-            priority: Some(SequencingPriority::Harmonic),
+            priority: Some(TransitionWeightSpec::Named("harmonic".into())),
             energy_curve: Some(EnergyCurveInput::Preset(EnergyCurvePreset::FlatEnergy)),
             opening_track_id: None,
             candidates: Some(2),
@@ -767,7 +767,7 @@ async fn build_set_recomputes_preset_curve_when_pool_is_smaller_than_target() {
         .build_set(Parameters(BuildSetParams {
             track_ids: selected,
             target_tracks: 6,
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             energy_curve: Some(EnergyCurveInput::Preset(
                 EnergyCurvePreset::WarmupBuildPeakRelease,
             )),
@@ -3248,7 +3248,7 @@ fn master_tempo_off_changes_key_scoring() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -3267,7 +3267,7 @@ fn master_tempo_off_changes_key_scoring() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ScoringContext::default(),
@@ -3316,7 +3316,7 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
         &to_under,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3327,7 +3327,7 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
         &to_over,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3372,7 +3372,7 @@ fn detuning_smooth_degradation_with_increasing_shift() {
             &to,
             None,
             None,
-            SequencingPriority::Balanced,
+            &priority_weights(SequencingPriority::Balanced),
             false,
             None,
             &ctx,
@@ -3396,7 +3396,7 @@ fn detuning_smooth_degradation_with_increasing_shift() {
         &same,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3417,7 +3417,7 @@ fn detuning_master_tempo_on_unchanged() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ctx,
@@ -3443,7 +3443,7 @@ fn detuning_label_shows_cents_when_audible() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3472,7 +3472,7 @@ fn detuning_play_bpms_bilinear_interpolation() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3502,7 +3502,7 @@ fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true, // master tempo ON
         None,
         &ctx,
@@ -3528,7 +3528,7 @@ fn detuning_play_bpms_asymmetric_one_zero_shift() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ctx,
@@ -3596,7 +3596,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Conservative),
         &ScoringContext::default(),
@@ -3609,7 +3609,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -3635,7 +3635,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Adventurous),
         &ScoringContext::default(),
@@ -3654,7 +3654,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &to2,
         Some(EnergyPhase::Build),
         Some(EnergyPhase::Build),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Balanced),
         &ScoringContext::default(),
@@ -3665,7 +3665,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &to2,
         Some(EnergyPhase::Build),
         Some(EnergyPhase::Build),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -3690,7 +3690,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Adventurous),
         &ScoringContext::default(),
@@ -3701,7 +3701,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -3718,7 +3718,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Warmup),
         Some(EnergyPhase::Warmup),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Adventurous),
         &ScoringContext::default(),
@@ -3729,7 +3729,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Warmup),
         Some(EnergyPhase::Warmup),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -3754,7 +3754,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Peak),
         Some(EnergyPhase::Peak),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Conservative),
         &ScoringContext::default(),
@@ -3765,7 +3765,7 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &to,
         Some(EnergyPhase::Warmup),
         Some(EnergyPhase::Warmup),
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         Some(HarmonicMixingStyle::Conservative),
         &ScoringContext::default(),
@@ -3788,7 +3788,7 @@ fn composite_scoring_changes_by_priority_axis() {
             0.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Balanced
+            &priority_weights(SequencingPriority::Balanced)
         ),
         0.30
     ));
@@ -3800,7 +3800,7 @@ fn composite_scoring_changes_by_priority_axis() {
             0.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Harmonic
+            &priority_weights(SequencingPriority::Harmonic)
         ),
         0.48
     ));
@@ -3812,7 +3812,7 @@ fn composite_scoring_changes_by_priority_axis() {
             0.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Energy
+            &priority_weights(SequencingPriority::Energy)
         ),
         0.12
     ));
@@ -3824,7 +3824,7 @@ fn composite_scoring_changes_by_priority_axis() {
             0.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Genre
+            &priority_weights(SequencingPriority::Genre)
         ),
         0.18
     ));
@@ -3837,7 +3837,7 @@ fn composite_scoring_changes_by_priority_axis() {
             1.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Balanced
+            &priority_weights(SequencingPriority::Balanced)
         ),
         0.17
     ));
@@ -3849,13 +3849,21 @@ fn composite_scoring_changes_by_priority_axis() {
             1.0,
             Some(0.0),
             Some(0.0),
-            SequencingPriority::Genre
+            &priority_weights(SequencingPriority::Genre)
         ),
         0.38
     ));
 
     assert!(approx(
-        composite_score(1.0, 0.0, 0.0, 0.0, None, None, SequencingPriority::Balanced),
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            None,
+            &priority_weights(SequencingPriority::Balanced)
+        ),
         0.30 / 0.85
     ));
 }
@@ -3979,7 +3987,7 @@ fn bpm_trajectory_drift_penalty() {
         "bpm-start",
         3,
         &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        SequencingPriority::Harmonic,
+        &priority_weights(SequencingPriority::Harmonic),
         0,
         true,
         None,
@@ -3994,7 +4002,7 @@ fn bpm_trajectory_drift_penalty() {
         "bpm-start",
         3,
         &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        SequencingPriority::Harmonic,
+        &priority_weights(SequencingPriority::Harmonic),
         0,
         true,
         None,
@@ -4011,7 +4019,7 @@ fn bpm_trajectory_drift_penalty() {
         "bpm-start",
         3,
         &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        SequencingPriority::Harmonic,
+        &priority_weights(SequencingPriority::Harmonic),
         0,
         true,
         None,
@@ -4148,7 +4156,7 @@ async fn score_transition_returns_expected_axis_scores() {
             source_track_id: "from-track".to_string(),
             target_track_id: "to-track".to_string(),
             energy_phase: Some(EnergyPhase::Build),
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             use_master_tempo: None,
             harmonic_style: None,
         }))
@@ -4258,7 +4266,7 @@ async fn score_transition_balanced_default_penalizes_clash() {
             source_track_id: "clash-from".to_string(),
             target_track_id: "clash-to".to_string(),
             energy_phase: Some(EnergyPhase::Build),
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             use_master_tempo: None,
             harmonic_style: None,
         }))
@@ -4272,7 +4280,7 @@ async fn score_transition_balanced_default_penalizes_clash() {
             source_track_id: "clash-from".to_string(),
             target_track_id: "clash-to".to_string(),
             energy_phase: Some(EnergyPhase::Build),
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             use_master_tempo: None,
             harmonic_style: Some(HarmonicMixingStyle::Adventurous),
         }))
@@ -4635,7 +4643,7 @@ fn play_bpms_none_preserves_existing_behavior() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -4658,7 +4666,7 @@ fn play_bpms_affects_bpm_adjustment_pct() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         true,
         None,
         &ScoringContext::default(),
@@ -4685,7 +4693,7 @@ fn play_bpms_affects_key_transposition() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ScoringContext::default(),
@@ -4702,7 +4710,7 @@ fn play_bpms_affects_key_transposition() {
         &to,
         None,
         None,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         false,
         None,
         &ScoringContext::default(),
@@ -4741,7 +4749,7 @@ fn beam_search_width_1_matches_greedy() {
         "b1",
         4,
         &phases,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         0,
         true,
         Some(HarmonicMixingStyle::Balanced),
@@ -4753,7 +4761,7 @@ fn beam_search_width_1_matches_greedy() {
         "b1",
         4,
         &phases,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         1,
         true,
         Some(HarmonicMixingStyle::Balanced),
@@ -4782,7 +4790,7 @@ fn beam_search_wider_produces_multiple_plans() {
         "b1",
         4,
         &phases,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         4,
         true,
         Some(HarmonicMixingStyle::Balanced),
@@ -4816,7 +4824,7 @@ fn beam_search_empty_pool() {
         "missing",
         4,
         &[EnergyPhase::Peak; 4],
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         3,
         true,
         None,
@@ -4845,7 +4853,7 @@ fn beam_search_width_exceeding_pool_size() {
         "only1",
         2,
         &[EnergyPhase::Peak; 2],
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         10,
         true,
         None,
@@ -4873,7 +4881,7 @@ fn beam_search_with_bpm_trajectory() {
         "b1",
         4,
         &phases,
-        SequencingPriority::Balanced,
+        &priority_weights(SequencingPriority::Balanced),
         3,
         true,
         Some(HarmonicMixingStyle::Balanced),
@@ -4913,7 +4921,7 @@ async fn query_transition_candidates_ranks_pool() {
             playlist_id: None,
             target_bpm: None,
             energy_phase: Some(EnergyPhase::Build),
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             use_master_tempo: None,
             harmonic_style: None,
             limit: None,
@@ -5099,7 +5107,7 @@ async fn build_set_beam_search_produces_multiple_candidates() {
         .build_set(Parameters(BuildSetParams {
             track_ids,
             target_tracks: 4,
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             energy_curve: None,
             opening_track_id: None,
             candidates: None,
@@ -5144,7 +5152,7 @@ async fn build_set_with_bpm_range_includes_trajectory_fields() {
         .build_set(Parameters(BuildSetParams {
             track_ids,
             target_tracks: 4,
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             energy_curve: None,
             opening_track_id: None,
             candidates: None,
@@ -5205,7 +5213,7 @@ async fn build_set_beam_width_1_backward_compatible() {
         .build_set(Parameters(BuildSetParams {
             track_ids: track_ids.clone(),
             target_tracks: 4,
-            priority: Some(SequencingPriority::Balanced),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
             energy_curve: None,
             opening_track_id: None,
             candidates: Some(1),

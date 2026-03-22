@@ -30,6 +30,8 @@ mod resolve_handlers;
 mod scoring;
 mod sequencing_handlers;
 mod staging_handlers;
+mod weight_preset_handlers;
+mod weight_resolve;
 mod year_handlers;
 
 use analysis::*;
@@ -57,6 +59,8 @@ use resolve_handlers::*;
 use scoring::*;
 use sequencing_handlers::*;
 use staging_handlers::*;
+use weight_preset_handlers::*;
+use weight_resolve::*;
 use year_handlers::*;
 
 use crate::changes::ChangeManager;
@@ -475,6 +479,34 @@ impl ReklawdboxServer {
         params: Parameters<DiscoverPoolsParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_discover_pools(self, params.0)
+    }
+
+    #[tool(
+        description = "Save a custom weight preset for reuse across sessions. Weights are auto-renormalized to sum to 1.0. Use list_weight_presets to see available presets."
+    )]
+    async fn save_weight_preset(
+        &self,
+        params: Parameters<SaveWeightPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_save_weight_preset(self, params.0)
+    }
+
+    #[tool(
+        description = "List available weight presets (both built-in and custom saved). Shows weights for each preset."
+    )]
+    async fn list_weight_presets(
+        &self,
+        params: Parameters<ListWeightPresetsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_list_weight_presets(self, params.0)
+    }
+
+    #[tool(description = "Delete a custom saved weight preset. Cannot delete built-in presets.")]
+    async fn delete_weight_preset(
+        &self,
+        params: Parameters<DeleteWeightPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_delete_weight_preset(self, params.0)
     }
 
     #[tool(

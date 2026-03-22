@@ -6,7 +6,7 @@ use crate::db::escape_like;
 
 /// (id, path, issue_type, detail)
 pub type AuditIssueRow = (i64, String, String, Option<String>);
-const STORE_SCHEMA_VERSION: i32 = 5;
+const STORE_SCHEMA_VERSION: i32 = 6;
 
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
@@ -106,6 +106,14 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             stddev REAL NOT NULL,
             sample_count INTEGER NOT NULL,
             computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS weight_presets (
+            name TEXT NOT NULL,
+            scorer_type TEXT NOT NULL,
+            weights_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (name, scorer_type)
         );
         ",
     )?;
@@ -481,6 +489,97 @@ pub fn save_timbral_norm_stats(
     drop(stmt);
     tx.commit()?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Weight presets (user-saved scoring weight configurations)
+// ---------------------------------------------------------------------------
+
+pub struct WeightPresetEntry {
+    pub name: String,
+    pub scorer_type: String,
+    pub weights_json: String,
+}
+
+pub fn save_weight_preset(
+    conn: &Connection,
+    name: &str,
+    scorer_type: &str,
+    weights_json: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO weight_presets (name, scorer_type, weights_json)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(name, scorer_type)
+         DO UPDATE SET weights_json = ?3, updated_at = datetime('now')",
+        params![name, scorer_type, weights_json],
+    )?;
+    Ok(())
+}
+
+pub fn list_weight_presets(
+    conn: &Connection,
+    scorer_type: Option<&str>,
+) -> Result<Vec<WeightPresetEntry>, rusqlite::Error> {
+    if let Some(st) = scorer_type {
+        let mut stmt = conn.prepare(
+            "SELECT name, scorer_type, weights_json FROM weight_presets
+             WHERE scorer_type = ?1 ORDER BY name",
+        )?;
+        let rows = stmt
+            .query_map(params![st], |row| {
+                Ok(WeightPresetEntry {
+                    name: row.get(0)?,
+                    scorer_type: row.get(1)?,
+                    weights_json: row.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT name, scorer_type, weights_json FROM weight_presets ORDER BY scorer_type, name",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(WeightPresetEntry {
+                    name: row.get(0)?,
+                    scorer_type: row.get(1)?,
+                    weights_json: row.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+}
+
+pub fn get_weight_preset(
+    conn: &Connection,
+    name: &str,
+    scorer_type: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT weights_json FROM weight_presets
+         WHERE name = ?1 AND scorer_type = ?2",
+    )?;
+    let mut rows = stmt.query_map(params![name, scorer_type], |row| row.get::<_, String>(0))?;
+    match rows.next() {
+        Some(Ok(json)) => Ok(Some(json)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+pub fn delete_weight_preset(
+    conn: &Connection,
+    name: &str,
+    scorer_type: &str,
+) -> Result<bool, rusqlite::Error> {
+    let deleted = conn.execute(
+        "DELETE FROM weight_presets WHERE name = ?1 AND scorer_type = ?2",
+        params![name, scorer_type],
+    )?;
+    Ok(deleted > 0)
 }
 
 #[allow(dead_code)]
