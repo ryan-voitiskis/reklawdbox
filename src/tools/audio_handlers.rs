@@ -8,6 +8,15 @@ use crate::audio;
 use crate::db;
 use crate::store;
 
+fn file_mtime_secs(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub(super) async fn handle_analyze_track_audio(
     server: &ReklawdboxServer,
     params: AnalyzeTrackAudioParams,
@@ -24,15 +33,6 @@ pub(super) async fn handle_analyze_track_audio(
     };
 
     let file_path = resolve_file_path(&track.file_path)?;
-    let metadata = std::fs::metadata(&file_path)
-        .map_err(|e| mcp_internal_error(format!("Cannot stat file '{}': {e}", file_path)))?;
-    let file_size = metadata.len() as i64;
-    let file_mtime = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
 
     // Stratum-dsp: check cache then analyze
     let stratum_cached = if skip_cached {
@@ -41,8 +41,6 @@ pub(super) async fn handle_analyze_track_audio(
             &store,
             &file_path,
             audio::ANALYZER_STRATUM,
-            file_size,
-            file_mtime,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(mcp_internal_error)?
@@ -61,12 +59,14 @@ pub(super) async fn handle_analyze_track_audio(
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
         let store = server.cache_store_conn()?;
+        let metadata = std::fs::metadata(&file_path)
+            .map_err(|e| mcp_internal_error(format!("Cannot stat file '{}': {e}", file_path)))?;
         store::set_audio_analysis(
             &store,
             &file_path,
             audio::ANALYZER_STRATUM,
-            file_size,
-            file_mtime,
+            metadata.len() as i64,
+            file_mtime_secs(&metadata),
             audio::STRATUM_SCHEMA_VERSION,
             &features_json,
         )
@@ -91,8 +91,6 @@ pub(super) async fn handle_analyze_track_audio(
                 &store,
                 &file_path,
                 audio::ANALYZER_ESSENTIA,
-                file_size,
-                file_mtime,
                 audio::ESSENTIA_SCHEMA_VERSION,
             )
             .map_err(mcp_internal_error)?
@@ -115,12 +113,14 @@ pub(super) async fn handle_analyze_track_audio(
                     let features_json = serde_json::to_string(&features)
                         .map_err(|e| mcp_internal_error(format!("{e}")))?;
                     let store = server.cache_store_conn()?;
+                    let metadata = std::fs::metadata(&file_path)
+                        .map_err(|e| mcp_internal_error(format!("Cannot stat file: {e}")))?;
                     store::set_audio_analysis(
                         &store,
                         &file_path,
                         audio::ANALYZER_ESSENTIA,
-                        file_size,
-                        file_mtime,
+                        metadata.len() as i64,
+                        file_mtime_secs(&metadata),
                         audio::ESSENTIA_SCHEMA_VERSION,
                         &features_json,
                     )
@@ -197,21 +197,6 @@ async fn analyze_single_track(
         })
     })?;
 
-    let metadata = std::fs::metadata(&file_path).map_err(|e| {
-        serde_json::json!({
-            "track_id": &track_id, "artist": &artist, "title": &title,
-            "analyzer": audio::ANALYZER_STRATUM,
-            "error": format!("Cannot stat file: {e}"),
-        })
-    })?;
-    let file_size = metadata.len() as i64;
-    let file_mtime = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     // Open read-only cache connection for this task
     let cache_conn = store::open_read_only(&store_path).map_err(|e| {
         serde_json::json!({
@@ -227,8 +212,6 @@ async fn analyze_single_track(
             &cache_conn,
             &file_path,
             audio::ANALYZER_STRATUM,
-            file_size,
-            file_mtime,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .ok()
@@ -243,8 +226,6 @@ async fn analyze_single_track(
             &cache_conn,
             &file_path,
             audio::ANALYZER_ESSENTIA,
-            file_size,
-            file_mtime,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
         .ok()
@@ -267,12 +248,14 @@ async fn analyze_single_track(
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
         let val = serde_json::to_value(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
+        let metadata = std::fs::metadata(&file_path)
+            .map_err(|e| format!("Cannot stat file: {e}"))?;
         cache_tx
             .send(CacheWriteMsg::Audio {
                 file_path: file_path.clone(),
                 analyzer: audio::ANALYZER_STRATUM,
-                file_size,
-                file_mtime,
+                file_size: metadata.len() as i64,
+                file_mtime: file_mtime_secs(&metadata),
                 analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
                 features_json,
             })
@@ -308,12 +291,16 @@ async fn analyze_single_track(
                     Ok(v) => v,
                     Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
                 };
+                let metadata = match std::fs::metadata(&file_path_clone) {
+                    Ok(m) => m,
+                    Err(e) => return (None, None, Some(format!("Cannot stat file: {e}"))),
+                };
                 if let Err(e) = cache_tx_clone
                     .send(CacheWriteMsg::Audio {
                         file_path: file_path_clone.clone(),
                         analyzer: audio::ANALYZER_ESSENTIA,
-                        file_size,
-                        file_mtime,
+                        file_size: metadata.len() as i64,
+                        file_mtime: file_mtime_secs(&metadata),
                         analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
                         features_json,
                     })

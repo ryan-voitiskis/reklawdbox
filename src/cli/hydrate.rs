@@ -271,10 +271,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
 
         if want_analysis {
-            let cache_probe = cache_probe_for_path(&track.file_path, true);
+            let cache_key = cache_probe_for_path(&track.file_path, true);
             let (has_stratum, has_essentia) = cache_status_for_track(
                 &store_conn,
-                cache_probe.as_ref(),
+                cache_key.as_deref(),
                 true,
                 essentia_python.is_some(),
             )?;

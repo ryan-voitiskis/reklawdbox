@@ -197,46 +197,30 @@ fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
 
 fn is_cache_fresh(
     cached: Option<&store::CachedAudioAnalysis>,
-    file_size: i64,
-    file_mtime: i64,
     schema_version: &str,
 ) -> bool {
     matches!(
         cached,
-        Some(entry) if entry.file_size == file_size
-            && entry.file_mtime == file_mtime
-            && entry.analysis_version == schema_version
+        Some(entry) if entry.analysis_version == schema_version
     )
 }
 
-fn cache_probe_for_path(file_path: &str, skip_cached: bool) -> Option<(String, i64, i64)> {
+fn cache_probe_for_path(file_path: &str, skip_cached: bool) -> Option<String> {
     if !skip_cached {
         return None;
     }
-
-    match audio::resolve_audio_path(file_path) {
-        Ok(path) => match std::fs::metadata(&path) {
-            Ok(metadata) => Some((path, metadata.len() as i64, file_mtime_unix(&metadata))),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
+    audio::resolve_audio_path(file_path).ok()
 }
 
 fn has_fresh_cache_entry(
     store_conn: &rusqlite::Connection,
-    cache_probe: Option<&(String, i64, i64)>,
+    cache_key: Option<&str>,
     analyzer: &str,
     schema_version: &str,
 ) -> Result<bool, rusqlite::Error> {
-    if let Some((cache_key, file_size, file_mtime)) = cache_probe {
+    if let Some(cache_key) = cache_key {
         let cached = store::get_audio_analysis(store_conn, cache_key, analyzer)?;
-        Ok(is_cache_fresh(
-            cached.as_ref(),
-            *file_size,
-            *file_mtime,
-            schema_version,
-        ))
+        Ok(is_cache_fresh(cached.as_ref(), schema_version))
     } else {
         Ok(false)
     }
@@ -244,14 +228,14 @@ fn has_fresh_cache_entry(
 
 fn cache_status_for_track(
     store_conn: &rusqlite::Connection,
-    cache_probe: Option<&(String, i64, i64)>,
+    cache_key: Option<&str>,
     skip_cached: bool,
     essentia_available: bool,
 ) -> Result<(bool, bool), rusqlite::Error> {
     let has_stratum = if skip_cached {
         has_fresh_cache_entry(
             store_conn,
-            cache_probe,
+            cache_key,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )?
@@ -264,7 +248,7 @@ fn cache_status_for_track(
     } else if skip_cached {
         has_fresh_cache_entry(
             store_conn,
-            cache_probe,
+            cache_key,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )?
@@ -438,43 +422,44 @@ mod tests {
         }
     }
 
-    fn open_temp_store_with_probe() -> (tempfile::TempDir, rusqlite::Connection, (String, i64, i64))
-    {
+    fn open_temp_store_with_probe() -> (tempfile::TempDir, rusqlite::Connection, String, i64, i64) {
         let dir = tempfile::tempdir().expect("temp dir");
 
         let audio_path = dir.path().join("track.wav");
         std::fs::write(&audio_path, b"not-a-real-audio-file").expect("write audio fixture");
 
         let metadata = std::fs::metadata(&audio_path).expect("metadata");
-        let probe = (
-            audio_path.to_string_lossy().to_string(),
-            metadata.len() as i64,
-            file_mtime_unix(&metadata),
-        );
+        let cache_key = audio_path.to_string_lossy().to_string();
+        let file_size = metadata.len() as i64;
+        let file_mtime = file_mtime_unix(&metadata);
 
         let store_path = dir.path().join("cache.sqlite3");
         let conn = store::open(store_path.to_str().expect("utf-8 path")).expect("open store");
-        (dir, conn, probe)
+        (dir, conn, cache_key, file_size, file_mtime)
     }
 
     #[test]
-    fn cache_is_fresh_only_when_size_mtime_and_version_match() {
+    fn cache_is_fresh_only_when_version_matches() {
         let entry = cached(123, 456);
         let v = audio::STRATUM_SCHEMA_VERSION;
-        assert!(is_cache_fresh(Some(&entry), 123, 456, v));
-        assert!(!is_cache_fresh(Some(&entry), 999, 456, v));
-        assert!(!is_cache_fresh(Some(&entry), 123, 999, v));
-        assert!(!is_cache_fresh(Some(&entry), 123, 456, "outdated"));
+        assert!(is_cache_fresh(Some(&entry), v));
+        assert!(!is_cache_fresh(Some(&entry), "outdated"));
+    }
+
+    #[test]
+    fn cache_is_fresh_regardless_of_file_metadata_changes() {
+        // file_size/file_mtime in the cache entry don't affect freshness —
+        // only analysis_version matters. This prevents spurious re-analysis
+        // when Rekordbox or other tools write tags to audio files.
+        let entry = cached(100, 1000);
+        assert!(is_cache_fresh(Some(&entry), audio::STRATUM_SCHEMA_VERSION));
+        let entry2 = cached(999, 9999);
+        assert!(is_cache_fresh(Some(&entry2), audio::STRATUM_SCHEMA_VERSION));
     }
 
     #[test]
     fn missing_cache_is_not_fresh() {
-        assert!(!is_cache_fresh(
-            None,
-            123,
-            456,
-            audio::STRATUM_SCHEMA_VERSION
-        ));
+        assert!(!is_cache_fresh(None, audio::STRATUM_SCHEMA_VERSION));
     }
 
     #[test]
@@ -488,8 +473,7 @@ mod tests {
 
     #[test]
     fn cache_status_skips_track_when_both_fresh_entries_exist() {
-        let (_dir, conn, probe) = open_temp_store_with_probe();
-        let (cache_key, file_size, file_mtime) = probe.clone();
+        let (_dir, conn, cache_key, file_size, file_mtime) = open_temp_store_with_probe();
 
         store::set_audio_analysis(
             &conn,
@@ -513,23 +497,23 @@ mod tests {
         .expect("set essentia");
 
         let (has_stratum, has_essentia) =
-            cache_status_for_track(&conn, Some(&probe), true, true).expect("cache status");
+            cache_status_for_track(&conn, Some(cache_key.as_str()), true, true)
+                .expect("cache status");
         assert!(has_stratum);
         assert!(has_essentia);
     }
 
     #[test]
-    fn cache_status_only_skips_fresh_analyzers() {
-        let (_dir, conn, probe) = open_temp_store_with_probe();
-        let (cache_key, file_size, file_mtime) = probe.clone();
+    fn cache_status_detects_outdated_schema_version() {
+        let (_dir, conn, cache_key, file_size, file_mtime) = open_temp_store_with_probe();
 
         store::set_audio_analysis(
             &conn,
             &cache_key,
             "stratum-dsp",
-            file_size + 1,
+            file_size,
             file_mtime,
-            audio::STRATUM_SCHEMA_VERSION,
+            "outdated",
             "{}",
         )
         .expect("set stale stratum");
@@ -545,8 +529,9 @@ mod tests {
         .expect("set fresh essentia");
 
         let (has_stratum, has_essentia) =
-            cache_status_for_track(&conn, Some(&probe), true, true).expect("cache status");
-        assert!(!has_stratum, "stale stratum cache must be re-analyzed");
+            cache_status_for_track(&conn, Some(cache_key.as_str()), true, true)
+                .expect("cache status");
+        assert!(!has_stratum, "outdated stratum cache must be re-analyzed");
         assert!(has_essentia, "fresh essentia cache should still be skipped");
     }
 
