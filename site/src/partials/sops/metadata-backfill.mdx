@@ -1,7 +1,7 @@
 ## Constraints
 
-- **Labels are enrichment-dependent.** Labels come from Discogs enrichment cache, with MusicBrainz and Bandcamp as fallbacks. Tracks without cached enrichment from any source are skipped, not fetched (unless `auto_enrich=true`).
-- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates.
+- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, and Bandcamp enrichment caches only — it does not check Beatport, file tags, or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 3).
+- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 6).
 - **No auto-tagging without review.** The backfill tools stage non-conflicting values automatically, but conflicts require human approval before staging.
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
@@ -31,11 +31,11 @@ enrich_tracks(has_label=false, skip_cached=true, providers=["discogs"], max_trac
 enrich_tracks(has_label=false, skip_cached=true, providers=["bandcamp"], max_tracks=50)
 ```
 
-3. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 5) or via `auto_enrich`.
+3. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 6) or via `auto_enrich`.
 
 Repeat batches until providers reach 100% searched. Report progress between batches.
 
-**Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 3). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
+**Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 4). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
 
 ## Steps
 
@@ -128,7 +128,35 @@ Group D: Genuine disagreements (N tracks) — review individually
 
 Stage approved changes via `update_tracks`.
 
-### 3. Backfill years
+### 3. Research remaining label gaps
+
+After steps 1–2, tracks may still lack labels. The automated backfill typically resolves only a fraction of unlabeled tracks — it checks three enrichment providers and nothing else. This step fills the rest using Beatport data, web research, and model knowledge.
+
+#### 3a. Extract labels from Beatport enrichment
+
+Beatport enrichment cache entries often contain label data that `backfill_labels` doesn't use. Resolve remaining unlabeled tracks and inspect their Beatport enrichment for label fields:
+
+```
+resolve_tracks_data(has_label=false, max_tracks=50)
+```
+
+For tracks where Beatport enrichment includes a label, present findings for approval and stage via `update_tracks`. Work in batches of 50.
+
+#### 3b. Web research for remaining gaps
+
+For tracks still unlabeled after all cached enrichment is checked:
+
+1. **Group by artist** for efficient lookup — tracks from the same artist often share a label.
+2. **Prioritize by artist frequency** — artists with many unlabeled tracks first, for maximum coverage per lookup.
+3. **Research labels** using web search, store lookups (`lookup_beatport`, `lookup_discogs`, `lookup_bandcamp`), label catalogs, and model knowledge.
+4. **Present findings** grouped by confidence:
+   - **High confidence** (exact release found on store/catalog): present for bulk approval.
+   - **Uncertain** (multiple candidates or ambiguous match): present individually with source context.
+5. **Stage approved labels** via `update_tracks`.
+
+Skip tracks where no label can be determined — self-released tracks, private edits, or truly obscure releases may have no public label.
+
+### 4. Backfill years
 
 ```
 backfill_years()
@@ -157,7 +185,7 @@ Note: Beatport date extraction requires enrichment cache entries created after t
 
 Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source."
 
-### 4. Resolve year conflicts
+### 5. Resolve year conflicts
 
 Deduplicate conflicts before presenting — a track must appear in exactly one group.
 
@@ -194,13 +222,13 @@ Group B: Small discrepancies (N tracks) — recommend: keep current
 
 Stage approved changes via `update_tracks`.
 
-### 5. Research remaining year gaps
+### 6. Research remaining year gaps
 
 After `backfill_years`, some tracks may still have year=0 with no source data. The tool reports these as `remaining_year_zero` with `remaining_uncached_providers`.
 
-**If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to step 5c.
+**If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to step 6c.
 
-#### 5a. Batch enrich remaining year-zero tracks
+#### 6a. Batch enrich remaining year-zero tracks
 
 Use `enrich_tracks` with the `year_zero` filter to batch-enrich remaining tracks via Bandcamp:
 
@@ -210,7 +238,7 @@ enrich_tracks(year_zero=true, skip_cached=true, providers=["bandcamp"], max_trac
 
 Repeat until all year-zero tracks are covered. Then **re-run `backfill_years()`** to pick up the new data.
 
-#### 5b. Re-run backfill
+#### 6b. Re-run backfill
 
 After enrichment, re-run the backfill to incorporate newly cached data:
 
@@ -220,7 +248,7 @@ backfill_years()
 
 This picks up years from the fresh Bandcamp/MusicBrainz cache entries.
 
-#### 5c. Web research for remaining gaps
+#### 6c. Web research for remaining gaps
 
 For tracks still without years after all enrichment sources are exhausted:
 
@@ -233,7 +261,7 @@ For tracks still without years after all enrichment sources are exhausted:
 
 Skip tracks where no release information can be found — some self-released or private tracks have no public date.
 
-### 6. Export
+### 7. Export
 
 ```
 preview_changes()
