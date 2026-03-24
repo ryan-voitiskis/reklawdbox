@@ -114,6 +114,7 @@ struct BackfillLabelsScanResult {
     no_discogs: usize,
     no_musicbrainz: usize,
     no_bandcamp: usize,
+    no_beatport: usize,
     to_stage: Vec<TrackChange>,
     /// Tracks that had no Bandcamp cache and got no label from any source.
     uncached_bandcamp: Vec<(String, String, String, String)>, // (norm_artist, norm_title, raw_artist, raw_title)
@@ -142,8 +143,10 @@ fn scan_labels(
             label_from_cache(store_conn, "musicbrainz", &norm_artist, &norm_title, None);
         let (has_bc, bc_label) =
             label_from_cache(store_conn, "bandcamp", &norm_artist, &norm_title, None);
+        let (has_bp, bp_label) =
+            label_from_cache(store_conn, "beatport", &norm_artist, &norm_title, None);
 
-        let enrichment_label = discogs_label.or(mb_label).or(bc_label);
+        let enrichment_label = discogs_label.or(mb_label).or(bc_label).or(bp_label);
 
         let Some(enrich_label) = enrichment_label else {
             result.no_enrichment += 1;
@@ -161,6 +164,9 @@ fn scan_labels(
                     track.artist.clone(),
                     track.title.clone(),
                 ));
+            }
+            if !has_bp {
+                result.no_beatport += 1;
             }
             continue;
         };
@@ -274,6 +280,7 @@ pub(super) async fn handle_backfill_labels(
                 "no_discogs": scan.no_discogs,
                 "no_musicbrainz": scan.no_musicbrainz,
                 "no_bandcamp": scan.no_bandcamp,
+                "no_beatport": scan.no_beatport,
             },
         },
         "staged": staged_count,

@@ -1,6 +1,6 @@
 ## Constraints
 
-- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, and Bandcamp enrichment caches only — it does not check Beatport, file tags, or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 3).
+- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, Bandcamp, and Beatport enrichment caches — it does not check file tags or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 3).
 - **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 6).
 - **No auto-tagging without review (labels).** The backfill tools stage non-conflicting values automatically. Label conflicts require human approval before staging. Year conflicts are resolved automatically using the lowest year (see "Lowest year wins").
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
@@ -34,7 +34,15 @@ enrich_tracks(has_label=false, skip_cached=true, providers=["discogs"], max_trac
 enrich_tracks(has_label=false, skip_cached=true, providers=["bandcamp"], max_tracks=50)
 ```
 
-3. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 6) or via `auto_enrich`.
+3. **Beatport** (label data extracted from search results since v0.15; older cache entries lack labels):
+
+```
+enrich_tracks(has_label=false, skip_cached=true, providers=["beatport"], max_tracks=50)
+```
+
+If Beatport `searched_percent` is 100% but labels are still missing, existing cache entries predate label extraction. Re-enrich with `force_refresh=true` to populate them.
+
+4. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 6) or via `auto_enrich`.
 
 Repeat batches until providers reach 100% searched. Report progress between batches.
 
@@ -54,7 +62,7 @@ Or, to automatically fetch Bandcamp data for uncached tracks:
 backfill_labels(auto_enrich=true)
 ```
 
-The tool scans the entire collection (excluding samples), looks up each track's Discogs enrichment, and:
+The tool scans the entire collection (excluding samples), looks up each track's enrichment across all four providers (Discogs, MusicBrainz, Bandcamp, Beatport), and:
 - **Fills** empty labels from enrichment (auto-staged)
 - **Skips** tracks where current label matches enrichment
 - **Reports conflicts** where current label differs from enrichment (not staged)
@@ -133,19 +141,7 @@ Stage approved changes via `update_tracks`.
 
 ### 3. Research remaining label gaps
 
-After steps 1–2, tracks may still lack labels. The automated backfill typically resolves only a fraction of unlabeled tracks — it checks three enrichment providers and nothing else. This step fills the rest using Beatport data, web research, and model knowledge.
-
-#### 3a. Extract labels from Beatport enrichment
-
-Beatport enrichment cache entries often contain label data that `backfill_labels` doesn't use. Resolve remaining unlabeled tracks and inspect their Beatport enrichment for label fields:
-
-```
-resolve_tracks_data(has_label=false, max_tracks=50)
-```
-
-For tracks where Beatport enrichment includes a label, present findings for approval and stage via `update_tracks`. Work in batches of 50.
-
-#### 3b. Web research for remaining gaps
+After steps 1–2, tracks may still lack labels. The automated backfill checks four enrichment providers (Discogs, MusicBrainz, Bandcamp, Beatport). This step fills the rest using web research and model knowledge.
 
 For tracks still unlabeled after all cached enrichment is checked:
 

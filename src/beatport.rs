@@ -43,6 +43,7 @@ pub struct BeatportResult {
     pub track_name: String,
     pub artists: Vec<String>,
     pub release_date: Option<String>,
+    pub label: Option<String>,
 }
 
 async fn wait_for_rate_limit() {
@@ -236,6 +237,13 @@ fn parse_beatport_html(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let label = track
+                    .get("label")
+                    .and_then(|v| v.get("label_name"))
+                    .and_then(|v| v.as_str())
+                    .filter(|l| !l.is_empty())
+                    .map(|s| s.to_string());
+
                 return Ok(Some(BeatportResult {
                     genre,
                     bpm,
@@ -243,6 +251,7 @@ fn parse_beatport_html(
                     track_name: track_name.to_string(),
                     artists,
                     release_date,
+                    label,
                 }));
             }
         }
@@ -360,6 +369,28 @@ mod tests {
         assert_eq!(result.track_name, "Archangel");
         assert_eq!(result.artists, vec!["Burial".to_string()]);
         assert_eq!(result.release_date, None);
+        assert_eq!(result.label, None);
+    }
+
+    #[test]
+    fn test_parse_extracts_label() {
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 430213,
+                "track_name": "Archangel",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 135,
+                "key_name": "C Minor",
+                "genre": [{"genre_name": "Electronica"}],
+                "label": {"label_id": 4553, "label_name": "Hyperdub"}
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match");
+
+        assert_eq!(result.label, Some("Hyperdub".to_string()));
     }
 
     #[test]

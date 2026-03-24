@@ -2358,6 +2358,10 @@ async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
             .is_some(),
         "individual beatport cache should have string 'genre'"
     );
+    assert!(
+        individual_json.get("label").is_some(),
+        "individual beatport cache should include 'label' field"
+    );
     let individual_fields: HashSet<String> = individual_json
         .as_object()
         .expect("individual beatport cache should be object")
