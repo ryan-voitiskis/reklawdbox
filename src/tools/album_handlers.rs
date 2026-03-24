@@ -239,6 +239,8 @@ fn scan_albums(
         if let Some(album) = album_from_file_tags(&track.file_path) {
             if !is_noise_album(&album, &track.title, &track.artist) {
                 source = Some(("file_tags", album));
+            } else {
+                r.skipped_noise += 1;
             }
         }
 
@@ -246,6 +248,8 @@ fn scan_albums(
             if let Some(album) = album_from_folder_path(&track.file_path) {
                 if !is_noise_album(&album, &track.title, &track.artist) {
                     source = Some(("folder_path", album));
+                } else {
+                    r.skipped_noise += 1;
                 }
             }
         }
