@@ -15,6 +15,7 @@ scoring, and greedy set sequencing with energy-curve shaping.
 - Enrichment I/O: `reqwest` + `rustls`; Discogs via broker API; Beatport via HTML/JSON extraction.
 - Audio analysis: `symphonia` decode + `stratum-dsp`; optional Essentia via Python subprocess.
 - Companion service: Discogs broker in TypeScript on Cloudflare Workers + D1.
+- SOPs: `site/src/partials/sops/*.mdx` are `include_str!`'d into the binary via `help_handler.rs`. SOP changes require a release to take effect.
 
 ## MCP Development Loop
 

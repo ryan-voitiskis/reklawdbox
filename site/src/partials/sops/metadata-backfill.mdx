@@ -2,10 +2,12 @@
 
 - **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, and Bandcamp enrichment caches only — it does not check Beatport, file tags, or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 3).
 - **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 6).
-- **No auto-tagging without review.** The backfill tools stage non-conflicting values automatically, but conflicts require human approval before staging.
+- **No auto-tagging without review (labels).** The backfill tools stage non-conflicting values automatically. Label conflicts require human approval before staging. Year conflicts are resolved automatically using the lowest year (see "Lowest year wins").
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
 - **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Rekordbox often fails to import year tags from WAV files, so year=0 does not mean the file lacks a year tag — check before assuming it's missing.
+- **Lowest year wins.** Year is used as a signal for genre classification — it represents the track's production era, not its release or reissue date. When a conflict arises between current year and enrichment year, always use the lowest (earliest) year unless it is obviously wrong (e.g., a nonsensical date like 1900 for a modern electronic track). Do not present year conflicts for interactive review — resolve them automatically. Web research for year gaps should search for *release dates* (not production dates specifically), since release date is the best publicly available proxy.
+- **Year gaps are always researched.** Tracks left with year=0 after all automated sources are exhausted must be researched by the agent via web search, store lookups, and model knowledge. The tools handle the bulk; the agent fills every remaining gap it can.
 
 ## Prerequisites
 
@@ -187,44 +189,17 @@ Report the summary: "Year backfill complete: N years staged (N file tags, N fold
 
 ### 5. Resolve year conflicts
 
-Deduplicate conflicts before presenting — a track must appear in exactly one group.
+Year conflicts are resolved automatically — do not present them for interactive review.
 
-Group year conflicts by pattern and present each group as a table with columns: **#**, **Artist — Title**, **Current**, **Enrichment**, **Rec** (recommendation).
+For each conflict, stage the **lowest (earliest) year** from either the current value or the enrichment value via `update_tracks`. The earliest year best approximates the track's production era, which is the signal used for genre classification.
 
-#### Group A: Original vs reissue
+**Exception — obviously wrong years:** If the lowest year is clearly nonsensical (e.g., 1900 for a modern electronic track, or a year that predates the genre by decades), flag it to the user instead of auto-staging. This should be rare.
 
-When the current year and enrichment year differ, it's often because one is the original release and the other is a reissue. Recommend the earlier year — it reflects the track's era more accurately for genre classification and set building.
-
-```
-Group A: Original vs reissue (N tracks) — recommend: use earlier year
-
-| #  | Artist — Title              | Current | Enrichment | Rec       |
-|----|-----------------------------|---------|------------|-----------|
-| 1  | Chez Damier — Can You Feel It   | 2020    | 1993       | use 1993  |
-| 2  | Moodymann — Shades of Jae       | 1995    | 2018       | keep 1995 |
-```
-
-**→ "Approve all Group A (use earlier year), or specify numbers to change."**
-
-#### Group B: Small discrepancies
-
-When years differ by 1 (e.g. late-year release listed as following year), recommend keeping the current year.
-
-```
-Group B: Small discrepancies (N tracks) — recommend: keep current
-
-| #  | Artist — Title              | Current | Enrichment | Rec          |
-|----|-----------------------------|---------|------------|--------------|
-| 3  | Karenn — Grapefruit Regret  | 2019    | 2020       | keep current |
-```
-
-**→ "Skip all Group B, or specify numbers to change."**
-
-Stage approved changes via `update_tracks`.
+Report the summary: "Year conflicts resolved: N auto-staged (used earliest year), N already had the earliest year, N flagged for review."
 
 ### 6. Research remaining year gaps
 
-After `backfill_years`, some tracks may still have year=0 with no source data. The tool reports these as `remaining_year_zero` with `remaining_uncached_providers`.
+After `backfill_years`, some tracks will still have year=0 with no source data. The tool reports these as `remaining_year_zero`. The agent must research every one of them — this is not optional.
 
 **If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to step 6c.
 
@@ -253,13 +228,13 @@ This picks up years from the fresh Bandcamp/MusicBrainz cache entries.
 For tracks still without years after all enrichment sources are exhausted:
 
 1. **Group by artist** for efficient lookup.
-2. **Search for release dates** — use web search, Discogs links, or label catalogs to find the original release year.
+2. **Search for release dates** — use web search, Discogs links, store lookups (`lookup_beatport`, `lookup_discogs`, `lookup_bandcamp`), label catalogs, and model knowledge to find the original release year.
 3. **Present findings** grouped by confidence:
    - **High confidence** (exact release found): present for bulk approval.
    - **Uncertain** (multiple candidates or approximate): present individually with context.
 4. **Stage approved years** via `update_tracks`.
 
-Skip tracks where no release information can be found — some self-released or private tracks have no public date.
+Only mark a track as unresolvable after genuine research effort — anonymous private edits or truly untraceable tracks exist, but they are the exception. Exhaust web search, store lookups, and artist discographies before giving up on any track.
 
 ### 7. Export
 
