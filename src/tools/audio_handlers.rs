@@ -248,8 +248,8 @@ async fn analyze_single_track(
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
         let val = serde_json::to_value(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
-        let metadata = std::fs::metadata(&file_path)
-            .map_err(|e| format!("Cannot stat file: {e}"))?;
+        let metadata =
+            std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
         cache_tx
             .send(CacheWriteMsg::Audio {
                 file_path: file_path.clone(),

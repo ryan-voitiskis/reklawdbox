@@ -77,9 +77,7 @@ fn album_from_folder_path(file_path: &str) -> Option<String> {
         };
         let paren_content = &current[paren_open + 1..current.len() - 1];
         let lower = paren_content.to_lowercase();
-        let is_qualifier = QUALIFIER_WORDS
-            .iter()
-            .any(|word| lower.contains(word));
+        let is_qualifier = QUALIFIER_WORDS.iter().any(|word| lower.contains(word));
         if is_qualifier {
             name = current[..paren_open].trim_end().to_string();
         } else {
@@ -460,10 +458,7 @@ mod tests {
 
     #[test]
     fn album_from_folder_no_year() {
-        assert_eq!(
-            album_from_folder_path("/music/play/play1/track.wav"),
-            None,
-        );
+        assert_eq!(album_from_folder_path("/music/play/play1/track.wav"), None,);
     }
 
     #[test]

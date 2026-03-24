@@ -195,10 +195,7 @@ fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-fn is_cache_fresh(
-    cached: Option<&store::CachedAudioAnalysis>,
-    schema_version: &str,
-) -> bool {
+fn is_cache_fresh(cached: Option<&store::CachedAudioAnalysis>, schema_version: &str) -> bool {
     matches!(
         cached,
         Some(entry) if entry.analysis_version == schema_version
