@@ -22,7 +22,7 @@ const SOP_CHAPTER_SET_PLANNING: &str =
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     #[schemars(
-        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'pool', 'chapter', 'audit', 'import', 'metadata', 'label', 'year', 'health'. Omit for the full menu."
+        description = "Optional topic filter: 'genre', 'genre audit', 'set', 'pool', 'chapter', 'audit', 'import', 'metadata', 'label', 'year', 'album', 'health'. Omit for the full menu."
     )]
     pub topic: Option<String>,
 }
@@ -121,6 +121,8 @@ const WORKFLOWS: &[Workflow] = &[
         keywords: &[
             "label",
             "labels",
+            "album",
+            "albums",
             "backfill",
             "publisher",
             "year",
@@ -182,7 +184,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "sop": w.sop,
             }),
             None => serde_json::json!({
-                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, pool, chapter, audit, metadata, label, year, health."),
+                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, pool, chapter, audit, metadata, label, year, album, health."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
             }),
         }

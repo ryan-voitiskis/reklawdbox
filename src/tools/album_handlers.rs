@@ -122,7 +122,15 @@ fn album_from_cache(
     norm_album: Option<&str>,
 ) -> (bool, Option<String>) {
     let cache = store::get_enrichment(store_conn, provider, norm_artist, norm_title, norm_album)
-        .unwrap_or(None);
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                provider,
+                artist = norm_artist,
+                title = norm_title,
+                "album cache lookup failed: {e}"
+            );
+            None
+        });
     let has_cache = cache.is_some();
     let album = classify_handler::parse_response_json(cache.as_ref())
         .as_ref()
@@ -230,8 +238,6 @@ fn scan_albums(
 
         let norm_artist = normalize::normalize_for_matching(&track.artist);
         let norm_title = normalize::normalize_for_matching(&track.title);
-        let norm_album = normalize::normalize_for_matching(&track.album);
-        let norm_album_opt = (!norm_album.is_empty()).then_some(norm_album);
 
         // Source cascade: file tags → folder path → bandcamp → discogs
         let mut source = None;
@@ -271,7 +277,7 @@ fn scan_albums(
                     "discogs",
                     &norm_artist,
                     &norm_title,
-                    norm_album_opt.as_deref(),
+                    None, // album is always empty here (non-empty albums already continued above)
                 );
                 if let Some(album) = dc_album {
                     if !is_noise_album(&album, &track.title, &track.artist) {
