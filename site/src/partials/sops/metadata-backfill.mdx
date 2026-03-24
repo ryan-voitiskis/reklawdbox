@@ -8,6 +8,7 @@
 - **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Rekordbox often fails to import year tags from WAV files, so year=0 does not mean the file lacks a year tag — check before assuming it's missing.
 - **Lowest year wins.** Year is used as a signal for genre classification — it represents the track's production era, not its release or reissue date. When a conflict arises between current year and enrichment year, always use the lowest (earliest) year unless it is obviously wrong (e.g., a nonsensical date like 1900 for a modern electronic track). Do not present year conflicts for interactive review — resolve them automatically. Web research for year gaps should search for *release dates* (not production dates specifically), since release date is the best publicly available proxy.
 - **Year gaps are always researched.** Tracks left with year=0 after all automated sources are exhausted must be researched by the agent via web search, store lookups, and model knowledge. The tools handle the bulk; the agent fills every remaining gap it can.
+- **Albums are best-effort.** `backfill_albums` fills empty albums from file tags, folder paths, and enrichment caches. Unlike labels and years, album gaps do not require exhaustive research — fill what the tools and a light web search can find. Empty album is valid for singles, loose tracks, and DJ edits. Album names where the value equals the track title or artist name are noise and are skipped automatically.
 
 ## Prerequisites
 
@@ -236,7 +237,34 @@ For tracks still without years after all enrichment sources are exhausted:
 
 Only mark a track as unresolvable after genuine research effort — anonymous private edits or truly untraceable tracks exist, but they are the exception. Exhaust web search, store lookups, and artist discographies before giving up on any track.
 
-### 7. Export
+### 7. Backfill albums
+
+```
+backfill_albums()
+```
+
+Or, to automatically fetch Bandcamp data for uncached tracks:
+
+```
+backfill_albums(auto_enrich=true)
+```
+
+The tool scans tracks with empty album and tries four sources in order:
+
+1. **File tags** — reads album from the audio file's metadata.
+2. **Folder path** — extracts album name from the parent directory if it has a `(YYYY)` suffix (e.g. `Album Name (2019)/`). Edition qualifiers like `(Deluxe Edition)` and `(Original Motion Picture Soundtrack)` are stripped automatically.
+3. **Bandcamp enrichment** — uses the `album` field from cached Bandcamp data.
+4. **Discogs enrichment** — uses the `title` field (release name) from cached Discogs data.
+
+Noise is filtered automatically: albums that match the track title or artist name are skipped.
+
+No conflict resolution is needed — the tool only fills empty albums.
+
+Report the summary: "Album backfill complete: N albums staged (N file tags, N folder paths, N Bandcamp, N Discogs), N already set, N without any source."
+
+The agent may optionally web-research remaining gaps, but this is not required. Empty album is valid for singles, loose tracks, and DJ edits.
+
+### 8. Export
 
 ```
 preview_changes()

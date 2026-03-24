@@ -163,6 +163,7 @@ fn scan_years(
         color: None,
         label: None,
         year: Some(year),
+        album: None,
     };
 
     for track in tracks {

@@ -141,6 +141,7 @@ pub(super) fn handle_update_tracks(
             }),
             label: c.label,
             year: c.year,
+            album: c.album,
         })
         .collect();
 
@@ -155,6 +156,7 @@ pub(super) fn handle_update_tracks(
                 "color": c.color,
                 "label": c.label,
                 "year": c.year,
+                "album": c.album,
             })
         })
         .collect();

@@ -127,11 +127,12 @@ const WORKFLOWS: &[Workflow] = &[
             "years",
             "metadata",
         ],
-        summary: "Auto-fill empty labels and years from Discogs enrichment, then resolve conflicts.",
+        summary: "Auto-fill empty labels, years, and albums from enrichment and file metadata.",
         key_tools: &[
             "cache_coverage",
             "backfill_labels",
             "backfill_years",
+            "backfill_albums",
             "update_tracks",
         ],
         sop: SOP_METADATA_BACKFILL,

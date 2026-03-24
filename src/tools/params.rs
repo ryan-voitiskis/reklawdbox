@@ -139,6 +139,8 @@ pub struct TrackChangeInput {
     pub label: Option<String>,
     #[schemars(description = "Release year")]
     pub year: Option<i32>,
+    #[schemars(description = "Album name")]
+    pub album: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

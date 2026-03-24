@@ -175,6 +175,7 @@ fn scan_labels(
                 color: None,
                 label: Some(enrich_label.clone()),
                 year: None,
+                album: None,
             });
         } else if track.label.eq_ignore_ascii_case(&enrich_label) {
             result.already_labeled += 1;

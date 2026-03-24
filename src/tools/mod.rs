@@ -6,6 +6,7 @@ use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 use rusqlite::Connection;
 
+mod album_handlers;
 mod analysis;
 mod audio_handlers;
 mod audio_scan;
@@ -34,6 +35,7 @@ mod weight_preset_handlers;
 mod weight_resolve;
 mod year_handlers;
 
+use album_handlers::*;
 use analysis::*;
 use audio_handlers::*;
 use audio_scan::*;
@@ -262,7 +264,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Stage changes to track metadata (genre, comments, rating, color, label, year). Changes are held in memory until write_xml is called."
+        description = "Stage changes to track metadata (genre, comments, rating, color, label, year, album). Changes are held in memory until write_xml is called."
     )]
     async fn update_tracks(
         &self,
@@ -325,6 +327,16 @@ impl ReklawdboxServer {
         params: Parameters<BackfillYearsParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_backfill_years(self, params.0).await
+    }
+
+    #[tool(
+        description = "Auto-fill empty album names from file tags, folder paths, and enrichment cache (Bandcamp/Discogs). Only fills tracks with no album set. Skips noise (album = track title or artist name). Set auto_enrich=true to fetch Bandcamp data for uncached tracks first. Use preview_changes then write_xml to export."
+    )]
+    async fn backfill_albums(
+        &self,
+        params: Parameters<BackfillAlbumsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_backfill_albums(self, params.0).await
     }
 
     #[tool(
