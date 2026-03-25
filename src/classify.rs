@@ -339,13 +339,8 @@ fn check_audio_vetoes(
         ));
     }
 
-    // fast + danceability > 1.0 → Bass family (only if enrichment agrees or is absent)
-    if has_flag(profile, CharFlag::Fast)
-        && evidence
-            .audio
-            .as_ref()
-            .is_some_and(|a| a.danceability.unwrap_or(0.0) > 1.0)
-    {
+    // fast + at least low-energy → Bass family (only if enrichment agrees or is absent)
+    if has_flag(profile, CharFlag::Fast) && profile.bucket != EnergyBucket::NonDancefloor {
         let has_enrichment =
             !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
         let enrichment_supports_bass = evidence
@@ -720,10 +715,13 @@ fn find_consensus(
             ));
             flags.push("bpm-override".into());
             final_genre = alt_genre;
-            // Downgrade confidence if it was High
-            if confidence == ClassificationConfidence::High {
-                confidence = ClassificationConfidence::Medium;
-            }
+            // Downgrade confidence by one level — the runner-up was elevated by BPM
+            // elimination, not by evidence weight
+            confidence = match confidence {
+                ClassificationConfidence::High => ClassificationConfidence::Medium,
+                ClassificationConfidence::Medium => ClassificationConfidence::Low,
+                other => other,
+            };
         }
     }
 
@@ -816,7 +814,10 @@ fn resolve_same_family_specificity(
         } else {
             evidence.push(format!(
                 "depth: {} (depth {}) vs {} (depth {}), no strong audio signal",
-                deeper, top_depth, shallower, second_depth
+                deeper,
+                genre::genre_depth(deeper),
+                shallower,
+                genre::genre_depth(shallower),
             ));
             top
         }
@@ -1005,21 +1006,70 @@ fn audio_only_inference(
         }
     }
 
-    // D.3: Spectral centroid refinement
-    if let Some(centroid) = sc {
-        if candidates.len() > 1 {
-            let centroid_hint = if centroid < 600.0 {
-                "very-low centroid → Deep/Dub Techno"
-            } else if centroid < 1200.0 {
-                "low centroid → Deep House/Minimal"
-            } else if centroid < 2500.0 {
-                "mid centroid → House/Techno"
-            } else if centroid < 4000.0 {
-                "mid-high centroid → Tech House/Trance"
-            } else {
-                "high centroid → Hard Techno"
-            };
-            ev.push(format!("D.3: {}", centroid_hint));
+    // D.3: Spectral centroid refinement — reorder candidates by tonal character.
+    // Preference lists are aesthetic/provisional — replace with empirically derived
+    // rankings once issue #19 produces real classification data by centroid range.
+    if let Some(centroid) = sc
+        && candidates.len() > 1
+    {
+        let first_before = candidates[0];
+        let (centroid_hint, reordered) = if centroid < 1200.0 {
+            // Dark/warm — prefer deeper, darker genres
+            let preferred: &[&str] = &[
+                "Downtempo",
+                "Ambient",
+                "Ambient Techno",
+                "Deep House",
+                "Minimal",
+                "Techno",
+                "Jungle",
+                "Trance",
+                "Garage",
+                "IDM",
+                "Experimental",
+            ];
+            candidates
+                .sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
+            (
+                if centroid < 600.0 {
+                    "very-low centroid"
+                } else {
+                    "low centroid"
+                },
+                candidates[0] != first_before,
+            )
+        } else if centroid >= 2500.0 {
+            // Bright/aggressive — prefer energetic, brighter genres
+            let preferred: &[&str] = &[
+                "Hard Techno",
+                "Breakbeat",
+                "Tech House",
+                "Drum & Bass",
+                "House",
+                "Electro",
+            ];
+            candidates
+                .sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
+            (
+                if centroid >= 4000.0 {
+                    "high centroid"
+                } else {
+                    "mid-high centroid"
+                },
+                candidates[0] != first_before,
+            )
+        } else {
+            // Mid centroid (1200–2500): D.2 order is appropriate
+            ("mid centroid", false)
+        };
+
+        if reordered {
+            ev.push(format!(
+                "D.3: {} → {} over {}",
+                centroid_hint, candidates[0], first_before
+            ));
+        } else {
+            ev.push(format!("D.3: {} (confirms D.2 order)", centroid_hint));
         }
     }
 

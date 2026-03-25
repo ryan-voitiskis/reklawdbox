@@ -54,24 +54,43 @@ pub(super) fn handle_classify_tracks(
         .map(|o| (o.from.trim().to_ascii_lowercase(), o.to))
         .collect();
 
-    let results = classify_batch(server, &tracks, &overrides)?;
+    // Validate override targets against the taxonomy
+    let invalid_targets: Vec<&str> = overrides
+        .iter()
+        .filter(|(_, to)| genre::canonical_genre_name(to).is_none())
+        .map(|(_, to)| to.as_str())
+        .collect();
+    if !invalid_targets.is_empty() {
+        return Err(mcp_internal_error(format!(
+            "Invalid genre override target(s): {}. Must be canonical genre names (see get_genre_taxonomy).",
+            invalid_targets.join(", ")
+        )));
+    }
+
+    let (results, cache_errors) = classify_batch(server, &tracks, &overrides)?;
 
     let (high, medium, low, insufficient) = count_by_confidence(&results);
     let (suggest, conflict, confirm, manual) = count_by_action(&results);
 
+    let mut summary = serde_json::json!({
+        "total": results.len(),
+        "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
+        "by_action": { "suggest": suggest, "conflict": conflict, "confirm": confirm, "manual": manual },
+    });
+    if cache_errors > 0 {
+        summary["cache_read_errors"] = cache_errors.into();
+    }
+
     let output = serde_json::json!({
-        "summary": {
-            "total": results.len(),
-            "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
-            "by_action": { "suggest": suggest, "conflict": conflict, "confirm": confirm, "manual": manual },
-        },
+        "summary": summary,
         "results": results.iter()
             .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
             .collect::<Vec<_>>(),
         "needs_review": results.iter()
-            .filter(|r| matches!(r.confidence,
-                ClassificationConfidence::Low | ClassificationConfidence::Insufficient
-            ))
+            .filter(|r| !matches!(r.action, ClassificationAction::Confirm)
+                && matches!(r.confidence,
+                    ClassificationConfidence::Low | ClassificationConfidence::Insufficient
+                ))
             .collect::<Vec<_>>(),
     });
 
@@ -110,7 +129,7 @@ pub(super) fn handle_audit_genres(
     };
 
     let include_confirmed = params.include_confirmed.unwrap_or(false);
-    let results = classify_batch(server, &tracks, &[])?;
+    let (results, cache_errors) = classify_batch(server, &tracks, &[])?;
 
     // For audit, exclude confirmed tracks (unless include_confirmed)
     let visible: Vec<&ClassificationResult> = results
@@ -129,14 +148,19 @@ pub(super) fn handle_audit_genres(
 
     let (high, medium, low, insufficient) = count_by_confidence(&results);
 
+    let mut summary = serde_json::json!({
+        "total_audited": results.len(),
+        "confirmed": confirmed_count,
+        "conflicts": conflict_count,
+        "manual_review": results.iter().filter(|r| matches!(r.action, ClassificationAction::Manual)).count(),
+        "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
+    });
+    if cache_errors > 0 {
+        summary["cache_read_errors"] = cache_errors.into();
+    }
+
     let output = serde_json::json!({
-        "summary": {
-            "total_audited": results.len(),
-            "confirmed": confirmed_count,
-            "conflicts": conflict_count,
-            "manual_review": results.iter().filter(|r| matches!(r.action, ClassificationAction::Manual)).count(),
-            "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
-        },
+        "summary": summary,
         "results": visible,
     });
 
@@ -183,21 +207,23 @@ fn classify_batch(
     server: &ReklawdboxServer,
     tracks: &[crate::types::Track],
     overrides: &[(String, String)],
-) -> Result<Vec<ClassificationResult>, McpError> {
+) -> Result<(Vec<ClassificationResult>, u32), McpError> {
     let mut results = Vec::with_capacity(tracks.len());
+    let mut cache_errors = 0u32;
 
     for track in tracks {
-        let evidence = build_track_evidence(server, track, overrides)?;
+        let evidence = build_track_evidence(server, track, overrides, &mut cache_errors)?;
         results.push(classify_track(&evidence));
     }
 
-    Ok(results)
+    Ok((results, cache_errors))
 }
 
 fn build_track_evidence(
     server: &ReklawdboxServer,
     track: &crate::types::Track,
     overrides: &[(String, String)],
+    cache_errors: &mut u32,
 ) -> Result<TrackEvidence, McpError> {
     let norm_artist = normalize::normalize_for_matching(&track.artist);
     let norm_title = normalize::normalize_for_matching(&track.title);
@@ -213,24 +239,52 @@ fn build_track_evidence(
             &norm_title,
             norm_album.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        .unwrap_or_else(|e| {
+            warn!(
+                track_id = track.id.as_str(),
+                "Cache read error (discogs): {e}"
+            );
+            *cache_errors += 1;
+            None
+        });
         let beatport =
             store::get_enrichment(&store_conn, "beatport", &norm_artist, &norm_title, None)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+                .unwrap_or_else(|e| {
+                    warn!(
+                        track_id = track.id.as_str(),
+                        "Cache read error (beatport): {e}"
+                    );
+                    *cache_errors += 1;
+                    None
+                });
         let stratum = get_fresh_analysis_entry(
             &store_conn,
             &track.file_path,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
-        .map_err(mcp_internal_error)?;
+        .unwrap_or_else(|e| {
+            warn!(
+                track_id = track.id.as_str(),
+                "Analysis cache error (stratum): {e}"
+            );
+            *cache_errors += 1;
+            None
+        });
         let essentia = get_fresh_analysis_entry(
             &store_conn,
             &track.file_path,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
-        .map_err(mcp_internal_error)?;
+        .unwrap_or_else(|e| {
+            warn!(
+                track_id = track.id.as_str(),
+                "Analysis cache error (essentia): {e}"
+            );
+            *cache_errors += 1;
+            None
+        });
         (discogs, beatport, stratum, essentia)
     };
 

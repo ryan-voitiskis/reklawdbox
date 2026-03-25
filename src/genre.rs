@@ -280,6 +280,8 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Downtempo" => Some(BpmRange::new(80.0, 115.0)),
         "Drone Techno" => Some(BpmRange::new(115.0, 135.0)),
         "Drum & Bass" => Some(BpmRange::new(168.0, 180.0)),
+        "Dub" => Some(BpmRange::new(60.0, 90.0)),
+        "Dub Reggae" => Some(BpmRange::new(60.0, 90.0)),
         "Dub Techno" => Some(BpmRange::new(118.0, 132.0)),
         "Dubstep" => Some(BpmRange::new(136.0, 144.0)),
         "Garage" => Some(BpmRange::new(130.0, 138.0)),
@@ -295,6 +297,7 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Tech House" => Some(BpmRange::new(124.0, 132.0)),
         "Techno" => Some(BpmRange::new(128.0, 140.0)),
         "Trance" => Some(BpmRange::new(136.0, 145.0)),
+        "UK Bass" => Some(BpmRange::new(130.0, 145.0)),
         _ => None,
     }
 }
