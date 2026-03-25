@@ -8,6 +8,7 @@
 - **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Rekordbox often fails to import year tags from WAV files, so year=0 does not mean the file lacks a year tag — check before assuming it's missing.
 - **Lowest year wins.** Year is used as a signal for genre classification — it represents the track's production era, not its release or reissue date. When a conflict arises between current year and enrichment year, always use the lowest (earliest) year unless it is obviously wrong (e.g., a nonsensical date like 1900 for a modern electronic track). Do not present year conflicts for interactive review — resolve them automatically. Web research for year gaps should search for *release dates* (not production dates specifically), since release date is the best publicly available proxy.
 - **Year gaps are always researched.** Tracks left with year=0 after all automated sources are exhausted must be researched by the agent via web search, store lookups, and model knowledge. The tools handle the bulk; the agent fills every remaining gap it can.
+- **Manual research is mandatory (labels and years).** Steps 3 and 6 must be completed before proceeding to export. The automated backfill tools handle the bulk, but tracks left without labels or years afterward must be individually researched via web search, store lookups, and model knowledge. Do not proceed to step 8 (export) until steps 3 and 6 are done. Skipping research and exporting only the automated results leaves the job half-finished.
 - **Albums are best-effort.** `backfill_albums` fills empty albums from file tags, folder paths, and enrichment caches. Unlike labels and years, album gaps do not require exhaustive research — fill what the tools and a light web search can find. Empty album is valid for singles, loose tracks, and DJ edits. Album names where the value equals the track title or artist name are noise and are skipped automatically.
 
 ## Prerequisites
@@ -139,9 +140,9 @@ Group D: Genuine disagreements (N tracks) — review individually
 
 Stage approved changes via `update_tracks`.
 
-### 3. Research remaining label gaps
+### 3. Research remaining label gaps (mandatory)
 
-After steps 1–2, tracks may still lack labels. The automated backfill checks four enrichment providers (Discogs, MusicBrainz, Bandcamp, Beatport). This step fills the rest using web research and model knowledge.
+After steps 1–2, tracks may still lack labels. The automated backfill checks four enrichment providers (Discogs, MusicBrainz, Bandcamp, Beatport). This step fills the rest using web research and model knowledge. **Do not skip this step or defer it to a later export — complete it before proceeding to step 4.**
 
 For tracks still unlabeled after all cached enrichment is checked:
 
@@ -194,9 +195,9 @@ For each conflict, stage the **lowest (earliest) year** from either the current 
 
 Report the summary: "Year conflicts resolved: N auto-staged (used earliest year), N already had the earliest year, N flagged for review."
 
-### 6. Research remaining year gaps
+### 6. Research remaining year gaps (mandatory)
 
-After `backfill_years`, some tracks will still have year=0 with no source data. The tool reports these as `remaining_year_zero`. The agent must research every one of them — this is not optional.
+After `backfill_years`, some tracks will still have year=0 with no source data. The tool reports these as `remaining_year_zero`. The agent must research every one of them — this is not optional. **Do not skip this step or proceed to export until all year-zero tracks have been researched.**
 
 **If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to step 6c.
 
@@ -261,6 +262,12 @@ Report the summary: "Album backfill complete: N albums staged (N file tags, N fo
 The agent may optionally web-research remaining gaps, but this is not required. Empty album is valid for singles, loose tracks, and DJ edits.
 
 ### 8. Export
+
+**Pre-export gate — do not skip.** Before exporting, confirm all research steps are complete:
+- Step 3 (label research): all unlabeled tracks have been researched. Remaining gaps are genuinely unresolvable (private edits, anonymous tracks), not just unattempted.
+- Step 6 (year research): all year-zero tracks have been researched. Same standard.
+
+If either step was skipped, go back and complete it before proceeding.
 
 ```
 preview_changes()
