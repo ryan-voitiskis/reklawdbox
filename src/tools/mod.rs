@@ -88,6 +88,10 @@ pub(super) struct ServerState {
     pub(super) store_path: Option<String>,
     pub(super) changes: ChangeManager,
     pub(super) http: reqwest::Client,
+    /// Set by backfill_labels when unlabeled tracks remain. Stores the count.
+    /// write_xml checks this and refuses to export unless the agent explicitly
+    /// acknowledges that label research is complete (skip_label_gate=true).
+    pub(super) label_research_gate: std::sync::atomic::AtomicU32,
 }
 
 #[derive(Clone)]
@@ -183,6 +187,7 @@ impl ReklawdboxServer {
                 store_path: None,
                 changes: ChangeManager::new(),
                 http,
+                label_research_gate: std::sync::atomic::AtomicU32::new(0),
             }),
             tool_router: Self::tool_router(),
         }
@@ -292,7 +297,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Write staged changes and optional playlists to a Rekordbox-compatible XML file. Runs backup first."
+        description = "Write staged changes and optional playlists to a Rekordbox-compatible XML file. Runs backup first. If backfill_labels was run and found unlabeled tracks, this tool will refuse to export until label research is complete (step 3 of metadata backfill SOP). Pass skip_label_gate=true only after completing label research."
     )]
     async fn write_xml(
         &self,

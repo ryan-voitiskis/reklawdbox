@@ -289,6 +289,24 @@ pub(super) async fn handle_write_xml(
     server: &ReklawdboxServer,
     params: WriteXmlParams,
 ) -> Result<CallToolResult, McpError> {
+    // Label research gate: if backfill_labels ran and found unlabeled tracks,
+    // refuse to export until the agent acknowledges research is complete.
+    let gate_count = server
+        .state
+        .label_research_gate
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if gate_count > 0 && !params.skip_label_gate.unwrap_or(false) {
+        return Err(mcp_internal_error(format!(
+            "Label research gate: backfill_labels found {} unlabeled tracks that need research. \
+             Complete step 3 of the metadata backfill SOP (research remaining label gaps) before \
+             exporting. Use search_tracks(has_label=false) to find them, then research labels \
+             via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp.\n\n\
+             Once label research is complete and remaining gaps are genuinely unresolvable, \
+             call write_xml(skip_label_gate=true) to proceed.",
+            gate_count
+        )));
+    }
+
     let playlists = params.playlists.unwrap_or_default();
     let has_playlists = !playlists.is_empty();
     let snapshot = server.state.changes.take(None);

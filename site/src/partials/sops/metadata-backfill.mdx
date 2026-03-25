@@ -140,11 +140,17 @@ Group D: Genuine disagreements (N tracks) — review individually
 
 Stage approved changes via `update_tracks`.
 
-### 3. Research remaining label gaps (mandatory)
+### 3. Research remaining label gaps (mandatory — enforced by write_xml gate)
 
-After steps 1–2, tracks may still lack labels. The automated backfill checks four enrichment providers (Discogs, MusicBrainz, Bandcamp, Beatport). This step fills the rest using web research and model knowledge. **Do not skip this step or defer it to a later export — complete it before proceeding to step 4.**
+After steps 1–2, tracks may still lack labels. The `backfill_labels` output includes a `research_queue` section listing the count and top artists by frequency. **`write_xml` will refuse to export until this step is done** — it checks whether `backfill_labels` reported unlabeled tracks and blocks export unless `skip_label_gate=true` is passed.
 
-For tracks still unlabeled after all cached enrichment is checked:
+Start by fetching the first batch of unlabeled tracks:
+
+```
+search_tracks(has_label=false, max_tracks=50)
+```
+
+Then for each batch:
 
 1. **Group by artist** for efficient lookup — tracks from the same artist often share a label.
 2. **Prioritize by artist frequency** — artists with many unlabeled tracks first, for maximum coverage per lookup.
@@ -263,7 +269,9 @@ The agent may optionally web-research remaining gaps, but this is not required. 
 
 ### 8. Export
 
-**Pre-export gate — do not skip.** Before exporting, confirm all research steps are complete:
+**Pre-export gate (enforced by tool).** `write_xml` checks whether `backfill_labels` reported unlabeled tracks. If so, it returns an error unless `skip_label_gate=true` is passed.
+
+Before calling `write_xml(skip_label_gate=true)`, confirm:
 - Step 3 (label research): all unlabeled tracks have been researched. Remaining gaps are genuinely unresolvable (private edits, anonymous tracks), not just unattempted.
 - Step 6 (year research): all year-zero tracks have been researched. Same standard.
 
@@ -276,7 +284,7 @@ preview_changes()
 Ask user: "Export these changes to XML?"
 
 ```
-write_xml()
+write_xml(skip_label_gate=true)
 ```
 
 Report output path, then walk the user through the Rekordbox import:

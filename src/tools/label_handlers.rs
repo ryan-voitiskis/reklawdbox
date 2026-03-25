@@ -260,6 +260,14 @@ pub(super) async fn handle_backfill_labels(
         drop(store_conn);
     }
 
+    // Collect IDs of tracks getting labels staged before to_stage is moved.
+    let staged_label_ids: std::collections::HashSet<String> = scan
+        .to_stage
+        .iter()
+        .filter(|c| c.label.is_some())
+        .map(|c| c.track_id.clone())
+        .collect();
+
     let staged_count = if !dry_run && !scan.to_stage.is_empty() {
         let (staged, _) = server.state.changes.stage(scan.to_stage);
         staged
@@ -294,6 +302,74 @@ pub(super) async fn handle_backfill_labels(
             "auto_enriched".to_string(),
             serde_json::json!(auto_enriched),
         );
+    }
+
+    // Build a research queue: count remaining unlabeled tracks grouped by artist.
+    // This gives the agent a concrete on-ramp to step 3 (label research).
+    // Subtract tracks just staged by this backfill — they're still unlabeled in the
+    // read-only DB but will resolve on export, so they don't need research.
+    let unlabeled_count = {
+        let rb_conn = server.rekordbox_conn()?;
+        let search_params = db::SearchParams {
+            has_label: Some(false),
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let unlabeled = db::search_tracks_unbounded(&rb_conn, &search_params)
+            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        let unlabeled: Vec<_> = unlabeled
+            .into_iter()
+            .filter(|t| !staged_label_ids.contains(&t.id))
+            .collect();
+        let count = unlabeled.len();
+
+        if count > 0 {
+            // Group by artist, sorted by count descending
+            let mut by_artist: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            for t in &unlabeled {
+                *by_artist.entry(&t.artist).or_insert(0) += 1;
+            }
+            let mut artist_counts: Vec<_> = by_artist.into_iter().collect();
+            artist_counts.sort_by(|a, b| b.1.cmp(&a.1));
+            let top_artists: Vec<_> = artist_counts
+                .iter()
+                .take(20)
+                .map(|(artist, count)| {
+                    serde_json::json!({"artist": artist, "count": count})
+                })
+                .collect();
+
+            result.as_object_mut().unwrap().insert(
+                "research_queue".to_string(),
+                serde_json::json!({
+                    "total_unlabeled": count,
+                    "top_artists": top_artists,
+                    "action": format!(
+                        "IMPORTANT: {} tracks have no label. The metadata backfill SOP \
+                         requires researching these before export. Use the top_artists list \
+                         above to prioritize research. Fetch the first batch with \
+                         search_tracks(has_label=false, max_tracks=50), then research labels \
+                         via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp. \
+                         write_xml will block export unless skip_label_gate=true is passed \
+                         after research is complete.",
+                        count
+                    ),
+                }),
+            );
+        }
+        count
+    };
+
+    // Update the gate so write_xml can enforce label research.
+    // Always write — including 0 when all labels are filled — so the gate
+    // clears automatically after a successful re-run.
+    // Skip on dry_run: a preview should not have side effects.
+    if !dry_run {
+        server
+            .state
+            .label_research_gate
+            .store(unlabeled_count as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
     let json =

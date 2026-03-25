@@ -162,6 +162,10 @@ pub struct WriteXmlParams {
         description = "Optional playlist exports. Each playlist includes a name and ordered track_ids."
     )]
     pub playlists: Option<Vec<WriteXmlPlaylistInput>>,
+    #[schemars(
+        description = "Set to true to acknowledge that label research is complete and bypass the label gate. Required when backfill_labels reported unlabeled tracks. Only set this after completing step 3 (label research) of the metadata backfill SOP."
+    )]
+    pub skip_label_gate: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
