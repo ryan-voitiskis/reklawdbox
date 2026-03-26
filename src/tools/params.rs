@@ -155,7 +155,7 @@ pub struct WriteXmlPlaylistInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteXmlParams {
     #[schemars(
-        description = "Output file path (default: ./rekordbox-exports/reklawdbox-{timestamp}.xml)"
+        description = "Output file path (default: ~/reklawdbox-exports/reklawdbox-{timestamp}.xml)"
     )]
     pub output_path: Option<String>,
     #[schemars(
@@ -179,7 +179,7 @@ pub struct ClearChangesParams {
     #[schemars(description = "Track IDs to clear (if empty, clears all)")]
     pub track_ids: Option<Vec<String>>,
     #[schemars(
-        description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\", \"label\", \"year\". If omitted, clears all fields (removes entire entries)."
+        description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\", \"label\", \"year\", \"album\". If omitted, clears all fields (removes entire entries)."
     )]
     pub fields: Option<Vec<String>>,
 }
@@ -288,7 +288,7 @@ pub struct AnalyzeAudioBatchParams {
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
     #[schemars(
-        description = "Max concurrent track analyses (default: half CPU cores, min 1, max 4)"
+        description = "Max concurrent track analyses (default: CPU cores - 2, min 1, max 4)"
     )]
     pub concurrency: Option<u32>,
 }
