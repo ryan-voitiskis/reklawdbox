@@ -19,13 +19,13 @@ scoring, and greedy set sequencing with energy-curve shaping.
 
 ## MCP Development Loop
 
-This project IS the MCP server. The user's MCP config (`~/.claude/projects/-Users-vz/.mcp.json`) points to the Homebrew-installed `reklawdbox` binary. To test local changes:
+This project IS the MCP server. The MCP config at `/Users/vz/.claude/projects/-Users-vz/.mcp.json` normally points to the Homebrew-installed binary (`"command": "reklawdbox"`). To test local changes:
 
 1. `cargo build --release`
-2. Edit `~/.claude/projects/-Users-vz/.mcp.json`: change `"command": "reklawdbox"` to `"command": "/Users/vz/projects/reklawdbox/target/release/reklawdbox"`
+2. Edit `/Users/vz/.claude/projects/-Users-vz/.mcp.json`: change `"command": "reklawdbox"` to `"command": "/Users/vz/projects/reklawdbox/target/release/reklawdbox"`
 3. Ask the user to run `/mcp` to reconnect — the running server is the old binary until restarted.
-4. Smoke-test the changed functionality by calling the affected MCP tools with representative inputs. Include at least one happy-path call and one edge-case or error-path call per changed tool.
-5. Immediately revert the config: change command back to `"reklawdbox"`. The server process is already running the local binary — the config is only read at connection time, so reverting is safe.
+4. Smoke-test the changed functionality by calling the affected MCP tools. Include at least one happy-path call and one edge-case or error-path call per changed tool.
+5. When all testing is done (not between build-test cycles), revert the config: change command back to `"reklawdbox"`. The running server process is unaffected — the config is only read at connection time.
 
 ## Releasing
 
