@@ -154,10 +154,10 @@ pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
     let audio_profile = evidence.audio.as_ref().map(compute_audio_profile);
 
     // Step B.3: Check audio vetoes first
-    if let Some(ref profile) = audio_profile {
-        if let Some(result) = check_audio_vetoes(evidence, profile) {
-            return result;
-        }
+    if let Some(profile) = audio_profile.as_ref()
+        && let Some(result) = check_audio_vetoes(evidence, profile)
+    {
+        return result;
     }
 
     // Gather votes from all sources (Step A)
@@ -411,7 +411,7 @@ fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
             GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass
         )
     });
-    let bp_dance = evidence.beatport_genre.map_or(true, |g| {
+    let bp_dance = evidence.beatport_genre.is_none_or(|g| {
         matches!(
             genre::genre_family(g),
             GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass
@@ -423,10 +423,10 @@ fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
 /// Find the best genre from enrichment in a specific family.
 fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'static str> {
     // Check Beatport first (single, precise)
-    if let Some(bp) = evidence.beatport_genre {
-        if genre::genre_family(bp) == family {
-            return Some(bp);
-        }
+    if let Some(bp) = evidence.beatport_genre
+        && genre::genre_family(bp) == family
+    {
+        return Some(bp);
     }
     // Check Discogs (highest style_count in family)
     evidence
@@ -585,7 +585,7 @@ fn find_consensus(
     }
 
     // Audio evidence
-    if let Some(ref profile) = audio_profile {
+    if let Some(profile) = audio_profile.as_ref() {
         let bucket_name = match profile.bucket {
             EnergyBucket::NonDancefloor => "non-dancefloor",
             EnergyBucket::LowEnergy => "low-energy",
@@ -631,7 +631,7 @@ fn find_consensus(
             ClassificationConfidence::Medium
         }
     } else if ranked.len() >= 2 {
-        let (second_genre, _) = second.unwrap();
+        let (second_genre, _) = second.expect("second exists when ranked.len() >= 2");
         let same_family = genre::genre_family(top_genre) == genre::genre_family(second_genre);
 
         if margin / total_weight > 0.4 {
@@ -672,7 +672,7 @@ fn find_consensus(
                 ClassificationConfidence::Low
             } else {
                 // C rule 9c/9d: cross-family
-                if let Some(ref profile) = audio_profile {
+                if let Some(profile) = audio_profile.as_ref() {
                     if audio_clearly_favors_family(profile, top_genre) {
                         flags.push("audio-assisted-tiebreak".into());
                         ClassificationConfidence::Low
@@ -703,56 +703,55 @@ fn find_consensus(
     // Post-consensus: BPM preference override
     // If the top genre is BPM-implausible and there's a plausible alternative, swap.
     let effective_bpm = audio_profile.map(|p| p.bpm).unwrap_or(evidence.bpm);
-    if !bpm_plausible(final_genre, effective_bpm) {
-        if let Some((alt_genre, _)) = ranked
+    if !bpm_plausible(final_genre, effective_bpm)
+        && let Some((alt_genre, _)) = ranked
             .iter()
             .skip(1)
             .find(|(g, _)| bpm_plausible(g, effective_bpm))
-        {
-            ev.push(format!(
-                "bpm-override: {} implausible at {}bpm → {}",
-                final_genre, effective_bpm as i32, alt_genre
-            ));
-            flags.push("bpm-override".into());
-            final_genre = alt_genre;
-            // Downgrade confidence by one level — the runner-up was elevated by BPM
-            // elimination, not by evidence weight
-            confidence = match confidence {
-                ClassificationConfidence::High => ClassificationConfidence::Medium,
-                ClassificationConfidence::Medium => ClassificationConfidence::Low,
-                other => other,
-            };
-        }
+    {
+        ev.push(format!(
+            "bpm-override: {} implausible at {}bpm → {}",
+            final_genre, effective_bpm as i32, alt_genre
+        ));
+        flags.push("bpm-override".into());
+        final_genre = alt_genre;
+        // Downgrade confidence by one level — the runner-up was elevated by BPM
+        // elimination, not by evidence weight
+        confidence = match confidence {
+            ClassificationConfidence::High => ClassificationConfidence::Medium,
+            ClassificationConfidence::Medium => ClassificationConfidence::Low,
+            other => other,
+        };
     }
 
     // Post-consensus: energy-based depth demotion
     // HighEnergy always demotes deep variants to their shallower parent.
     // Dancefloor demotes only when the shallower alternative has its own votes
     // (i.e. enrichment evidence supports both, and audio doesn't favour depth).
-    if let Some(ref profile) = audio_profile {
-        if let Some(shallower) = shallower_alternative(final_genre) {
-            let demote = match profile.bucket {
-                EnergyBucket::HighEnergy => true,
-                EnergyBucket::Dancefloor => {
-                    // Only demote if the shallower variant is also in the ranked list
-                    ranked.iter().any(|(g, _)| *g == shallower)
-                        && !has_flag(profile, CharFlag::Atmospheric)
-                }
-                _ => false,
-            };
-            if demote {
-                ev.push(format!(
-                    "depth: {}-energy audio → {} over {}",
-                    if profile.bucket == EnergyBucket::HighEnergy {
-                        "high"
-                    } else {
-                        "dancefloor"
-                    },
-                    shallower,
-                    final_genre
-                ));
-                final_genre = shallower;
+    if let Some(profile) = audio_profile.as_ref()
+        && let Some(shallower) = shallower_alternative(final_genre)
+    {
+        let demote = match profile.bucket {
+            EnergyBucket::HighEnergy => true,
+            EnergyBucket::Dancefloor => {
+                // Only demote if the shallower variant is also in the ranked list
+                ranked.iter().any(|(g, _)| *g == shallower)
+                    && !has_flag(profile, CharFlag::Atmospheric)
             }
+            _ => false,
+        };
+        if demote {
+            ev.push(format!(
+                "depth: {}-energy audio → {} over {}",
+                if profile.bucket == EnergyBucket::HighEnergy {
+                    "high"
+                } else {
+                    "dancefloor"
+                },
+                shallower,
+                final_genre
+            ));
+            final_genre = shallower;
         }
     }
 
@@ -766,10 +765,10 @@ fn find_consensus(
             ));
         }
     }
-    if let Some(bp) = evidence.beatport_genre {
-        if genre::genre_family(bp) != primary_family {
-            ev.push(format!("influence: {} (beatport)", bp));
-        }
+    if let Some(bp) = evidence.beatport_genre
+        && genre::genre_family(bp) != primary_family
+    {
+        ev.push(format!("influence: {} (beatport)", bp));
     }
 
     (Some(final_genre), confidence, ev, flags)
@@ -972,19 +971,19 @@ fn audio_only_inference(
             } else if bpm >= 128.0 && rr > 0.9 {
                 candidates.push("Techno");
                 ev.push(format!("D.2: {}bpm + regular rhythm → Techno", bpm as i32));
-            } else if bpm >= 120.0 && bpm <= 135.0 && rr > 0.9 {
+            } else if (120.0..=135.0).contains(&bpm) && rr > 0.9 {
                 candidates.extend_from_slice(&["Techno", "Tech House", "House"]);
                 ev.push(format!(
                     "D.2: {}bpm + regular → Techno/Tech House/House",
                     bpm as i32
                 ));
-            } else if bpm >= 118.0 && bpm <= 130.0 && rr >= 0.8 {
+            } else if (118.0..=130.0).contains(&bpm) && rr >= 0.8 {
                 candidates.extend_from_slice(&["House", "Deep House"]);
                 ev.push(format!(
                     "D.2: {}bpm + moderate rhythm → House/Deep House",
                     bpm as i32
                 ));
-            } else if bpm >= 120.0 && bpm <= 140.0 && rr < 0.8 {
+            } else if (120.0..=140.0).contains(&bpm) && rr < 0.8 {
                 candidates.extend_from_slice(&["Breakbeat", "Garage"]);
                 ev.push(format!(
                     "D.2: {}bpm + broken rhythm → Breakbeat/Garage",

@@ -243,7 +243,7 @@ fn compute_autocorrelation_fft(signal: &[f32]) -> Result<Vec<f32>, crate::error:
 
     // Compute |FFT|²
     for x in &mut fft_input {
-        *x = *x * x.conj();
+        *x *= x.conj();
     }
 
     // Inverse FFT
@@ -317,7 +317,7 @@ fn find_peaks_in_acf(
                 // Check minimum distance from previous peak
                 let lag = i + offset;
                 if peaks.is_empty()
-                    || (lag as i32 - peaks.last().unwrap().0 as i32).abs() >= min_distance as i32
+                    || (lag as i32 - peaks.last().unwrap().0 as i32).abs() >= min_distance
                 {
                     peaks.push((lag, value));
                 } else {

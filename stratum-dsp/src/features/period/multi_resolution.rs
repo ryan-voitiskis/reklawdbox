@@ -201,6 +201,7 @@ pub fn multi_resolution_analysis(
 /// Recomputes STFT magnitudes at hop sizes {256, 512, 1024} on the *audio samples*,
 /// runs the tempogram pipeline on each, then fuses candidates using a calibrated
 /// cross-resolution scoring rule aimed at resolving T vs 2T vs T/2 ambiguity.
+#[allow(clippy::too_many_arguments)]
 pub fn multi_resolution_tempogram_from_samples(
     samples: &[f32],
     sample_rate: u32,
@@ -507,10 +508,12 @@ pub fn multi_resolution_tempogram_from_samples(
         }
 
         // If the choice is not clearly separated, apply an optional gentle prior as tie-break.
-        if margin < margin_threshold {
-            if use_human_prior && chosen_bpm >= 70.0 && chosen_bpm <= 180.0 && margin < 0.05 {
-                chosen_score += 0.05;
-            }
+        if margin < margin_threshold
+            && use_human_prior
+            && (70.0..=180.0).contains(&chosen_bpm)
+            && margin < 0.05
+        {
+            chosen_score += 0.05;
         }
 
         hyps.push(Hyp {
@@ -583,7 +586,7 @@ pub fn multi_resolution_tempogram_from_samples(
             return 0.0;
         }
         let period = frames_per_beat.round() as isize;
-        if period < 3 || period > 512 {
+        if !(3..=512).contains(&period) {
             return 0.0;
         }
         let period = period as usize;
@@ -694,7 +697,7 @@ pub fn multi_resolution_tempogram_from_samples(
     // Fold-down (high -> half)
     if best.bpm >= 170.0 {
         let half = best.bpm * 0.5;
-        if half >= 70.0 && half <= 120.0 {
+        if (70.0..=120.0).contains(&half) {
             let (s_best, a_best) = total_support(&c256, &c512, &c1024, best.bpm, tol);
             let (s_half, a_half) = total_support(&c256, &c512, &c1024, half, tol);
             let ratio = if s_best > 0.0 { s_half / s_best } else { 0.0 };
@@ -723,7 +726,7 @@ pub fn multi_resolution_tempogram_from_samples(
     // Fold-up (low -> double)
     if best.bpm <= 80.0 {
         let dbl = best.bpm * 2.0;
-        if dbl >= 70.0 && dbl <= 180.0 {
+        if (70.0..=180.0).contains(&dbl) {
             let (s_best, a_best) = total_support(&c256, &c512, &c1024, best.bpm, tol);
             let (s_dbl, a_dbl) = total_support(&c256, &c512, &c1024, dbl, tol);
             let ratio = if s_best > 0.0 { s_dbl / s_best } else { 0.0 };
@@ -784,14 +787,14 @@ pub fn multi_resolution_tempogram_from_samples(
                     if !(bpm.is_finite() && bpm >= min_bpm && bpm <= max_bpm) {
                         continue;
                     }
-                    if bpm < 70.0 || bpm > 180.0 {
+                    if !(70.0..=180.0).contains(&bpm) {
                         continue;
                     }
                     let (support, agree) = total_support(&c256, &c512, &c1024, bpm, tol);
                     if agree < 2 || support <= 0.0 {
                         continue;
                     }
-                    let align = beat_contrast_score(&novelty_512, sample_rate, 512, bpm);
+                    let align = beat_contrast_score(novelty_512, sample_rate, 512, bpm);
                     fams.push(Fam {
                         bpm,
                         support,
@@ -832,7 +835,7 @@ pub fn multi_resolution_tempogram_from_samples(
                         let current = Fam {
                             bpm: best.bpm,
                             support: total_support(&c256, &c512, &c1024, best.bpm, tol).0,
-                            align: beat_contrast_score(&novelty_512, sample_rate, 512, best.bpm),
+                            align: beat_contrast_score(novelty_512, sample_rate, 512, best.bpm),
                             label: "T*",
                         };
 
@@ -908,10 +911,10 @@ mod tests {
 
         // Add periodic pattern
         let period = 43;
-        for i in 0..spectrogram.len() {
+        for (i, frame) in spectrogram.iter_mut().enumerate() {
             if i % period == 0 {
-                for bin in 0..512 {
-                    spectrogram[i][bin] = 1.0;
+                for bin in &mut frame[0..512] {
+                    *bin = 1.0;
                 }
             }
         }
@@ -921,7 +924,7 @@ mod tests {
         // Should either succeed or fail gracefully
         match result {
             Ok(est) => {
-                assert!(est.bpm >= 100.0 && est.bpm <= 140.0);
+                assert!((100.0..=140.0).contains(&est.bpm));
                 assert!(est.confidence >= 0.0 && est.confidence <= 1.0);
             }
             Err(_) => {

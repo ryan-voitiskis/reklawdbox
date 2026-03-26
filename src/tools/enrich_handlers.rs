@@ -24,7 +24,7 @@ pub(super) async fn handle_lookup_discogs(
     let (artist, title, album) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{track_id}' not found"), None)
             })?;
@@ -59,7 +59,7 @@ pub(super) async fn handle_lookup_discogs(
             &norm_title,
             norm_album.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+        .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -100,7 +100,7 @@ pub(super) async fn handle_lookup_discogs(
             match_quality,
             response_json.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+        .map_err(cache_error)?;
     }
 
     let output = lookup_output_with_cache_metadata(
@@ -123,7 +123,7 @@ pub(super) async fn handle_lookup_beatport(
     let (artist, title) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{track_id}' not found"), None)
             })?;
@@ -148,7 +148,7 @@ pub(super) async fn handle_lookup_beatport(
         let store_conn = server.cache_store_conn()?;
         if let Some(cached) =
             store::get_enrichment(&store_conn, "beatport", &norm_artist, &norm_title, None)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -186,7 +186,7 @@ pub(super) async fn handle_lookup_beatport(
             match_quality,
             response_json.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+        .map_err(cache_error)?;
     }
 
     let output = lookup_output_with_cache_metadata(
@@ -208,7 +208,7 @@ pub(super) async fn handle_lookup_musicbrainz(
     let (artist, title) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{track_id}' not found"), None)
             })?;
@@ -233,7 +233,7 @@ pub(super) async fn handle_lookup_musicbrainz(
         let store_conn = server.cache_store_conn()?;
         if let Some(cached) =
             store::get_enrichment(&store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -271,7 +271,7 @@ pub(super) async fn handle_lookup_musicbrainz(
             match_quality,
             response_json.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+        .map_err(cache_error)?;
     }
 
     let output = lookup_output_with_cache_metadata(
@@ -293,7 +293,7 @@ pub(super) async fn handle_lookup_bandcamp(
     let (artist, title) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{track_id}' not found"), None)
             })?;
@@ -318,7 +318,7 @@ pub(super) async fn handle_lookup_bandcamp(
         let store_conn = server.cache_store_conn()?;
         if let Some(cached) =
             store::get_enrichment(&store_conn, "bandcamp", &norm_artist, &norm_title, None)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?
+                .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -356,7 +356,7 @@ pub(super) async fn handle_lookup_bandcamp(
             match_quality,
             response_json.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+        .map_err(cache_error)?;
     }
 
     let output = lookup_output_with_cache_metadata(
@@ -561,7 +561,7 @@ async fn enrich_single_track(
                             );
                         }
                     };
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "discogs".to_string(),
                             norm_artist,
@@ -570,11 +570,14 @@ async fn enrich_single_track(
                             match_quality: Some(quality),
                             response_json: Some(json_str),
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "discogs", "cache channel send failed: {e}");
+                    }
                     (1, 0, Vec::new(), None)
                 }
                 Ok(None) => {
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "discogs".to_string(),
                             norm_artist,
@@ -583,7 +586,10 @@ async fn enrich_single_track(
                             match_quality: Some("none".to_string()),
                             response_json: None,
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "discogs", "cache channel send failed: {e}");
+                    }
                     (0, 1, Vec::new(), None)
                 }
                 Err(e) => {
@@ -673,7 +679,7 @@ async fn enrich_single_track(
                         }
                     };
                     let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "beatport".to_string(),
                             norm_artist,
@@ -682,11 +688,14 @@ async fn enrich_single_track(
                             match_quality: Some(quality.to_string()),
                             response_json: Some(json_str),
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "beatport", "cache channel send failed: {e}");
+                    }
                     (1, 0, Vec::new())
                 }
                 Ok(None) => {
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "beatport".to_string(),
                             norm_artist,
@@ -695,7 +704,10 @@ async fn enrich_single_track(
                             match_quality: Some("none".to_string()),
                             response_json: None,
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "beatport", "cache channel send failed: {e}");
+                    }
                     (0, 1, Vec::new())
                 }
                 Err(e) => (
@@ -763,7 +775,7 @@ async fn enrich_single_track(
                             );
                         }
                     };
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "bandcamp".to_string(),
                             norm_artist,
@@ -772,11 +784,14 @@ async fn enrich_single_track(
                             match_quality: Some(quality.to_string()),
                             response_json: Some(json_str),
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "bandcamp", "cache channel send failed: {e}");
+                    }
                     (1, 0, Vec::new())
                 }
                 Ok(None) => {
-                    let _ = cache_tx
+                    if let Err(e) = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "bandcamp".to_string(),
                             norm_artist,
@@ -785,7 +800,10 @@ async fn enrich_single_track(
                             match_quality: Some("none".to_string()),
                             response_json: None,
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(provider = "bandcamp", "cache channel send failed: {e}");
+                    }
                     (0, 1, Vec::new())
                 }
                 Err(e) => (
@@ -987,7 +1005,12 @@ pub(super) async fn handle_enrich_tracks(
 
     // Shut down writer
     drop(cache_tx);
-    let _ = writer_handle.await;
+    if let Err(e) = writer_handle.await {
+        progress.failures.push(serde_json::json!({
+            "provider": "cache_writer",
+            "error": format!("Cache writer task failed: {e}"),
+        }));
+    }
 
     let result = serde_json::json!({
         "summary": {

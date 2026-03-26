@@ -153,10 +153,7 @@ pub fn fft_tempogram(
     // Compute power spectrum (magnitude squared)
     let power_spectrum: Vec<f32> = fft_input
         .iter()
-        .map(|x| {
-            let mag_sq = x.re * x.re + x.im * x.im;
-            mag_sq
-        })
+        .map(|x| x.re * x.re + x.im * x.im)
         .collect();
 
     // Convert frequency bins to BPM
@@ -256,9 +253,9 @@ mod tests {
         // Create novelty curve with periodicity at frames_per_beat
         let period = frames_per_beat as usize;
         let mut novelty = vec![0.0f32; 500];
-        for i in 0..novelty.len() {
+        for (i, val) in novelty.iter_mut().enumerate() {
             if i % period == 0 {
-                novelty[i] = 1.0;
+                *val = 1.0;
             }
         }
 
@@ -267,7 +264,7 @@ mod tests {
         // Should find 120 BPM (or close) as top candidate
         let best = find_best_bpm_fft(&tempogram).unwrap();
         assert!(
-            best.bpm >= 115.0 && best.bpm <= 125.0,
+            (115.0..=125.0).contains(&best.bpm),
             "Expected BPM around 120, got {:.1}",
             best.bpm
         );

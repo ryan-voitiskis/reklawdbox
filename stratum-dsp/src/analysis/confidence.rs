@@ -128,7 +128,7 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
     let key_confidence = compute_key_confidence(result);
 
     // 3. Grid Stability (already computed, but we validate it)
-    let grid_stability = result.grid_stability.max(0.0).min(1.0);
+    let grid_stability = result.grid_stability.clamp(0.0, 1.0);
 
     // 4. Overall Confidence (weighted average)
     // Weights: BPM=40%, Key=30%, Grid=30%
@@ -136,8 +136,7 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
     let overall_confidence = if bpm_confidence > 0.0 && key_confidence > 0.0 {
         // All components succeeded: weighted average
         (bpm_confidence * 0.4 + key_confidence * 0.3 + grid_stability * 0.3)
-            .max(0.0)
-            .min(1.0)
+            .clamp(0.0, 1.0)
     } else if bpm_confidence > 0.0 {
         // Only BPM succeeded: use BPM confidence with penalty
         bpm_confidence * 0.6
@@ -238,7 +237,7 @@ fn compute_bpm_confidence(result: &AnalysisResult) -> f32 {
 
     // Use the confidence from period estimation
     // This already includes method agreement and peak prominence
-    let base_confidence = result.bpm_confidence.max(0.0).min(1.0);
+    let base_confidence = result.bpm_confidence.clamp(0.0, 1.0);
 
     // Additional adjustments based on metadata
     // Check if there are warnings about BPM
@@ -270,7 +269,7 @@ fn compute_key_confidence(result: &AnalysisResult) -> f32 {
 
     // Use the confidence from key detection
     // This already includes template matching score difference
-    let base_confidence = result.key_confidence.max(0.0).min(1.0);
+    let base_confidence = result.key_confidence.clamp(0.0, 1.0);
 
     // Incorporate key clarity directly: low clarity reduces confidence
     // Key clarity is a strong indicator of detection reliability

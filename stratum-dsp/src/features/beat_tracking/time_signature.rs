@@ -143,7 +143,7 @@ pub fn detect_time_signature(
         .unwrap();
 
     // Normalize confidence to [0, 1]
-    let confidence = (*best_score).min(1.0).max(0.0);
+    let confidence = (*best_score).clamp(0.0, 1.0);
 
     Ok((*best_sig, confidence))
 }
@@ -217,7 +217,7 @@ mod tests {
         let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
 
         // Should return a valid time signature with valid confidence
-        assert!(confidence >= 0.0 && confidence <= 1.0);
+        assert!((0.0..=1.0).contains(&confidence));
         // Time signature should be one of the valid options
         assert!(matches!(
             time_sig,
@@ -240,7 +240,7 @@ mod tests {
         let (_time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
 
         // May detect 3/4 or default to 4/4 depending on pattern
-        assert!(confidence >= 0.0 && confidence <= 1.0);
+        assert!((0.0..=1.0).contains(&confidence));
     }
 
     #[test]

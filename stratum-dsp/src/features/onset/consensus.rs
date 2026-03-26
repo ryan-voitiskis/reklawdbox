@@ -213,7 +213,7 @@ pub fn vote_onsets(
         for cluster in &mut clusters {
             // Check if this onset is within tolerance of any onset in the cluster
             for existing_onset in cluster.iter() {
-                if (onset.sample as i32 - existing_onset.sample as i32).abs() as usize
+                if (onset.sample as i32 - existing_onset.sample as i32).unsigned_abs() as usize
                     <= tolerance_samples
                 {
                     cluster.push(onset);
@@ -255,7 +255,7 @@ pub fn vote_onsets(
         // Maximum possible weight is sum of all weights
         let max_weight: f32 = weights.iter().sum();
         let confidence = if max_weight > 0.0 {
-            (total_weight / max_weight).min(1.0).max(0.0)
+            (total_weight / max_weight).clamp(0.0, 1.0)
         } else {
             0.0
         };

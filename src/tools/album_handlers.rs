@@ -203,13 +203,13 @@ fn scan_albums(
             }
         }
 
-        if source.is_none() {
-            if let Some(album) = album_from_folder_path(&track.file_path) {
-                if !is_noise_album(&album, &track.title, &track.artist) {
-                    source = Some(("folder_path", album));
-                } else {
-                    r.skipped_noise += 1;
-                }
+        if source.is_none()
+            && let Some(album) = album_from_folder_path(&track.file_path)
+        {
+            if !is_noise_album(&album, &track.title, &track.artist) {
+                source = Some(("folder_path", album));
+            } else {
+                r.skipped_noise += 1;
             }
         }
 
@@ -296,7 +296,7 @@ pub(super) async fn handle_backfill_albums(
             ..Default::default()
         };
         let tracks = db::search_tracks_unbounded(&rb_conn, &search_params)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+            .map_err(db_error)?;
         drop(rb_conn);
 
         let store_conn = server.cache_store_conn()?;

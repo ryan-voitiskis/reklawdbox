@@ -289,8 +289,8 @@ mod tests {
         // This creates a clear energy difference between frames
         let mut samples = vec![0.0f32; 44100];
         // Create a step: silence before, signal after sample 5000
-        for i in 5000..44100 {
-            samples[i] = 0.5; // Constant signal
+        for sample in &mut samples[5000..44100] {
+            *sample = 0.5; // Constant signal
         }
 
         let onsets = detect_energy_flux_onsets(&samples, 2048, 512, -30.0).unwrap();

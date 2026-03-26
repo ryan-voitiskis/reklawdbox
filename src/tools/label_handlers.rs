@@ -167,7 +167,7 @@ pub(super) async fn handle_backfill_labels(
             ..Default::default()
         };
         let tracks = db::search_tracks_unbounded(&rb_conn, &search_params)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+            .map_err(db_error)?;
         drop(rb_conn);
 
         let store_conn = server.cache_store_conn()?;
@@ -269,7 +269,7 @@ pub(super) async fn handle_backfill_labels(
             ..Default::default()
         };
         let unlabeled = db::search_tracks_unbounded(&rb_conn, &search_params)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+            .map_err(db_error)?;
         let unlabeled: Vec<_> = unlabeled
             .into_iter()
             .filter(|t| !staged_label_ids.contains(&t.id))

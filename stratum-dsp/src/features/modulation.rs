@@ -108,8 +108,8 @@ pub fn modulation_spectral_centroid(
         let mut weighted_sum = 0.0_f64;
         let mut magnitude_sum = 0.0_f64;
 
-        for k in 1..nyquist_bin {
-            let mag = buffer[k].norm();
+        for (k, sample) in buffer.iter().enumerate().take(nyquist_bin).skip(1) {
+            let mag = sample.norm();
             let freq = k as f64 * mod_freq_resolution;
             weighted_sum += freq * mag;
             magnitude_sum += mag;

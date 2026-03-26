@@ -85,7 +85,7 @@ pub fn compute_key_clarity(scores: &[(crate::analysis::result::Key, f32)]) -> f3
     if range > 1e-10 {
         let clarity = (best_score - average_score) / range;
         // Clamp to [0, 1]
-        clarity.max(0.0).min(1.0)
+        clarity.clamp(0.0, 1.0)
     } else {
         // All scores are the same - no clarity
         0.0
@@ -153,6 +153,6 @@ mod tests {
         // Test that clarity is clamped to [0, 1]
         let scores = vec![(Key::Major(0), 1.0), (Key::Major(1), 0.0)];
         let clarity = compute_key_clarity(&scores);
-        assert!(clarity >= 0.0 && clarity <= 1.0);
+        assert!((0.0..=1.0).contains(&clarity));
     }
 }

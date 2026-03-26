@@ -446,7 +446,10 @@ pub(super) fn build_candidate_plan_beam(
                 continue;
             }
 
-            let from_id = beam.ordered_ids.last().unwrap();
+            let from_id = beam
+                .ordered_ids
+                .last()
+                .expect("ordered_ids always has at least the start track");
             let Some(from_profile) = profiles_by_id.get(from_id) else {
                 expansions.push(beam.clone());
                 continue;
@@ -596,7 +599,10 @@ pub(super) fn compute_bpm_trajectory(
         .map(|(i, phase)| match phase {
             EnergyPhase::Warmup => start_bpm,
             EnergyPhase::Build => {
-                let (build_start_idx, build_end_idx) = (build_start.unwrap(), build_end.unwrap());
+                let (build_start_idx, build_end_idx) = (
+                    build_start.expect("build_start exists when iterating a Build phase"),
+                    build_end.expect("build_end exists when iterating a Build phase"),
+                );
                 if build_start_idx == build_end_idx {
                     (start_bpm + end_bpm) / 2.0
                 } else {
@@ -607,8 +613,10 @@ pub(super) fn compute_bpm_trajectory(
             }
             EnergyPhase::Peak => end_bpm,
             EnergyPhase::Release => {
-                let (release_start_idx, release_end_idx) =
-                    (release_start.unwrap(), release_end.unwrap());
+                let (release_start_idx, release_end_idx) = (
+                    release_start.expect("release_start exists when iterating a Release phase"),
+                    release_end.expect("release_end exists when iterating a Release phase"),
+                );
                 if release_start_idx == release_end_idx {
                     (end_bpm + start_bpm) / 2.0
                 } else {

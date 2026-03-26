@@ -50,7 +50,7 @@ pub fn smooth_chroma(chroma_vectors: &[Vec<f32>], window_size: usize) -> Vec<Vec
     }
 
     // Ensure window size is odd
-    let window_size = if window_size % 2 == 0 {
+    let window_size = if window_size.is_multiple_of(2) {
         window_size + 1
     } else {
         window_size

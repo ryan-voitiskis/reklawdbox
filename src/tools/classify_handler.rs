@@ -395,10 +395,9 @@ fn extract_discogs_genres(
         let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
         if (mapping_type == "exact" || mapping_type == "alias")
             && let Some(genre_name) = maps_to
+            && let Some(canonical) = genre::canonical_genre_name(&genre_name)
         {
-            if let Some(canonical) = genre::canonical_genre_name(&genre_name) {
-                *genre_counts.entry(canonical).or_insert(0) += 1;
-            }
+            *genre_counts.entry(canonical).or_insert(0) += 1;
         }
     }
 

@@ -48,7 +48,7 @@ pub fn adaptive_threshold_median_mad(values: &[f32], k: f32) -> Result<f32, Anal
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) * 0.5
     } else {
         sorted[sorted.len() / 2]
@@ -59,7 +59,7 @@ pub fn adaptive_threshold_median_mad(values: &[f32], k: f32) -> Result<f32, Anal
     let mut deviations: Vec<f32> = values.iter().map(|&v| (v - median).abs()).collect();
     deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let mad = if deviations.len() % 2 == 0 {
+    let mad = if deviations.len().is_multiple_of(2) {
         (deviations[deviations.len() / 2 - 1] + deviations[deviations.len() / 2]) * 0.5
     } else {
         deviations[deviations.len() / 2]
@@ -92,7 +92,7 @@ pub fn percentile_threshold(values: &[f32], percentile: f32) -> Result<f32, Anal
         ));
     }
 
-    if percentile < 0.0 || percentile > 1.0 {
+    if !(0.0..=1.0).contains(&percentile) {
         return Err(AnalysisError::InvalidInput(format!(
             "Percentile must be in [0.0, 1.0], got {}",
             percentile

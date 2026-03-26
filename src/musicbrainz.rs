@@ -254,11 +254,8 @@ fn score_release(release: &serde_json::Value) -> i32 {
 
     if let Some(types) = secondary_types {
         for t in types {
-            if let Some(s) = t.as_str() {
-                match s {
-                    "Compilation" | "DJ-mix" | "Live" => score -= 50,
-                    _ => {}
-                }
+            if let Some("Compilation" | "DJ-mix" | "Live") = t.as_str() {
+                score -= 50;
             }
         }
     }
@@ -276,12 +273,12 @@ fn score_release(release: &serde_json::Value) -> i32 {
         .and_then(|v| v.as_str())
         .unwrap_or("9999");
 
-    if let Some(year_str) = date.get(..4) {
-        if let Ok(year) = year_str.parse::<i32>() {
-            // Subtract a small amount so earlier years score higher
-            // Use 2100 - year so year 2000 → +100, year 2020 → +80
-            score += (2100 - year).clamp(0, 200);
-        }
+    if let Some(year_str) = date.get(..4)
+        && let Ok(year) = year_str.parse::<i32>()
+    {
+        // Subtract a small amount so earlier years score higher
+        // Use 2100 - year so year 2000 → +100, year 2020 → +80
+        score += (2100 - year).clamp(0, 200);
     }
 
     score

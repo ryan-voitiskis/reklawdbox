@@ -134,7 +134,7 @@ impl KWeightingFilter {
         // Reference: ITU-R BS.1770-4 Annex 2
 
         // For 48kHz, the coefficients are:
-        let w0 = 2.0 * std::f32::consts::PI * 1681.974450955533 / sample_rate;
+        let w0 = 2.0 * std::f32::consts::PI * 1681.9745 / sample_rate;
         let cos_w0 = w0.cos();
         let sin_w0 = w0.sin();
         let alpha = sin_w0 / 2.0 * (1.0f32 / 0.707f32).sqrt(); // Q = 0.707
@@ -207,7 +207,7 @@ fn calculate_lufs(samples: &[f32], sample_rate: f32) -> Result<f32, AnalysisErro
     let filtered: Vec<f32> = samples.iter().map(|&s| filter.process(s)).collect();
 
     // Compute mean square for each 400ms block
-    let num_blocks = (filtered.len() + block_size - 1) / block_size;
+    let num_blocks = filtered.len().div_ceil(block_size);
     let mut block_energies = Vec::with_capacity(num_blocks);
 
     for i in 0..num_blocks {

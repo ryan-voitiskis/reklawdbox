@@ -14,7 +14,7 @@ pub(super) fn handle_resolve_track_data(
     let track = {
         let conn = server.rekordbox_conn()?;
         db::get_track(&conn, &params.track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{}' not found", params.track_id), None)
             })?
@@ -36,10 +36,10 @@ pub(super) fn handle_resolve_track_data(
             &norm_title,
             norm_album.as_deref(),
         )
-        .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+        .map_err(cache_error)?;
         let beatport_cache =
             store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+                .map_err(cache_error)?;
         let stratum_cache = get_fresh_analysis_entry(
             &store,
             &track.file_path,
@@ -113,10 +113,10 @@ pub(super) fn handle_resolve_tracks_data(
                 &norm_title,
                 norm_album.as_deref(),
             )
-            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+            .map_err(cache_error)?;
             let beatport_cache =
                 store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
-                    .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+                    .map_err(cache_error)?;
             let stratum_cache = get_fresh_analysis_entry(
                 &store,
                 &track.file_path,
@@ -180,7 +180,7 @@ pub(super) fn handle_cache_coverage(
                 rusqlite::params![sample_prefix],
                 |row| row.get::<_, i64>(0),
             )
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .max(0) as usize;
 
         let tracks = resolve_tracks(
@@ -262,21 +262,20 @@ pub(super) fn handle_cache_coverage(
         let store = server.cache_store_conn()?;
 
         let discogs_set = store::batch_enrichment_existence(&store, "discogs", &unique_artists)
-            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+            .map_err(cache_error)?;
         let beatport_set = store::batch_enrichment_existence(&store, "beatport", &unique_artists)
-            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+            .map_err(cache_error)?;
         let discogs_result_set =
             store::batch_enrichment_with_results(&store, "discogs", &unique_artists)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+                .map_err(cache_error)?;
         let beatport_result_set =
             store::batch_enrichment_with_results(&store, "beatport", &unique_artists)
-                .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+                .map_err(cache_error)?;
         let discogs_label_set =
-            store::batch_enrichment_with_label(&store, "discogs", &unique_artists).map_err(
-                |e| mcp_internal_error(format!("Label enrichment cache read error: {e}")),
-            )?;
+            store::batch_enrichment_with_label(&store, "discogs", &unique_artists)
+                .map_err(cache_error)?;
         let audio_set = store::batch_audio_analysis_existence(&store, &unique_paths)
-            .map_err(|e| mcp_internal_error(format!("Cache read error: {e}")))?;
+            .map_err(cache_error)?;
 
         // Build borrowed-key sets to avoid per-track clones during counting.
         let discogs_ref: std::collections::HashSet<(&str, &str)> = discogs_set
@@ -686,7 +685,7 @@ fn resolve_single_track_compact(
         .unwrap_or(serde_json::Value::Null);
     let beatport_mapped_genre_bpm_range = bp_canonical
         .as_deref()
-        .map(|g| bpm_range_json(g))
+        .map(bpm_range_json)
         .unwrap_or(serde_json::Value::Null);
 
     // Parse stratum cache for bpm, key

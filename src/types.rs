@@ -137,7 +137,7 @@ pub struct TrackPlayStats {
     pub session_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TrackChange {
     pub track_id: String,
     pub genre: Option<String>,

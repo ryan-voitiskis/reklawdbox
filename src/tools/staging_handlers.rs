@@ -183,7 +183,7 @@ pub(super) fn handle_suggest_normalizations(
     let min_count = params.min_genre_count.unwrap_or(1);
 
     let stats =
-        db::get_library_stats(&conn).map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        db::get_library_stats(&conn).map_err(db_error)?;
 
     let mut alias_suggestions = Vec::new();
     let mut unknown_items = Vec::new();
@@ -199,7 +199,7 @@ pub(super) fn handle_suggest_normalizations(
 
         if let Some(canonical) = genre::canonical_genre_from_alias(&gc.name) {
             let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+                .map_err(db_error)?;
             for t in tracks {
                 alias_suggestions.push(crate::types::NormalizationSuggestion {
                     track_id: t.id,
@@ -217,7 +217,7 @@ pub(super) fn handle_suggest_normalizations(
             }));
         } else {
             let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+                .map_err(db_error)?;
             for t in tracks {
                 unknown_items.push(crate::types::NormalizationSuggestion {
                     track_id: t.id,
@@ -271,7 +271,7 @@ pub(super) fn handle_preview_changes(
 
     let conn = server.rekordbox_conn()?;
     let current_tracks = db::get_tracks_by_ids(&conn, &ids)
-        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        .map_err(db_error)?;
 
     let diffs = server.state.changes.preview(&current_tracks);
     if diffs.is_empty() {
@@ -353,7 +353,7 @@ pub(super) async fn handle_write_xml(
         Ok(tracks) => tracks,
         Err(e) => {
             server.state.changes.restore(snapshot);
-            return Err(mcp_internal_error(format!("DB error: {e}")));
+            return Err(db_error(e));
         }
     };
     let found_ids: HashSet<&str> = current_tracks.iter().map(|t| t.id.as_str()).collect();
@@ -453,7 +453,7 @@ pub(super) fn handle_clear_changes(
 pub(super) fn handle_clear_caches(server: &ReklawdboxServer) -> Result<CallToolResult, McpError> {
     let conn = server.cache_store_conn()?;
     let result =
-        crate::store::clear_caches(&conn).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        crate::store::clear_caches(&conn).map_err(cache_error)?;
 
     let staged = server.state.changes.clear(None).0;
 

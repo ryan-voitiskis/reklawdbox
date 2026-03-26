@@ -239,10 +239,10 @@ pub fn label_genre(label: &str) -> Option<&'static str> {
         return Some(genre);
     }
     for suffix in LABEL_SUFFIXES {
-        if let Some(stripped) = normalized.strip_suffix(suffix) {
-            if let Some(&genre) = label_genre_map().get(stripped) {
-                return Some(genre);
-            }
+        if let Some(stripped) = normalized.strip_suffix(suffix)
+            && let Some(&genre) = label_genre_map().get(stripped)
+        {
+            return Some(genre);
         }
     }
     None
@@ -656,14 +656,14 @@ mod tests {
         let map = label_genre_map();
         for &(label, genre) in LABEL_GENRES {
             for suffix in LABEL_SUFFIXES {
-                if let Some(prefix) = label.strip_suffix(suffix) {
-                    if let Some(&prefix_genre) = map.get(prefix) {
-                        assert_eq!(
-                            genre, prefix_genre,
-                            "label '{}' maps to '{}' but prefix '{}' maps to '{}'",
-                            label, genre, prefix, prefix_genre
-                        );
-                    }
+                if let Some(prefix) = label.strip_suffix(suffix)
+                    && let Some(&prefix_genre) = map.get(prefix)
+                {
+                    assert_eq!(
+                        genre, prefix_genre,
+                        "label '{}' maps to '{}' but prefix '{}' maps to '{}'",
+                        label, genre, prefix, prefix_genre
+                    );
                 }
             }
         }

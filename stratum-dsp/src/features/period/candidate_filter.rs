@@ -251,14 +251,13 @@ pub fn merge_bpm_candidates(
     // Add any reasonable-range candidates that weren't in top 10
     let mut added_reasonable = 0;
     for candidate in &autocorr_corrected {
-        if candidate.bpm >= 60.0 && candidate.bpm <= 180.0 {
-            if !autocorr_limited
+        if (60.0..=180.0).contains(&candidate.bpm)
+            && !autocorr_limited
                 .iter()
                 .any(|c| (c.bpm - candidate.bpm).abs() < 1.0)
-            {
-                autocorr_limited.push(candidate.clone());
-                added_reasonable += 1;
-            }
+        {
+            autocorr_limited.push(candidate.clone());
+            added_reasonable += 1;
         }
     }
     if added_reasonable > 0 {

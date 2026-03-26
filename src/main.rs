@@ -51,10 +51,9 @@ pub(crate) fn project_root() -> &'static PathBuf {
                 .parent()
                 .and_then(|p| p.parent())
                 .and_then(|p| p.parent())
+                && root.join("Cargo.toml").exists()
             {
-                if root.join("Cargo.toml").exists() {
-                    return root.to_path_buf();
-                }
+                return root.to_path_buf();
             }
         }
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -77,13 +76,13 @@ fn load_env_from_mcp_json() {
         return;
     };
     for (key, val) in env {
-        if let Some(val) = val.as_str() {
-            if std::env::var_os(key).is_none() {
-                // SAFETY: only sets vars that are unset (is_none guard), and runs
-                // before any application code reads these vars. Tokio worker threads
-                // exist but do not access env during this early init phase.
-                unsafe { std::env::set_var(key, val) };
-            }
+        if let Some(val) = val.as_str()
+            && std::env::var_os(key).is_none()
+        {
+            // SAFETY: only sets vars that are unset (is_none guard), and runs
+            // before any application code reads these vars. Tokio worker threads
+            // exist but do not access env during this early init phase.
+            unsafe { std::env::set_var(key, val) };
         }
     }
 }

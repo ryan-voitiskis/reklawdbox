@@ -1227,51 +1227,62 @@ async fn cli_analyze_for_hydrate(
                             ok = false;
                         }
                     }
-                    _ => {
+                    Ok(Err(e)) => {
+                        tracing::error!("stratum-dsp analysis failed for {file_path}: {e}");
+                        ok = false;
+                    }
+                    Err(e) => {
+                        tracing::error!("stratum-dsp analysis task failed for {file_path}: {e}");
                         ok = false;
                     }
                 }
             }
-            _ => {
+            Ok(Err(e)) => {
+                tracing::error!("Audio decode failed for {file_path}: {e}");
+                ok = false;
+            }
+            Err(e) => {
+                tracing::error!("Audio decode task failed for {file_path}: {e}");
                 ok = false;
             }
         }
     }
 
-    if needs_essentia {
-        if let Some(python) = essentia_python {
-            match audio::run_essentia(python, &file_path).await {
-                Ok(features) => {
-                    let features_json =
-                        match serialize_cache_payload(&features, "essentia analysis") {
-                            Ok(json) => json,
-                            Err(e) => {
-                                tracing::error!("{e}");
-                                ok = false;
-                                return ok;
-                            }
-                        };
-                    if let Err(e) = send_cache_message(
-                        cache_tx,
-                        HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
-                            file_path: file_path.clone(),
-                            analyzer: audio::ANALYZER_ESSENTIA.to_string(),
-                            file_size,
-                            file_mtime,
-                            analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-                            features_json,
-                        }),
-                        "essentia analysis",
-                    )
-                    .await
-                    {
-                        tracing::error!("{e}");
-                        ok = false;
-                    }
-                }
-                Err(_) => {
+    if needs_essentia
+        && let Some(python) = essentia_python
+    {
+        match audio::run_essentia(python, &file_path).await {
+            Ok(features) => {
+                let features_json =
+                    match serialize_cache_payload(&features, "essentia analysis") {
+                        Ok(json) => json,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            ok = false;
+                            return ok;
+                        }
+                    };
+                if let Err(e) = send_cache_message(
+                    cache_tx,
+                    HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
+                        file_path: file_path.clone(),
+                        analyzer: audio::ANALYZER_ESSENTIA.to_string(),
+                        file_size,
+                        file_mtime,
+                        analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+                        features_json,
+                    }),
+                    "essentia analysis",
+                )
+                .await
+                {
+                    tracing::error!("{e}");
                     ok = false;
                 }
+            }
+            Err(e) => {
+                tracing::error!("Essentia analysis failed for {file_path}: {e}");
+                ok = false;
             }
         }
     }

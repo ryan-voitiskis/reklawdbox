@@ -60,15 +60,15 @@ pub fn load() -> Config {
 /// SAFETY: must be called from main() before any threads are spawned.
 pub unsafe fn load_into_env() {
     let cfg = load();
-    if let Some(url) = cfg.discogs.broker.url {
-        if std::env::var_os(crate::discogs::BROKER_URL_ENV).is_none() {
-            unsafe { std::env::set_var(crate::discogs::BROKER_URL_ENV, url) };
-        }
+    if let Some(url) = cfg.discogs.broker.url
+        && std::env::var_os(crate::discogs::BROKER_URL_ENV).is_none()
+    {
+        unsafe { std::env::set_var(crate::discogs::BROKER_URL_ENV, url) };
     }
-    if let Some(token) = cfg.discogs.broker.token {
-        if std::env::var_os(crate::discogs::BROKER_TOKEN_ENV).is_none() {
-            unsafe { std::env::set_var(crate::discogs::BROKER_TOKEN_ENV, token) };
-        }
+    if let Some(token) = cfg.discogs.broker.token
+        && std::env::var_os(crate::discogs::BROKER_TOKEN_ENV).is_none()
+    {
+        unsafe { std::env::set_var(crate::discogs::BROKER_TOKEN_ENV, token) };
     }
 }
 

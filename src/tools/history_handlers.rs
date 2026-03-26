@@ -4,7 +4,7 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rusqlite::Connection;
 
-use super::mcp_internal_error;
+use super::{db_error, mcp_internal_error};
 use super::params::{GetPlayStatsParams, GetSessionTracksParams, GetSessionsParams};
 use crate::db;
 
@@ -18,7 +18,7 @@ pub(super) fn handle_get_sessions(
         .transpose()
         .map_err(|e| McpError::invalid_params(e, None))?;
     let sessions = db::get_sessions(&conn, params.limit, after.as_deref())
-        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        .map_err(db_error)?;
     let json =
         serde_json::to_string_pretty(&sessions).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -29,7 +29,7 @@ pub(super) fn handle_get_session_tracks(
     params: GetSessionTracksParams,
 ) -> Result<CallToolResult, McpError> {
     let tracks = db::get_session_tracks(&conn, &params.session_id)
-        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        .map_err(db_error)?;
     if tracks.is_empty() {
         return Ok(CallToolResult::success(vec![Content::text(format!(
             "Session '{}' not found or has no tracks",
@@ -52,7 +52,7 @@ pub(super) fn handle_get_play_stats(
         .into_search_params(true, None, None)
         .map_err(|e| McpError::invalid_params(e, None))?;
     let stats = db::get_play_stats(&conn, &search, include_unplayed, limit)
-        .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+        .map_err(db_error)?;
     let json =
         serde_json::to_string_pretty(&stats).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))

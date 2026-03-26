@@ -89,7 +89,7 @@ pub fn detect_hfc_onsets(
         ));
     }
 
-    if threshold_percentile < 0.0 || threshold_percentile > 1.0 {
+    if !(0.0..=1.0).contains(&threshold_percentile) {
         return Err(AnalysisError::InvalidInput(format!(
             "Threshold percentile must be in [0, 1], got {}",
             threshold_percentile
@@ -224,21 +224,21 @@ mod tests {
         let mut spectrogram = vec![vec![0.01f32; 1024]; 10];
 
         // Frames 0-4: low frequency content (first 100 bins)
-        for i in 0..5 {
-            for bin in 0..100 {
-                spectrogram[i][bin] = 0.5f32;
+        for frame in &mut spectrogram[0..5] {
+            for bin in &mut frame[0..100] {
+                *bin = 0.5f32;
             }
         }
 
         // Frame 5: high frequency content (bins 800-1024)
-        for bin in 800..1024 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5][800..1024] {
+            *bin = 1.0f32;
         }
 
         // Frames 6-9: back to low frequency
-        for i in 6..10 {
-            for bin in 0..100 {
-                spectrogram[i][bin] = 0.5f32;
+        for frame in &mut spectrogram[6..10] {
+            for bin in &mut frame[0..100] {
+                *bin = 0.5f32;
             }
         }
 
@@ -249,7 +249,7 @@ mod tests {
         assert!(!onsets.is_empty(), "Should detect at least one onset");
         // Onset should be at or near frame 5-6
         assert!(
-            onsets.iter().any(|&f| f >= 4 && f <= 7),
+            onsets.iter().any(|&f| (4..=7).contains(&f)),
             "Onset should be near frame 5-6, got {:?}",
             onsets
         );
@@ -311,11 +311,11 @@ mod tests {
     fn test_hfc_threshold_sensitivity() {
         // Create spectrogram with varying high-frequency content
         let mut spectrogram = vec![vec![0.01f32; 1024]; 20];
-        for i in 0..20 {
+        for (i, frame) in spectrogram.iter_mut().enumerate() {
             // Gradually increase high-frequency content
             let amplitude = 0.1 + (i as f32 / 20.0) * 0.9;
-            for bin in 800..1024 {
-                spectrogram[i][bin] = amplitude;
+            for bin in &mut frame[800..1024] {
+                *bin = amplitude;
             }
         }
 
@@ -340,13 +340,13 @@ mod tests {
         let mut spectrogram = vec![vec![0.0f32; 1024]; 2];
 
         // Frame 0: low frequency
-        for bin in 0..100 {
-            spectrogram[0][bin] = 1.0f32;
+        for bin in &mut spectrogram[0][0..100] {
+            *bin = 1.0f32;
         }
 
         // Frame 1: high frequency
-        for bin in 900..1024 {
-            spectrogram[1][bin] = 1.0f32;
+        for bin in &mut spectrogram[1][900..1024] {
+            *bin = 1.0f32;
         }
 
         let _onsets = detect_hfc_onsets(&spectrogram, 44100, 0.5).unwrap();
@@ -354,8 +354,6 @@ mod tests {
         // Should detect an onset due to the increase in HFC from low to high frequency
         // Even though magnitudes are similar, HFC is higher for high frequencies
         // The test verifies that HFC correctly weights higher frequencies
-        // Note: onsets.len() >= 0 is always true, but we're testing the algorithm works
-        assert!(true, "HFC frequency weighting test completed");
     }
 
     #[test]
@@ -364,9 +362,9 @@ mod tests {
         let mut spectrogram = vec![vec![0.01f32; 1024]; 20];
 
         // High-frequency bursts at frames 5, 10, 15
-        for frame_idx in [5, 10, 15] {
-            for bin in 800..1024 {
-                spectrogram[frame_idx][bin] = 1.0f32;
+        for &frame_idx in &[5, 10, 15] {
+            for bin in &mut spectrogram[frame_idx][800..1024] {
+                *bin = 1.0f32;
             }
         }
 

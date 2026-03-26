@@ -99,7 +99,7 @@ mod tests {
                         result.beat_grid.downbeats[1] - result.beat_grid.downbeats[0];
                     // Accept any reasonable bar interval (1.0s to 4.0s)
                     assert!(
-                        bar_interval >= 1.0 && bar_interval <= 4.0,
+                        (1.0..=4.0).contains(&bar_interval),
                         "Bar interval should be reasonable (1.0-4.0s), got {:.3}s",
                         bar_interval
                     );

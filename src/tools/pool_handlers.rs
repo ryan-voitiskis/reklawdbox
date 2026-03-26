@@ -37,18 +37,18 @@ pub(super) fn handle_score_pool_compatibility(
 
     match mode {
         PoolMode::Pairwise => {
-            let id_a = params.track_a.unwrap();
-            let id_b = params.track_b.unwrap();
+            let id_a = params.track_a.expect("track_a is Some in Pairwise branch");
+            let id_b = params.track_b.expect("track_b is Some in Pairwise branch");
 
             let (track_a, track_b) = {
                 let conn = server.rekordbox_conn()?;
                 let a = db::get_track(&conn, &id_a)
-                    .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                    .map_err(db_error)?
                     .ok_or_else(|| {
                         McpError::invalid_params(format!("Track '{id_a}' not found"), None)
                     })?;
                 let b = db::get_track(&conn, &id_b)
-                    .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                    .map_err(db_error)?
                     .ok_or_else(|| {
                         McpError::invalid_params(format!("Track '{id_b}' not found"), None)
                     })?;
@@ -94,18 +94,20 @@ pub(super) fn handle_score_pool_compatibility(
         }
 
         PoolMode::OneVsPool => {
-            let candidate_id = params.track_id.unwrap();
-            let pool_ids = params.pool_track_ids.unwrap();
+            let candidate_id = params.track_id.expect("track_id is Some in OneVsPool branch");
+            let pool_ids = params
+                .pool_track_ids
+                .expect("pool_track_ids is Some in OneVsPool branch");
 
             let (candidate_track, pool_tracks) = {
                 let conn = server.rekordbox_conn()?;
                 let candidate = db::get_track(&conn, &candidate_id)
-                    .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                    .map_err(db_error)?
                     .ok_or_else(|| {
                         McpError::invalid_params(format!("Track '{candidate_id}' not found"), None)
                     })?;
                 let pool = db::get_tracks_by_ids(&conn, &pool_ids)
-                    .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?;
+                    .map_err(db_error)?;
                 (candidate, pool)
             };
 
@@ -180,7 +182,9 @@ pub(super) fn handle_score_pool_compatibility(
         }
 
         PoolMode::Cohesion => {
-            let pool_ids = params.pool_track_ids.unwrap();
+            let pool_ids = params
+                .pool_track_ids
+                .expect("pool_track_ids is Some in Cohesion branch");
 
             if pool_ids.len() < 2 {
                 return Err(McpError::invalid_params(
@@ -192,7 +196,7 @@ pub(super) fn handle_score_pool_compatibility(
             let pool_tracks = {
                 let conn = server.rekordbox_conn()?;
                 db::get_tracks_by_ids(&conn, &pool_ids)
-                    .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                    .map_err(db_error)?
             };
 
             let store = server.cache_store_conn()?;
@@ -263,7 +267,7 @@ pub(super) fn handle_expand_pool(
     let seed_tracks = {
         let conn = server.rekordbox_conn()?;
         db::get_tracks_by_ids(&conn, &params.seed_track_ids)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
     };
 
     if seed_tracks.is_empty() {
@@ -486,11 +490,11 @@ pub(super) fn handle_describe_pool(
         let conn = server.rekordbox_conn()?;
         if let Some(ref ids) = params.pool_track_ids {
             db::get_tracks_by_ids(&conn, ids)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         } else {
             let pid = params.playlist_id.as_ref().unwrap();
             db::get_playlist_tracks(&conn, pid, None)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         }
     };
 

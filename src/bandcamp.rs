@@ -91,10 +91,10 @@ pub async fn lookup(
     let mut best: Option<(SearchResult, i32)> = None;
     for candidate in candidates {
         let score = score_match(artist, title, &candidate.artist, &candidate.title);
-        if score >= 65 {
-            if best.as_ref().is_none_or(|(_, s)| score > *s) {
-                best = Some((candidate, score));
-            }
+        if score >= 65
+            && best.as_ref().is_none_or(|(_, s)| score > *s)
+        {
+            best = Some((candidate, score));
         }
     }
 
@@ -151,8 +151,8 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
     // Try "DD Mon YYYY ..." format (JSON-LD)
     // e.g. "28 Oct 2016 00:00:00 GMT"
     let parts: Vec<&str> = s.split_whitespace().collect();
-    if parts.len() >= 3 {
-        if let (Some(day), Some(month_num), Some(year)) = (
+    if parts.len() >= 3
+        && let (Some(day), Some(month_num), Some(year)) = (
             parts[0]
                 .parse::<u32>()
                 .ok()
@@ -162,9 +162,9 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
                 .parse::<i32>()
                 .ok()
                 .filter(|y| (1900..=2099).contains(y)),
-        ) {
-            return Some(format!("{year:04}-{month_num:02}-{day:02}"));
-        }
+        )
+    {
+        return Some(format!("{year:04}-{month_num:02}-{day:02}"));
     }
 
     // Try "Month DD, YYYY" format (search page)

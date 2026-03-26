@@ -215,10 +215,10 @@ fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Err
     }
 
     // Validate URL
-    if let Some(ref url) = cfg.discogs.broker.url {
-        if discogs::normalize_base_url(url).is_none() {
-            return Err(format!("Invalid URL: {url}").into());
-        }
+    if let Some(ref url) = cfg.discogs.broker.url
+        && discogs::normalize_base_url(url).is_none()
+    {
+        return Err(format!("Invalid URL: {url}").into());
     }
 
     // Broker token — only needed for custom broker URLs

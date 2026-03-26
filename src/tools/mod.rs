@@ -75,6 +75,14 @@ pub(super) fn mcp_internal_error(msg: String) -> McpError {
     McpError::internal_error(msg, None)
 }
 
+pub(super) fn db_error(e: rusqlite::Error) -> McpError {
+    McpError::internal_error(format!("DB error: {e}"), None)
+}
+
+pub(super) fn cache_error(e: rusqlite::Error) -> McpError {
+    McpError::internal_error(format!("Cache error: {e}"), None)
+}
+
 /// Inner shared state (not Clone).
 pub(super) struct ServerState {
     pub(super) db: OnceLock<Result<Mutex<Connection>, String>>,

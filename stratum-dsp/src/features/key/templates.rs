@@ -117,9 +117,9 @@ impl KeyTemplates {
             }
 
             // Minor keys: rotate C-minor base profile (tonic at index 0) the same way we rotate major.
-            for semitone_idx in 0..12 {
+            for (semitone_idx, slot) in minor[key_idx].iter_mut().enumerate() {
                 let source_idx = (semitone_idx + 12 - key_idx) % 12;
-                minor[key_idx][semitone_idx] = c_minor[source_idx];
+                *slot = c_minor[source_idx];
             }
         }
 
@@ -196,9 +196,9 @@ impl KeyTemplates {
             }
 
             // Minor keys: rotate C minor template
-            for semitone_idx in 0..12 {
+            for (semitone_idx, slot) in minor[key_idx].iter_mut().enumerate() {
                 let source_idx = (semitone_idx + 12 - key_idx) % 12;
-                minor[key_idx][semitone_idx] = c_minor[source_idx];
+                *slot = c_minor[source_idx];
             }
         }
 

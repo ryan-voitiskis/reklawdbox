@@ -239,9 +239,9 @@ mod tests {
         // Create novelty curve with periodicity at frames_per_beat
         let period = frames_per_beat as usize;
         let mut novelty = vec![0.0f32; 500];
-        for i in 0..novelty.len() {
+        for (i, val) in novelty.iter_mut().enumerate() {
             if i % period == 0 {
-                novelty[i] = 1.0;
+                *val = 1.0;
             }
         }
 
@@ -251,7 +251,7 @@ mod tests {
         // Should find 120 BPM (or close) as top candidate
         let best = find_best_bpm_autocorr(&tempogram).unwrap();
         assert!(
-            best.bpm >= 115.0 && best.bpm <= 125.0,
+            (115.0..=125.0).contains(&best.bpm),
             "Expected BPM around 120, got {:.1}",
             best.bpm
         );

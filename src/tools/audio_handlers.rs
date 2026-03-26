@@ -26,7 +26,7 @@ pub(super) async fn handle_analyze_track_audio(
     let track = {
         let conn = server.rekordbox_conn()?;
         db::get_track(&conn, &params.track_id)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{}' not found", params.track_id), None)
             })?
@@ -58,9 +58,10 @@ pub(super) async fn handle_analyze_track_audio(
             .map_err(mcp_internal_error)?;
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        let store = server.cache_store_conn()?;
-        let metadata = std::fs::metadata(&file_path)
+        let metadata = tokio::fs::metadata(&file_path)
+            .await
             .map_err(|e| mcp_internal_error(format!("Cannot stat file '{}': {e}", file_path)))?;
+        let store = server.cache_store_conn()?;
         store::set_audio_analysis(
             &store,
             &file_path,
@@ -70,7 +71,7 @@ pub(super) async fn handle_analyze_track_audio(
             audio::STRATUM_SCHEMA_VERSION,
             &features_json,
         )
-        .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+        .map_err(cache_error)?;
         (
             serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?,
             false,
@@ -112,9 +113,10 @@ pub(super) async fn handle_analyze_track_audio(
                 Ok(features) => {
                     let features_json = serde_json::to_string(&features)
                         .map_err(|e| mcp_internal_error(format!("{e}")))?;
-                    let store = server.cache_store_conn()?;
-                    let metadata = std::fs::metadata(&file_path)
+                    let metadata = tokio::fs::metadata(&file_path)
+                        .await
                         .map_err(|e| mcp_internal_error(format!("Cannot stat file: {e}")))?;
+                    let store = server.cache_store_conn()?;
                     store::set_audio_analysis(
                         &store,
                         &file_path,
@@ -124,7 +126,7 @@ pub(super) async fn handle_analyze_track_audio(
                         audio::ESSENTIA_SCHEMA_VERSION,
                         &features_json,
                     )
-                    .map_err(|e| mcp_internal_error(format!("Cache write error: {e}")))?;
+                    .map_err(cache_error)?;
                     essentia = Some(
                         serde_json::to_value(&features)
                             .map_err(|e| mcp_internal_error(format!("{e}")))?,
@@ -248,8 +250,9 @@ async fn analyze_single_track(
         let features_json =
             serde_json::to_string(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
         let val = serde_json::to_value(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
-        let metadata =
-            std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
+        let metadata = tokio::fs::metadata(&file_path)
+            .await
+            .map_err(|e| format!("Cannot stat file: {e}"))?;
         cache_tx
             .send(CacheWriteMsg::Audio {
                 file_path: file_path.clone(),
@@ -291,7 +294,7 @@ async fn analyze_single_track(
                     Ok(v) => v,
                     Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
                 };
-                let metadata = match std::fs::metadata(&file_path_clone) {
+                let metadata = match tokio::fs::metadata(&file_path_clone).await {
                     Ok(m) => m,
                     Err(e) => return (None, None, Some(format!("Cannot stat file: {e}"))),
                 };
@@ -561,7 +564,19 @@ pub(super) async fn handle_setup_essentia(
 
     // Check if already available (validate to catch stale overrides)
     if let Some(path) = server.essentia_python_path() {
-        if validate_essentia_python(&path) {
+        let path_clone = path.clone();
+        let is_valid = match tokio::task::spawn_blocking(move || {
+            validate_essentia_python(&path_clone)
+        })
+        .await
+        {
+            Ok(valid) => valid,
+            Err(e) => {
+                tracing::warn!("Essentia validation task failed: {e}");
+                false
+            }
+        };
+        if is_valid {
             let result = serde_json::json!({
                 "status": "already_installed",
                 "python_path": path,
@@ -617,7 +632,7 @@ pub(super) async fn handle_setup_essentia(
 
         // Create parent directories
         if let Some(parent) = venv_dir.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 mcp_internal_error(format!(
                     "Failed to create directory {}: {e}",
                     parent.display()

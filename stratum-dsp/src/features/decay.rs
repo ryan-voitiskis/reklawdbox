@@ -239,7 +239,7 @@ fn fit_decay(envelope: &[f64], ms_per_frame: f64) -> Option<(f32, f32)> {
     Some((tau, r2))
 }
 
-fn make_band_decay(taus: &mut Vec<f32>, r2s: &mut Vec<f32>) -> Option<BandDecay> {
+fn make_band_decay(taus: &mut [f32], r2s: &mut [f32]) -> Option<BandDecay> {
     if taus.is_empty() {
         return None;
     }
@@ -248,7 +248,7 @@ fn make_band_decay(taus: &mut Vec<f32>, r2s: &mut Vec<f32>) -> Option<BandDecay>
     r2s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let n = taus.len();
-    let tau_median = if n % 2 == 0 {
+    let tau_median = if n.is_multiple_of(2) {
         (taus[n / 2 - 1] + taus[n / 2]) / 2.0
     } else {
         taus[n / 2]
@@ -258,7 +258,7 @@ fn make_band_decay(taus: &mut Vec<f32>, r2s: &mut Vec<f32>) -> Option<BandDecay>
     let q3_idx = (3 * n) / 4;
     let tau_iqr = taus[q3_idx.min(n - 1)] - taus[q1_idx.min(n - 1)];
 
-    let r2_median = if n % 2 == 0 {
+    let r2_median = if n.is_multiple_of(2) {
         (r2s[n / 2 - 1] + r2s[n / 2]) / 2.0
     } else {
         r2s[n / 2]

@@ -75,7 +75,7 @@ pub fn detect_spectral_flux_onsets(
         return Ok(Vec::new());
     }
 
-    if threshold_percentile < 0.0 || threshold_percentile > 1.0 {
+    if !(0.0..=1.0).contains(&threshold_percentile) {
         return Err(AnalysisError::InvalidInput(format!(
             "Threshold percentile must be in [0, 1], got {}",
             threshold_percentile
@@ -233,21 +233,21 @@ mod tests {
         let mut spectrogram = vec![vec![0.01f32; 1024]; 10];
 
         // Frames 0-4: low frequency content
-        for i in 0..5 {
-            for bin in 0..256 {
-                spectrogram[i][bin] = 1.0f32;
+        for frame in &mut spectrogram[0..5] {
+            for bin in &mut frame[0..256] {
+                *bin = 1.0f32;
             }
         }
 
         // Frame 5: high frequency content (different spectral pattern)
-        for bin in 768..1024 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5][768..1024] {
+            *bin = 1.0f32;
         }
 
         // Frames 6-9: back to low frequency
-        for i in 6..10 {
-            for bin in 0..256 {
-                spectrogram[i][bin] = 1.0f32;
+        for frame in &mut spectrogram[6..10] {
+            for bin in &mut frame[0..256] {
+                *bin = 1.0f32;
             }
         }
 
@@ -258,7 +258,7 @@ mod tests {
         assert!(!onsets.is_empty(), "Should detect at least one onset");
         // Onset should be at or near frame 5-6 (the change happens at frame 5, so flux is between 4-5 and 5-6)
         assert!(
-            onsets.iter().any(|&f| f >= 4 && f <= 7),
+            onsets.iter().any(|&f| (4..=7).contains(&f)),
             "Onset should be near frame 5-6, got {:?}",
             onsets
         );
@@ -313,10 +313,10 @@ mod tests {
     fn test_spectral_flux_threshold_sensitivity() {
         // Create spectrogram with gradual changes
         let mut spectrogram = vec![vec![0.1f32; 1024]; 20];
-        for i in 0..20 {
+        for (i, frame) in spectrogram.iter_mut().enumerate() {
             let amplitude = 0.1 + (i as f32 / 20.0) * 0.9;
-            for bin in 0..1024 {
-                spectrogram[i][bin] = amplitude;
+            for bin in frame.iter_mut() {
+                *bin = amplitude;
             }
         }
 
@@ -355,16 +355,16 @@ mod tests {
 
         // Create three distinct changes with different patterns
         // Change 1 at frame 5: high values in first half of bins
-        for bin in 0..512 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5][0..512] {
+            *bin = 1.0f32;
         }
         // Change 2 at frame 10: high values in second half of bins (different spectral pattern)
-        for bin in 512..1024 {
-            spectrogram[10][bin] = 1.0f32;
+        for bin in &mut spectrogram[10][512..1024] {
+            *bin = 1.0f32;
         }
         // Change 3 at frame 15: high values in middle bins (another different pattern)
-        for bin in 256..768 {
-            spectrogram[15][bin] = 1.0f32;
+        for bin in &mut spectrogram[15][256..768] {
+            *bin = 1.0f32;
         }
 
         // Use lower threshold to catch the changes

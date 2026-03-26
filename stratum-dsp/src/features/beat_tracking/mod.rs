@@ -500,7 +500,7 @@ mod tests {
             generate_beat_grid(bpm, bpm_confidence, &onsets, sample_rate).unwrap();
 
         assert!(!beat_grid.beats.is_empty());
-        assert!(stability >= 0.0 && stability <= 1.0);
+        assert!((0.0..=1.0).contains(&stability));
 
         // Beats should be sorted
         for i in 1..beat_grid.beats.len() {
@@ -631,7 +631,7 @@ mod tests {
             stability < 0.9,
             "Variable tempo should have lower stability"
         );
-        assert!(stability >= 0.0 && stability <= 1.0);
+        assert!((0.0..=1.0).contains(&stability));
     }
 
     #[test]

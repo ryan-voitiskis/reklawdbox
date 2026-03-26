@@ -184,9 +184,10 @@ impl HmmBeatTracker {
     fn build_transition_matrix(&self) -> Vec<Vec<f32>> {
         let mut matrix = vec![vec![0.0; NUM_STATES]; NUM_STATES];
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..NUM_STATES {
             for j in 0..NUM_STATES {
-                let distance = (i as i32 - j as i32).abs() as usize;
+                let distance = (i as i32 - j as i32).unsigned_abs() as usize;
 
                 if distance == 0 {
                     // Self-transition: most likely
@@ -202,11 +203,11 @@ impl HmmBeatTracker {
         }
 
         // Normalize rows (should sum to 1.0)
-        for i in 0..NUM_STATES {
-            let sum: f32 = matrix[i].iter().sum();
+        for row in &mut matrix {
+            let sum: f32 = row.iter().sum();
             if sum > EPSILON {
-                for j in 0..NUM_STATES {
-                    matrix[i][j] /= sum;
+                for val in row.iter_mut() {
+                    *val /= sum;
                 }
             }
         }
@@ -252,6 +253,7 @@ impl HmmBeatTracker {
         let mut emission_matrix = vec![vec![0.0; NUM_STATES]; num_frames];
 
         // For each time frame
+        #[allow(clippy::needless_range_loop)]
         for t in 0..num_frames {
             let frame_time = start_time + (t as f32 * beat_interval);
 
@@ -351,9 +353,9 @@ impl HmmBeatTracker {
         let mut best_final_prob = 0.0;
         let mut best_final_state = 0;
 
-        for s in 0..NUM_STATES {
-            if viterbi[num_frames - 1][s] > best_final_prob {
-                best_final_prob = viterbi[num_frames - 1][s];
+        for (s, &prob) in viterbi[num_frames - 1].iter().enumerate() {
+            if prob > best_final_prob {
+                best_final_prob = prob;
                 best_final_state = s;
             }
         }
@@ -469,8 +471,8 @@ mod tests {
         assert_eq!(matrix[0].len(), 5);
 
         // Self-transition should be highest (0.7)
-        for i in 0..5 {
-            assert!(matrix[i][i] > 0.6, "Self-transition should be high");
+        for (i, row) in matrix.iter().enumerate() {
+            assert!(row[i] > 0.6, "Self-transition should be high");
         }
 
         // Adjacent transitions should be medium (0.15)
@@ -505,7 +507,7 @@ mod tests {
         for row in &emissions {
             for &prob in row {
                 assert!(
-                    prob >= 0.0 && prob <= 1.0,
+                    (0.0..=1.0).contains(&prob),
                     "Emission probability should be in [0, 1]"
                 );
             }

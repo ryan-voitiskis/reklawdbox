@@ -1155,6 +1155,7 @@ async fn write_xml_no_change_path_via_router_includes_provenance() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_with_playlists_exports_without_staged_changes() {
     let _env_guard = backup_script_env_lock()
         .lock()
@@ -1235,6 +1236,7 @@ async fn write_xml_with_playlists_reports_missing_track_ids() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_label_gate_blocks_when_set() {
     let _env_guard = backup_script_env_lock()
         .lock()
@@ -1305,6 +1307,7 @@ async fn write_xml_label_gate_blocks_when_set() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_label_gate_clears_when_zero() {
     let _env_guard = backup_script_env_lock()
         .lock()
@@ -1359,6 +1362,7 @@ async fn write_xml_label_gate_clears_when_zero() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_deduplicates_playlist_and_staged_tracks() {
     let _env_guard = backup_script_env_lock()
         .lock()
@@ -1489,6 +1493,7 @@ async fn write_xml_deduplicates_playlist_and_staged_tracks() {
 
 #[tokio::test]
 #[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() {
     use std::os::unix::fs::PermissionsExt;
 

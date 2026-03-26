@@ -67,6 +67,7 @@ const DEFAULT_ITERATIONS: usize = 10;
 /// let (harmonic, percussive) = hpss_decompose(&magnitude_spec, 10)?;
 /// # Ok::<(), stratum_dsp::AnalysisError>(())
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn hpss_decompose(
     magnitude_spec: &[Vec<f32>],
     margin: usize,
@@ -104,8 +105,8 @@ pub fn hpss_decompose(
     );
 
     // Initialize harmonic and percussive with input spectrogram
-    let mut harmonic: Vec<Vec<f32>> = magnitude_spec.iter().map(|frame| frame.clone()).collect();
-    let mut percussive: Vec<Vec<f32>> = magnitude_spec.iter().map(|frame| frame.clone()).collect();
+    let mut harmonic: Vec<Vec<f32>> = magnitude_spec.to_vec();
+    let mut percussive: Vec<Vec<f32>> = magnitude_spec.to_vec();
 
     // Iterative refinement
     for iteration in 0..DEFAULT_ITERATIONS {
@@ -181,6 +182,7 @@ fn apply_horizontal_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Ve
     let mut filtered = vec![vec![0.0f32; n_bins]; n_frames];
 
     for bin_idx in 0..n_bins {
+        #[allow(clippy::needless_range_loop)]
         for frame_idx in 0..n_frames {
             // Collect values in window around current frame
             let start = frame_idx.saturating_sub(margin);
@@ -192,7 +194,7 @@ fn apply_horizontal_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Ve
             window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let median = if window.is_empty() {
                 0.0
-            } else if window.len() % 2 == 0 {
+            } else if window.len().is_multiple_of(2) {
                 (window[window.len() / 2 - 1] + window[window.len() / 2]) * 0.5
             } else {
                 window[window.len() / 2]
@@ -212,8 +214,8 @@ fn apply_vertical_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Vec<
     let n_bins = spectrogram[0].len();
     let mut filtered = vec![vec![0.0f32; n_bins]; n_frames];
 
-    for frame_idx in 0..n_frames {
-        for bin_idx in 0..n_bins {
+    for (frame_idx, filtered_row) in filtered.iter_mut().enumerate() {
+        for (bin_idx, filtered_val) in filtered_row.iter_mut().enumerate() {
             // Collect values in window around current bin
             let start = bin_idx.saturating_sub(margin);
             let end = (bin_idx + margin + 1).min(n_bins);
@@ -224,13 +226,13 @@ fn apply_vertical_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Vec<
             window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let median = if window.is_empty() {
                 0.0
-            } else if window.len() % 2 == 0 {
+            } else if window.len().is_multiple_of(2) {
                 (window[window.len() / 2 - 1] + window[window.len() / 2]) * 0.5
             } else {
                 window[window.len() / 2]
             };
 
-            filtered[frame_idx][bin_idx] = median;
+            *filtered_val = median;
         }
     }
 
@@ -336,7 +338,7 @@ pub fn detect_hpss_onsets(
         return Ok(Vec::new());
     }
 
-    if threshold_percentile < 0.0 || threshold_percentile > 1.0 {
+    if !(0.0..=1.0).contains(&threshold_percentile) {
         return Err(AnalysisError::InvalidInput(format!(
             "Threshold percentile must be in [0, 1], got {}",
             threshold_percentile
@@ -487,16 +489,16 @@ mod tests {
         let mut magnitude_spec = vec![vec![0.0f32; 1024]; 20];
 
         // Harmonic: sustained energy across time in specific frequency bins
-        for frame_idx in 0..20 {
-            for bin_idx in 100..200 {
-                magnitude_spec[frame_idx][bin_idx] = 0.8f32;
+        for frame in &mut magnitude_spec {
+            for bin in &mut frame[100..200] {
+                *bin = 0.8f32;
             }
         }
 
         // Percussive: transient bursts at specific frames
-        for frame_idx in [5, 10, 15] {
-            for bin_idx in 0..1024 {
-                magnitude_spec[frame_idx][bin_idx] = 1.0f32;
+        for &frame_idx in &[5, 10, 15] {
+            for bin in &mut magnitude_spec[frame_idx][0..1024] {
+                *bin = 1.0f32;
             }
         }
 
@@ -520,9 +522,9 @@ mod tests {
         let mut percussive = vec![vec![0.01f32; 1024]; 20];
 
         // Add transient bursts at frames 5, 10, 15
-        for frame_idx in [5, 10, 15] {
-            for bin_idx in 0..1024 {
-                percussive[frame_idx][bin_idx] = 1.0f32;
+        for &frame_idx in &[5, 10, 15] {
+            for bin in &mut percussive[frame_idx][0..1024] {
+                *bin = 1.0f32;
             }
         }
 
@@ -567,10 +569,10 @@ mod tests {
     fn test_detect_hpss_onsets_threshold_sensitivity() {
         // Create percussive with varying energy
         let mut percussive = vec![vec![0.01f32; 1024]; 20];
-        for i in 0..20 {
+        for (i, frame) in percussive.iter_mut().enumerate() {
             let amplitude = 0.1 + (i as f32 / 20.0) * 0.9;
-            for bin_idx in 0..1024 {
-                percussive[i][bin_idx] = amplitude;
+            for bin in frame.iter_mut() {
+                *bin = amplitude;
             }
         }
 

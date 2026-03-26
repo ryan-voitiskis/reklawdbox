@@ -98,6 +98,7 @@ pub struct SilenceRegion {
 /// println!("Found {} silence regions", silence_map.len());
 /// # Ok::<(), stratum_dsp::AnalysisError>(())
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn detect_and_trim(
     samples: &[f32],
     sample_rate: u32,
@@ -177,7 +178,7 @@ pub fn detect_and_trim(
     // Convert min_duration_ms to frames
     let min_duration_samples =
         (detector.min_duration_ms as f32 / 1000.0 * sample_rate as f32) as usize;
-    let min_duration_frames = (min_duration_samples + hop_size - 1) / hop_size; // Round up
+    let min_duration_frames = min_duration_samples.div_ceil(hop_size);
 
     // Find silence regions
     let mut silence_regions: Vec<SilenceRegion> = Vec::new();
@@ -290,8 +291,8 @@ mod tests {
     ) -> Vec<f32> {
         let mut samples = vec![0.0f32; total_samples];
         // Add audio signal in the middle
-        for i in audio_start..audio_end.min(total_samples) {
-            samples[i] = amplitude * (i as f32 / 1000.0).sin(); // Simple sine wave
+        for (i, sample) in samples[audio_start..audio_end.min(total_samples)].iter_mut().enumerate() {
+            *sample = amplitude * ((audio_start + i) as f32 / 1000.0).sin(); // Simple sine wave
         }
         samples
     }
@@ -338,8 +339,8 @@ mod tests {
     fn test_detect_and_trim_no_silence() {
         // Audio with no silence
         let mut samples = vec![0.0f32; 44100];
-        for i in 0..samples.len() {
-            samples[i] = 0.5 * (i as f32 / 1000.0).sin();
+        for (i, sample) in samples.iter_mut().enumerate() {
+            *sample = 0.5 * (i as f32 / 1000.0).sin();
         }
 
         let detector = SilenceDetector {
@@ -386,12 +387,12 @@ mod tests {
         // Create audio with varying levels
         let mut samples = vec![0.0f32; 44100 * 2];
         // Add quiet section (below -40 dB)
-        for i in 0..22050 {
-            samples[i] = 0.01; // ~-40 dB
+        for sample in &mut samples[0..22050] {
+            *sample = 0.01; // ~-40 dB
         }
         // Add louder section
-        for i in 22050..44100 {
-            samples[i] = 0.5; // Much louder
+        for sample in &mut samples[22050..44100] {
+            *sample = 0.5; // Much louder
         }
 
         // Low threshold should detect less silence
@@ -426,8 +427,8 @@ mod tests {
         // Create audio with short silence bursts
         let mut samples = vec![0.5f32; 44100 * 2];
         // Add very short silence (less than 500ms)
-        for i in 10000..15000 {
-            samples[i] = 0.0;
+        for sample in &mut samples[10000..15000] {
+            *sample = 0.0;
         }
 
         let detector = SilenceDetector {

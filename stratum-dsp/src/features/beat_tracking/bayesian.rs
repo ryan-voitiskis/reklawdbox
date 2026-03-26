@@ -77,7 +77,7 @@ impl BayesianBeatTracker {
     pub fn new(initial_bpm: f32, initial_confidence: f32) -> Self {
         Self {
             current_bpm: initial_bpm,
-            current_confidence: initial_confidence.max(0.0).min(1.0),
+            current_confidence: initial_confidence.clamp(0.0, 1.0),
             history: vec![initial_bpm],
         }
     }
@@ -380,7 +380,7 @@ mod tests {
         let (new_bpm, new_confidence) = tracker.update_with_onsets(&onsets, 44100).unwrap();
 
         assert!(new_bpm > 0.0);
-        assert!(new_confidence >= 0.0 && new_confidence <= 1.0);
+        assert!((0.0..=1.0).contains(&new_confidence));
         assert_eq!(tracker.current_bpm, new_bpm);
         assert_eq!(tracker.current_confidence, new_confidence);
         assert_eq!(tracker.history.len(), 2); // Initial + updated

@@ -314,7 +314,7 @@ fn collect_audio_files(dir: &Path, recursive: bool, result: &mut Vec<PathBuf>) {
             let mut files = Vec::new();
             let mut subdirs = Vec::new();
             for entry in entries.filter_map(|e| e.ok()) {
-                let is_symlink = entry.file_type().map_or(false, |ft| ft.is_symlink());
+                let is_symlink = entry.file_type().is_ok_and(|ft| ft.is_symlink());
                 let path = entry.path();
                 if path.is_file() && is_audio_file(&path) {
                     files.push(path);

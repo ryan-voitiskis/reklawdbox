@@ -494,6 +494,7 @@ fn frame_to_chroma_tuned(
 ///
 /// This is a lightweight approximation intended for real-world mixes (DJ tracks), while still using
 /// the existing STFT front-end (no CQT required).
+#[allow(clippy::too_many_arguments)]
 fn frame_to_hpcp_tuned(
     magnitude_frame: &[f32],
     sample_rate: u32,
@@ -524,6 +525,7 @@ fn frame_to_hpcp_tuned(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn frame_to_hpcp_tuned_band(
     magnitude_frame: &[f32],
     sample_rate: u32,
@@ -764,8 +766,7 @@ pub fn convert_linear_to_log_frequency_spectrogram(
     // Convert each frame
     let mut log_freq_spec = Vec::with_capacity(n_frames);
 
-    for frame_idx in 0..n_frames {
-        let linear_frame = &linear_spec_frames[frame_idx];
+    for linear_frame in linear_spec_frames.iter().take(n_frames) {
         let mut log_frame = vec![0.0f32; n_semitone_bins];
 
         // For each linear frequency bin, accumulate into semitone bins using linear interpolation
@@ -825,6 +826,7 @@ pub fn convert_linear_to_log_frequency_spectrogram(
 /// # Returns
 ///
 /// Chroma vectors (one per beat interval) and per-beat energies
+#[allow(clippy::too_many_arguments)]
 pub fn extract_beat_synchronous_chroma(
     magnitude_spec_frames: &[Vec<f32>],
     sample_rate: u32,
@@ -1091,6 +1093,7 @@ pub fn extract_chroma_from_spectrogram_with_options_and_energy_tuned(
 /// Extract HPCP-style pitch-class profiles and per-frame energy from a spectrogram.
 ///
 /// This is a key-only feature option (more robust on real-world mixes than raw chroma).
+#[allow(clippy::too_many_arguments)]
 pub fn extract_hpcp_from_spectrogram_with_options_and_energy_tuned(
     magnitude_spec_frames: &[Vec<f32>],
     sample_rate: u32,
@@ -1147,6 +1150,7 @@ pub fn extract_hpcp_from_spectrogram_with_options_and_energy_tuned(
 }
 
 /// Extract blended HPCP profiles: (1-w)*full_band + w*bass_band, normalized per frame.
+#[allow(clippy::too_many_arguments)]
 pub fn extract_hpcp_bass_blend_from_spectrogram_with_options_and_energy_tuned(
     magnitude_spec_frames: &[Vec<f32>],
     sample_rate: u32,
@@ -1209,7 +1213,7 @@ pub fn extract_hpcp_bass_blend_from_spectrogram_with_options_and_energy_tuned(
             fft_size,
             soft_mapping_sigma,
             tuning_offset_semitones,
-            peaks_per_frame.min(12).max(1),
+            peaks_per_frame.clamp(1, 12),
             num_harmonics,
             harmonic_decay,
             mag_power,
@@ -1273,6 +1277,7 @@ pub fn smooth_spectrogram_time(
         for t in 0..n_frames {
             prefix[t + 1] = prefix[t] + magnitude_spec_frames[t][bin];
         }
+        #[allow(clippy::needless_range_loop)]
         for t in 0..n_frames {
             let start = t.saturating_sub(margin);
             let end = (t + margin + 1).min(n_frames);
@@ -1361,6 +1366,7 @@ pub fn harmonic_spectrogram_time_mask(
 ///
 /// Reference:
 /// - Driedger, J., & Müller, M. (2014). Extending Harmonic-Percussive Separation of Audio Signals. ISMIR.
+#[allow(clippy::too_many_arguments)]
 pub fn harmonic_spectrogram_hpss_median_mask(
     magnitude_spec_frames: &[Vec<f32>],
     sample_rate: u32,
@@ -1435,13 +1441,14 @@ pub fn harmonic_spectrogram_hpss_median_mask(
     // Harmonic estimate: median across time (horizontal median filter).
     let mut h_est = vec![vec![0.0f32; band_bins]; n_ds];
     let mut scratch: Vec<f32> = Vec::with_capacity(2 * time_margin + 1);
+    #[allow(clippy::needless_range_loop)]
     for b in 0..band_bins {
         for t in 0..n_ds {
             scratch.clear();
             let start = t.saturating_sub(time_margin);
             let end = (t + time_margin + 1).min(n_ds);
-            for tt in start..end {
-                let x = band_ds[tt][b];
+            for row in &band_ds[start..end] {
+                let x = row[b];
                 scratch.push(if x.is_finite() { x.max(0.0) } else { 0.0 });
             }
             h_est[t][b] = median_in_place(&mut scratch);
@@ -1451,13 +1458,13 @@ pub fn harmonic_spectrogram_hpss_median_mask(
     // Percussive estimate: median across frequency (vertical median filter).
     let mut p_est = vec![vec![0.0f32; band_bins]; n_ds];
     scratch = Vec::with_capacity(2 * freq_margin + 1);
+    #[allow(clippy::needless_range_loop)]
     for t in 0..n_ds {
         for b in 0..band_bins {
             scratch.clear();
             let start = b.saturating_sub(freq_margin);
             let end = (b + freq_margin + 1).min(band_bins);
-            for bb in start..end {
-                let x = band_ds[t][bb];
+            for &x in &band_ds[t][start..end] {
                 scratch.push(if x.is_finite() { x.max(0.0) } else { 0.0 });
             }
             p_est[t][b] = median_in_place(&mut scratch);
@@ -1468,25 +1475,26 @@ pub fn harmonic_spectrogram_hpss_median_mask(
     let p = mask_power.max(1.0);
     let eps = 1e-12f32;
     let mut mask_ds = vec![vec![0.0f32; band_bins]; n_ds];
-    for t in 0..n_ds {
-        for b in 0..band_bins {
+    for (t, mask_row) in mask_ds.iter_mut().enumerate() {
+        for (b, mask_val) in mask_row.iter_mut().enumerate() {
             let h = h_est[t][b].max(0.0);
             let per = p_est[t][b].max(0.0);
             let hp = h.powf(p);
             let pp = per.powf(p);
-            mask_ds[t][b] = hp / (hp + pp + eps);
+            *mask_val = hp / (hp + pp + eps);
         }
     }
 
     // Apply mask back to the full-resolution spectrogram.
     let mut out = vec![vec![0.0f32; n_bins]; n_frames];
-    for t in 0..n_frames {
+    for (t, out_row) in out.iter_mut().enumerate() {
         let k = (t / step).min(n_ds - 1);
+        #[allow(clippy::needless_range_loop)]
         for b in 0..band_bins {
             let bin = bin_start + b;
             let x = magnitude_spec_frames[t][bin];
             let x = if x.is_finite() { x.max(0.0) } else { 0.0 };
-            out[t][bin] = x * mask_ds[k][b];
+            out_row[bin] = x * mask_ds[k][b];
         }
     }
 

@@ -118,7 +118,7 @@ impl Key {
         let (num_str, suffix) = notation.split_at(notation.len() - 1);
         let num: u32 = num_str.parse().ok()?;
 
-        if num < 1 || num > 12 {
+        if !(1..=12).contains(&num) {
             return None;
         }
 

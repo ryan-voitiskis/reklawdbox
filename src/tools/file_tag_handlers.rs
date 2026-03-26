@@ -82,7 +82,7 @@ pub(super) async fn handle_read_file_tags(
         let sem = semaphore.clone();
         let fields_clone = fields.clone();
         handles.push(tokio::task::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = sem.acquire().await.expect("semaphore is never closed");
             let path = std::path::PathBuf::from(&file_path);
             let selected_fields = fields_clone;
             tokio::task::spawn_blocking(move || {
@@ -255,11 +255,13 @@ pub(super) async fn handle_embed_cover_art(
         .unwrap_or_else(|| "front_cover".to_string());
 
     // Read image metadata before the embed loop
-    let image_size_bytes = std::fs::metadata(&image_path)
+    let image_size_bytes = tokio::fs::metadata(&image_path)
+        .await
         .map(|m| m.len() as usize)
         .unwrap_or(0);
     let image_format = {
-        let data = std::fs::read(&image_path)
+        let data = tokio::fs::read(&image_path)
+            .await
             .map_err(|e| mcp_internal_error(format!("Failed to read image: {e}")))?;
         if data.starts_with(&[0xff, 0xd8]) {
             "jpeg"

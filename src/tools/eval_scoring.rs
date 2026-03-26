@@ -1341,6 +1341,7 @@ mod tests {
     // Timbral axis unit tests
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     fn make_timbral_profile(
         id: &str,
         key: &str,
@@ -1807,7 +1808,7 @@ mod tests {
 
     #[test]
     fn eval_pool_cohesion_single_track() {
-        let profiles = vec![simple_profile("single", "8A", 126.0, 0.5, "House")];
+        let profiles = [simple_profile("single", "8A", 126.0, 0.5, "House")];
         let refs: Vec<&TrackProfile> = profiles.iter().collect();
         let result = compute_pool_cohesion(
             &refs,
@@ -2046,7 +2047,7 @@ mod tests {
 
     #[test]
     fn eval_discover_pools_empty_below_min_size() {
-        let profiles = vec![simple_profile("small1", "8A", 126.0, 0.5, "House")];
+        let profiles = [simple_profile("small1", "8A", 126.0, 0.5, "House")];
         let refs: Vec<&TrackProfile> = profiles.iter().collect();
 
         let pools = discover_pools(
@@ -2203,7 +2204,7 @@ mod tests {
     #[test]
     fn eval_discover_pools_all_incompatible() {
         // 5 tracks that are all wildly incompatible — no edges at threshold 0.8
-        let profiles = vec![
+        let profiles = [
             simple_profile("inc1", "1A", 100.0, 0.2, "Ambient"),
             simple_profile("inc2", "5B", 140.0, 0.9, "Drum & Bass"),
             simple_profile("inc3", "9A", 80.0, 0.5, "Dub"),
@@ -2233,7 +2234,7 @@ mod tests {
     #[test]
     fn eval_discover_pools_core_edge_classification() {
         // 4 tight tracks + 1 marginal track
-        let profiles = vec![
+        let profiles = [
             simple_profile("ce1", "8A", 126.0, 0.55, "House"),
             simple_profile("ce2", "9A", 126.5, 0.57, "House"),
             simple_profile("ce3", "8A", 127.0, 0.56, "House"),

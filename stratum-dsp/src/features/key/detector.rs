@@ -287,7 +287,7 @@ pub fn detect_key_weighted(
         .unwrap_or(0.0);
 
     let confidence = if final_score > 0.0 {
-        ((final_score - best_other) / final_score).max(0.0).min(1.0)
+        ((final_score - best_other) / final_score).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -342,7 +342,7 @@ pub fn detect_key_weighted_mode_heuristic(
     }
 
     // Compute a simple weighted average chroma distribution for the 3rd-degree test.
-    let mut avg = vec![0.0f32; 12];
+    let mut avg = [0.0f32; 12];
     let mut wsum = 0.0f32;
     match frame_weights {
         None => {
@@ -497,9 +497,7 @@ pub fn detect_key_weighted_mode_heuristic(
     }
 
     let confidence = if chosen_score > 0.0 {
-        ((chosen_score - best_other) / chosen_score)
-            .max(0.0)
-            .min(1.0)
+        ((chosen_score - best_other) / chosen_score).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -544,6 +542,7 @@ pub fn detect_key_weighted_mode_heuristic(
 /// # Returns
 ///
 /// Key detection result aggregated across all scales
+#[allow(clippy::too_many_arguments)]
 pub fn detect_key_multi_scale(
     chroma_vectors: &[Vec<f32>],
     templates: &KeyTemplates,
@@ -683,7 +682,7 @@ pub fn detect_key_multi_scale(
             0.0
         };
         let confidence = if best_score > 0.0 {
-            ((best_score - second_score) / best_score).max(0.0).min(1.0)
+            ((best_score - second_score) / best_score).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -839,9 +838,7 @@ pub fn detect_key_median(
         .unwrap_or(0.0);
 
     let confidence = if median_score > 0.0 {
-        ((median_score - second_score) / median_score)
-            .max(0.0)
-            .min(1.0)
+        ((median_score - second_score) / median_score).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -952,7 +949,7 @@ pub fn detect_key_ensemble(
 
     // Confidence: (best - second) / best
     let confidence = if best_score > 0.0 {
-        ((best_score - second_score) / best_score).max(0.0).min(1.0)
+        ((best_score - second_score) / best_score).clamp(0.0, 1.0)
     } else {
         0.0
     };

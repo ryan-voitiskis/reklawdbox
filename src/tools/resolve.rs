@@ -50,7 +50,7 @@ pub(super) fn resolve_tracks(
 
     let tracks = if let Some(ids) = track_ids {
         db::get_tracks_by_ids(conn, ids)
-            .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+            .map_err(db_error)?
     } else if let Some(pid) = playlist_id {
         let db_limit = if bounded {
             effective_max.map(|m| m as u32)
@@ -59,10 +59,10 @@ pub(super) fn resolve_tracks(
         };
         if bounded {
             db::get_playlist_tracks(conn, pid, db_limit)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         } else {
             db::get_playlist_tracks_unbounded(conn, pid, db_limit)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         }
     } else {
         let limit = effective_max.map(|m| m as u32);
@@ -71,10 +71,10 @@ pub(super) fn resolve_tracks(
             .map_err(|e| McpError::invalid_params(e, None))?;
         if bounded {
             db::search_tracks(conn, &search)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         } else {
             db::search_tracks_unbounded(conn, &search)
-                .map_err(|e| mcp_internal_error(format!("DB error: {e}")))?
+                .map_err(db_error)?
         }
     };
 

@@ -140,6 +140,7 @@ impl MelFilterbank {
             }
 
             // Rising slope: left..center
+            #[allow(clippy::needless_range_loop)]
             for b in left..=center {
                 let w = if b == left {
                     0.0
@@ -151,6 +152,7 @@ impl MelFilterbank {
                 }
             }
             // Falling slope: center..right
+            #[allow(clippy::needless_range_loop)]
             for b in center..=right {
                 let w = if b == right {
                     0.0
@@ -359,14 +361,14 @@ pub fn superflux_novelty(
         let curr = &log_frames[i];
 
         let mut sum = 0.0f32;
-        for b in 0..n_bins {
+        for (b, &curr_val) in curr.iter().enumerate().take(n_bins) {
             let start = b.saturating_sub(k);
             let end = (b + k + 1).min(n_bins);
             let mut prev_max = 0.0f32;
             for v in &prev[start..end] {
                 prev_max = prev_max.max(*v);
             }
-            let diff = (curr[b] - prev_max).max(0.0);
+            let diff = (curr_val - prev_max).max(0.0);
             sum += diff * diff;
         }
         flux.push(sum.sqrt());
@@ -425,14 +427,14 @@ pub fn superflux_novelty_band(
         let curr = &log_frames[i];
 
         let mut sum = 0.0f32;
-        for b in start..end {
+        for (b, &curr_val) in curr.iter().enumerate().take(end).skip(start) {
             let local_start = b.saturating_sub(k).max(start);
             let local_end = (b + k + 1).min(end);
             let mut prev_max = 0.0f32;
             for v in &prev[local_start..local_end] {
                 prev_max = prev_max.max(*v);
             }
-            let diff = (curr[b] - prev_max).max(0.0);
+            let diff = (curr_val - prev_max).max(0.0);
             sum += diff * diff;
         }
         flux.push(sum.sqrt());
@@ -578,14 +580,14 @@ pub fn mel_superflux_novelty(
         }
 
         let mut sum = 0.0f32;
-        for b in 0..n {
+        for (b, &curr_val) in curr.iter().enumerate().take(n) {
             let start = b.saturating_sub(k);
             let end = (b + k + 1).min(n);
             let mut prev_max = 0.0f32;
             for v in &prev[start..end] {
                 prev_max = prev_max.max(*v);
             }
-            let diff = (curr[b] - prev_max).max(0.0);
+            let diff = (curr_val - prev_max).max(0.0);
             sum += diff * diff;
         }
         flux.push(sum.sqrt());
@@ -865,6 +867,7 @@ pub fn combined_novelty(spectral: &[f32], energy: &[f32], hfc: &[f32]) -> Vec<f3
 ///
 /// This is a tuning hook: novelty weighting and conditioning strongly affects whether the
 /// novelty emphasizes the beat-level pulse vs subdivisions (hi-hats) vs harmonic motion.
+#[allow(clippy::too_many_arguments)]
 pub fn combined_novelty_with_params(
     spectral: &[f32],
     energy: &[f32],
@@ -989,8 +992,8 @@ mod tests {
         let mut spectrogram = vec![vec![0.1f32; 1024]; 10];
 
         // Frame 5: different spectral pattern
-        for bin in 0..512 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5][0..512] {
+            *bin = 1.0f32;
         }
 
         let novelty = spectral_flux_novelty(&spectrogram).unwrap();
@@ -1022,8 +1025,8 @@ mod tests {
         let mut spectrogram = vec![vec![0.1f32; 1024]; 10];
 
         // Frame 5: higher energy
-        for bin in 0..1024 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5] {
+            *bin = 1.0f32;
         }
 
         let novelty = energy_flux_novelty(&spectrogram).unwrap();
@@ -1038,8 +1041,8 @@ mod tests {
         let mut spectrogram = vec![vec![0.1f32; 1024]; 10];
 
         // Frame 5: high-frequency content
-        for bin in 512..1024 {
-            spectrogram[5][bin] = 1.0f32;
+        for bin in &mut spectrogram[5][512..1024] {
+            *bin = 1.0f32;
         }
 
         let novelty = hfc_novelty(&spectrogram, 44100).unwrap();
@@ -1059,7 +1062,7 @@ mod tests {
 
         assert_eq!(combined.len(), 5);
         // Conditioning can reshape small synthetic examples; just validate normalization/range.
-        assert!(combined.iter().all(|&v| v >= 0.0 && v <= 1.0));
+        assert!(combined.iter().all(|&v| (0.0..=1.0).contains(&v)));
         assert!(combined.iter().copied().fold(0.0f32, f32::max) > 0.0);
     }
 

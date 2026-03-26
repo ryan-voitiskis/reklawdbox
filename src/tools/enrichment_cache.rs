@@ -32,10 +32,18 @@ pub(super) fn cache_lookup_result<T: serde::Serialize + HasScore>(
         Some(r) => {
             let json = match serde_json::to_string(r) {
                 Ok(j) => j,
-                Err(_) => return Ok(1), // skip cache write rather than store null data
+                Err(e) => {
+                    tracing::warn!(
+                        provider,
+                        artist = norm_artist,
+                        title = norm_title,
+                        "cache write skipped: serialization failed: {e}"
+                    );
+                    return Ok(1);
+                }
             };
             let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
-            let _ = store::set_enrichment(
+            if let Err(e) = store::set_enrichment(
                 &store_conn,
                 provider,
                 norm_artist,
@@ -43,11 +51,18 @@ pub(super) fn cache_lookup_result<T: serde::Serialize + HasScore>(
                 None,
                 Some(quality),
                 Some(&json),
-            );
+            ) {
+                tracing::warn!(
+                    provider,
+                    artist = norm_artist,
+                    title = norm_title,
+                    "cache write failed: {e}"
+                );
+            }
             Ok(1)
         }
         None => {
-            let _ = store::set_enrichment(
+            if let Err(e) = store::set_enrichment(
                 &store_conn,
                 provider,
                 norm_artist,
@@ -55,7 +70,14 @@ pub(super) fn cache_lookup_result<T: serde::Serialize + HasScore>(
                 None,
                 Some("none"),
                 None,
-            );
+            ) {
+                tracing::warn!(
+                    provider,
+                    artist = norm_artist,
+                    title = norm_title,
+                    "cache write (miss marker) failed: {e}"
+                );
+            }
             Ok(0)
         }
     }

@@ -109,10 +109,7 @@ pub fn detect_key_changes(
         let end_frame = start_frame + segment_frames;
 
         // Extract segment chroma vectors
-        let segment_chroma: Vec<Vec<f32>> = chroma_vectors[start_frame..end_frame]
-            .iter()
-            .cloned()
-            .collect();
+        let segment_chroma: Vec<Vec<f32>> = chroma_vectors[start_frame..end_frame].to_vec();
 
         // Detect key for this segment
         match detect_key(&segment_chroma, templates) {
