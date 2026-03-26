@@ -25,7 +25,7 @@ SQLCipher mismatch or corrupted DB. Ensure you're using the reklawdbox binary (b
 
 ## Discogs authentication
 
-### "Discogs auth is not configured"
+### "Invalid broker URL in REKLAWDBOX_DISCOGS_BROKER_URL"
 
 Broker URL is invalid. Remove custom `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` overrides to use built-in defaults. If self-hosting, verify the URL includes the scheme (`https://`).
 
@@ -51,6 +51,10 @@ Call `lookup_discogs` again to start a new auth flow. If that fails, hard reset:
    sqlite3 ~/Library/Application\ Support/reklawdbox/internal.sqlite3 \
      "DELETE FROM broker_discogs_session;"
    ```
+
+   <Aside type="tip">
+     Session tokens are also stored in macOS Keychain under service `com.reklawdbox.broker-session`. Removing the DB row is sufficient (prevents the session from being found), but for a thorough reset you can also delete the Keychain entry via Keychain Access or `security delete-generic-password -s com.reklawdbox.broker-session`.
+   </Aside>
 
 3. Restart the MCP host.
 

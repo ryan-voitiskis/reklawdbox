@@ -121,12 +121,21 @@ Genres are grouped into families. Compatibility depends on whether two genres sh
 | Family    | Genres                                                                                                  |
 | --------- | ------------------------------------------------------------------------------------------------------- |
 | House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco |
-| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, Electro      |
+| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, Electro, Trance, Psytrance |
 | Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, UK Bass, Grime, Bassline, Broken Beat                          |
 | Downtempo | Ambient, Downtempo, Dub, Dub Reggae, IDM, Experimental                                                  |
-| Other     | Hip Hop, Trance, Psytrance, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                |
+| Other     | Hip Hop, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                                   |
 
 Genres within the "Other" family do **not** receive the 0.7 related-genre bonus with each other. They score 0.3 against all other genres, including other "Other" entries.
+
+### Contextual modifiers
+
+Genre scoring adjusts based on recent sequencing context:
+
+- **Streak bonus (+0.1):** When the current transition stays within the same genre family and the preceding run of same-family tracks is 1-4 tracks long (non-Other family), +0.1 is added to the genre axis score (capped at 1.0). This rewards building genre momentum.
+- **Early switch penalty (-0.1):** When switching to a different genre family after a run of only 1 same-family track, -0.1 is subtracted from the genre axis score (floored at 0.0). This discourages abrupt one-off genre detours.
+
+These modifiers only apply during `build_set` sequencing, where the algorithm tracks the genre run length across the evolving set. They do not apply to standalone `score_transition` calls.
 
 Genre matching uses the canonical genre assigned by reklawdbox's classification system, not the raw genre string from Rekordbox metadata. If a track hasn't been classified yet, the raw metadata genre is normalized to the closest canonical genre.
 

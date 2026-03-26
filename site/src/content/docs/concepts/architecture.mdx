@@ -50,7 +50,7 @@ Rekordbox 6/7 encrypt `master.db` with SQLCipher 4 (AES-256-CBC). The key is uni
 | `djmdKey` | Musical key names (FK from DjmdContent) |
 | `djmdLabel` | Record label names |
 | `djmdColor` | Color tag names (FK from DjmdContent) |
-| `djmdPlaylist` | Playlists/folders (type 0 = playlist, 1 = folder, 4 = smart) |
+| `djmdPlaylist` | Playlists/folders (Attribute 0 = playlist, 1 = folder, 4 = smart) |
 | `djmdSongPlaylist` | Track-to-playlist join table |
 
 <Aside type="note">
@@ -110,7 +110,7 @@ The binary doubles as a standalone CLI. No MCP host required.
 | `write-tags` | Write native file tags |
 | `extract-art` | Extract embedded cover art |
 | `embed-art` | Embed cover art into audio files |
-| `setup` | Configure broker URL/token (self-hosted brokers only) |
+| `setup` | Install Essentia (and optionally configure broker URL/token with `--broker`) |
 
 See [CLI Commands](/cli/) for full usage.
 

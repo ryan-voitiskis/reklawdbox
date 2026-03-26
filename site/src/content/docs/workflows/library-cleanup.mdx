@@ -10,6 +10,10 @@ import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
 Five sessions, each with clear entry and exit criteria. Follow in order — later sessions depend on earlier ones.
 
+<Aside type="tip" title="Start with a health scan">
+  Before Session 1, run a [Library Health](/workflows/library-health/) scan to find broken links, orphan files, and duplicates. Fixing structural issues first prevents wasted work in later sessions.
+</Aside>
+
 <Aside type="danger">
   **Session 1 writes directly to files, while Sessions 3–5 stage changes as XML.** For XML sessions, the Rekordbox database only updates after you import the XML file. Each session reads from the database, so you **must** complete each checkpoint before starting the next session.
 </Aside>
@@ -76,7 +80,9 @@ reklawdbox hydrate --cpu overnight -y
 Find tracks missing labels and years in my collection and fill them from enrichment data.
 ```
 
-Labels are the strongest genre signal for electronic music, and years provide era context for classification and set building. The agent checks enrichment coverage, backfills empty labels and missing years from Discogs, and presents conflicts grouped by pattern for your review.
+Labels are the strongest genre signal for electronic music, years provide era context for classification and set building, and albums round out metadata for library browsing. The agent checks enrichment coverage, backfills empty labels, missing years, and albums from all enrichment providers, and presents conflicts grouped by pattern for your review.
+
+<LinkCard title="Metadata Backfill workflow" href="/workflows/metadata-backfill/" />
 
 #### CHECKPOINT
 

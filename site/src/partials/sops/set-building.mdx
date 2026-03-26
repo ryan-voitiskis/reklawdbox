@@ -22,7 +22,7 @@ Ask user for:
 - **Genre focus** — specific genres, playlist, or "any"
 - **BPM range** — e.g., 120-135, or "flexible"
 - **Energy curve** — warmup→build→peak→release (default), flat, peak_only, or custom
-- **Priority** — balanced (default), harmonic, energy, or genre
+- **Priority** — balanced (default), harmonic, energy, or genre. Accepts a named preset string (e.g., `"balanced"`), a preset with overrides (e.g., `{preset: "harmonic", overrides: {energy: 0.25}}`), or fully custom weights with axes: key, bpm, energy, genre, brightness, rhythm. Custom presets can be saved with `save_weight_preset` and listed with `list_weight_presets` for reuse across sessions.
 - **Starting track** — optional seed track
 - **Harmonic style** — conservative / balanced (default) / adventurous
 - **BPM drift tolerance** — default 6%
@@ -86,6 +86,7 @@ Ask user: "Proceed with this pool? / adjust filters / add from another playlist"
 build_set(
   track_ids=[...],
   target_tracks=12,
+  start_track_id="...",
   priority="balanced",
   energy_curve="warmup_build_peak_release",
   beam_width=3,

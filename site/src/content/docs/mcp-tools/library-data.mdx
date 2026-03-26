@@ -13,7 +13,7 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ### `read_library` <Badge text="no params" variant="note" />
 
-Returns a library summary: track count, genre distribution, BPM range, key distribution, and rating breakdown.
+Returns a library summary: track count, genre distribution, average BPM, key distribution, and rating breakdown.
 
 ---
 
@@ -31,6 +31,8 @@ Search and filter tracks. All parameters are optional — combine any set of fil
 | `bpm_max` | number | | Maximum BPM |
 | `key` | string | | Filter by musical key (e.g., `"Am"`) |
 | `has_genre` | boolean | | Filter by whether track has a genre set |
+| `has_label` | boolean | | Filter by whether track has a label set |
+| `year_zero` | boolean | | Filter to tracks with year = 0 (unset) |
 | `label` | string | | Filter by label (partial match) |
 | `path` | string | | Filter by file path/folder (substring) |
 | `path_prefix` | string | | Require file path starts with this prefix |

@@ -27,6 +27,8 @@ Ask user for 2-5 seed tracks that define the pool's character. Sources:
 
 Confirm seeds with user before proceeding. Present each seed's key, BPM, energy, genre.
 
+**Alternative: automatic seed discovery.** Instead of manual seed selection, `discover_pools` can find natural track pools using Bron-Kerbosch clique enumeration on a compatibility graph. Filter by genre, BPM, or playlist and adjust `threshold` (0.3-0.95) to control pool tightness. Discovered pools can be used directly or as seeds for expansion.
+
 ### 2. Expand the pool
 
 ```
@@ -39,7 +41,7 @@ expand_pool(
 
 Adjust parameters based on user goals:
 - `cross_genre=true` for timbral discovery across genre boundaries
-- `preset="timbral"` to prioritize sonic similarity over metadata matching
+- `preset="timbral"` to prioritize sonic similarity over metadata matching. The `preset` parameter accepts a named preset string (e.g., `"balanced"`), a preset with overrides (e.g., `{preset: "timbral", overrides: {timbral: 0.4}}`), or fully custom weights with axes: bpm, energy, timbral, key, genre, brightness, rhythm. Custom presets can be saved with `save_weight_preset` and listed with `list_weight_presets` for reuse across sessions.
 - `playlist_id` to restrict candidates to a specific playlist
 - Search filters (`genre`, `bpm_min`, `bpm_max`, `rating_min`) to scope candidates
 

@@ -30,19 +30,19 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
   </Card>
   <Card title="Enrichment & Analysis" icon="rocket">
     Look up metadata on Discogs and Beatport. Analyze audio for BPM, key, and energy descriptors.
-    [6 tools](/mcp-tools/enrichment-analysis/)
+    [8 tools](/mcp-tools/enrichment-analysis/)
   </Card>
   <Card title="Classification & Staging" icon="pencil">
     Genre classification, auditing, metadata backfill, staging, and XML export.
-    [10 tools](/mcp-tools/classification-staging/)
+    [11 tools](/mcp-tools/classification-staging/)
   </Card>
   <Card title="Mixing & Sequencing" icon="bars-ascending">
     Score transitions, build set sequences, and discover compatible track pools.
-    [6 tools](/mcp-tools/mixing/)
+    [10 tools](/mcp-tools/mixing/)
   </Card>
   <Card title="Files & System" icon="setting">
     Read/write native file tags, manage cover art, audit collections, and clear caches.
-    [7 tools](/mcp-tools/files-system/)
+    [11 tools](/mcp-tools/files-system/)
   </Card>
 </CardGrid>
 
@@ -61,6 +61,7 @@ Many tools share a common set of **search filter parameters**. Used by `search_t
 | `key` | string | Filter by musical key (e.g., `"Am"`, `"Cm"`) |
 | `has_genre` | boolean | Filter by whether track has a genre set |
 | `has_label` | boolean | Filter by whether track has a label set |
+| `year_zero` | boolean | Filter to tracks with year = 0 (unset) |
 | `label` | string | Filter by label (partial match) |
 | `path` | string | Filter by file path/folder (substring match) |
 | `path_prefix` | string | Filter to tracks whose file path starts with this prefix |

@@ -20,7 +20,7 @@ Score a single transition between two tracks across all six axes plus a weighted
 | `from_track_id` | string | **yes** | Source track ID |
 | `to_track_id` | string | **yes** | Destination track ID |
 | `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
-| `priority` | string | | `"balanced"`, `"harmonic"`, `"energy"`, `"genre"` |
+| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
 | `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
 | `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
 
@@ -39,7 +39,7 @@ Rank pool tracks as transition candidates from a reference track, sorted by comp
 | `playlist_id` | string | | Use a playlist as the candidate pool |
 | `target_bpm` | number | | Target BPM — scores how well each candidate fits |
 | `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
-| `priority` | string | | `"balanced"`, `"harmonic"`, `"energy"`, `"genre"` |
+| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
 | `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
 | `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
 | `limit` | integer | | Max results (default: `10`, max: `50`) |
@@ -56,7 +56,7 @@ Generate candidate DJ set sequences from a track pool using beam search with ene
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | **yes** | Pool of candidate track IDs (pre-filtered) |
 | `target_tracks` | integer | **yes** | Desired number of tracks per candidate set |
-| `priority` | string | | Weight axis (default: `"balanced"`) |
+| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
 | `energy_curve` | string or array | | Preset name or custom phase array (default: `"warmup_build_peak_release"`) |
 | `start_track_id` | string | | Force a specific opening track |
 | `beam_width` | integer | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`) |
@@ -71,7 +71,9 @@ Generate candidate DJ set sequences from a track pool using beam search with ene
 
 Returns candidate sequences with per-transition scores, overall set score, and estimated total duration.
 
-### Quality gates
+### Evaluation thresholds (test harness only, not enforced at runtime)
+
+These thresholds are used by the internal test suite (`eval_scoring.rs`) to catch scoring regressions. They are **not** enforced by `build_set` at runtime.
 
 | Metric | Threshold | Description |
 |:-------|:---------:|:------------|
@@ -81,6 +83,30 @@ Returns candidate sequences with per-transition scores, overall set score, and e
 | Harmonic coherence | &ge; 50% | Fraction of transitions with key &ge; 0.8 |
 | Energy fidelity | &ge; 40% | Fraction of transitions with perfect energy |
 | Max pitch adjustment | &le; 8% | Maximum BPM deviation across set |
+
+---
+
+### Transition weight spec
+
+The `priority` parameter on `score_transition`, `query_transition_candidates`, and `build_set` accepts a flexible `TransitionWeightSpec` with three forms:
+
+**Named preset** — a built-in or saved preset by name:
+```json
+"balanced"
+```
+Built-in presets: `"balanced"`, `"harmonic"`, `"energy"`, `"genre"`.
+
+**Preset with per-axis overrides** — start from a preset and tweak individual axes (auto-renormalized):
+```json
+{"preset": "harmonic", "overrides": {"energy": 0.25}}
+```
+
+**Fully custom weights** — specify all axes directly (auto-renormalized to sum to 1.0):
+```json
+{"key": 0.3, "bpm": 0.2, "energy": 0.2, "genre": 0.15, "brightness": 0.1, "rhythm": 0.05}
+```
+
+**Transition axes:** `key`, `bpm`, `energy`, `genre`, `brightness`, `rhythm` (6 axes). All fields are optional in override and custom forms; missing fields inherit from the base preset (or default to 0 in fully custom mode).
 
 ---
 
@@ -122,7 +148,7 @@ Score pool compatibility between tracks. Three modes determined by which paramet
 |-----------|------|:-------:|-------------|
 | `master_tempo` | boolean | `false` | Master Tempo mode |
 | `reference_bpm` | number | median | Reference BPM for key evaluation |
-| `preset` | string | `"balanced"` | `"balanced"` or `"timbral"` |
+| `preset` | string \| object | `"balanced"` | Pool weight spec (see [below](#pool-weight-spec)) |
 
 ---
 
@@ -137,7 +163,7 @@ Find tracks compatible with an existing pool via iterative greedy expansion. Eac
 | `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
 | `reference_bpm` | number | | Reference BPM (default: median of seeds) |
 | `cross_genre` | boolean | | Disable genre family pre-filter (default: `false`) |
-| `preset` | string | | `"balanced"` or `"timbral"` |
+| `preset` | string \| object | | Pool weight spec (see [below](#pool-weight-spec)) |
 | `playlist_id` | string | | Restrict candidates to a playlist |
 | `max_tracks` | integer | | Cap on candidate universe size |
 
@@ -157,8 +183,86 @@ Analyze a pool's cohesion, coverage, and structure.
 | `playlist_id` | string | | Playlist ID to use as the pool |
 | `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
 | `reference_bpm` | number | | Reference BPM (default: median) |
-| `preset` | string | | `"balanced"` or `"timbral"` |
+| `preset` | string \| object | | Pool weight spec (see [below](#pool-weight-spec)) |
 
 Provide either `pool_track_ids` or `playlist_id`.
 
 Returns: cohesion (mean/min pairwise), medoid track, weak members, energy band, BPM center/spread, key neighborhood, dominant genre, analysis coverage. When `master_tempo=false`, also reports `optimal_reference_bpm` and key stability comparison.
+
+---
+
+## `discover_pools`
+
+Discover natural track pools in a library subset using Bron-Kerbosch clique enumeration on a thresholded compatibility graph. Returns overlapping pools with core/edge members and bridge tracks.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_ids` | string[] | | Specific track IDs to analyze (highest priority selector) |
+| `playlist_id` | string | | Analyze tracks in this playlist |
+| `max_tracks` | integer | | Max tracks to analyze (default: `200`) |
+| `threshold` | number | | Compatibility threshold for graph edges, 0.0--1.0 (default: `0.7`). Higher = tighter pools, fewer results |
+| `min_pool_size` | integer | | Minimum pool size (default: `3`, min: `2`) |
+| `max_pool_size` | integer | | Maximum pool size (default: `12`) |
+| `max_pools` | integer | | Max pools to return (default: `10`) |
+| `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
+| `reference_bpm` | number | | Reference BPM for key evaluation (default: median) |
+| `preset` | string \| object | | Pool weight spec (see [below](#pool-weight-spec)) |
+
+Also accepts all [search filter parameters](/mcp-tools/#shared-search-filters) for scoping the input tracks.
+
+---
+
+### Pool weight spec
+
+The `preset` parameter on `score_pool_compatibility`, `expand_pool`, `describe_pool`, and `discover_pools` accepts a flexible `PoolWeightSpec` with three forms:
+
+**Named preset** — a built-in or saved preset by name:
+```json
+"balanced"
+```
+Built-in presets: `"balanced"`, `"timbral"`.
+
+**Preset with per-axis overrides** — start from a preset and tweak individual axes (auto-renormalized):
+```json
+{"preset": "timbral", "overrides": {"timbral": 0.4}}
+```
+
+**Fully custom weights** — specify all axes directly (auto-renormalized to sum to 1.0):
+```json
+{"bpm": 0.2, "energy": 0.2, "timbral": 0.15, "key": 0.15, "genre": 0.15, "brightness": 0.1, "rhythm": 0.05}
+```
+
+**Pool axes:** `bpm`, `energy`, `timbral`, `key`, `genre`, `brightness`, `rhythm` (7 axes). All fields are optional in override and custom forms; missing fields inherit from the base preset (or default to 0 in fully custom mode).
+
+---
+
+## Weight Presets
+
+Save, list, and delete custom weight presets that persist across sessions. Built-in presets (`balanced`, `harmonic`, `energy`, `genre` for transition; `balanced`, `timbral` for pool) cannot be overwritten or deleted.
+
+### `save_weight_preset`
+
+Save a custom weight preset for reuse. Weights are auto-renormalized to sum to 1.0.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `name` | string | **yes** | Name for the preset (e.g., `"deep_techno_pool"`) |
+| `scorer_type` | string | **yes** | `"pool"` or `"transition"` |
+| `weights` | object | **yes** | Weight values. For pool: `{bpm, energy, timbral, key, genre, brightness, rhythm}`. For transition: `{key, bpm, energy, genre, brightness, rhythm}` |
+
+### `list_weight_presets`
+
+List available weight presets (both built-in and custom saved), showing weights for each.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `scorer_type` | string | | Filter by `"pool"` or `"transition"`. Omit for all |
+
+### `delete_weight_preset`
+
+Delete a custom saved weight preset. Cannot delete built-in presets.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `name` | string | **yes** | Name of the preset to delete |
+| `scorer_type` | string | **yes** | `"pool"` or `"transition"` |

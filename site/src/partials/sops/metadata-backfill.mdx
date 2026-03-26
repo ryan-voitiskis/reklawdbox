@@ -188,7 +188,7 @@ The tool scans the entire collection (excluding samples) and tries six sources i
 5. **MusicBrainz enrichment** — falls back to the cached MusicBrainz `first-release-date`.
 6. **Bandcamp enrichment** — falls back to the cached Bandcamp `release_date`. Particularly effective for underground/independent electronic music.
 
-The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. Tracks where the current year differs from a source are reported as conflicts.
+The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. For tracks that already have a non-zero year, the tool checks Discogs enrichment only — if the Discogs year differs from the current year, the track is reported as a conflict. Other providers (Beatport, MusicBrainz, Bandcamp) are not compared against existing years.
 
 The summary includes `remaining_uncached_providers` showing which providers are missing data for remaining year-zero tracks. If providers show gaps, hydrate them and re-run (or use `auto_enrich=true`).
 
@@ -200,7 +200,7 @@ Report the summary: "Year backfill complete: N years staged (N file tags, N fold
 
 Year conflicts are resolved automatically — do not present them for interactive review.
 
-For each conflict, stage the **lowest (earliest) year** from either the current value or the enrichment value via `update_tracks`. The earliest year best approximates the track's production era, which is the signal used for genre classification.
+For each conflict, stage the **lowest (earliest) year** from either the current value or the Discogs enrichment value via `update_tracks`. The earliest year best approximates the track's production era, which is the signal used for genre classification.
 
 **Exception — obviously wrong years:** If the lowest year is clearly nonsensical (e.g., 1900 for a modern electronic track, or a year that predates the genre by decades), flag it to the user instead of auto-staging. This should be rare.
 

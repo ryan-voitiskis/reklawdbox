@@ -13,7 +13,7 @@
 |------|---------|
 | `reklawdbox` MCP | Tag reading/writing, Discogs/Beatport lookups, cover art embedding |
 
-`lookup_discogs`, `lookup_beatport`, `read_file_tags`, `write_file_tags`, `embed_cover_art`, and `extract_cover_art` are MCP tool calls.
+`lookup_discogs`, `lookup_beatport`, `lookup_bandcamp`, `lookup_musicbrainz`, `read_file_tags`, `write_file_tags`, `embed_cover_art`, and `extract_cover_art` are MCP tool calls.
 
 ---
 
@@ -141,19 +141,19 @@ If no Discogs result, try Beatport:
 lookup_beatport(artist="Artist Name", title="First Track Title")
 ```
 
-If still missing data (common with self-released and digital-only music), check the **Bandcamp release page**:
+If still missing data (common with self-released and digital-only music), try Bandcamp:
 
-```sh
-# URL patterns to try in order:
-# 1. artistname.bandcamp.com/album/album-name
-# 2. artistname.bandcamp.com/track/track-name
-# 3. labelname.bandcamp.com/album/album-name
-# If artist/label subdomain is unknown: search site:bandcamp.com "artist" "album"
+```
+lookup_bandcamp(artist="Artist Name", title="First Track Title")
 ```
 
-Use WebFetch to extract: label (`released by …` or label link), release date, track listing, and cover art URL (from the `tralbumArt` section — full-res URL ends in `_10.jpg`).
+Bandcamp is the authoritative source for Bandcamp-sourced downloads and is often the **only** source for self-released music. The tool handles search and metadata extraction with caching automatically.
 
-Bandcamp is the authoritative source for Bandcamp-sourced downloads and is often the **only** source for self-released music.
+If still missing year or label, try MusicBrainz as a final fallback:
+
+```
+lookup_musicbrainz(artist="Artist Name", title="First Track Title")
+```
 
 Use results for: release year, label name, artist/album spelling verification.
 
@@ -223,13 +223,13 @@ embed_cover_art(image_path="/path/to/album/cover.jpg", targets=["/path/to/album/
 
 **Multiple images:** Ask user which is the cover.
 
-**No images:** Try the **Bandcamp release page** first — cover art is always available in the `tralbumArt` section (full-res URL ends in `_10.jpg`):
+**No images:** Try `lookup_bandcamp(artist="...", title="...")` first — if the result includes a `cover_image` URL, download it:
 
 ```sh
 curl -sL -o "/path/to/album/cover.jpg" "BANDCAMP_COVER_URL"
 ```
 
-If no Bandcamp page, try `lookup_discogs(...)` — if result includes `cover_image`, download and embed:
+If no Bandcamp result, try `lookup_discogs(...)` — if result includes `cover_image`, download and embed:
 
 ```sh
 curl -sL -o "/path/to/album/cover.jpg" "DISCOGS_COVER_IMAGE_URL"
@@ -239,7 +239,7 @@ curl -sL -o "/path/to/album/cover.jpg" "DISCOGS_COVER_IMAGE_URL"
 embed_cover_art(image_path="/path/to/album/cover.jpg", targets=["/path/to/album/01 Artist - Track.flac", ...])
 ```
 
-If no cover from Bandcamp or Discogs, note for user to source manually.
+If no cover from `lookup_bandcamp` or `lookup_discogs`, note for user to source manually.
 
 ### Step 9: Create target directory and move files
 
@@ -303,7 +303,7 @@ For each loose track, read existing tags:
 read_file_tags(paths=["/path/to/batch/Artist - Title.wav"])
 ```
 
-If tags are missing, look up with `lookup_discogs(...)` / `lookup_beatport(...)`. For Bandcamp-sourced downloads, also check the Bandcamp release page (see Phase 2 Step 4 for URL patterns) — it's often the only source for self-released and digital-only music.
+If tags are missing, look up with `lookup_discogs(...)` / `lookup_beatport(...)` / `lookup_bandcamp(...)` / `lookup_musicbrainz(...)`. Bandcamp is often the only source for self-released and digital-only music.
 
 Write tags (include album — almost always available from the source release):
 
@@ -322,7 +322,7 @@ Check for `cover_Artist Name - Track Title.jpg` files. If found:
 embed_cover_art(image_path="/path/to/cover.jpg", targets=["/path/to/track.flac"])
 ```
 
-If no local cover file exists, fetch from the **Bandcamp release page**. The cover art URL is in the `tralbumArt` section — the full-resolution image URL ends in `_10.jpg`:
+If no local cover file exists, try `lookup_bandcamp(artist="...", title="...")` — if the result includes a `cover_image` URL, download it:
 
 ```sh
 curl -sL -o "/path/to/cover_Artist - Title.jpg" "BANDCAMP_COVER_URL"
@@ -334,7 +334,7 @@ embed_cover_art(image_path="/path/to/cover_Artist - Title.jpg", targets=["/path/
 
 **WAV files:** Keep the cover image file alongside the audio — Rekordbox cannot import cover art from WAV tags, so the user needs the image colocated for manual import. For other formats (FLAC, MP3, AIFF), clean up the downloaded image after embedding.
 
-If no Bandcamp page is available, try Discogs `cover_image`. Note any tracks without cover art in the report.
+If no Bandcamp result, try `lookup_discogs(...)` for `cover_image`. Note any tracks without cover art in the report.
 
 ### Step 4: Move loose tracks
 

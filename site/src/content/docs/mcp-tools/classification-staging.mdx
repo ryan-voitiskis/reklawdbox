@@ -67,21 +67,34 @@ Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforce
 
 ### `backfill_labels`
 
-Auto-fill empty labels from Discogs enrichment. Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.
+Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `dry_run` | boolean | | Preview without staging (default: `false`) |
+| `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
 
 ---
 
 ### `backfill_years`
 
-Auto-fill missing years (year=0) from Discogs enrichment. Stages non-conflicting years automatically; reports conflicts where the current year disagrees with enrichment.
+Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years automatically; reports conflicts where the current year disagrees with enrichment.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `dry_run` | boolean | | Preview without staging (default: `false`) |
+| `auto_enrich` | boolean | | Automatically enrich remaining year-zero tracks via Bandcamp and MusicBrainz before re-scanning (default: `false`) |
+
+---
+
+### `backfill_albums`
+
+Auto-fill empty album names from file tags, folder paths, and enrichment cache (Bandcamp/Discogs). Only fills tracks with no album set. Skips noise entries where the album matches the track title or artist name.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `dry_run` | boolean | | Preview without staging (default: `false`) |
+| `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
 
 ---
 
@@ -114,6 +127,7 @@ Each change object:
 | `color` | string | | Color name |
 | `label` | string | | Record label |
 | `year` | integer | | Release year |
+| `album` | string | | Album name |
 
 You can stage changes for multiple tracks in one call. Calling `update_tracks` again for the same track **merges** fields — only the specified fields are overwritten, existing staged fields are preserved.
 
@@ -137,6 +151,7 @@ Export staged changes to Rekordbox-compatible XML. Optionally includes playlists
 |-----------|------|:--------:|-------------|
 | `output_path` | string | | Output path (default: `~/reklawdbox-exports/reklawdbox-{timestamp}.xml`) |
 | `playlists` | array | | Optional playlist exports |
+| `skip_label_gate` | boolean | | Set to true to acknowledge that label research is complete and bypass the label gate |
 
 Each playlist object:
 
@@ -162,4 +177,4 @@ Clear staged changes, either entirely or selectively by track or field.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | | Track IDs to clear (omit to clear all; an empty array clears nothing) |
-| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"`, `"label"`, `"year"` (omit to clear all fields on matched tracks) |
+| `fields` | string[] | | Fields to unstage: `"genre"`, `"comments"`, `"rating"`, `"color"`, `"label"`, `"year"`, `"album"` (omit to clear all fields on matched tracks) |

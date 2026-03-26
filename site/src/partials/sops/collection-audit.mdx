@@ -22,6 +22,17 @@ If the user specified a narrower scope in their prompt (an artist, directory, or
 
 **Always skip `GENRE_SET`** — genre issues are handled by the Genre Classification and Genre Audit workflows.
 
+### 0b. (Optional) Structural health scans
+
+Before the tag audit, consider running these scans for structural library issues:
+
+- `scan_broken_links()` — tracks in Rekordbox whose audio files are missing from disk
+- `scan_orphan_files()` — audio files on disk not imported into Rekordbox
+- `scan_duplicates()` — duplicate tracks by metadata or file hash
+- `scan_playlist_coverage()` — tracks not assigned to any playlist
+
+These are independent of the tag audit and can be run at any time. Address any findings before or after the tag audit.
+
 ### 1. Scan
 
 ```
@@ -74,7 +85,7 @@ Present each issue type in batches.
 
 **Empty/missing tags** (`EMPTY_ARTIST`, `EMPTY_TITLE`, `MISSING_TRACK_NUM`, `MISSING_ALBUM`, `MISSING_YEAR`):
 - Check the `detail` field — it may be `null` for empty/missing-tag issues. Infer fix from filename and parent directory structure.
-- Use `lookup_discogs()` / `lookup_beatport()` for missing album/year
+- Use `lookup_discogs()` / `lookup_beatport()` / `lookup_bandcamp()` / `lookup_musicbrainz()` for missing album/year
 - Ask user to confirm each fix
 
 **Filename issues** (`BAD_FILENAME`, `MISSING_YEAR_IN_DIR`, `FILENAME_TAG_DRIFT`):
@@ -89,7 +100,7 @@ Workflow:
 1. Read the `detail` JSON — contains `filename` and `tag` values for each drifted field
 2. If the file is **not imported** into Rekordbox, rename to match the tag
 3. If the file **is imported**, defer with a note about manual Rekordbox relocate, or accept as-is
-4. If the drift is a genuinely different name (not just character substitution), look up via `lookup_discogs` / `lookup_beatport`
+4. If the drift is a genuinely different name (not just character substitution), look up via `lookup_discogs` / `lookup_beatport` / `lookup_bandcamp` / `lookup_musicbrainz`
 5. If ambiguous after lookup, flag for user review — do not guess
 
 **Genre tags** (`GENRE_SET`, if included):
@@ -134,8 +145,8 @@ Present: scope, files scanned, pass rate, fixes by type, deferred items, next st
 | `EMPTY_ARTIST` | Review | `artist` field empty/null | Parse from filename |
 | `EMPTY_TITLE` | Review | `title` field empty/null | Parse from filename |
 | `MISSING_TRACK_NUM` | Review | `track` field empty/null | Parse from filename |
-| `MISSING_ALBUM` | Review | `album` field empty/null | Directory name or Discogs |
-| `MISSING_YEAR` | Review | `year`/`date` both empty/null | Discogs lookup |
+| `MISSING_ALBUM` | Review | `album` field empty/null | Directory name or enrichment lookup |
+| `MISSING_YEAR` | Review | `year`/`date` both empty/null | Enrichment lookup |
 | `ARTIST_IN_TITLE` | Safe | `title` starts with `{artist} - ` | Strip prefix |
 | `WAV_TAG3_MISSING` | Safe | WAV file with `tag3_missing` non-empty | Copy from tag 2 |
 | `WAV_TAG_DRIFT` | Safe | WAV `id3v2` and `riff_info` values differ | Sync to tag 2 |
@@ -144,5 +155,5 @@ Present: scope, files scanned, pass rate, fixes by type, deferred items, next st
 | `BAD_FILENAME` | Review | Filename doesn't match canonical | User review |
 | `ORIGINAL_MIX_SUFFIX` | Rename-safe | Filename contains `(Original Mix)` | Strip suffix (if not imported) |
 | `TECH_SPECS_IN_DIR` | Rename-safe | Directory contains `[FLAC]`, `[WAV]`, etc. | Strip from dir name |
-| `MISSING_YEAR_IN_DIR` | Review | Album directory missing `(YYYY)` suffix | Discogs lookup |
+| `MISSING_YEAR_IN_DIR` | Review | Album directory missing `(YYYY)` suffix | Enrichment lookup |
 | `FILENAME_TAG_DRIFT` | Review | Filename artist/title disagrees with tags | Rename to match tag (defer if imported) |

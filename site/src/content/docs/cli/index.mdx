@@ -130,14 +130,15 @@ Read native metadata tags from audio files.
 reklawdbox read-tags <paths...> [options]
 ```
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `<paths>` | string[] | required | Audio files or directories |
-| `--fields` | list | all | Comma-separated field filter |
-| `--cover-art` | flag | | Include cover art metadata |
-| `--json` | flag | | Output as JSON (JSONL for multiple files) |
+| Flag | Short | Type | Default | Description |
+|------|:-----:|------|---------|-------------|
+| `<paths>` | | string[] | required | Audio files or directories |
+| `--fields` | | list | all | Comma-separated field filter |
+| `--recursive` | `-r` | flag | | Recursively scan directories for audio files |
+| `--cover-art` | | flag | | Include cover art metadata |
+| `--json` | | flag | | Output as JSON (JSONL for multiple files) |
 
-Directories are scanned one level deep. WAV files show both ID3v2 and RIFF INFO layers.
+Without `--recursive`, directories are scanned one level deep. WAV files show both ID3v2 and RIFF INFO layers.
 
 ### Example
 

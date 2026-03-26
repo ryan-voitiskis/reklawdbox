@@ -22,45 +22,45 @@ Review `content_roots` and `total_tracks` to understand the library scope.
 ### 1. Scan for broken links
 
 ```
-scan_broken_links()
+scan_broken_links(path_prefix="/path/to/scope", limit=200)
 ```
 
-Checks every track in the database for missing files on disk. Reports suggested relocations when a file with the same name exists elsewhere in the content roots.
+Checks every track in the database for missing files on disk. Use `path_prefix` to scope to a specific directory. `suggest_relocations` (default true) reports suggested relocations when a file with the same name exists elsewhere in the content roots.
 
 **If broken links found:** Review suggested relocations. File moves must be done manually in Rekordbox (Preferences > Advanced > Database Management > Relocate) or by correcting the directory structure.
 
 ### 2. Scan for orphan files
 
 ```
-scan_orphan_files()
+scan_orphan_files(path_prefix="/path/to/scope", limit=200)
 ```
 
-Finds audio files on disk that are not imported into Rekordbox. Groups results by directory.
+Finds audio files on disk that are not imported into Rekordbox. Groups results by directory. Use `path_prefix` to scope to a specific directory instead of scanning all content roots.
 
 **If orphans found:** These files can be imported into Rekordbox via drag-and-drop, or deleted if no longer wanted.
 
 ### 3. Check playlist coverage
 
 ```
-scan_playlist_coverage()
+scan_playlist_coverage(limit=200)
 ```
 
-Finds tracks not assigned to any playlist. Use filters to scope to specific genres, date ranges, or paths.
+Finds tracks not assigned to any playlist. Accepts the shared search filters (`genre`, `artist`, `bpm_min`, `bpm_max`, `path_prefix`, `has_label`, etc.) for scoping to specific subsets of the library.
 
 **If uncovered tracks found:** Review and assign to playlists, or accept that some tracks are intentionally unplaylisted.
 
 ### 4. Find duplicates
 
 ```
-scan_duplicates(detection_level="metadata")
+scan_duplicates(detection_level="metadata", limit=50)
 ```
 
-Groups tracks by matching artist + title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating).
+Groups tracks by matching artist + title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating). Use `path_prefix` to scope to a specific directory.
 
 For higher confidence, run exact-level detection:
 
 ```
-scan_duplicates(detection_level="exact")
+scan_duplicates(detection_level="exact", limit=50)
 ```
 
 This hashes actual audio files and only reports byte-identical duplicates.

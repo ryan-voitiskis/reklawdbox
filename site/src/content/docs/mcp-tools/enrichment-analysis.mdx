@@ -1,6 +1,6 @@
 ---
 title: Enrichment & Analysis
-description: Tools for looking up external metadata from Discogs and Beatport, and analyzing audio with stratum-dsp and Essentia.
+description: Tools for looking up external metadata from Discogs, Beatport, MusicBrainz, and Bandcamp, and analyzing audio with stratum-dsp and Essentia.
 sidebar:
   order: 2
 ---
@@ -12,7 +12,7 @@ import DataFlowDiagram from '../../../components/DataFlowDiagram.astro';
 
 ## Enrichment tools
 
-Look up metadata from Discogs and Beatport. Results are cached — subsequent calls return instantly unless `force_refresh` is set.
+Look up metadata from Discogs, Beatport, MusicBrainz, and Bandcamp. Results are cached — subsequent calls return instantly unless `force_refresh` is set.
 
 ---
 
@@ -47,9 +47,35 @@ Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and labe
 
 ---
 
+### `lookup_musicbrainz`
+
+Look up a track on MusicBrainz for year/label data. Returns year from first-release-date and label from the best matching release. Results are cached.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | | Track ID — auto-fills artist/title from library |
+| `artist` | string | | Artist name (required if no `track_id`) |
+| `title` | string | | Track title (required if no `track_id`) |
+| `force_refresh` | boolean | | Bypass cache (default: `false`) |
+
+---
+
+### `lookup_bandcamp`
+
+Look up a track on Bandcamp for year/label/tags data. Searches Bandcamp, then fetches the detail page for structured metadata. Particularly effective for underground/independent electronic music. Results are cached.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | | Track ID — auto-fills artist/title from library |
+| `artist` | string | | Artist name (required if no `track_id`) |
+| `title` | string | | Track title (required if no `track_id`) |
+| `force_refresh` | boolean | | Bypass cache (default: `false`) |
+
+---
+
 ### `enrich_tracks`
 
-Batch enrich tracks via Discogs and/or Beatport. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
+Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -57,7 +83,7 @@ Batch enrich tracks via Discogs and/or Beatport. Accepts [shared search filters]
 | `playlist_id` | string | | Enrich tracks in this playlist |
 | `max_tracks` | integer | | Max tracks to enrich (default: `50`) |
 | `offset` | integer | | Skip first N tracks in result set |
-| `providers` | string[] | | Providers: `"discogs"`, `"beatport"` (default: `["discogs"]`) |
+| `providers` | string[] | | Providers: `"discogs"`, `"beatport"`, `"bandcamp"` (default: `["discogs"]`) |
 | `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
 | `force_refresh` | boolean | | Bypass cache entirely (default: `false`) |
 | `concurrency` | integer | | Max concurrent enrichments (default: `4`, max: `8`) |
@@ -98,7 +124,7 @@ Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-
 | `max_tracks` | integer | | Max tracks to analyze (default: `20`) |
 | `offset` | integer | | Skip first N tracks in result set |
 | `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
-| `concurrency` | integer | | Max concurrent analyses (default: `cpus - 2`, min: `2`, max: `16`) |
+| `concurrency` | integer | | Max concurrent analyses (default: `cpus - 2`, min: `1`, max: `4`) |
 
 ---
 

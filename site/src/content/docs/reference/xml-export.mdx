@@ -36,11 +36,11 @@ A minimal Rekordbox XML file looks like this:
 
 ## What reklawdbox exports
 
-**Editable fields** (actively written by `write_xml`): Genre, Comments, Rating (1-5), Colour, Label, Year.
+**Editable fields** (actively written by `write_xml`): Genre, Comments, Rating (1-5), Colour, Label, Year, Album.
 
 **Pass-through fields** (read from DB, included in export): title, artist, album, remixer, label, year, key, BPM, file location, file kind, bit rate, sample rate, play count, date added, total time.
 
-**Hardcoded defaults** (not read from DB): Composer, Grouping, Mix (`""`), Size, DiscNumber, TrackNumber (`0`).
+**Omitted fields** (not included in export): Composer, Grouping, Mix, Size, DiscNumber, TrackNumber.
 
 Playlists are included when `write_xml` is called with the `playlists` parameter.
 
@@ -99,7 +99,7 @@ Rekordbox XML uses classic notation (`Am`, `Bb`, `F#m`). Camelot is display-only
 
 ## Backup behavior
 
-Before export, reklawdbox checks for a backup script (in order): `REKLAWDBOX_BACKUP_SCRIPT` env var, then built-in probe paths. If found, it runs synchronously with `--pre-op` before writing. Failures log warnings but don't block export.
+Before export, reklawdbox checks for a backup script (in order): `REKLAWDBOX_BACKUP_SCRIPT` env var, then built-in probe paths. If found, it runs synchronously with `--pre-op` before writing. Failures restore staged changes and block export with an error.
 
 XML files are written to `~/reklawdbox-exports/` by default.
 

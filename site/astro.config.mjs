@@ -78,6 +78,16 @@ export default defineConfig({
               paths: ['agent/chapter-set-planning'],
               description: 'Agent SOP for chapter set planning',
             },
+            {
+              label: 'Metadata Backfill SOP',
+              paths: ['agent/metadata-backfill'],
+              description: 'Agent SOP for metadata backfill',
+            },
+            {
+              label: 'Library Health SOP',
+              paths: ['agent/library-health'],
+              description: 'Agent SOP for library health scanning',
+            },
           ],
         }),
       ],

@@ -7,7 +7,7 @@
 
 ## Prerequisites
 
-- At least 2 locked chapters (playlists) from the Pool Building workflow
+- At least 2 locked chapters (playlists) from the Pool Building workflow. Alternatively, `discover_pools` can find chapter candidates automatically from a library subset using Bron-Kerbosch clique enumeration.
 - User must identify each chapter as **sequenced** (fixed order) or **unordered** (improvise order live)
 
 ```
@@ -128,6 +128,8 @@ build_set(
 Or use `score_transition` for pairwise evaluation if the chapter is small (≤5 tracks).
 
 Present ordering options. Ask user: "Pick sequence / keep unordered / adjust"
+
+**Weight presets.** Use `save_weight_preset` to save custom transition or pool weights for reuse. `list_weight_presets` shows all available presets (built-in and custom). `delete_weight_preset` removes custom presets.
 
 ### 6. Present full set plan
 

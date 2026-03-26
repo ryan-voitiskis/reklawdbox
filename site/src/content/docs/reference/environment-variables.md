@@ -57,12 +57,14 @@ The cache database stores Discogs/Beatport enrichment results, audio analysis ou
 
 ## Advanced
 
-| Variable                              | Description                                     | Default                        |
-| ------------------------------------- | ----------------------------------------------- | ------------------------------ |
-| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS` | Minimum interval between Beatport requests (ms) | `1000`                         |
-| `REKLAWDBOX_CORPUS_PATH`              | Path to the Rekordbox knowledge corpus manifest | `docs/rekordbox/manifest.yaml` |
+| Variable                                  | Description                                        | Default                        |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------ |
+| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`     | Minimum interval between Beatport requests (ms)    | `1000`                         |
+| `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`     | Minimum interval between Bandcamp requests (ms)    | `1500`                         |
+| `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS`  | Minimum interval between MusicBrainz requests (ms) | `1100`                         |
+| `REKLAWDBOX_CORPUS_PATH`                  | Path to the Rekordbox knowledge corpus manifest    | `docs/rekordbox/manifest.yaml` |
 
-These are internal tuning knobs. The Beatport interval controls rate limiting — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
+These are internal tuning knobs. The rate-limit intervals control minimum time between requests to each service — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
 
 ## Example MCP config
 

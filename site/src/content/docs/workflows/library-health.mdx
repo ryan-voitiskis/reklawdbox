@@ -1,0 +1,50 @@
+---
+title: Library Health
+description: Scan for broken links, orphan files, duplicates, and uncategorized tracks.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import LibraryHealthSOP from '../../../partials/sops/library-health.mdx'
+
+Scan your Rekordbox library for structural issues: broken links, orphan files on disk, duplicate tracks, and playlist coverage gaps. All scans are read-only — nothing is modified, moved, or deleted.
+
+**Paste into your agent to start:**
+
+```
+Run a full health scan on my library.
+```
+
+<Aside type="caution">
+  These scans are point-in-time snapshots. Run them after any Rekordbox import/export or file system changes for accurate results.
+</Aside>
+
+## When to scan
+
+- Before starting a library cleanup — identify structural issues first
+- After moving or reorganizing files on disk
+- After a large batch import
+- Periodically, as part of library maintenance
+
+## How it works
+
+Four independent scans cover different aspects of library health:
+
+1. **`scan_broken_links`** — checks every database track for missing files on disk. Suggests relocations when a matching filename exists elsewhere.
+2. **`scan_orphan_files`** — finds audio files on disk not imported into Rekordbox. Groups by directory.
+3. **`scan_playlist_coverage`** — finds tracks not assigned to any playlist.
+4. **`scan_duplicates`** — groups tracks by matching artist + title (metadata level) or by file hash (exact level).
+
+## Prerequisites
+
+No enrichment or cache coverage required — all scanning is built-in.
+
+## Step-by-step
+
+<LibraryHealthSOP />
+
+## Next steps
+
+- [Collection Audit](/workflows/collection-audit/) — fix naming and tagging issues found during health scans
+- [Library Cleanup](/workflows/library-cleanup/) — follow the full session-based cleanup guide

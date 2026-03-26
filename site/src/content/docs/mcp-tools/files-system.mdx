@@ -88,6 +88,74 @@ Embed cover art into one or more audio files.
 
 ---
 
+## Library health
+
+Scan the Rekordbox library for structural problems: broken file links, orphan files on disk, playlist gaps, and duplicate tracks.
+
+---
+
+### `scan_broken_links`
+
+Scan for tracks with missing audio files on disk. Optionally suggests relocated files by matching filenames across content roots.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `path_prefix` | string | | Scope to tracks whose file path starts with this prefix |
+| `suggest_relocations` | boolean | | Attempt fuzzy filename matching for relocations (default: `true`) |
+| `limit` | integer | | Max broken links to report (default: `200`) |
+| `offset` | integer | | Offset for pagination |
+
+---
+
+### `scan_orphan_files`
+
+Find audio files on disk not imported into Rekordbox. Compares filesystem contents against the database for each content root.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `path_prefix` | string | | Directory to scan (default: content roots from library) |
+| `limit` | integer | | Max orphan files to report (default: `200`) |
+
+---
+
+### `scan_playlist_coverage`
+
+Find tracks not assigned to any playlist. Supports all search filters for scoping.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `query` | string | | Search query matching title or artist |
+| `artist` | string | | Filter by artist name (partial match) |
+| `genre` | string | | Filter by genre name (partial match) |
+| `rating_min` | integer | | Minimum star rating (1--5) |
+| `bpm_min` | number | | Minimum BPM |
+| `bpm_max` | number | | Maximum BPM |
+| `key` | string | | Filter by musical key (e.g. `"Am"`, `"Cm"`) |
+| `has_genre` | boolean | | Filter by whether track has a genre set |
+| `has_label` | boolean | | Filter by whether track has a label set |
+| `year_zero` | boolean | | Filter to tracks with year = 0 (unset) |
+| `label` | string | | Filter by label name (partial match) |
+| `path` | string | | Filter by file path/folder (substring match) |
+| `path_prefix` | string | | Filter to tracks whose file path starts with this prefix |
+| `added_after` | string | | Only tracks added on or after this ISO date |
+| `added_before` | string | | Only tracks added on or before this ISO date |
+| `limit` | integer | | Max uncovered tracks to return (default: `200`) |
+| `offset` | integer | | Offset for pagination |
+
+---
+
+### `scan_duplicates`
+
+Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256). Each group includes a `suggested_keep` recommendation based on audio quality.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `detection_level` | string | | `"metadata"` (default) or `"exact"` (SHA-256 hash) |
+| `path_prefix` | string | | Scope to tracks whose file path starts with this prefix |
+| `limit` | integer | | Max duplicate groups to report (default: `50`) |
+
+---
+
 ## System tools
 
 ---
@@ -146,7 +214,7 @@ Get an audit summary with issue counts by type and status.
 
 ### `clear_caches` <Badge text="no params" variant="note" />
 
-Clear all internal caches (enrichment, audio analysis, audit state) **and all staged metadata changes**.
+Clear all internal caches (enrichment, audio analysis, audit state) **and all staged metadata changes**. Preserves Discogs broker session.
 
 <Aside type="caution">
   Clears everything — enrichment data must be re-fetched and any pending staged changes are lost. Call `preview_changes` and `write_xml` first if you have pending edits.
@@ -160,4 +228,4 @@ Get workflow guides with step-by-step instructions.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `topic` | string | | `"import"`, `"genre"`, `"set"`, `"audit"` — or omit for all |
+| `topic` | string | | `"genre"`, `"genre audit"`, `"set"`, `"pool"`, `"chapter"`, `"audit"`, `"import"`, `"metadata"` (aliases: `"label"`, `"year"`, `"album"`), `"health"` — or omit for all |
