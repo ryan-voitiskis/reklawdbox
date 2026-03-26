@@ -2821,8 +2821,7 @@ mod tests {
     #[test]
     fn query_issues_empty_result_for_non_matching_type() {
         let (_dir, conn) = seed_query_resolve_db();
-        let issues =
-            query_issues(&conn, "/music/", None, Some("BAD_FILENAME"), 100, 0).unwrap();
+        let issues = query_issues(&conn, "/music/", None, Some("BAD_FILENAME"), 100, 0).unwrap();
         assert!(issues.is_empty());
     }
 

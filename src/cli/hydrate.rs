@@ -255,7 +255,13 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
 
         if want_beatport {
-            match store::get_enrichment_any(&store_conn, "beatport", &norm_artist, &norm_title, None)? {
+            match store::get_enrichment_any(
+                &store_conn,
+                "beatport",
+                &norm_artist,
+                &norm_title,
+                None,
+            )? {
                 Some(entry) => {
                     if entry.match_quality.as_deref() == Some("error") {
                         beatport_errors += 1;

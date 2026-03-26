@@ -1028,8 +1028,7 @@ fn audio_only_inference(
                 "IDM",
                 "Experimental",
             ];
-            candidates
-                .sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
+            candidates.sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
             (
                 if centroid < 600.0 {
                     "very-low centroid"
@@ -1048,8 +1047,7 @@ fn audio_only_inference(
                 "House",
                 "Electro",
             ];
-            candidates
-                .sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
+            candidates.sort_by_key(|g| preferred.iter().position(|p| p == g).unwrap_or(usize::MAX));
             (
                 if centroid >= 4000.0 {
                     "high centroid"
@@ -2192,9 +2190,9 @@ mod tests {
                 rekordbox_bpm: 130.0,
                 stratum_bpm: Some(130.0),
                 bpm_agreement: Some(true),
-                danceability: Some(2.2),         // dancefloor bucket
-                dynamic_complexity: Some(3.0),   // not ambient/atmospheric
-                rhythm_regularity: Some(0.92),   // regular — no broken flag
+                danceability: Some(2.2),       // dancefloor bucket
+                dynamic_complexity: Some(3.0), // not ambient/atmospheric
+                rhythm_regularity: Some(0.92), // regular — no broken flag
                 spectral_centroid_mean: Some(1800.0),
             }),
             has_discogs: true,
@@ -2213,7 +2211,9 @@ mod tests {
             "Cross-family tiebreak via audio should yield Low confidence"
         );
         assert!(
-            result.flags.contains(&"audio-assisted-tiebreak".to_string()),
+            result
+                .flags
+                .contains(&"audio-assisted-tiebreak".to_string()),
             "Should flag that audio assisted the tiebreak, flags: {:?}",
             result.flags
         );

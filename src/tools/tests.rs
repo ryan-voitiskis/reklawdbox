@@ -1120,7 +1120,8 @@ async fn write_xml_no_change_path_includes_provenance() {
     let server = ReklawdboxServer::new(None);
 
     let result = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: None,
             playlists: None,
         }))
@@ -1172,7 +1173,8 @@ async fn write_xml_with_playlists_exports_without_staged_changes() {
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let result = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: Some(output_path_str.clone()),
             playlists: Some(vec![WriteXmlPlaylistInput {
                 name: "Set & Test".to_string(),
@@ -1212,7 +1214,8 @@ async fn write_xml_with_playlists_reports_missing_track_ids() {
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
     let err = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: None,
             playlists: Some(vec![WriteXmlPlaylistInput {
                 name: "Bad Set".to_string(),
@@ -1244,9 +1247,13 @@ async fn write_xml_label_gate_blocks_when_set() {
     // Stage a change so write_xml has something to write
     server.state.changes.stage(vec![TrackChange {
         track_id: "gate-track-1".to_string(),
-        genre: None, comments: None, rating: None, color: None,
+        genre: None,
+        comments: None,
+        rating: None,
+        color: None,
         label: Some("Test Label".to_string()),
-        year: None, album: None,
+        year: None,
+        album: None,
     }]);
 
     // Set the gate as if backfill_labels found 50 unlabeled tracks
@@ -1316,9 +1323,13 @@ async fn write_xml_label_gate_clears_when_zero() {
     // Stage a change
     server.state.changes.stage(vec![TrackChange {
         track_id: "gate-clear-1".to_string(),
-        genre: None, comments: None, rating: None, color: None,
+        genre: None,
+        comments: None,
+        rating: None,
+        color: None,
         label: Some("Test".to_string()),
-        year: None, album: None,
+        year: None,
+        album: None,
     }]);
 
     // write_xml without skip_label_gate should succeed since gate is 0
@@ -1378,7 +1389,8 @@ async fn write_xml_deduplicates_playlist_and_staged_tracks() {
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let result = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: Some(output_path_str.clone()),
             playlists: Some(vec![WriteXmlPlaylistInput {
                 name: "Mixed Export".to_string(),
@@ -1514,7 +1526,8 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
     let output_dir = tempfile::tempdir().expect("temp output dir should create");
     let output_path = output_dir.path().join("should-not-exist.xml");
     let err = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: Some(output_path.to_string_lossy().to_string()),
             playlists: None,
         }))
@@ -1533,7 +1546,8 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
 
     let retry_path = output_dir.path().join("after-backup-failure.xml");
     let retry = server
-        .write_xml(Parameters(WriteXmlParams { skip_label_gate: Some(true),
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
             output_path: Some(retry_path.to_string_lossy().to_string()),
             playlists: None,
         }))

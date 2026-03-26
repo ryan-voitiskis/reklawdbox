@@ -288,9 +288,7 @@ pub(super) async fn handle_backfill_labels(
             let top_artists: Vec<_> = artist_counts
                 .iter()
                 .take(20)
-                .map(|(artist, count)| {
-                    serde_json::json!({"artist": artist, "count": count})
-                })
+                .map(|(artist, count)| serde_json::json!({"artist": artist, "count": count}))
                 .collect();
 
             result.as_object_mut().unwrap().insert(
@@ -345,10 +343,7 @@ mod tests {
     fn normalize_label_filters_not_on_label_with_suffix() {
         // Discogs uses "Not On Label (Artist Self-released)" and similar variants
         assert_eq!(normalize_label("Not On Label (Artist Self-released)"), None);
-        assert_eq!(
-            normalize_label("Not On Label (Some Other Variant)"),
-            None
-        );
+        assert_eq!(normalize_label("Not On Label (Some Other Variant)"), None);
     }
 
     #[test]
@@ -357,14 +352,8 @@ mod tests {
             normalize_label("Warp Records"),
             Some("Warp Records".to_string())
         );
-        assert_eq!(
-            normalize_label("Planet Mu"),
-            Some("Planet Mu".to_string())
-        );
-        assert_eq!(
-            normalize_label("Hyperdub"),
-            Some("Hyperdub".to_string())
-        );
+        assert_eq!(normalize_label("Planet Mu"), Some("Planet Mu".to_string()));
+        assert_eq!(normalize_label("Hyperdub"), Some("Hyperdub".to_string()));
     }
 
     #[test]

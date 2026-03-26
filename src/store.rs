@@ -2110,10 +2110,18 @@ mod tests {
         .unwrap();
 
         // NULL match_quality — should NOT appear
-        set_enrichment(&conn, "discogs", "artist_a", "title_5", None, None, Some("{}")).unwrap();
+        set_enrichment(
+            &conn,
+            "discogs",
+            "artist_a",
+            "title_5",
+            None,
+            None,
+            Some("{}"),
+        )
+        .unwrap();
 
-        let results =
-            batch_enrichment_with_results(&conn, "discogs", &["artist_a"]).unwrap();
+        let results = batch_enrichment_with_results(&conn, "discogs", &["artist_a"]).unwrap();
 
         assert_eq!(results.len(), 2);
         assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
@@ -2188,8 +2196,7 @@ mod tests {
         )
         .unwrap();
 
-        let results =
-            batch_enrichment_with_label(&conn, "beatport", &["artist_a"]).unwrap();
+        let results = batch_enrichment_with_label(&conn, "beatport", &["artist_a"]).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
@@ -2215,7 +2222,9 @@ mod tests {
         save_timbral_norm_stats(&conn, &stats).unwrap();
 
         // Read back
-        let loaded = get_timbral_norm_stats(&conn).unwrap().expect("should find stats");
+        let loaded = get_timbral_norm_stats(&conn)
+            .unwrap()
+            .expect("should find stats");
         assert_eq!(loaded.dims.len(), 3);
         assert!((loaded.dims[0].0 - 0.5).abs() < f64::EPSILON);
         assert!((loaded.dims[0].1 - 0.1).abs() < f64::EPSILON);
@@ -2247,13 +2256,7 @@ mod tests {
         assert!(all.is_empty());
 
         // Save two presets of different types
-        save_weight_preset(
-            &conn,
-            "chill",
-            "transition",
-            r#"{"energy":0.3,"key":0.7}"#,
-        )
-        .unwrap();
+        save_weight_preset(&conn, "chill", "transition", r#"{"energy":0.3,"key":0.7}"#).unwrap();
         save_weight_preset(
             &conn,
             "high-energy",
@@ -2261,13 +2264,7 @@ mod tests {
             r#"{"energy":0.9,"key":0.5}"#,
         )
         .unwrap();
-        save_weight_preset(
-            &conn,
-            "club",
-            "pool",
-            r#"{"bpm":0.8}"#,
-        )
-        .unwrap();
+        save_weight_preset(&conn, "club", "pool", r#"{"bpm":0.8}"#).unwrap();
 
         // List all
         let all = list_weight_presets(&conn, None).unwrap();
@@ -2299,14 +2296,10 @@ mod tests {
         assert!(miss2.is_none());
 
         // Update existing preset (upsert)
-        save_weight_preset(
-            &conn,
-            "chill",
-            "transition",
-            r#"{"energy":0.2,"key":0.8}"#,
-        )
-        .unwrap();
-        let updated = get_weight_preset(&conn, "chill", "transition").unwrap().unwrap();
+        save_weight_preset(&conn, "chill", "transition", r#"{"energy":0.2,"key":0.8}"#).unwrap();
+        let updated = get_weight_preset(&conn, "chill", "transition")
+            .unwrap()
+            .unwrap();
         assert!(updated.contains("0.2"));
 
         // Delete
