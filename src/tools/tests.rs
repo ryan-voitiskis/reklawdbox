@@ -1156,6 +1156,10 @@ async fn write_xml_no_change_path_via_router_includes_provenance() {
 
 #[tokio::test]
 async fn write_xml_with_playlists_exports_without_staged_changes() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
     let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
@@ -1232,6 +1236,10 @@ async fn write_xml_with_playlists_reports_missing_track_ids() {
 
 #[tokio::test]
 async fn write_xml_label_gate_blocks_when_set() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
     let db_conn = create_single_track_test_db("gate-track-1", "/tmp/gate-track-1.flac");
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
@@ -1298,6 +1306,10 @@ async fn write_xml_label_gate_blocks_when_set() {
 
 #[tokio::test]
 async fn write_xml_label_gate_clears_when_zero() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
     let db_conn = create_single_track_test_db("gate-clear-1", "/tmp/gate-clear-1.flac");
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
@@ -1348,6 +1360,10 @@ async fn write_xml_label_gate_clears_when_zero() {
 
 #[tokio::test]
 async fn write_xml_deduplicates_playlist_and_staged_tracks() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
     let db_conn = create_single_track_test_db("staged-track-1", "/tmp/staged-track-1.flac");
     insert_test_track(
         &db_conn,
