@@ -1,14 +1,15 @@
 ## Constraints
 
-- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, Bandcamp, and Beatport enrichment caches — it does not check file tags or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 3).
-- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 6).
+- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, Bandcamp, and Beatport enrichment caches — it does not check file tags or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 1c).
+- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 2c).
 - **No auto-tagging without review (labels).** The backfill tools stage non-conflicting values automatically. Label conflicts require human approval before staging. Year conflicts are resolved automatically using the lowest year (see "Lowest year wins").
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
 - **Year 0 = unset.** Rekordbox uses 0 for tracks with no year. Rekordbox often fails to import year tags from WAV files, so year=0 does not mean the file lacks a year tag — check before assuming it's missing.
 - **Lowest year wins.** Year is used as a signal for genre classification — it represents the track's production era, not its release or reissue date. When a conflict arises between current year and enrichment year, always use the lowest (earliest) year unless it is obviously wrong (e.g., a nonsensical date like 1900 for a modern electronic track). Do not present year conflicts for interactive review — resolve them automatically. Web research for year gaps should search for *release dates* (not production dates specifically), since release date is the best publicly available proxy.
 - **Year gaps are always researched.** Tracks left with year=0 after all automated sources are exhausted must be researched by the agent via web search, store lookups, and model knowledge. The tools handle the bulk; the agent fills every remaining gap it can.
-- **Manual research is mandatory (labels and years).** Steps 3 and 6 must be completed before proceeding to export. The automated backfill tools handle the bulk, but tracks left without labels or years afterward must be individually researched via web search, store lookups, and model knowledge. Do not proceed to step 8 (export) until steps 3 and 6 are done. Skipping research and exporting only the automated results leaves the job half-finished.
+- **Never ask whether to research — just do it.** After a backfill tool reports remaining gaps, immediately begin researching them. Do not summarize and wait for instructions, do not ask "should I also research?", and do not present research as a separate decision. The automated backfill is the easy warm-up; researching the remaining gaps is the core work. Asking whether to proceed is asking whether to finish the job — the answer is always yes.
+- **Pause only where marked.** This workflow has exactly two pause points: conflict-resolution prompts (where user input is needed) and the final export confirmation. Everything else — including the transition from backfill to research — is automatic. Do not stop, summarize, or ask for direction at unmarked transitions.
 - **Albums are best-effort.** `backfill_albums` fills empty albums from file tags, folder paths, and enrichment caches. Unlike labels and years, album gaps do not require exhaustive research — fill what the tools and a light web search can find. Empty album is valid for singles, loose tracks, and DJ edits. Album names where the value equals the track title or artist name are noise and are skipped automatically.
 
 ## Prerequisites
@@ -43,15 +44,17 @@ enrich_tracks(has_label=false, skip_cached=true, providers=["beatport"], max_tra
 
 If Beatport `searched_percent` is 100% but labels are still missing, existing cache entries predate label extraction. Re-enrich with `force_refresh=true` to populate them.
 
-4. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 6) or via `auto_enrich`.
+4. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 2c) or via `auto_enrich`.
 
 Repeat batches until providers reach 100% searched. Report progress between batches.
 
-**Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 4). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
+**Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 2). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
 
 ## Steps
 
-### 1. Backfill labels
+### 1. Fill labels
+
+#### 1a. Backfill from enrichment
 
 ```
 backfill_labels()
@@ -70,15 +73,15 @@ The tool scans the entire collection (excluding samples), looks up each track's 
 
 The summary includes `no_enrichment_by_provider` showing which providers are missing data for the remaining unlabeled tracks. If `no_bandcamp` is high, hydrate Bandcamp and re-run.
 
-Report the summary: "Backfill complete: N labels staged, N already correct, N conflicts, N without enrichment."
+Report the summary: "Backfill complete: N labels staged, N already correct, N conflicts, N without enrichment." Then immediately proceed to conflict resolution.
 
-### 2. Resolve label conflicts
+#### 1b. Resolve conflicts
 
 Deduplicate conflicts before presenting — a track must appear in exactly one group.
 
 Group conflicts by pattern and present each group as a table with columns: **#**, **Artist — Title**, **Current**, **Enrichment**, **Rec** (recommendation). Follow each table with a clear bulk-action prompt.
 
-#### Group A: Artist-name-as-label → actual label
+##### Group A: Artist-name-as-label → actual label
 
 When the current label is the artist's name and enrichment has an actual label, recommend the enrichment label — it provides a stronger signal than the artist name.
 
@@ -93,7 +96,7 @@ Group A: Artist-name-as-label → actual label (N tracks) — recommend: use enr
 
 **→ "Approve all Group A, reject all, or specify numbers to change (e.g. 'approve all except 2')."**
 
-#### Group B: Label name variations
+##### Group B: Label name variations
 
 When both labels refer to the same entity with different formatting (e.g. "Palette" vs "Palette Recordings", "трип" vs "trip recordings"), recommend keeping the current label — it was set intentionally.
 
@@ -108,7 +111,7 @@ Group B: Label name variations (N tracks) — recommend: keep current
 
 **→ "Skip all Group B (keep current labels), or specify numbers to change."**
 
-#### Group C: Wrong enrichment
+##### Group C: Wrong enrichment
 
 When enrichment returned nonsense — artist names as labels, gibberish, or clearly incorrect data — recommend keeping the current label.
 
@@ -123,7 +126,7 @@ Group C: Wrong enrichment (N tracks) — recommend: keep current
 
 **→ "Skip all Group C, or specify numbers to change."**
 
-#### Group D: Genuine disagreements
+##### Group D: Genuine disagreements
 
 When the enrichment label is a different entity entirely (e.g. different pressing, compilation, or wrong match), present for individual review with no default recommendation.
 
@@ -138,11 +141,11 @@ Group D: Genuine disagreements (N tracks) — review individually
 
 **→ "For each, reply 'keep' or 'use enrichment', or skip. You can also bulk-skip: 'skip all Group D'."**
 
-Stage approved changes via `update_tracks`.
+Stage approved changes via `update_tracks`. Then immediately proceed to research remaining gaps — do not ask.
 
-### 3. Research remaining label gaps (mandatory — enforced by write_xml gate)
+#### 1c. Research remaining gaps
 
-After steps 1–2, tracks may still lack labels. The `backfill_labels` output includes a `research_queue` section listing the count and top artists by frequency. **`write_xml` will refuse to export until this step is done** — it checks whether `backfill_labels` reported unlabeled tracks and blocks export unless `skip_label_gate=true` is passed.
+After steps 1a–1b, tracks may still lack labels. The `backfill_labels` output includes a `research_queue` section listing the count and top artists by frequency. **`write_xml` will refuse to export until this step is done** — it checks whether `backfill_labels` reported unlabeled tracks and blocks export unless `skip_label_gate=true` is passed.
 
 Start by fetching the first batch of unlabeled tracks:
 
@@ -162,7 +165,9 @@ Then for each batch:
 
 Skip tracks where no label can be determined — self-released tracks, private edits, or truly obscure releases may have no public label.
 
-### 4. Backfill years
+### 2. Fill years
+
+#### 2a. Backfill from sources
 
 ```
 backfill_years()
@@ -189,9 +194,9 @@ The summary includes `remaining_uncached_providers` showing which providers are 
 
 Note: Beatport date extraction requires enrichment cache entries created after this feature was added. For tracks with older cache entries, re-enrich with `enrich_tracks(providers=["beatport"], force_refresh=true)` to populate the `release_date` field.
 
-Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source."
+Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source." Then immediately proceed to resolve conflicts.
 
-### 5. Resolve year conflicts
+#### 2b. Resolve conflicts
 
 Year conflicts are resolved automatically — do not present them for interactive review.
 
@@ -199,15 +204,15 @@ For each conflict, stage the **lowest (earliest) year** from either the current 
 
 **Exception — obviously wrong years:** If the lowest year is clearly nonsensical (e.g., 1900 for a modern electronic track, or a year that predates the genre by decades), flag it to the user instead of auto-staging. This should be rare.
 
-Report the summary: "Year conflicts resolved: N auto-staged (used earliest year), N already had the earliest year, N flagged for review."
+Report the summary: "Year conflicts resolved: N auto-staged (used earliest year), N already had the earliest year, N flagged for review." Then immediately proceed to research remaining gaps — do not ask.
 
-### 6. Research remaining year gaps (mandatory)
+#### 2c. Research remaining gaps
 
 After `backfill_years`, some tracks will still have year=0 with no source data. The tool reports these as `remaining_year_zero`. The agent must research every one of them — this is not optional. **Do not skip this step or proceed to export until all year-zero tracks have been researched.**
 
-**If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to step 6c.
+**If `auto_enrich=true` was used**, Bandcamp and MusicBrainz have already been fetched for these tracks. Skip to the web research sub-step below.
 
-#### 6a. Batch enrich remaining year-zero tracks
+**Batch enrich remaining year-zero tracks**
 
 Use `enrich_tracks` with the `year_zero` filter to batch-enrich remaining tracks via Bandcamp:
 
@@ -217,7 +222,7 @@ enrich_tracks(year_zero=true, skip_cached=true, providers=["bandcamp"], max_trac
 
 Repeat until all year-zero tracks are covered. Then **re-run `backfill_years()`** to pick up the new data.
 
-#### 6b. Re-run backfill
+**Re-run backfill**
 
 After enrichment, re-run the backfill to incorporate newly cached data:
 
@@ -227,7 +232,7 @@ backfill_years()
 
 This picks up years from the fresh Bandcamp/MusicBrainz cache entries.
 
-#### 6c. Web research for remaining gaps
+**Web research for remaining gaps**
 
 For tracks still without years after all enrichment sources are exhausted:
 
@@ -240,7 +245,7 @@ For tracks still without years after all enrichment sources are exhausted:
 
 Only mark a track as unresolvable after genuine research effort — anonymous private edits or truly untraceable tracks exist, but they are the exception. Exhaust web search, store lookups, and artist discographies before giving up on any track.
 
-### 7. Backfill albums
+### 3. Backfill albums
 
 ```
 backfill_albums()
@@ -267,13 +272,13 @@ Report the summary: "Album backfill complete: N albums staged (N file tags, N fo
 
 The agent may optionally web-research remaining gaps, but this is not required. Empty album is valid for singles, loose tracks, and DJ edits.
 
-### 8. Export
+### 4. Export
 
 **Pre-export gate (enforced by tool).** `write_xml` checks whether `backfill_labels` reported unlabeled tracks. If so, it returns an error unless `skip_label_gate=true` is passed.
 
 Before calling `write_xml(skip_label_gate=true)`, confirm:
-- Step 3 (label research): all unlabeled tracks have been researched. Remaining gaps are genuinely unresolvable (private edits, anonymous tracks), not just unattempted.
-- Step 6 (year research): all year-zero tracks have been researched. Same standard.
+- Step 1c (label research): all unlabeled tracks have been researched. Remaining gaps are genuinely unresolvable (private edits, anonymous tracks), not just unattempted.
+- Step 2c (year research): all year-zero tracks have been researched. Same standard.
 
 If either step was skipped, go back and complete it before proceeding.
 
