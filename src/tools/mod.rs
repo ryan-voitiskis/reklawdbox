@@ -568,7 +568,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Cache-only — never triggers external calls."
+        description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Use format=\"compact\" when classifying all tracks upfront (returns only track_id, artist, title, genre, confidence, action). Follow up with resolve_tracks_data(format=\"classification\") for full evidence on tracks that need review. When track_ids are provided explicitly, tracks with existing (non-canonical) genres can also be classified. Cache-only — never triggers external calls."
     )]
     async fn classify_tracks(
         &self,

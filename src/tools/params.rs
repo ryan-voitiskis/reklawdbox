@@ -331,6 +331,19 @@ pub struct ClassifyTracksParams {
         description = "Genre overrides: remap a genre string before scoring. Example: [{\"from\": \"Melodic House & Techno\", \"to\": \"Deep Techno\"}]"
     )]
     pub genre_overrides: Option<Vec<GenreOverrideInput>>,
+    #[schemars(
+        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents."
+    )]
+    pub format: Option<ClassifyFormat>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassifyFormat {
+    #[default]
+    Full,
+    Compact,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -16,15 +16,27 @@ use crate::classify::{
 use crate::genre;
 use crate::normalize;
 use crate::store;
-use crate::tools::params::{AuditGenresParams, ClassifyTracksParams};
+use crate::tools::params::{AuditGenresParams, ClassifyFormat, ClassifyTracksParams};
 
 pub(super) fn handle_classify_tracks(
     server: &ReklawdboxServer,
     params: ClassifyTracksParams,
 ) -> Result<CallToolResult, McpError> {
-    // Only classify ungenred tracks
+    if let Some(ref ids) = params.track_ids {
+        if ids.is_empty() {
+            return Err(mcp_internal_error(
+                "track_ids was provided but empty — nothing to classify.".into(),
+            ));
+        }
+    }
+
+    // Force has_genre=false when using filter-based selection. When track_ids
+    // are provided, the caller has explicitly selected tracks — respect that
+    // selection (e.g. unknown-genre tracks from suggest_normalizations).
     let mut filters = params.filters;
-    filters.has_genre = Some(false);
+    if params.track_ids.is_none() {
+        filters.has_genre = Some(false);
+    }
 
     let tracks = {
         let conn = server.rekordbox_conn()?;
@@ -76,18 +88,32 @@ pub(super) fn handle_classify_tracks(
         summary["cache_read_errors"] = cache_errors.into();
     }
 
-    let output = serde_json::json!({
-        "summary": summary,
-        "results": results.iter()
-            .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
-            .collect::<Vec<_>>(),
-        "needs_review": results.iter()
-            .filter(|r| !matches!(r.action, ClassificationAction::Confirm)
-                && matches!(r.confidence,
-                    ClassificationConfidence::Low | ClassificationConfidence::Insufficient
-                ))
-            .collect::<Vec<_>>(),
-    });
+    let format = params.format.unwrap_or_default();
+    let output = match format {
+        ClassifyFormat::Full => serde_json::json!({
+            "summary": summary,
+            "results": results.iter()
+                .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
+                .collect::<Vec<_>>(),
+            "needs_review": results.iter()
+                .filter(|r| !matches!(r.action, ClassificationAction::Confirm)
+                    && matches!(r.confidence,
+                        ClassificationConfidence::Low | ClassificationConfidence::Insufficient
+                    ))
+                .collect::<Vec<_>>(),
+        }),
+        ClassifyFormat::Compact => {
+            let compact: Vec<_> = results
+                .iter()
+                .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
+                .map(|r| r.to_compact())
+                .collect();
+            serde_json::json!({
+                "summary": summary,
+                "results": compact,
+            })
+        }
+    };
 
     let json =
         serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
@@ -98,9 +124,20 @@ pub(super) fn handle_audit_genres(
     server: &ReklawdboxServer,
     params: AuditGenresParams,
 ) -> Result<CallToolResult, McpError> {
-    // Only audit tracks that already have genres
+    if let Some(ref ids) = params.track_ids {
+        if ids.is_empty() {
+            return Err(mcp_internal_error(
+                "track_ids was provided but empty — nothing to audit.".into(),
+            ));
+        }
+    }
+
+    // Force has_genre=true when using filter-based selection. When track_ids
+    // are provided, respect the explicit selection.
     let mut filters = params.filters;
-    filters.has_genre = Some(true);
+    if params.track_ids.is_none() {
+        filters.has_genre = Some(true);
+    }
 
     let tracks = {
         let conn = server.rekordbox_conn()?;

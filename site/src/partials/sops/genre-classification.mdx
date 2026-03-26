@@ -4,6 +4,7 @@
 - **No auto-tagging.** Every genre change requires explicit human approval.
 - **Cache-first.** Classification runs from cached data. If cache is empty for a track, it is flagged as insufficient evidence — do not trigger enrichment mid-classification.
 - **XML export only.** No direct DB writes. All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
+- **Per-track reasoning is mandatory for low/insufficient confidence.** Do not skip or batch-approve these tracks. Delegate to subagents if the volume is large.
 
 ## Prerequisites
 
@@ -37,70 +38,125 @@ update_tracks(changes=[{"track_id": "...", "genre": "..."}])
 
 For debatable aliases, ask the user. Store overrides for Step 2.
 
-### 2. Classify batch
+**Unknown genres** (non-canonical, no alias mapping) must be classified through the same pipeline as ungenred tracks. Collect their track IDs for Step 2.
+
+### 2. Classify all tracks
+
+Classify the full scope before reviewing anything. This gives an accurate confidence distribution and enables efficient review.
 
 ```
-classify_tracks(max_tracks=50, genre_overrides=[{"from": "...", "to": "..."}])
+classify_tracks(max_tracks=50, format="compact", genre_overrides=[...])
 ```
 
-The server applies the genre decision tree using all cached evidence (Discogs styles, Beatport genre, label mappings, audio analysis). Results are returned grouped by confidence with a summary.
+Paginate with `offset` until all ungenred tracks are processed. Then classify the unknown-genre tracks from Step 1:
 
-Report the confidence distribution before review: "This batch: N high, N medium, N low, N insufficient out of N total."
+```
+classify_tracks(track_ids=[...unknown IDs...], format="compact", genre_overrides=[...])
+```
 
-### 3. Review by confidence tier
+Collect all results into a roster. Report the aggregate distribution:
 
-Process each tier separately, highest confidence first.
+```
+"N tracks classified: X high, Y medium, Z low, W insufficient."
+```
+
+### 3. Set approval policy
+
+Present the confidence distribution and ask the user which tiers to auto-approve:
+
+**"Approve all high-confidence? Approve high and medium? Or review everything?"**
+
+Default recommendation: approve high, present medium as summary, full review for low/insufficient.
+
+### 4. Stage auto-approved tiers
 
 #### High confidence
 
-Present as a numbered list, grouped by suggested genre:
+Present a genre-grouped summary before staging:
 
 ```
-High confidence (15 suggestions):
-
-→ Techno (6):
- #1  Artist A — Track X → Techno (Beatport: Techno, Discogs: Techno x3, 132bpm)
- #2  Artist B — Track Y → Techno (label: Tresor, Discogs: Techno x2)
- ...
-
-→ Deep House (4):
- #7  Artist C — Track Z → Deep House (Beatport: Deep House, audio: atmospheric 122bpm)
- ...
+High confidence (N tracks):
+  Techno: 58 — G-Man (30), Aril Brikha (14), Marcel Dettmann (8), ...
+  Breakbeat: 12 — Octo Octa (4), Gacha Bakradze (4), ...
+  House: 7 — Tim Deluxe (2), Enliven (2), ...
 ```
 
-Ask user: **"Approve all, or reject/change specific numbers."**
-
-Stage approved changes.
+Stage after user confirms.
 
 #### Medium confidence
 
-Same numbered-list format. Highlight which evidence sources agree vs disagree.
+If the user auto-approved medium, present the same genre-grouped summary and stage.
 
-Ask user: **"Approve all, or reject/change specific numbers. Say 'investigate #N' for any you want more context on."**
+If not auto-approved, present as a numbered list grouped by genre. Highlight which evidence sources agree vs disagree:
 
-For investigated tracks: use artist discography, label roster, and related tracks in the library to form a recommendation.
+```
+→ Techno (8):
+ #1  Cristi Cons — Bird In Space (Discogs: Techno, label: Cocoon → Techno, 124bpm)
+ #2  Polar Inertia — Black Sun remix (Discogs: Techno, 131bpm)
+ ...
+```
 
-Stage approved changes.
+Ask: **"Approve all, or reject/change specific numbers. Say 'investigate #N' for any you want more context on."**
 
-#### Low confidence and insufficient evidence
-
-These need per-track judgment. For each:
-
-1. Read the evidence and flags from the classification result
-2. Use artist reputation, label context, and track title to form a recommendation
-3. Present reasoning: `Artist on Label — known for [context]. Evidence: [summary]. Recommend: GENRE because [reason].`
-
-Present in small groups (3–5) and ask user to approve/reject/change each.
+For investigated tracks, use `resolve_tracks_data` to get full evidence, then check artist context via `search_tracks`.
 
 Stage approved changes.
 
-### 4. Paginate
+### 5. Review low and insufficient confidence
 
-Repeat Steps 2–3 with `offset` until all tracks are processed.
+These tracks need per-track reasoning — do not batch-approve them. Use subagents to parallelize the work.
 
-Report cumulative progress between batches: `"Batch 3/N: M classified, X changes staged."`
+#### 5.1 Group by artist
 
-### 5. Export
+From the compact roster, group low/insufficient tracks by artist:
+
+- Artists with 5+ tracks → dedicated subagent
+- Remaining artists → batch into subagents of ~15–20 tracks
+
+#### 5.2 Dispatch review subagents
+
+Launch subagents in parallel (3–4 at a time). Each subagent receives:
+
+- A list of tracks: `(track_id, artist, title, suggested_genre, confidence)`
+- The review prompt below
+
+**Review subagent prompt:**
+
+> You are classifying genres for tracks in a Rekordbox library. For each track, produce a genre recommendation with reasoning.
+>
+> **Tools available:**
+> - `resolve_tracks_data(track_ids=[...], format="classification")` — full classification evidence
+> - `search_tracks(artist="...", has_genre=true)` — artist's other genred tracks in the library
+> - `get_track(track_id="...")` — single track detail
+>
+> **For each track:**
+> 1. Call `resolve_tracks_data` to get full evidence (Discogs, Beatport, label, audio)
+> 2. Check if the artist has other genred tracks in the library — what genres are they?
+> 3. Consider artist reputation, label identity, and track title
+> 4. Recommend a canonical genre with one-sentence reasoning
+>
+> **Output format:**
+> ```
+> #N  Artist — Title
+>     Evidence: [summary of sources]
+>     Library: [artist's other genres, or "no other tracks"]
+>     Recommend: GENRE — [why]
+> ```
+>
+> **Tracks to classify:**
+> [track list here]
+
+#### 5.3 Present recommendations
+
+As each subagent completes, present its recommendations to the user in the `#N Artist — Title / Evidence / Library / Recommend` format.
+
+Ask: **"Approve all, or reject/change specific numbers."**
+
+Stage approved changes. Repeat until all subagents have reported.
+
+Report cumulative progress: `"Review complete: N classified, M changes staged, K remaining."`
+
+### 6. Export
 
 ```
 preview_changes()

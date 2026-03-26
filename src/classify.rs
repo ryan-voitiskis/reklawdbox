@@ -60,6 +60,49 @@ pub(crate) struct ClassificationResult {
     pub(crate) review_hint: Option<String>,
 }
 
+/// Minimal view for roster collection — omits evidence, candidates, flags,
+/// and review_hint.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CompactClassificationResult {
+    pub(crate) track_id: String,
+    pub(crate) artist: String,
+    pub(crate) title: String,
+    pub(crate) current_genre: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) genre: Option<&'static str>,
+    pub(crate) confidence: ClassificationConfidence,
+    pub(crate) action: ClassificationAction,
+}
+
+impl ClassificationResult {
+    /// Destructured so adding a field to [`ClassificationResult`] produces a
+    /// compile error here, forcing a conscious decision about the compact view.
+    pub(crate) fn to_compact(&self) -> CompactClassificationResult {
+        let ClassificationResult {
+            ref track_id,
+            ref artist,
+            ref title,
+            ref current_genre,
+            genre,
+            confidence,
+            action,
+            evidence: _,
+            candidates: _,
+            flags: _,
+            review_hint: _,
+        } = *self;
+        CompactClassificationResult {
+            track_id: track_id.clone(),
+            artist: artist.clone(),
+            title: title.clone(),
+            current_genre: current_genre.clone(),
+            genre,
+            confidence,
+            action,
+        }
+    }
+}
+
 /// Mapped genre from an enrichment source.
 pub(crate) struct MappedGenre {
     pub(crate) genre: &'static str,
