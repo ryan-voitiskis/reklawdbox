@@ -258,7 +258,6 @@ pub(super) fn handle_preview_changes(
         )]));
     }
 
-    // Filter to requested track IDs if provided
     if let Some(ref filter_ids) = params.track_ids {
         let filter_set: HashSet<&str> = filter_ids.iter().map(|s| s.as_str()).collect();
         ids.retain(|id| filter_set.contains(id.as_str()));
@@ -289,8 +288,7 @@ pub(super) async fn handle_write_xml(
     server: &ReklawdboxServer,
     params: WriteXmlParams,
 ) -> Result<CallToolResult, McpError> {
-    // Label research gate: if backfill_labels ran and found unlabeled tracks,
-    // refuse to export until the agent acknowledges research is complete.
+    // Block export until label research from backfill_labels is acknowledged.
     let gate_count = server
         .state
         .label_research_gate

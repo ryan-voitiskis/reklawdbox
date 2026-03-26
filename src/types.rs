@@ -15,7 +15,6 @@ pub enum FileKind {
 }
 
 impl FileKind {
-    /// Convert from Rekordbox integer file type code.
     pub fn from_raw(raw: i32) -> Self {
         match raw {
             1 => Self::Mp3,
@@ -27,7 +26,7 @@ impl FileKind {
         }
     }
 
-    /// Human-readable kind string matching Rekordbox XML `Kind` attribute.
+    /// Matches Rekordbox XML `Kind` attribute values.
     pub fn as_kind_str(&self) -> &'static str {
         match self {
             Self::Mp3 => "MP3 File",
@@ -196,7 +195,6 @@ impl EditableField {
         }
     }
 
-    /// Comma-separated list of all field names (for error messages and descriptions).
     pub fn all_names_csv() -> String {
         Self::ALL
             .iter()
@@ -230,7 +228,6 @@ pub struct LibraryStats {
     pub unrated_count: i32,
     pub avg_bpm: f64,
     pub key_distribution: Vec<KeyCount>,
-    /// Distinct root directories containing library audio files.
     pub content_roots: Vec<String>,
 }
 

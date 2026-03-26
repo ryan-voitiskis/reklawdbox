@@ -42,23 +42,16 @@ pub struct BandcampResult {
     pub score: i32,
 }
 
-// ── Rate limiting ────────────────────────────────────────────────────────
-
 async fn wait_for_rate_limit() {
     let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
     crate::rate_limit::wait(last, "REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS", 1500).await;
 }
 
-// ── Public lookup ────────────────────────────────────────────────────────
-
-/// Search Bandcamp for a track, then fetch the detail page for label/tags.
-/// Returns the best match above the score threshold, or `None`.
 pub async fn lookup(
     client: &Client,
     artist: &str,
     title: &str,
 ) -> Result<Option<BandcampResult>, BandcampError> {
-    // Phase 1: search
     wait_for_rate_limit().await;
 
     let search_query = build_search_query(artist, title);
@@ -87,7 +80,6 @@ pub async fn lookup(
         return Ok(None);
     }
 
-    // Score candidates and pick the best match
     let mut best: Option<(SearchResult, i32)> = None;
     for candidate in candidates {
         let score = score_match(artist, title, &candidate.artist, &candidate.title);
@@ -102,7 +94,6 @@ pub async fn lookup(
         return Ok(None);
     };
 
-    // Phase 2: fetch detail page for label + structured data (best-effort)
     wait_for_rate_limit().await;
 
     let detail = match fetch_detail(client, &matched.url).await {
@@ -136,20 +127,11 @@ pub async fn lookup(
     }))
 }
 
-// ── Date normalization ───────────────────────────────────────────────────
-
-/// Normalize Bandcamp date strings to ISO "YYYY-MM-DD" format.
-///
-/// Bandcamp uses two formats:
-/// - JSON-LD: "28 Oct 2016 00:00:00 GMT"
-/// - Search page: "October 28, 2016"
-///
-/// Returns None if the date can't be parsed.
+/// Bandcamp uses "DD Mon YYYY ..." (JSON-LD) and "Month DD, YYYY" (search).
+/// Normalizes both to "YYYY-MM-DD".
 fn normalize_date_to_iso(s: &str) -> Option<String> {
     let s = s.trim();
 
-    // Try "DD Mon YYYY ..." format (JSON-LD)
-    // e.g. "28 Oct 2016 00:00:00 GMT"
     let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.len() >= 3
         && let (Some(day), Some(month_num), Some(year)) = (
@@ -167,8 +149,6 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
         return Some(format!("{year:04}-{month_num:02}-{day:02}"));
     }
 
-    // Try "Month DD, YYYY" format (search page)
-    // e.g. "October 28, 2016"
     if parts.len() >= 3 {
         let day_str = parts[1].trim_end_matches(',');
         if let (Some(month_num), Some(day), Some(year)) = (
@@ -183,7 +163,6 @@ fn normalize_date_to_iso(s: &str) -> Option<String> {
         }
     }
 
-    // Fallback: if it already starts with 4 digits, pass through
     if s.len() >= 4 && s[..4].chars().all(|c| c.is_ascii_digit()) {
         return Some(s.to_string());
     }
@@ -227,9 +206,6 @@ fn month_name_to_num(s: &str) -> Option<u32> {
     }
 }
 
-// ── Search query building ────────────────────────────────────────────────
-
-/// Build a clean search query: strip file extensions, "(Original Mix)", etc.
 fn build_search_query(artist: &str, title: &str) -> String {
     let clean_title = strip_title_noise(title);
     format!("{artist} {clean_title}")
@@ -238,14 +214,12 @@ fn build_search_query(artist: &str, title: &str) -> String {
 fn strip_title_noise(title: &str) -> String {
     let mut s = title.to_string();
 
-    // Strip file extensions
     for ext in [".wav", ".mp3", ".aif", ".aiff", ".flac"] {
         if s.to_lowercase().ends_with(ext) {
             s.truncate(s.len() - ext.len());
         }
     }
 
-    // Strip "(Original Mix)" suffix (case-insensitive)
     let lower = s.to_lowercase();
     if lower.ends_with("(original mix)") {
         s.truncate(s.len() - "(original mix)".len());
@@ -253,8 +227,6 @@ fn strip_title_noise(title: &str) -> String {
 
     s.trim().to_string()
 }
-
-// ── Search result parsing ────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 struct SearchResult {
@@ -265,25 +237,16 @@ struct SearchResult {
     date: Option<String>,
 }
 
-/// Parse search result blocks from Bandcamp search HTML.
 fn parse_search_results(html: &str) -> Vec<SearchResult> {
-    // Split into result blocks — each starts with class="searchresult
     let blocks: Vec<&str> = html.split("class=\"searchresult").skip(1).collect();
 
     blocks
         .iter()
         .filter_map(|block| {
-            // Extract track URL from heading link
             let url = url_re().captures(block)?.get(1)?.as_str().to_string();
-
-            // Extract title: text between > and </a> after the heading href
             let title = extract_heading_text(block)?;
-
-            // Extract artist from subhead ("by Artist" or "from Album by Artist")
             let (artist, album) = extract_artist_album(block);
             let artist = artist?;
-
-            // Extract release date
             let date = extract_released_date(block);
 
             Some(SearchResult {
@@ -297,14 +260,11 @@ fn parse_search_results(html: &str) -> Vec<SearchResult> {
         .collect()
 }
 
-/// Extract the track title from the heading link text.
 fn extract_heading_text(block: &str) -> Option<String> {
-    // Find the heading section
     let heading_start = block.find("class=\"heading\"")?;
     let section = &block[heading_start..];
 
-    // Find the <a> tag content
-    let a_start = section.find('>')? + 1; // end of heading div tag
+    let a_start = section.find('>')? + 1;
     let link_start = section[a_start..].find('>')? + a_start + 1;
     let link_end = section[link_start..].find("</a>")? + link_start;
 
@@ -312,12 +272,10 @@ fn extract_heading_text(block: &str) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    // Strip any remaining HTML tags
     Some(strip_html_tags(text))
 }
 
-/// Extract artist and optional album from subhead text.
-/// Formats: "by Artist" or "from Album by Artist"
+/// Parses "by Artist" or "from Album by Artist" from the subhead.
 fn extract_artist_album(block: &str) -> (Option<String>, Option<String>) {
     let subhead_start = match block.find("class=\"subhead\"") {
         Some(pos) => pos,
@@ -335,7 +293,6 @@ fn extract_artist_album(block: &str) -> (Option<String>, Option<String>) {
     let text = strip_html_tags(section[content_start..content_end].trim());
     let text = text.trim();
 
-    // "from Album by Artist"
     if let Some(from_pos) = text.find("from ") {
         let after_from = &text[from_pos + 5..];
         if let Some(by_pos) = after_from.rfind(" by ") {
@@ -348,7 +305,6 @@ fn extract_artist_album(block: &str) -> (Option<String>, Option<String>) {
         }
     }
 
-    // "by Artist"
     if let Some(by_pos) = text.find("by ") {
         let artist = text[by_pos + 3..].trim().to_string();
         if !artist.is_empty() {
@@ -359,12 +315,10 @@ fn extract_artist_album(block: &str) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// Extract the release date from the "released ..." section.
 fn extract_released_date(block: &str) -> Option<String> {
     let pos = block.find("released ")?;
     let after = &block[pos + 9..];
 
-    // Take text up to the next HTML tag or newline
     let end = after
         .find('<')
         .unwrap_or(after.len())
@@ -374,7 +328,6 @@ fn extract_released_date(block: &str) -> Option<String> {
     if date.is_empty() { None } else { Some(date) }
 }
 
-/// Remove HTML tags from a string.
 fn strip_html_tags(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut in_tag = false;
@@ -390,8 +343,6 @@ fn strip_html_tags(s: &str) -> String {
     result.trim().to_string()
 }
 
-// ── Detail page parsing ──────────────────────────────────────────────────
-
 #[derive(Debug)]
 struct DetailResult {
     artist: Option<String>,
@@ -400,7 +351,6 @@ struct DetailResult {
     tags: Option<Vec<String>>,
 }
 
-/// Fetch a Bandcamp track page and extract structured data from JSON-LD.
 async fn fetch_detail(client: &Client, url: &str) -> Result<DetailResult, BandcampError> {
     let resp = client
         .get(url)
@@ -419,7 +369,6 @@ async fn fetch_detail(client: &Client, url: &str) -> Result<DetailResult, Bandca
     parse_detail_json_ld(&html)
 }
 
-/// Extract metadata from a Bandcamp track page's JSON-LD.
 fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
     let json_str = match extract_json_ld(html) {
         Some(s) => s,
@@ -450,7 +399,7 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
         .and_then(|v| v.get("name"))
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        // Filter: if publisher == artist, it's self-released (no useful label signal)
+        // publisher == artist means self-released; no useful label signal
         .filter(|l| artist.as_deref() != Some(l.as_str()));
 
     let date_published = data
@@ -458,8 +407,7 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
-    // Bandcamp's JSON-LD `keywords` may be a comma-separated string (per
-    // schema.org spec) or occasionally a JSON array. Handle both.
+    // keywords may be a comma-separated string or a JSON array
     let tags = data.get("keywords").and_then(|v| {
         if let Some(arr) = v.as_array() {
             let tags: Vec<String> = arr
@@ -488,7 +436,6 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
     })
 }
 
-/// Extract the first JSON-LD script block from HTML.
 fn extract_json_ld(html: &str) -> Option<&str> {
     let marker = "application/ld+json";
     let marker_pos = html.find(marker)?;
@@ -499,9 +446,6 @@ fn extract_json_ld(html: &str) -> Option<&str> {
     Some(html[open_tag_end..script_end].trim())
 }
 
-// ── Fuzzy matching ───────────────────────────────────────────────────────
-
-/// Score a candidate match against the query. Returns 0–100.
 fn score_match(
     query_artist: &str,
     query_title: &str,
@@ -511,7 +455,6 @@ fn score_match(
     let norm_qa = normalize_for_comparison(query_artist);
     let norm_ra = normalize_for_comparison(result_artist);
 
-    // For titles, also strip parenthetical suffixes like "(DJ Qu remix)"
     let norm_qt = normalize_for_comparison(&strip_paren_suffix(query_title));
     let norm_rt = normalize_for_comparison(&strip_paren_suffix(result_title));
 
@@ -521,14 +464,11 @@ fn score_match(
 
     let artist_score = normalized_levenshtein(&norm_qa, &norm_ra);
 
-    // For titles: also check if one is a prefix of the other (handles
-    // "Aus" matching "Aus DJ Qu remix" after paren stripping)
     let title_lev = normalized_levenshtein(&norm_qt, &norm_rt);
     let title_prefix = if norm_rt.starts_with(&norm_qt) || norm_qt.starts_with(&norm_rt) {
-        // Prefix bonus — shorter title contained in longer
         let shorter = norm_qt.len().min(norm_rt.len()) as f64;
         let longer = norm_qt.len().max(norm_rt.len()) as f64;
-        (shorter / longer).max(0.85) // at least 0.85 for prefix match
+        (shorter / longer).max(0.85)
     } else {
         0.0
     };
@@ -537,9 +477,6 @@ fn score_match(
     ((artist_score * 0.4 + title_score * 0.6) * 100.0) as i32
 }
 
-/// Strip trailing parenthetical content from a title.
-/// "Aus (DJ Qu remix)" → "Aus"
-/// "Energy Soul (Original Mix)" → "Energy Soul"
 fn strip_paren_suffix(s: &str) -> String {
     let trimmed = s.trim();
     if let Some(pos) = trimmed.rfind('(') {
@@ -551,12 +488,9 @@ fn strip_paren_suffix(s: &str) -> String {
     trimmed.to_string()
 }
 
-/// Normalize a string for fuzzy comparison: lowercase, strip special chars,
-/// remove common noise like "feat.", "ft.", "the ", etc.
 fn normalize_for_comparison(s: &str) -> String {
     let lower = s.to_lowercase();
 
-    // Strip feat/ft and everything after
     let s = if let Some(pos) = lower.find(" feat.") {
         &lower[..pos]
     } else if let Some(pos) = lower.find(" feat ") {
@@ -569,7 +503,6 @@ fn normalize_for_comparison(s: &str) -> String {
         &lower
     };
 
-    // Keep only alphanumeric and spaces
     s.chars()
         .filter(|c| c.is_alphanumeric() || *c == ' ')
         .collect::<String>()
@@ -578,7 +511,6 @@ fn normalize_for_comparison(s: &str) -> String {
         .join(" ")
 }
 
-/// Levenshtein similarity normalized to 0.0–1.0 (1.0 = identical).
 fn normalized_levenshtein(a: &str, b: &str) -> f64 {
     if a == b {
         return 1.0;
@@ -591,7 +523,6 @@ fn normalized_levenshtein(a: &str, b: &str) -> f64 {
     let len_b = b.chars().count();
     let max_len = len_a.max(len_b);
 
-    // Build DP table
     let b_chars: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=len_b).collect();
     let mut curr = vec![0usize; len_b + 1];
@@ -609,15 +540,11 @@ fn normalized_levenshtein(a: &str, b: &str) -> f64 {
     1.0 - (distance as f64 / max_len as f64)
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::*;
-
-    // ── strip_title_noise ────────────────────────────────────────────
 
     #[test]
     fn strip_file_extensions() {
@@ -640,8 +567,6 @@ mod tests {
         assert_eq!(strip_title_noise("Archangel (Remix)"), "Archangel (Remix)");
     }
 
-    // ── normalize_for_comparison ─────────────────────────────────────
-
     #[test]
     fn normalize_strips_feat() {
         assert_eq!(
@@ -656,8 +581,6 @@ mod tests {
         assert_eq!(normalize_for_comparison("Mr. G"), "mr g");
         assert_eq!(normalize_for_comparison("Cos-Ber-Zam"), "cosberzam");
     }
-
-    // ── normalized_levenshtein ───────────────────────────────────────
 
     #[test]
     fn levenshtein_identical() {
@@ -681,8 +604,6 @@ mod tests {
         let score = normalized_levenshtein("hello", "world");
         assert!(score < 0.5, "expected < 0.5, got {score}");
     }
-
-    // ── score_match ──────────────────────────────────────────────────
 
     #[test]
     fn score_exact_match() {
@@ -715,15 +636,11 @@ mod tests {
         assert!(score < 40, "expected < 40, got {score}");
     }
 
-    // ── strip_html_tags ──────────────────────────────────────────────
-
     #[test]
     fn strips_tags() {
         assert_eq!(strip_html_tags("<b>hello</b>"), "hello");
         assert_eq!(strip_html_tags("no tags"), "no tags");
     }
-
-    // ── extract_artist_album ─────────────────────────────────────────
 
     #[test]
     fn extract_by_artist() {
@@ -743,8 +660,6 @@ mod tests {
         assert_eq!(album.as_deref(), Some("Energy Soul"));
     }
 
-    // ── extract_released_date ────────────────────────────────────────
-
     #[test]
     fn extract_date() {
         let block = "released October 28, 2016\n";
@@ -762,8 +677,6 @@ mod tests {
             Some("January 1, 2015")
         );
     }
-
-    // ── extract_json_ld ──────────────────────────────────────────────
 
     #[test]
     fn extract_json_ld_basic() {
@@ -789,8 +702,6 @@ mod tests {
         assert!(extract_json_ld(html).is_none());
     }
 
-    // ── parse_detail_json_ld ─────────────────────────────────────────
-
     #[test]
     fn parse_detail_extracts_all_fields() {
         let html = r#"<html><head>
@@ -808,8 +719,6 @@ mod tests {
         assert_eq!(detail.date_published.as_deref(), Some("28 Oct 2016"));
         assert_eq!(detail.tags.unwrap(), vec!["deep house", "techno"]);
     }
-
-    // ── normalize_date_to_iso ────────────────────────────────────────
 
     #[test]
     fn normalize_json_ld_date() {
@@ -856,7 +765,6 @@ mod tests {
 
     #[test]
     fn parse_detail_keywords_as_string() {
-        // Bandcamp JSON-LD uses comma-separated string per schema.org spec
         let html = r#"<html><head>
             <script type="application/ld+json">{
                 "byArtist": {"name": "Fred P"},
@@ -890,8 +798,6 @@ mod tests {
         assert!(detail.artist.is_none());
         assert!(detail.label.is_none());
     }
-
-    // ── parse_search_results ─────────────────────────────────────────
 
     #[test]
     fn parse_search_results_extracts_track() {
@@ -955,8 +861,6 @@ mod tests {
             "album URLs should not match track regex"
         );
     }
-
-    // ── rate limiter ─────────────────────────────────────────────────
 
     #[tokio::test]
     async fn rate_limiter_enforces_minimum_spacing() {

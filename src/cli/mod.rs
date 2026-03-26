@@ -9,10 +9,6 @@ use clap::Parser;
 
 use crate::{audio, store};
 
-// ---------------------------------------------------------------------------
-// CPU preset (shared by analyze + hydrate)
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 pub(crate) enum CpuPreset {
     /// ~50% of cores, niced — use while working on the machine
@@ -31,7 +27,6 @@ impl std::fmt::Display for CpuPreset {
     }
 }
 
-/// Returns the analysis concurrency for the given CPU preset.
 pub(crate) fn analysis_concurrency_for_preset(preset: CpuPreset) -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
@@ -42,7 +37,6 @@ pub(crate) fn analysis_concurrency_for_preset(preset: CpuPreset) -> usize {
     }
 }
 
-/// Applies process-level niceness for background mode.
 pub(crate) fn apply_cpu_niceness(preset: CpuPreset) {
     if matches!(preset, CpuPreset::Background) {
         // SAFETY: setpriority with PRIO_PROCESS/0 targets the calling process.
@@ -53,17 +47,12 @@ pub(crate) fn apply_cpu_niceness(preset: CpuPreset) {
     }
 }
 
-/// Format a human-readable CPU mode summary line.
 pub(crate) fn cpu_preset_summary(preset: CpuPreset, concurrency: usize) -> String {
     match preset {
         CpuPreset::Background => format!("CPU: background ({concurrency} cores, niced)"),
         CpuPreset::Overnight => format!("CPU: overnight ({concurrency} cores)"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Memory budget helpers (shared by analyze + hydrate)
-// ---------------------------------------------------------------------------
 
 /// Empirically measured stratum-dsp memory usage per minute of audio, plus 20% margin.
 const MEMORY_MB_PER_MINUTE: u32 = 600;
@@ -83,7 +72,7 @@ const BACKGROUND_MEMORY_FRACTION: f64 = 0.30;
 /// Abort the pipeline after this many consecutive cache write failures.
 pub(crate) const MAX_CONSECUTIVE_CACHE_WRITE_FAILURES: u32 = 3;
 
-/// Returns total system physical memory in MB. Falls back to 16 GB if sysctl fails.
+/// Falls back to 16 GB if sysctl fails.
 fn system_total_memory_mb() -> u32 {
     #[cfg(target_os = "macos")]
     {
@@ -110,10 +99,9 @@ fn system_total_memory_mb() -> u32 {
     }
     #[cfg(not(target_os = "macos"))]
     tracing::warn!("No sysctl on this platform — falling back to 16 GB memory assumption");
-    16_384 // 16 GB fallback
+    16_384
 }
 
-/// Returns the memory budget in MB for analysis tasks based on preset.
 pub(crate) fn memory_budget_mb(preset: CpuPreset) -> u32 {
     let total = system_total_memory_mb();
     let fraction = match preset {
@@ -123,14 +111,12 @@ pub(crate) fn memory_budget_mb(preset: CpuPreset) -> u32 {
     ((total as f64 * fraction) as u32).max(MEMORY_MIN_COST_MB)
 }
 
-/// Returns the estimated memory cost in MB for analysing a track of `duration_secs` length.
 pub(crate) fn track_memory_cost_mb(duration_secs: i32) -> u32 {
     let minutes = (duration_secs.max(0) as f64) / 60.0;
     let cost = (minutes * MEMORY_MB_PER_MINUTE as f64) as u32 + MEMORY_FIXED_OVERHEAD_MB;
     cost.max(MEMORY_MIN_COST_MB)
 }
 
-/// Format a human-readable memory budget summary line.
 pub(crate) fn memory_preset_summary(budget_mb: u32) -> String {
     let total_mb = system_total_memory_mb();
     format!(
@@ -181,10 +167,6 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cli::Setup(args) => setup::run_setup(args),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Shared helpers used by analyze + hydrate
-// ---------------------------------------------------------------------------
 
 fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
     metadata
@@ -256,7 +238,6 @@ fn cache_status_for_track(
     Ok((has_stratum, has_essentia))
 }
 
-/// Cache write message for audio analysis (used by analyze + hydrate)
 pub(crate) struct CliCacheWriteMsg {
     pub file_path: String,
     pub analyzer: String,
@@ -282,10 +263,6 @@ pub(crate) async fn send_cache_message<T>(
         .await
         .map_err(|e| format!("{context} cache queue send failed: {e}"))
 }
-
-// ---------------------------------------------------------------------------
-// Audio file extension matching for directory scanning
-// ---------------------------------------------------------------------------
 
 fn is_audio_file(path: &Path) -> bool {
     path.extension()
@@ -338,8 +315,7 @@ fn collect_audio_files(dir: &Path, recursive: bool, result: &mut Vec<PathBuf>) {
     }
 }
 
-/// Title-case a canonical field name for human output.
-/// "album_artist" → "Album Artist", "bpm" → "BPM", etc.
+/// "album_artist" -> "Album Artist", "bpm" -> "BPM", etc.
 fn display_field_name(field: &str) -> String {
     field
         .split('_')
@@ -619,8 +595,6 @@ mod tests {
         assert_eq!(analyzed, 1);
         assert_eq!(failed, 1);
     }
-
-    // Memory budget helpers ------------------------------------------------
 
     use super::{
         CpuPreset, MEMORY_MIN_COST_MB, memory_budget_mb, memory_preset_summary,

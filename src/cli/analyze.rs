@@ -68,13 +68,11 @@ pub(crate) struct AnalyzeArgs {
 }
 
 pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // Open Rekordbox DB
     let db_path = db::resolve_db_path().ok_or(
         "Cannot find Rekordbox database. Set REKORDBOX_DB_PATH or ensure Rekordbox is installed.",
     )?;
     let conn = db::open(&db_path)?;
 
-    // Open internal store (cache)
     let store_path = store::default_path();
     let store_path_str = store_path
         .to_str()
@@ -82,7 +80,6 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         .to_string();
     let store_conn = store::open(&store_path_str)?;
 
-    // Probe essentia
     let essentia_python = if args.stratum_only {
         None
     } else {
@@ -101,7 +98,6 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         }
     );
 
-    // Search tracks
     let params = db::SearchParams {
         query: args.query,
         artist: args.artist,
@@ -136,7 +132,6 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         return Ok(());
     }
 
-    // Pre-filter: check cache for each track
     let skip_cached = !args.no_skip_cached;
     let mut to_analyze = Vec::new();
     let mut cached_count = 0;
@@ -164,7 +159,6 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
 
     let pending = to_analyze.len();
 
-    // Apply CPU preset
     let cpu_preset = args.cpu;
     super::apply_cpu_niceness(cpu_preset);
     let concurrency = match args.concurrency {
@@ -194,12 +188,11 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         .progress_chars("##-"),
     );
 
-    // Drop pre-filter connection — writer task will open its own
+    // Writer task opens its own connection
     drop(store_conn);
 
     let cancel = CancellationToken::new();
 
-    // Ctrl+C handler
     let cancel_clone = cancel.clone();
     let mp_clone = mp.clone();
     tokio::spawn(async move {
@@ -216,7 +209,6 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let failed = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    // Spawn cache writer task (with consecutive failure abort)
     let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<CliCacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path_str.clone();
     let writer_cancel = cancel.clone();
@@ -376,14 +368,12 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         }));
     }
 
-    // Await all tasks
     for handle in handles {
         let _ = handle.await;
     }
 
     pb.finish_and_clear();
 
-    // Shut down writer
     drop(cache_tx);
     let _ = writer_handle.await;
 
@@ -444,7 +434,6 @@ async fn cli_analyze_single_track(
     let track_start = Instant::now();
 
     if needs_stratum {
-        // Decode + analyze stratum
         let path_clone = file_path.clone();
         let (samples, sample_rate) =
             tokio::task::spawn_blocking(move || audio::decode_to_samples(&path_clone))

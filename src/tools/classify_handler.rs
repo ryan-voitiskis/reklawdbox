@@ -18,15 +18,11 @@ use crate::normalize;
 use crate::store;
 use crate::tools::params::{AuditGenresParams, ClassifyTracksParams};
 
-// ---------------------------------------------------------------------------
-// classify_tracks handler
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_classify_tracks(
     server: &ReklawdboxServer,
     params: ClassifyTracksParams,
 ) -> Result<CallToolResult, McpError> {
-    // Force has_genre=false for classification (ungenred tracks only)
+    // Only classify ungenred tracks
     let mut filters = params.filters;
     filters.has_genre = Some(false);
 
@@ -54,7 +50,6 @@ pub(super) fn handle_classify_tracks(
         .map(|o| (o.from.trim().to_ascii_lowercase(), o.to))
         .collect();
 
-    // Validate override targets against the taxonomy
     let invalid_targets: Vec<&str> = overrides
         .iter()
         .filter(|(_, to)| genre::canonical_genre_name(to).is_none())
@@ -99,15 +94,11 @@ pub(super) fn handle_classify_tracks(
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
-// ---------------------------------------------------------------------------
-// audit_genres handler
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_audit_genres(
     server: &ReklawdboxServer,
     params: AuditGenresParams,
 ) -> Result<CallToolResult, McpError> {
-    // Force has_genre=true for audit (tracks with existing genres only)
+    // Only audit tracks that already have genres
     let mut filters = params.filters;
     filters.has_genre = Some(true);
 
@@ -131,7 +122,6 @@ pub(super) fn handle_audit_genres(
     let include_confirmed = params.include_confirmed.unwrap_or(false);
     let (results, cache_errors) = classify_batch(server, &tracks, &[])?;
 
-    // For audit, exclude confirmed tracks (unless include_confirmed)
     let visible: Vec<&ClassificationResult> = results
         .iter()
         .filter(|r| include_confirmed || !matches!(r.action, ClassificationAction::Confirm))
@@ -169,10 +159,6 @@ pub(super) fn handle_audit_genres(
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
-// ---------------------------------------------------------------------------
-// Summary helpers
-// ---------------------------------------------------------------------------
-
 fn count_by_confidence(results: &[ClassificationResult]) -> (u32, u32, u32, u32) {
     let (mut high, mut medium, mut low, mut insufficient) = (0u32, 0u32, 0u32, 0u32);
     for r in results {
@@ -198,10 +184,6 @@ fn count_by_action(results: &[ClassificationResult]) -> (u32, u32, u32, u32) {
     }
     (suggest, conflict, confirm, manual)
 }
-
-// ---------------------------------------------------------------------------
-// Shared classification logic
-// ---------------------------------------------------------------------------
 
 fn classify_batch(
     server: &ReklawdboxServer,
@@ -288,15 +270,12 @@ fn build_track_evidence(
         (discogs, beatport, stratum, essentia)
     };
 
-    // Parse Discogs styles → mapped genres
     let discogs_val = parse_response_json(discogs_cache.as_ref());
     let discogs_mapped = extract_discogs_genres(discogs_val.as_ref(), overrides);
 
-    // Parse Beatport genre
     let beatport_val = parse_response_json(beatport_cache.as_ref());
     let (beatport_genre, beatport_raw) = extract_beatport_genre(beatport_val.as_ref(), overrides);
 
-    // Effective label
     let effective_label = if !track.label.is_empty() {
         Some(track.label.clone())
     } else {
@@ -309,7 +288,7 @@ fn build_track_evidence(
     };
     let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
-    // Audio features (has_audio reflects whether features actually parsed, not just cache presence)
+    // has_audio reflects whether features actually parsed, not just cache presence
     let audio = extract_audio_features(track, stratum_cache.as_ref(), essentia_cache.as_ref());
     let has_audio = audio.is_some();
 
@@ -330,10 +309,6 @@ fn build_track_evidence(
         has_audio,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Evidence extraction helpers
-// ---------------------------------------------------------------------------
 
 pub(super) fn parse_response_json(
     cache: Option<&store::EnrichmentCacheEntry>,
@@ -378,7 +353,6 @@ fn extract_discogs_genres(
     let mut genre_counts: HashMap<&'static str, usize> = HashMap::new();
 
     for style in styles.iter().filter_map(|s| s.as_str()) {
-        // Check overrides first
         if let Some(override_genre) = apply_override(style, overrides) {
             if let Some(canonical) = genre::canonical_genre_name(&override_genre) {
                 *genre_counts.entry(canonical).or_insert(0) += 1;
@@ -391,7 +365,6 @@ fn extract_discogs_genres(
                 );
             }
         }
-        // Standard taxonomy mapping
         let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
         if (mapping_type == "exact" || mapping_type == "alias")
             && let Some(genre_name) = maps_to
@@ -420,7 +393,6 @@ fn extract_beatport_genre(
         return (None, None);
     };
 
-    // Check overrides first
     if let Some(override_genre) = apply_override(raw, overrides) {
         if let Some(canonical) = genre::canonical_genre_name(&override_genre) {
             return (Some(canonical), Some(raw.to_string()));
@@ -433,7 +405,6 @@ fn extract_beatport_genre(
         }
     }
 
-    // Standard taxonomy mapping
     let (maps_to, mapping_type) = map_genre_through_taxonomy(raw);
     let canonical = if (mapping_type == "exact" || mapping_type == "alias") && maps_to.is_some() {
         maps_to.and_then(|g| genre::canonical_genre_name(&g))

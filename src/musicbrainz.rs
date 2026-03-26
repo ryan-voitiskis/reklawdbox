@@ -50,7 +50,6 @@ pub async fn lookup(
 ) -> Result<Option<MusicBrainzResult>, MusicBrainzError> {
     wait_for_rate_limit().await;
 
-    // Recording search
     let query = format!("artist:\"{}\" AND recording:\"{}\"", artist, title);
     let url = format!(
         "https://musicbrainz.org/ws/2/recording/?query={}&fmt=json&limit=5",
@@ -103,7 +102,6 @@ pub async fn lookup(
         return Ok(None);
     }
 
-    // Find best recording with score >= 90
     let best = recordings.iter().find(|r| {
         r.get("score")
             .and_then(|s| s.as_i64())
@@ -136,7 +134,6 @@ pub async fn lookup(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Pick best release ID for label lookup
     let releases = recording.get("releases").and_then(|v| v.as_array());
 
     let best_release_id = releases.and_then(|rels| {
@@ -149,7 +146,6 @@ pub async fn lookup(
             .map(|s| s.to_string())
     });
 
-    // Look up release for label — degrade gracefully on failure
     let label = if let Some(ref release_id) = best_release_id {
         wait_for_rate_limit().await;
         match lookup_release_label(client, release_id).await {
@@ -219,20 +215,16 @@ async fn lookup_release_label(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Filter out "[no label]"
     let label = label.filter(|l| l != "[no label]" && !l.is_empty());
 
     Ok(label)
 }
 
-/// Score a release for picking the best one from a recording's releases array.
-///
-/// Prefer Single/EP over Album, exclude compilations/DJ-mixes/live,
-/// prefer Official status, earliest date breaks ties.
+/// Prefer Single/EP over Album, penalise compilations/DJ-mixes/live,
+/// prefer Official status; earliest date breaks ties.
 fn score_release(release: &serde_json::Value) -> i32 {
     let mut score = 0i32;
 
-    // Release group primary type scoring
     let primary_type = release
         .get("release-group")
         .and_then(|rg| rg.get("primary-type"))
@@ -246,7 +238,6 @@ fn score_release(release: &serde_json::Value) -> i32 {
         _ => score += 5,
     }
 
-    // Penalise secondary types: Compilation, DJ-mix, Live
     let secondary_types = release
         .get("release-group")
         .and_then(|rg| rg.get("secondary-types"))
@@ -260,14 +251,12 @@ fn score_release(release: &serde_json::Value) -> i32 {
         }
     }
 
-    // Prefer Official status
     let status = release.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
     if status == "Official" {
         score += 15;
     }
 
-    // Prefer earlier dates (subtract year as a tiebreaker)
     let date = release
         .get("date")
         .and_then(|v| v.as_str())
@@ -276,8 +265,7 @@ fn score_release(release: &serde_json::Value) -> i32 {
     if let Some(year_str) = date.get(..4)
         && let Ok(year) = year_str.parse::<i32>()
     {
-        // Subtract a small amount so earlier years score higher
-        // Use 2100 - year so year 2000 → +100, year 2020 → +80
+        // 2100 - year: year 2000 → +100, year 2020 → +80
         score += (2100 - year).clamp(0, 200);
     }
 
@@ -475,7 +463,6 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limiter_enforces_minimum_spacing() {
-        // Use a short interval so the test completes quickly.
         // SAFETY: test runs sequentially (no other threads reading this env var).
         unsafe { std::env::set_var("REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS", "50") };
 
@@ -493,7 +480,6 @@ mod tests {
             "expected >= {min_expected:?}, got {elapsed:?}"
         );
 
-        // Reset stored instant so it doesn't leak into other tests.
         *RATE_LIMITER.get().unwrap().lock().await = None;
 
         // SAFETY: cleaning up test-only env var.

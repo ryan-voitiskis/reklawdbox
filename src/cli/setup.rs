@@ -37,33 +37,26 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Essentia installation
-// ---------------------------------------------------------------------------
-
 fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
     let venv_dir = essentia_venv_dir()
         .ok_or("Cannot determine home directory for venv location — is $HOME set?")?;
     let venv_python = venv_dir.join("bin/python");
     let venv_python_str = venv_python.to_string_lossy().to_string();
 
-    // Check if already installed and working
     if venv_python.exists() && validate_essentia_python(&venv_python_str) {
         println!("Essentia is already installed at {venv_python_str}");
         return Ok(());
     }
 
-    // Find a suitable Python
     let python_bin = find_python()?;
     println!("Using Python: {python_bin}");
 
-    // Create parent directories
     if let Some(parent) = venv_dir.parent() {
         let display = parent.display();
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {display}: {e}"))?;
     }
 
-    // Create venv (--clear ensures a fresh start if a broken venv exists)
+    // --clear ensures a fresh start if a broken venv exists
     println!("Creating virtualenv: {}", venv_dir.display());
     run_cmd(
         &python_bin,
@@ -82,7 +75,6 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    // Install essentia
     println!("Installing Essentia (this may take a minute)...");
     run_cmd(
         venv_pip.to_string_lossy().as_ref(),
@@ -90,14 +82,12 @@ fn install_essentia() -> Result<(), Box<dyn std::error::Error>> {
         "pip install essentia",
     )?;
 
-    // Validate with diagnostics
     validate_essentia_import(&venv_python_str)?;
 
     println!("Essentia installed at {venv_python_str}");
     Ok(())
 }
 
-/// Run the Essentia import check and return a detailed error on failure.
 fn validate_essentia_import(python_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(python_path)
         .args(["-c", "import essentia; print(essentia.__version__)"])
@@ -182,17 +172,12 @@ fn run_cmd(program: &str, args: &[&str], context: &str) -> Result<(), Box<dyn st
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Custom Discogs broker configuration (--broker)
-// ---------------------------------------------------------------------------
-
 fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Error>> {
     let config_path =
         config::config_path().ok_or("Could not determine config directory — is $HOME set?")?;
 
     let mut cfg = config::load();
 
-    // Broker URL
     let current_url = cfg
         .discogs
         .broker
@@ -214,7 +199,6 @@ fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Err
         });
     }
 
-    // Validate URL
     if let Some(ref url) = cfg.discogs.broker.url
         && discogs::normalize_base_url(url).is_none()
     {

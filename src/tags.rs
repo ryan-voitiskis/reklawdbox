@@ -25,10 +25,8 @@ pub enum TagError {
     /// Validation failures (unknown field, invalid year/track/disc).
     #[error("{0}")]
     Validation(String),
-    /// No cover art found in file.
     #[error("No cover art found in file")]
     NoPicture,
-    /// No tags found in file.
     #[error("No tags found in file")]
     NoTags,
     /// File doesn't support requested tag type.
@@ -115,7 +113,6 @@ fn item_key_to_field(key: &ItemKey) -> Option<&'static str> {
     }
 }
 
-/// Check whether a canonical field is available in RIFF INFO.
 fn is_riff_info_field(field: &str) -> bool {
     RIFF_INFO_FIELDS.contains(&field)
 }
@@ -183,7 +180,6 @@ pub enum CommentMode {
 
 const COMMENT_SEPARATOR: &str = " | ";
 
-/// Merge a new comment value with an optional existing value.
 pub fn merge_comment(new: &str, existing: Option<&str>, mode: CommentMode) -> String {
     match mode {
         CommentMode::Replace => new.to_string(),
@@ -281,14 +277,12 @@ pub enum FileEmbedResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build `ParseOptions` with sensible defaults.
 fn parse_options(read_cover_art: bool) -> ParseOptions {
     ParseOptions::new()
         .read_cover_art(read_cover_art)
         .parsing_mode(ParsingMode::BestAttempt)
 }
 
-/// Friendly format name from `FileType`.
 fn file_type_name(ft: FileType) -> &'static str {
     match ft {
         FileType::Wav => "wav",
@@ -307,7 +301,6 @@ fn file_type_name(ft: FileType) -> &'static str {
     }
 }
 
-/// Friendly tag-type name.
 fn tag_type_name(tt: TagType) -> &'static str {
     match tt {
         TagType::Id3v2 => "id3v2",
@@ -337,7 +330,6 @@ fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
         return Some(val.to_string());
     }
 
-    // Secondary fallback keys
     match field {
         "year" => tag.get_string(ItemKey::Year).map(|s| s.to_string()),
         "bpm" => tag.get_string(ItemKey::Bpm).map(|s| s.to_string()),
@@ -345,9 +337,6 @@ fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
     }
 }
 
-/// Read all requested fields from a tag, returning a map where:
-/// - present key with `Some(val)` → tag has value
-/// - present key with `None` → tag absent
 fn read_tag_fields(tag: &Tag, fields: &[&str]) -> HashMap<String, Option<String>> {
     let mut map = HashMap::with_capacity(fields.len());
     for &field in fields {
@@ -383,7 +372,6 @@ fn read_cover_art_meta(tag: &Tag) -> Option<CoverArtMeta> {
     })
 }
 
-/// Resolve which fields to read — either the supplied filter or all fields.
 fn resolve_fields(filter: Option<&[String]>) -> Vec<&str> {
     match filter {
         Some(f) => f.iter().map(|s| s.as_str()).collect(),
@@ -391,7 +379,7 @@ fn resolve_fields(filter: Option<&[String]>) -> Vec<&str> {
     }
 }
 
-/// Parse a `PictureType` from a string name. Defaults to `CoverFront`.
+/// Defaults to `CoverFront` for unrecognised names.
 pub fn parse_picture_type(name: &str) -> PictureType {
     match name {
         "other" => PictureType::Other,
@@ -418,7 +406,6 @@ pub fn parse_picture_type(name: &str) -> PictureType {
     }
 }
 
-/// Format a `PictureType` as a snake_case string.
 fn picture_type_name(pt: PictureType) -> &'static str {
     match pt {
         PictureType::Other => "other",
@@ -446,7 +433,6 @@ fn picture_type_name(pt: PictureType) -> &'static str {
     }
 }
 
-/// File extension for a `MimeType`.
 fn mime_extension(mime: Option<&MimeType>) -> &'static str {
     match mime {
         Some(MimeType::Jpeg) => "jpg",
@@ -458,7 +444,6 @@ fn mime_extension(mime: Option<&MimeType>) -> &'static str {
     }
 }
 
-/// Friendly MIME type name.
 fn mime_name(mime: Option<&MimeType>) -> &'static str {
     match mime {
         Some(MimeType::Jpeg) => "jpeg",
@@ -566,7 +551,6 @@ pub fn read_file_tags(
     }
 }
 
-/// Read WAV file with dual tag layers.
 fn read_wav_tags(
     tagged_file: &lofty::file::TaggedFile,
     path: &str,
@@ -624,7 +608,6 @@ fn read_wav_tags(
     }
 }
 
-/// Read single-layer tag (FLAC, MP3, M4A, etc.).
 fn read_single_tags(
     tagged_file: &lofty::file::TaggedFile,
     path: &str,
@@ -717,7 +700,6 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
     let path = &entry.path;
     let path_str = path.display().to_string();
 
-    // Read file to detect format
     let tagged_file = Probe::open(path)
         .map_err(|e| TagError::Io(format!("Failed to open: {e}")))?
         .options(parse_options(false))
@@ -857,11 +839,9 @@ fn write_tag_layer(
         .read()
         .map_err(|e| TagError::Io(format!("Failed to read: {e}")))?;
 
-    // Get or create the tag
     let tag = match tagged_file.tag_mut(tag_type) {
         Some(t) => t,
         None => {
-            // Insert a new empty tag of this type
             tagged_file.insert_tag(Tag::new(tag_type));
             tagged_file.tag_mut(tag_type).ok_or_else(|| {
                 TagError::Unsupported(format!("File does not support {tag_type:?} tags"))
@@ -872,7 +852,6 @@ fn write_tag_layer(
     let mut any_changes = false;
 
     for (field, value) in tags {
-        // Skip fields unavailable in RIFF INFO
         if riff_info_layer && !is_riff_info_field(field) {
             continue;
         }
@@ -885,11 +864,9 @@ fn write_tag_layer(
         let current_value = get_field_from_tag(tag, field);
 
         if should_delete {
-            // Skip if already absent
             if current_value.is_none() {
                 continue;
             }
-            // Remove primary key
             tag.remove_key(primary_key);
             // Also remove secondary keys for split-key fields
             match field.as_str() {
@@ -901,13 +878,11 @@ fn write_tag_layer(
             any_changes = true;
         } else {
             let raw_value = value.as_ref().unwrap();
-            // Apply comment merge logic when writing the comment field
             let new_value = if field == "comment" && comment_mode != CommentMode::Replace {
                 merge_comment(raw_value, current_value.as_deref(), comment_mode)
             } else {
                 raw_value.clone()
             };
-            // Skip if value is unchanged
             if current_value.as_deref() == Some(new_value.as_str()) {
                 continue;
             }
@@ -1004,7 +979,6 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
     let mut changes = HashMap::new();
 
     for (field, new_value) in &entry.tags {
-        // Skip fields that the write path would skip for RIFF-only WAV targets
         if riff_only && !is_riff_info_field(field) {
             continue;
         }
@@ -1023,7 +997,6 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
             }
         };
 
-        // Only include in diff if there's an actual change
         if old_value != effective_new {
             changes.insert(
                 field.clone(),
@@ -1079,7 +1052,6 @@ pub fn extract_cover_art(
 
     let file_type = tagged_file.file_type();
 
-    // For WAV, read from ID3v2 only
     let tag = if file_type == FileType::Wav {
         tagged_file.tag(TagType::Id3v2)
     } else {
@@ -1090,7 +1062,6 @@ pub fn extract_cover_art(
 
     let tag = tag.ok_or(TagError::NoTags)?;
 
-    // Find the requested picture type, fall back to any picture
     let picture = tag
         .pictures()
         .iter()
@@ -1155,7 +1126,6 @@ fn embed_cover_art_inner(
 ) -> Result<(), TagError> {
     let pic_type = parse_picture_type(picture_type_str);
 
-    // Read image data and detect format via lofty
     let image_data =
         fs::read(image_path).map_err(|e| TagError::Io(format!("Failed to read image: {e}")))?;
 
@@ -1167,14 +1137,12 @@ fn embed_cover_art_inner(
         detected.mime_type().cloned()
     };
 
-    // Build a new picture with the desired PictureType and detected MIME
     let mut builder = Picture::unchecked(image_data).pic_type(pic_type);
     if let Some(mime) = mime {
         builder = builder.mime_type(mime);
     }
     let picture = builder.build();
 
-    // Read the target file
     let mut tagged_file = Probe::open(target_path)
         .map_err(|e| TagError::Io(format!("Failed to open: {e}")))?
         .options(parse_options(true))
@@ -1184,7 +1152,6 @@ fn embed_cover_art_inner(
     let file_type = tagged_file.file_type();
 
     if file_type == FileType::Wav {
-        // WAV: embed into ID3v2 only
         let tag = match tagged_file.tag_mut(TagType::Id3v2) {
             Some(t) => t,
             None => {
@@ -1389,7 +1356,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wav_path = dir.path().join("test.wav");
 
-        // Write a minimal valid WAV file (44-byte header + 2 bytes of silence)
         let wav_header: Vec<u8> = {
             let data_size: u32 = 2; // 1 sample, 16-bit mono
             let file_size = 36 + data_size;

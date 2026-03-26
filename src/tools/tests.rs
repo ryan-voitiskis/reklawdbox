@@ -1092,7 +1092,6 @@ async fn setup_essentia_returns_already_installed_when_override_is_valid() {
 #[tokio::test]
 async fn essentia_python_override_takes_precedence() {
     let server = ReklawdboxServer::new(None);
-    // Seed the OnceLock probe to None (not found)
     server
         .state
         .essentia_python
@@ -1103,7 +1102,6 @@ async fn essentia_python_override_takes_precedence() {
         "should be None before override"
     );
 
-    // Set an override
     {
         let mut guard = server.state.essentia_python_override.lock().unwrap();
         *guard = Some("/override/python".to_string());
@@ -1254,7 +1252,6 @@ async fn write_xml_label_gate_blocks_when_set() {
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
-    // Stage a change so write_xml has something to write
     server.state.changes.stage(vec![TrackChange {
         track_id: "gate-track-1".to_string(),
         genre: None,
@@ -1266,13 +1263,11 @@ async fn write_xml_label_gate_blocks_when_set() {
         album: None,
     }]);
 
-    // Set the gate as if backfill_labels found 50 unlabeled tracks
     server
         .state
         .label_research_gate
         .store(50, std::sync::atomic::Ordering::Relaxed);
 
-    // write_xml without skip_label_gate should fail
     let err = server
         .write_xml(Parameters(WriteXmlParams {
             skip_label_gate: None,
@@ -1292,7 +1287,6 @@ async fn write_xml_label_gate_blocks_when_set() {
         "error should mention the unlabeled count, got: {msg}"
     );
 
-    // write_xml with skip_label_gate=true should succeed
     let result = server
         .write_xml(Parameters(WriteXmlParams {
             skip_label_gate: Some(true),
@@ -1325,7 +1319,6 @@ async fn write_xml_label_gate_clears_when_zero() {
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
-    // Set gate, then clear it (as backfill_labels would after successful research)
     server
         .state
         .label_research_gate
@@ -1335,7 +1328,6 @@ async fn write_xml_label_gate_clears_when_zero() {
         .label_research_gate
         .store(0, std::sync::atomic::Ordering::Relaxed);
 
-    // Stage a change
     server.state.changes.stage(vec![TrackChange {
         track_id: "gate-clear-1".to_string(),
         genre: None,
@@ -1347,7 +1339,6 @@ async fn write_xml_label_gate_clears_when_zero() {
         album: None,
     }]);
 
-    // write_xml without skip_label_gate should succeed since gate is 0
     let result = server
         .write_xml(Parameters(WriteXmlParams {
             skip_label_gate: None,
@@ -2777,8 +2768,6 @@ fn golden_dataset_genre_accuracy() {
     );
 }
 
-// --- resolve_single_track unit tests ---
-
 fn make_test_track(id: &str, genre: &str, bpm: f64, key: &str) -> crate::types::Track {
     crate::types::Track {
         id: id.to_string(),
@@ -2812,7 +2801,6 @@ fn resolve_single_track_rekordbox_only() {
     let track = make_test_track("t1", "Deep House", 126.0, "Am");
     let result = resolve_single_track(&track, None, None, None, None, false, None);
 
-    // Verify rekordbox section present
     let rb = result
         .get("rekordbox")
         .expect("rekordbox section should exist");
@@ -2826,7 +2814,6 @@ fn resolve_single_track_rekordbox_only() {
     assert_eq!(rb["rating"], 3);
     assert_eq!(rb["label"], "Test Label");
 
-    // Null sections when no cache
     assert!(
         result["audio_analysis"].is_null(),
         "audio_analysis should be null without cache"
@@ -2844,7 +2831,6 @@ fn resolve_single_track_rekordbox_only() {
         "staged_changes should be null without staged"
     );
 
-    // Data completeness
     let dc = result
         .get("data_completeness")
         .expect("data_completeness should exist");
@@ -2855,7 +2841,6 @@ fn resolve_single_track_rekordbox_only() {
     assert_eq!(dc["discogs"], false);
     assert_eq!(dc["beatport"], false);
 
-    // Genre taxonomy — "Deep House" is canonical
     let gt = result
         .get("genre_taxonomy")
         .expect("genre_taxonomy should exist");
@@ -2892,10 +2877,8 @@ fn resolve_single_track_with_staged_changes() {
 
 #[test]
 fn resolve_single_track_taxonomy_mappings() {
-    // Track with an alias genre
     let track = make_test_track("t3", "Hip-Hop", 130.0, "Fm");
 
-    // Create mock Discogs enrichment with known, alias, and unknown styles
     let discogs_json = serde_json::json!({
         "title": "Some Release",
         "year": "2020",
@@ -2914,7 +2897,6 @@ fn resolve_single_track_taxonomy_mappings() {
         created_at: "2024-01-01".to_string(),
     };
 
-    // Create mock Beatport enrichment with a known genre
     let beatport_json = serde_json::json!({
         "genre": "Techno",
         "bpm": 130,
@@ -2942,25 +2924,19 @@ fn resolve_single_track_taxonomy_mappings() {
         None,
     );
 
-    // Data completeness
     let dc = &result["data_completeness"];
     assert_eq!(dc["discogs"], true);
     assert_eq!(dc["beatport"], true);
     assert_eq!(dc["stratum_dsp"], false);
 
-    // Genre taxonomy
     let gt = &result["genre_taxonomy"];
-
-    // "Hip-Hop" is an alias for "Hip Hop"
     assert_eq!(gt["current_genre_canonical"], "Hip Hop");
 
-    // Discogs style mappings
     let dsm = gt["discogs_style_mappings"]
         .as_array()
         .expect("should be array");
     assert_eq!(dsm.len(), 3);
 
-    // Deep House — exact match (canonical genre)
     let dh = dsm
         .iter()
         .find(|m| m["style"] == "Deep House")
@@ -2968,7 +2944,6 @@ fn resolve_single_track_taxonomy_mappings() {
     assert_eq!(dh["mapping_type"], "exact");
     assert_eq!(dh["maps_to"], "Deep House");
 
-    // Garage House — alias mapping
     let gh = dsm
         .iter()
         .find(|m| m["style"] == "Garage House")
@@ -2976,7 +2951,6 @@ fn resolve_single_track_taxonomy_mappings() {
     assert_eq!(gh["mapping_type"], "alias");
     assert_eq!(gh["maps_to"], "House");
 
-    // Some Unknown Style — unknown
     let unknown = dsm
         .iter()
         .find(|m| m["style"] == "Some Unknown Style")
@@ -2984,13 +2958,11 @@ fn resolve_single_track_taxonomy_mappings() {
     assert_eq!(unknown["mapping_type"], "unknown");
     assert!(unknown["maps_to"].is_null());
 
-    // Beatport genre mapping
     let bgm = &gt["beatport_genre_mapping"];
     assert_eq!(bgm["genre"], "Techno");
     assert_eq!(bgm["mapping_type"], "exact");
     assert_eq!(bgm["maps_to"], "Techno");
 
-    // Enrichment data is present
     assert!(
         result["discogs"].is_object(),
         "discogs should be parsed object"
@@ -3029,7 +3001,6 @@ fn resolve_single_track_unknown_genre_maps_to_null() {
 fn resolve_single_track_with_stratum_agreement() {
     let track = make_test_track("t6", "Techno", 128.0, "Am");
 
-    // Stratum cache with matching BPM and key
     let stratum_json = serde_json::json!({
         "bpm": 128.5,
         "key": "Am",
@@ -3146,7 +3117,6 @@ fn resolve_single_track_stratum_disagreement() {
 fn resolve_single_track_enrichment_no_match_returns_null() {
     let track = make_test_track("t8", "House", 126.0, "Am");
 
-    // Cache entry exists but response_json is None (no match)
     let discogs_cache = store::EnrichmentCacheEntry {
         provider: "discogs".to_string(),
         query_artist: "test artist".to_string(),
@@ -3159,7 +3129,6 @@ fn resolve_single_track_enrichment_no_match_returns_null() {
 
     let result = resolve_single_track(&track, Some(&discogs_cache), None, None, None, false, None);
 
-    // discogs cached but no match -> null enrichment data, but data_completeness = true
     assert!(
         result["discogs"].is_null(),
         "discogs with no response_json should be null"
@@ -3228,32 +3197,26 @@ fn camelot_distance_scoring_handles_wrap_and_mode_shift() {
 
 #[test]
 fn key_axis_covers_all_relation_types() {
-    // Perfect match
     let perfect = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("8A"));
     assert_eq!(perfect.value, 1.0);
     assert_eq!(perfect.label, "Perfect");
 
-    // Camelot adjacent (+1)
     let adjacent = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("9A"));
     assert_eq!(adjacent.value, 0.9);
     assert!(adjacent.label.contains("Camelot adjacent"));
 
-    // Mood shift (A↔B same number)
     let mood = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("8B"));
     assert_eq!(mood.value, 0.8);
     assert!(mood.label.contains("Mood shift"));
 
-    // Energy diagonal (±1 cross letter)
     let diagonal = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("9B"));
     assert_eq!(diagonal.value, 0.55);
     assert!(diagonal.label.contains("Energy diagonal"));
 
-    // Extended (±2 same letter)
     let extended = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("10A"));
     assert_eq!(extended.value, 0.45);
     assert!(extended.label.contains("Extended"));
 
-    // Clash (distant keys)
     let clash = score_key_axis(parse_camelot_key("1A"), parse_camelot_key("6A"));
     assert_eq!(clash.value, 0.1);
     assert_eq!(clash.label, "Clash");
@@ -3261,10 +3224,7 @@ fn key_axis_covers_all_relation_types() {
 
 #[test]
 fn bpm_exponential_scoring_curve() {
-    // Continuous curve: exp(-0.019 * pct²)
-    // 0% → 1.0, monotonically decreasing
-
-    // <2% → "Seamless", value near 1.0
+    // exp(-0.019 * pct²): 0% → 1.0, monotonically decreasing
     let seamless = score_bpm_axis(128.0, 129.5); // 1.17%
     assert!(
         seamless.value > 0.97,
@@ -3273,7 +3233,6 @@ fn bpm_exponential_scoring_curve() {
     );
     assert!(seamless.label.contains("Seamless"));
 
-    // 2-4% → "Comfortable"
     let comfortable = score_bpm_axis(130.0, 126.5); // 2.69%
     assert!(
         comfortable.value > 0.85 && comfortable.value < 0.95,
@@ -3282,7 +3241,6 @@ fn bpm_exponential_scoring_curve() {
     );
     assert!(comfortable.label.contains("Comfortable"));
 
-    // 4-6% → "Noticeable"
     let noticeable = score_bpm_axis(120.0, 125.5); // 4.58%
     assert!(
         noticeable.value > 0.55 && noticeable.value < 0.75,
@@ -3291,7 +3249,6 @@ fn bpm_exponential_scoring_curve() {
     );
     assert!(noticeable.label.contains("Noticeable"));
 
-    // 6-9% → "Creative transition needed"
     let creative = score_bpm_axis(128.0, 138.0); // 7.81%
     assert!(
         creative.value > 0.25 && creative.value < 0.45,
@@ -3300,7 +3257,6 @@ fn bpm_exponential_scoring_curve() {
     );
     assert!(creative.label.contains("Creative transition needed"));
 
-    // ≥9% → "Jarring"
     let jarring = score_bpm_axis(120.0, 132.0); // 10.0%
     assert!(
         jarring.value < 0.20,
@@ -3309,12 +3265,10 @@ fn bpm_exponential_scoring_curve() {
     );
     assert!(jarring.label.contains("Jarring"));
 
-    // Guard: from_bpm <= 0 → 0.5 "Unknown BPM"
     let unknown = score_bpm_axis(0.0, 128.0);
     assert_eq!(unknown.value, 0.5);
     assert_eq!(unknown.label, "Unknown BPM");
 
-    // Monotonicity: closer BPM always scores higher
     let at_0 = score_bpm_axis(128.0, 128.0);
     let at_1 = score_bpm_axis(128.0, 129.28); // ~1%
     let at_3 = score_bpm_axis(128.0, 131.84); // ~3%
@@ -3328,27 +3282,20 @@ fn bpm_exponential_scoring_curve() {
 
 #[test]
 fn transpose_camelot_key_circle_of_fifths() {
-    // +1 semitone = +7 positions on Camelot wheel
-    // 8A + 1 semi → (8-1+7)%12+1 = 14%12+1 = 3 → 3A
+    // +1 semitone = +7 Camelot positions: 8A → 3A
     let k8a = parse_camelot_key("8A").unwrap();
     let up1 = transpose_camelot_key(k8a, 1);
     assert_eq!(format_camelot(up1), "3A");
 
-    // Full octave (+12 semitones) = identity
     let full = transpose_camelot_key(k8a, 12);
     assert_eq!(format_camelot(full), "8A");
 
-    // -1 semitone from 8A → (8-1 + (-1*7)%12=5) → (7+5)%12=0 → 12 → but let's compute:
-    // steps = ((-1 % 12) * 7).rem_euclid(12) = (-7).rem_euclid(12) = 5
-    // (8-1+5)%12+1 = 12%12+1 = 1 → 1A
     let down1 = transpose_camelot_key(k8a, -1);
     assert_eq!(format_camelot(down1), "1A");
 
-    // Round-trip: +1 then -1
     let round_trip = transpose_camelot_key(up1, -1);
     assert_eq!(format_camelot(round_trip), "8A");
 
-    // Letter is preserved
     let k5b = parse_camelot_key("5B").unwrap();
     let up2 = transpose_camelot_key(k5b, 2);
     assert!(
@@ -3397,15 +3344,12 @@ fn master_tempo_off_changes_key_scoring() {
         timbral: None,
     };
 
-    // to track at 135 BPM → when played at 128, pitch drops.
-    // shift = round(12 * log2(128/135)) = round(12 * -0.0758) = round(-0.91) = -1
-    // So effective key of to-track shifts -1 semitone from its natural key
+    // 128/135 BPM → -1 semitone pitch shift
     let mut to = from.clone();
     to.track.id = "mt-to".to_string();
     to.bpm = 135.0;
     to.camelot_key = parse_camelot_key("8A"); // same key naturally
 
-    // With master_tempo ON: same key → perfect (1.0)
     let scores_mt_on = score_transition_profiles(
         &from,
         &to,
@@ -3424,7 +3368,6 @@ fn master_tempo_off_changes_key_scoring() {
     assert_eq!(scores_mt_on.pitch_shift_semitones, 0);
     assert!(scores_mt_on.effective_to_key.is_none());
 
-    // With master_tempo OFF: pitch shift changes effective key
     let scores_mt_off = score_transition_profiles(
         &from,
         &to,
@@ -3445,10 +3388,8 @@ fn master_tempo_off_changes_key_scoring() {
         Some("1A".to_string()),
         "8A shifted -1 semitone = 1A"
     );
-    // With continuous detuning: shift is -0.909 semitones (not exactly -1),
-    // so the key score blends between score_at_0 (Perfect=1.0) and
-    // score_at_-1 (Clash=0.1). The blend should be close to 0.1 but not
-    // exactly, because 9% weight goes to the native key.
+    // Continuous detuning blends Perfect (1.0) and Clash (0.1) weighted by
+    // fractional semitones (-0.909), so score is slightly above 0.1.
     assert!(
         scores_mt_off.key.value > 0.1 && scores_mt_off.key.value < 0.25,
         "128→135: key score should be slightly above 0.1 due to detuning blend, got {}",
@@ -3462,14 +3403,10 @@ fn master_tempo_off_changes_key_scoring() {
 
 #[test]
 fn detuning_eliminates_cliff_at_rounding_boundary() {
-    // The cliff bug: at 0.49 semitones the old code scored 1.0 (Perfect),
-    // at 0.51 semitones it scored 0.1 (Clash). With continuous detuning,
-    // these should produce similar scores.
-
-    // 128 → ~131.5 BPM: shift ≈ -0.46 semitones (rounds to 0 in old code)
+    // Regression: old rounding caused a 10x score cliff at 0.5 semitones.
+    // Continuous detuning should produce similar scores on either side.
     let from = make_test_profile("cliff-from", "8A", 128.0, 0.5, "House");
     let to_under = make_test_profile("cliff-under", "8A", 131.5, 0.5, "House");
-    // 128 → ~132.0 BPM: shift ≈ -0.53 semitones (rounds to -1 in old code)
     let to_over = make_test_profile("cliff-over", "8A", 132.0, 0.5, "House");
 
     let ctx = ScoringContext::default();
@@ -3497,8 +3434,6 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
         None,
     );
 
-    // Old behavior: scores_under.key.value = 1.0, scores_over.key.value = 0.1
-    // New behavior: both should be in a similar range (no 10x cliff)
     let diff = (scores_under.key.value - scores_over.key.value).abs();
     assert!(
         diff < 0.15,
@@ -3511,7 +3446,6 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
         diff,
     );
 
-    // Both should be degraded from the perfect score of 1.0
     assert!(
         scores_under.key.value < 0.85,
         "~0.46 semitone detuning should noticeably reduce key score, got {}",
@@ -3521,7 +3455,6 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
 
 #[test]
 fn detuning_smooth_degradation_with_increasing_shift() {
-    // Key scores should degrade smoothly as BPM difference increases
     let from = make_test_profile("smooth-from", "8A", 128.0, 0.5, "House");
     let ctx = ScoringContext::default();
 
@@ -3542,7 +3475,6 @@ fn detuning_smooth_degradation_with_increasing_shift() {
             None,
         );
 
-        // Each step should produce an equal or lower key score
         assert!(
             scores.key.value <= prev_score + 0.01,
             "Key score should not increase: at {bpm} BPM got {:.3}, prev was {:.3}",
@@ -3552,7 +3484,6 @@ fn detuning_smooth_degradation_with_increasing_shift() {
         prev_score = scores.key.value;
     }
 
-    // The first (same BPM) should be perfect
     let same = make_test_profile("smooth-same", "8A", 128.0, 0.5, "House");
     let scores_same = score_transition_profiles(
         &from,
@@ -3570,7 +3501,6 @@ fn detuning_smooth_degradation_with_increasing_shift() {
 
 #[test]
 fn detuning_master_tempo_on_unchanged() {
-    // With master tempo ON, key scores should be unaffected by BPM difference
     let from = make_test_profile("mt-on-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("mt-on-to", "8A", 135.0, 0.5, "House");
     let ctx = ScoringContext::default();
@@ -3595,9 +3525,7 @@ fn detuning_master_tempo_on_unchanged() {
 
 #[test]
 fn detuning_label_shows_cents_when_audible() {
-    // At significant detuning (>10 cents), the label should indicate detuning
     let from = make_test_profile("label-from", "8A", 128.0, 0.5, "House");
-    // ~2% BPM diff = ~0.34 semitones = 34 cents detuning
     let to = make_test_profile("label-to", "8A", 130.5, 0.5, "House");
     let ctx = ScoringContext::default();
 
@@ -3622,10 +3550,7 @@ fn detuning_label_shows_cents_when_audible() {
 
 #[test]
 fn detuning_play_bpms_bilinear_interpolation() {
-    // Test the play_bpms path where BOTH tracks have fractional pitch shifts.
-    // from: native 128 BPM, playing at 130 → shift ≈ +0.27 semitones
-    // to: native 132 BPM, playing at 130 → shift ≈ -0.26 semitones
-    // Both are fractional, exercising all 4 combinations in bilinear blend.
+    // Both tracks have fractional pitch shifts, exercising all 4 bilinear blend combinations.
     let from = make_test_profile("pb-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("pb-to", "8A", 132.0, 0.5, "House");
     let ctx = ScoringContext::default();
@@ -3642,10 +3567,6 @@ fn detuning_play_bpms_bilinear_interpolation() {
         Some((130.0, 130.0)), // both pitched to 130
     );
 
-    // Both shifts are ~0.27 semitones each in opposite directions, so the
-    // total relative shift is ~0.53 semitones. The bilinear blend includes
-    // some "clash" key combinations (e.g., 3A vs 1A), so the score is
-    // noticeably degraded but not terrible.
     assert!(
         scores.key.value > 0.5 && scores.key.value < 0.85,
         "Bilinear blend with ~0.53 total shift should score moderately, got {}",
@@ -3655,7 +3576,6 @@ fn detuning_play_bpms_bilinear_interpolation() {
 
 #[test]
 fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
-    // With master tempo ON, play_bpms should not cause detuning
     let from = make_test_profile("pb-mt-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("pb-mt-to", "8A", 135.0, 0.5, "House");
     let ctx = ScoringContext::default();
@@ -3681,7 +3601,6 @@ fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
 
 #[test]
 fn detuning_play_bpms_asymmetric_one_zero_shift() {
-    // One track at native BPM (zero shift), other with fractional shift
     let from = make_test_profile("pb-asym-from", "8A", 130.0, 0.5, "House");
     let to = make_test_profile("pb-asym-to", "8A", 132.0, 0.5, "House");
     let ctx = ScoringContext::default();
@@ -3698,8 +3617,6 @@ fn detuning_play_bpms_asymmetric_one_zero_shift() {
         Some((130.0, 130.0)), // from at native, to pitched down 2 BPM
     );
 
-    // from shift = 0 (native), to shift ≈ -0.26 semitones
-    // Score blends 73.5% Perfect (1.0) + 26.5% Clash (0.1) ≈ 0.76
     assert!(
         scores.key.value > 0.7 && scores.key.value < 0.9,
         "One-sided ~0.26 semitone shift should score ~0.76, got {}",
@@ -3749,11 +3666,9 @@ fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) ->
 
 #[test]
 fn harmonic_style_conservative_penalizes_poor_transitions() {
-    // Two tracks where key score = 0.55 (energy diagonal: 8A → 9B)
     let from = make_test_profile("hs-from", "8A", 128.0, 0.7, "House");
     let to = make_test_profile("hs-to", "9B", 128.0, 0.7, "House");
 
-    // Conservative + peak phase + key=0.55 (< 0.8 threshold) → penalty
     let conservative = score_transition_profiles(
         &from,
         &to,
@@ -3766,7 +3681,6 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         None,
     );
 
-    // Same without harmonic_style → no penalty (baseline)
     let baseline = score_transition_profiles(
         &from,
         &to,
@@ -3783,7 +3697,6 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         conservative.composite < baseline.composite,
         "conservative should penalize key=0.55 at peak phase"
     );
-    // Penalty is 0.1x for Conservative style
     let expected = baseline.composite * 0.1;
     assert!(
         (conservative.composite - expected).abs() < 1e-9,
@@ -3792,7 +3705,6 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         expected
     );
 
-    // Adventurous + peak phase + key=0.55 → no penalty (threshold is 0.1)
     let adventurous = score_transition_profiles(
         &from,
         &to,
@@ -3809,7 +3721,7 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         "adventurous should not penalize key=0.55 at peak phase"
     );
 
-    // Balanced + build phase + key=0.45 (Extended: 8A→10A) → threshold is 0.45, exactly at threshold
+    // key=0.45 at exactly the Balanced build threshold (0.45) should not trigger penalty
     let from2 = make_test_profile("hs-from2", "8A", 128.0, 0.5, "House");
     let to2 = make_test_profile("hs-to2", "10A", 128.0, 0.6, "House");
     let balanced_build = score_transition_profiles(
@@ -3834,7 +3746,6 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
         &ScoringContext::default(),
         None,
     );
-    // key=0.45, threshold=0.45 → NOT below threshold → no penalty
     assert_eq!(
         balanced_build.composite, baseline_build.composite,
         "balanced should not penalize key=0.45 at build phase (exactly at threshold)"
@@ -3843,11 +3754,9 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
 
 #[test]
 fn harmonic_style_adventurous_is_phase_dependent() {
-    // Clash pair: 8A → 2A gives key=0.1
     let from = make_test_profile("adv-from", "8A", 128.0, 0.7, "House");
     let to = make_test_profile("adv-to", "2A", 128.0, 0.7, "House");
 
-    // Adventurous at Peak: threshold=0.1, key=0.1 → NOT below → no penalty
     let adv_peak = score_transition_profiles(
         &from,
         &to,
@@ -3875,7 +3784,6 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         "adventurous at peak should not penalize key=0.1 (threshold is 0.1)"
     );
 
-    // Adventurous at Warmup: threshold=0.45, key=0.1 → below → penalty
     let adv_warmup = score_transition_profiles(
         &from,
         &to,
@@ -3902,7 +3810,6 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         adv_warmup.composite < baseline_warmup.composite,
         "adventurous at warmup should penalize key=0.1 (threshold is 0.45)"
     );
-    // Adventurous uses 0.5x penalty factor
     let expected = baseline_warmup.composite * 0.5;
     assert!(
         (adv_warmup.composite - expected).abs() < 1e-9,
@@ -3911,7 +3818,6 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         expected
     );
 
-    // Conservative is phase-independent: always 0.8 threshold
     let cons_peak = score_transition_profiles(
         &from,
         &to,
@@ -3934,7 +3840,6 @@ fn harmonic_style_adventurous_is_phase_dependent() {
         &ScoringContext::default(),
         None,
     );
-    // Both should be penalized (key=0.1 < 0.8)
     assert!(cons_peak.composite < baseline_peak.composite);
     assert!(cons_warmup.composite < baseline_warmup.composite);
 }
@@ -4058,7 +3963,6 @@ fn score_genre_axis_treats_missing_genre_as_neutral() {
 fn genre_stickiness_bonus_and_penalty() {
     let approx = |a: f64, b: f64| (a - b).abs() < 1e-9;
 
-    // Streak bonus: same family, run_length=3 (< 5) → +0.1
     let bonus = score_genre_axis(
         Some("Deep House"),
         Some("Tech House"),
@@ -4073,7 +3977,6 @@ fn genre_stickiness_bonus_and_penalty() {
     );
     assert!(bonus.label.contains("streak bonus"));
 
-    // No bonus at run=5 (cap)
     let no_bonus = score_genre_axis(
         Some("Deep House"),
         Some("Tech House"),
@@ -4084,7 +3987,6 @@ fn genre_stickiness_bonus_and_penalty() {
     assert_eq!(no_bonus.value, 0.7);
     assert!(!no_bonus.label.contains("streak bonus"));
 
-    // Early switch penalty: different family, run_length=1 (< 2) → -0.1
     let penalty = score_genre_axis(
         Some("House"),
         Some("Drum & Bass"),
@@ -4099,7 +4001,6 @@ fn genre_stickiness_bonus_and_penalty() {
     );
     assert!(penalty.label.contains("early switch penalty"));
 
-    // No penalty at run=2
     let no_penalty = score_genre_axis(
         Some("House"),
         Some("Drum & Bass"),
@@ -4110,7 +4011,6 @@ fn genre_stickiness_bonus_and_penalty() {
     assert_eq!(no_penalty.value, 0.3);
     assert!(!no_penalty.label.contains("early switch penalty"));
 
-    // No bonus at run=0 (first transition)
     let first = score_genre_axis(
         Some("House"),
         Some("Tech House"),
@@ -4126,13 +4026,6 @@ fn genre_stickiness_bonus_and_penalty() {
 fn bpm_trajectory_drift_penalty() {
     use std::collections::HashMap;
 
-    // Pool: start at 128 BPM, candidates at 130 (+1.56%) and 145 (+13.28%)
-    // With bpm_drift_pct=3.0 and target_tracks=3 (divisor = 2):
-    //   position 1: budget_pct = 3.0 * (1/2) = 1.5% → budget_bpm = 128 * 1.5% = 1.92
-    //   130 drifts 2 (>1.92) → penalized; 145 drifts 17 (>1.92) → penalized
-    // With bpm_drift_pct=6.0 and target_tracks=3 (divisor = 2):
-    //   position 1: budget_pct = 6.0 * (1/2) = 3.0% → budget_bpm = 128 * 3% = 3.84
-    //   130 drifts 2 (<=3.84) → no penalty; 145 drifts 17 (>3.84) → penalized
     let start = make_test_profile("bpm-start", "8A", 128.0, 0.7, "House");
     let close = make_test_profile("bpm-close", "8A", 130.0, 0.7, "House");
     let far = make_test_profile("bpm-far", "8A", 145.0, 0.7, "House");
@@ -4142,9 +4035,6 @@ fn bpm_trajectory_drift_penalty() {
     profiles.insert("bpm-close".to_string(), close);
     profiles.insert("bpm-far".to_string(), far);
 
-    // 3% limit: both candidates penalized at position 1 (budget 1.92 BPM)
-    // but close (drift 2) is barely over while far (drift 17) is way over
-    // close still wins on composite even with penalty
     let tight = build_candidate_plan(
         &profiles,
         "bpm-start",
@@ -4159,7 +4049,6 @@ fn bpm_trajectory_drift_penalty() {
     );
     assert_eq!(tight.ordered_ids[1], "bpm-close");
 
-    // 6% limit (default): close (1.56%) within budget, far (13.28%) penalized
     let moderate = build_candidate_plan(
         &profiles,
         "bpm-start",
@@ -4173,10 +4062,8 @@ fn bpm_trajectory_drift_penalty() {
         None,
     );
     assert_eq!(moderate.ordered_ids[1], "bpm-close");
-    // Far still included (only penalized, not excluded)
     assert!(moderate.ordered_ids.contains(&"bpm-far".to_string()));
 
-    // Very generous limit: no penalty for either
     let generous = build_candidate_plan(
         &profiles,
         "bpm-start",
@@ -4333,7 +4220,6 @@ async fn score_transition_returns_expected_axis_scores() {
     assert_eq!(payload["to"]["key"], "9A");
 
     assert_eq!(payload["scores"]["key"]["value"], 0.9);
-    // BPM uses Rekordbox BPM (128.0→123.5): 3.52% → exp(-0.019*3.52²) ≈ 0.791
     assert_eq!(payload["scores"]["bpm"]["value"], 0.791);
     assert_eq!(payload["scores"]["energy"]["value"], 1.0);
     assert_eq!(payload["scores"]["genre"]["value"], 1.0);
@@ -4341,7 +4227,6 @@ async fn score_transition_returns_expected_axis_scores() {
     assert_eq!(payload["scores"]["rhythm"]["value"], 0.5);
     assert_eq!(payload["scores"]["composite"], 0.915);
 
-    // Top-level transition metadata fields
     assert!(
         payload["key_relation"].is_string(),
         "key_relation should be present"
@@ -4365,8 +4250,7 @@ async fn score_transition_returns_expected_axis_scores() {
 
 #[tokio::test]
 async fn score_transition_balanced_default_penalizes_clash() {
-    // 8A → 2A is a Clash (key score 0.1, below Balanced threshold 0.45)
-    // With harmonic_style: None, the handler defaults to Balanced and applies 0.5x penalty
+    // harmonic_style: None defaults to Balanced, which applies 0.5x penalty on Clash
     let db_conn = create_single_track_test_db("clash-from", "/tmp/clash-from.flac");
     db_conn
         .execute(
@@ -4398,7 +4282,6 @@ async fn score_transition_balanced_default_penalizes_clash() {
     )
     .expect("temp internal store should open");
 
-    // Both tracks at 122 BPM to isolate key scoring; from=8A, to=2A (clash)
     store::set_audio_analysis(
         &store_conn,
         "/tmp/clash-from.flac",
@@ -4423,7 +4306,6 @@ async fn score_transition_balanced_default_penalizes_clash() {
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
-    // With harmonic_style: None → Balanced default → penalty on Clash
     let penalized = server
         .score_transition(Parameters(ScoreTransitionParams {
             source_track_id: "clash-from".to_string(),
@@ -4437,7 +4319,6 @@ async fn score_transition_balanced_default_penalizes_clash() {
         .expect("score_transition should succeed");
     let penalized_payload = extract_json(&penalized);
 
-    // Explicitly pass Adventurous → no penalty on Clash at Build phase (threshold 0.1)
     let unpenalized = server
         .score_transition(Parameters(ScoreTransitionParams {
             source_track_id: "clash-from".to_string(),
@@ -4451,11 +4332,9 @@ async fn score_transition_balanced_default_penalizes_clash() {
         .expect("score_transition should succeed");
     let unpenalized_payload = extract_json(&unpenalized);
 
-    // Key score should be 0.1 (Clash) in both cases
     assert_eq!(penalized_payload["scores"]["key"]["value"], 0.1);
     assert_eq!(unpenalized_payload["scores"]["key"]["value"], 0.1);
 
-    // Balanced default should halve the composite vs Adventurous
     let penalized_composite = penalized_payload["scores"]["composite"].as_f64().unwrap();
     let unpenalized_composite = unpenalized_payload["scores"]["composite"].as_f64().unwrap();
     let expected = unpenalized_composite * 0.5;
@@ -4465,11 +4344,6 @@ async fn score_transition_balanced_default_penalizes_clash() {
     );
 }
 
-// ==================== serde/schema contract tests for #[serde(flatten)] ====================
-
-/// Verify that flat JSON (as sent by MCP) deserializes correctly into all
-/// param structs that use `#[serde(flatten)] filters: SearchFilterParams`.
-/// Guards against regressions where fields silently stop binding.
 #[test]
 fn flatten_json_round_trip_search_tracks_params() {
     let json = serde_json::json!({
@@ -4633,12 +4507,9 @@ fn query_transition_candidates_params_deserializes_from_json() {
     assert!(p.playlist_id.is_none());
 }
 
-/// Verify that schemars inlines flattened fields at the top level of the
-/// JSON Schema. MCP clients read the schema to build tool UIs — a nested
-/// `filters` wrapper object would break them.
+/// MCP clients expect filter fields at schema top level, not nested under `filters`.
 #[test]
 fn flatten_schema_has_top_level_filter_properties() {
-    // Filter fields that must appear as top-level properties in every schema
     let filter_fields = [
         "query",
         "artist",
@@ -4679,7 +4550,6 @@ fn flatten_schema_has_top_level_filter_properties() {
         }
     }
 
-    // SearchTracksParams: filter fields + playlist, include_samples, limit, offset
     assert_schema_properties::<SearchTracksParams>(
         "SearchTracksParams",
         &[
@@ -4690,7 +4560,6 @@ fn flatten_schema_has_top_level_filter_properties() {
         &["filters"],
     );
 
-    // EnrichTracksParams: filter fields + track_ids, playlist_id, max_tracks, providers, skip_cached, force_refresh
     assert_schema_properties::<EnrichTracksParams>(
         "EnrichTracksParams",
         &[
@@ -4708,7 +4577,6 @@ fn flatten_schema_has_top_level_filter_properties() {
         &["filters"],
     );
 
-    // AnalyzeAudioBatchParams: filter fields + track_ids, playlist_id, max_tracks, skip_cached
     assert_schema_properties::<AnalyzeAudioBatchParams>(
         "AnalyzeAudioBatchParams",
         &[
@@ -4719,7 +4587,6 @@ fn flatten_schema_has_top_level_filter_properties() {
         &["filters"],
     );
 
-    // ResolveTracksDataParams: filter fields + track_ids, playlist_id, max_tracks
     assert_schema_properties::<ResolveTracksDataParams>(
         "ResolveTracksDataParams",
         &[
@@ -4730,8 +4597,6 @@ fn flatten_schema_has_top_level_filter_properties() {
         &["filters"],
     );
 }
-
-// ==================== BPM trajectory tests ====================
 
 #[test]
 fn bpm_trajectory_warmup_build_peak_release() {
@@ -4747,16 +4612,12 @@ fn bpm_trajectory_warmup_build_peak_release() {
     ];
     let trajectory = compute_bpm_trajectory(&phases, 124.0, 132.0);
     assert_eq!(trajectory.len(), 8);
-    // Warmup = start
     assert_eq!(trajectory[0], 124.0);
-    // Build ramp: 3 positions (indices 1,2,3), progress 0/2, 1/2, 2/2
     assert_eq!(trajectory[1], 124.0);
     assert_eq!(trajectory[2], 128.0);
     assert_eq!(trajectory[3], 132.0);
-    // Peak = end
     assert_eq!(trajectory[4], 132.0);
     assert_eq!(trajectory[5], 132.0);
-    // Release ramp: 2 positions (indices 6,7), progress 0/1, 1/1
     assert_eq!(trajectory[6], 132.0);
     assert_eq!(trajectory[7], 124.0);
 }
@@ -4786,15 +4647,12 @@ fn bpm_trajectory_empty() {
 
 #[test]
 fn bpm_trajectory_single_build_single_release() {
-    // A single build phase should use midpoint, same for single release
     let phases = vec![EnergyPhase::Build, EnergyPhase::Peak, EnergyPhase::Release];
     let trajectory = compute_bpm_trajectory(&phases, 120.0, 130.0);
     assert_eq!(trajectory[0], 125.0); // midpoint for single build
     assert_eq!(trajectory[1], 130.0); // peak
     assert_eq!(trajectory[2], 125.0); // midpoint for single release
 }
-
-// ==================== play_bpms scoring tests ====================
 
 #[test]
 fn play_bpms_none_preserves_existing_behavior() {
@@ -4812,7 +4670,6 @@ fn play_bpms_none_preserves_existing_behavior() {
         &ScoringContext::default(),
         None,
     );
-    // play_bpms=None should give same result as before
     assert!(without.composite > 0.0);
     assert!(without.effective_to_key.is_none());
     assert_eq!(without.pitch_shift_semitones, 0);
@@ -4823,7 +4680,6 @@ fn play_bpms_affects_bpm_adjustment_pct() {
     let from = make_test_profile("pbadj-from", "8A", 128.0, 0.6, "House");
     let to = make_test_profile("pbadj-to", "9A", 126.0, 0.7, "House");
 
-    // With play_bpms: target_bpm=130 for to-track (native 126)
     let with_play = score_transition_profiles(
         &from,
         &to,
@@ -4835,7 +4691,6 @@ fn play_bpms_affects_bpm_adjustment_pct() {
         &ScoringContext::default(),
         Some((128.0, 130.0)),
     );
-    // bpm_adjustment_pct = |130 - 126| / 126 * 100 ≈ 3.17%
     assert!(
         (with_play.bpm_adjustment_pct - 3.174).abs() < 0.1,
         "bpm_adjustment_pct should reflect target vs native; got {}",
@@ -4845,12 +4700,9 @@ fn play_bpms_affects_bpm_adjustment_pct() {
 
 #[test]
 fn play_bpms_affects_key_transposition() {
-    // When master_tempo is OFF and play_bpms causes pitch shift,
-    // both tracks should get effective keys
     let from = make_test_profile("pbkey-from", "8A", 128.0, 0.6, "House");
     let to = make_test_profile("pbkey-to", "8A", 128.0, 0.7, "House");
 
-    // Play both at their native BPM → no shift, same key, perfect
     let no_shift = score_transition_profiles(
         &from,
         &to,
@@ -4867,7 +4719,6 @@ fn play_bpms_affects_key_transposition() {
         "same play BPM, same native key = perfect"
     );
 
-    // Play to-track at much higher BPM with master_tempo OFF → key shifts
     let big_shift = score_transition_profiles(
         &from,
         &to,
@@ -4879,14 +4730,11 @@ fn play_bpms_affects_key_transposition() {
         &ScoringContext::default(),
         Some((128.0, 136.0)),
     );
-    // 136/128 = 1.0625, log2 ≈ 0.0875, *12 ≈ 1.05, rounds to 1 semitone
     assert_ne!(
         big_shift.pitch_shift_semitones, 0,
         "large BPM shift should transpose key"
     );
 }
-
-// ==================== Beam search tests ====================
 
 fn make_beam_test_profiles() -> HashMap<String, TrackProfile> {
     let tracks = vec![
@@ -4967,14 +4815,12 @@ fn beam_search_wider_produces_multiple_plans() {
         plans.len()
     );
 
-    // All plans should have the correct length
     for plan in &plans {
         assert_eq!(plan.ordered_ids.len(), 4);
         assert_eq!(plan.transitions.len(), 3);
         assert_eq!(plan.ordered_ids[0], "b1", "all plans should start with b1");
     }
 
-    // Plans should be distinct
     let unique: HashSet<&Vec<String>> = plans.iter().map(|p| &p.ordered_ids).collect();
     assert_eq!(unique.len(), plans.len(), "all plans should be distinct");
 }
@@ -5062,8 +4908,6 @@ fn beam_search_with_bpm_trajectory() {
     }
 }
 
-// ==================== query_transition_candidates tests ====================
-
 #[tokio::test]
 async fn query_transition_candidates_ranks_pool() {
     let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
@@ -5104,7 +4948,6 @@ async fn query_transition_candidates_ranks_pool() {
         "should return at least one candidate"
     );
 
-    // Verify sorted by composite descending
     let composites: Vec<f64> = candidates
         .iter()
         .map(|c| c["scores"]["composite"].as_f64().unwrap())
@@ -5116,7 +4959,6 @@ async fn query_transition_candidates_ranks_pool() {
         );
     }
 
-    // Each candidate should have required fields
     for c in candidates {
         assert!(c["track_id"].is_string());
         assert!(c["native_bpm"].is_number());
@@ -5124,7 +4966,6 @@ async fn query_transition_candidates_ranks_pool() {
         assert!(c["bpm_difference_pct"].is_number());
         assert!(c["key_relation"].is_string());
         assert!(c["scores"]["composite"].is_number());
-        // Without target_bpm, play_at_bpm and pitch fields should be absent
         assert!(
             c.get("play_at_bpm").is_none() || c["play_at_bpm"].is_null(),
             "play_at_bpm should not be present without target_bpm"
@@ -5168,7 +5009,6 @@ async fn query_transition_candidates_with_target_bpm() {
     let candidates = payload["candidates"].as_array().unwrap();
     assert!(candidates.len() <= 3, "limit should be respected");
 
-    // All candidates should report play_at_bpm equal to target_bpm
     for c in candidates {
         assert_eq!(
             c["play_at_bpm"].as_f64().unwrap(),
@@ -5212,8 +5052,6 @@ async fn query_transition_candidates_master_tempo_off() {
     assert_eq!(payload["master_tempo"], false);
     let candidates = payload["candidates"].as_array().unwrap();
     assert!(!candidates.is_empty());
-    // With target_bpm=135 and native BPMs 123.5-130, master_tempo off should
-    // produce pitch_shift_semitones on at least some candidates
     let has_shift = candidates
         .iter()
         .any(|c| c.get("pitch_shift_semitones").is_some());
@@ -5253,8 +5091,6 @@ async fn query_transition_candidates_rejects_missing_pool() {
         "error should mention required pool source; got: {msg}"
     );
 }
-
-// ==================== build_set beam + trajectory integration tests ====================
 
 #[tokio::test]
 async fn build_set_beam_search_produces_multiple_candidates() {
@@ -5330,13 +5166,11 @@ async fn build_set_with_bpm_range_includes_trajectory_fields() {
 
     let payload = extract_json(&result);
 
-    // Top-level bpm_trajectory array
     let trajectory = payload["bpm_trajectory"]
         .as_array()
         .expect("bpm_trajectory should be present at set level");
     assert_eq!(trajectory.len(), 4, "trajectory should match target_tracks");
 
-    // Per-candidate bpm_trajectory
     let candidates = payload["candidates"].as_array().unwrap();
     assert!(!candidates.is_empty());
 
@@ -5371,7 +5205,6 @@ async fn build_set_beam_width_1_backward_compatible() {
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
-    // Using legacy `candidates` field (beam_width=None) should use candidates as beam_width
     let result = server
         .build_set(Parameters(BuildSetParams {
             track_ids: track_ids.clone(),
@@ -5395,7 +5228,6 @@ async fn build_set_beam_width_1_backward_compatible() {
         "candidates=1 should route to greedy"
     );
     let candidates = payload["candidates"].as_array().unwrap();
-    // With beam_width=1, the pool is large enough for variation via start tracks
     assert!(!candidates.is_empty());
 
     for candidate in candidates {
@@ -5404,12 +5236,7 @@ async fn build_set_beam_width_1_backward_compatible() {
     }
 }
 
-// ==================== Schema compatibility tests ====================
-
-/// All tool input schemas must be free of $ref, $defs, and top-level
-/// oneOf/anyOf for Claude API compatibility. Schemars v1 emits these
-/// by default for enum/struct references; `#[schemars(inline)]` and
-/// manual `JsonSchema` impls prevent them.
+/// Tool schemas must be free of $ref/$defs and top-level oneOf/anyOf for Claude API compatibility.
 #[test]
 fn tool_schemas_are_claude_api_compatible() {
     fn check<T: JsonSchema>(name: &str) {
@@ -5419,7 +5246,6 @@ fn tool_schemas_are_claude_api_compatible() {
         assert!(!json.contains(r#""$ref""#), "{name} schema contains $ref");
         assert!(!json.contains(r#""$defs""#), "{name} schema contains $defs");
 
-        // Top-level oneOf/anyOf is forbidden (nested inside properties is ok)
         let root = schema.as_value();
         assert!(
             root.get("oneOf").is_none(),
@@ -5431,7 +5257,6 @@ fn tool_schemas_are_claude_api_compatible() {
         );
     }
 
-    // Tools with complex nested types (the 8 originally broken tools)
     check::<AuditOperation>("AuditOperation");
     check::<BuildSetParams>("BuildSetParams");
     check::<ScoreTransitionParams>("ScoreTransitionParams");
@@ -5441,7 +5266,6 @@ fn tool_schemas_are_claude_api_compatible() {
     check::<WriteXmlParams>("WriteXmlParams");
     check::<UpdateTracksParams>("UpdateTracksParams");
 
-    // All remaining tool param types for completeness
     check::<SearchTracksParams>("SearchTracksParams");
     check::<GetTrackParams>("GetTrackParams");
     check::<GetPlaylistTracksParams>("GetPlaylistTracksParams");

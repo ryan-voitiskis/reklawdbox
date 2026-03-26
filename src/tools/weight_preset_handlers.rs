@@ -12,7 +12,6 @@ pub(super) fn handle_save_weight_preset(
         ScorerType::Transition => "transition",
     };
 
-    // Prevent overwriting built-in presets
     let is_built_in = matches!(
         (scorer_type_str, params.name.as_str()),
         ("transition", "balanced" | "harmonic" | "energy" | "genre")
@@ -28,7 +27,6 @@ pub(super) fn handle_save_weight_preset(
         ));
     }
 
-    // Validate and renormalize the weights
     let normalized_json = match params.scorer_type {
         ScorerType::Transition => {
             let input: TransitionWeightInput = serde_json::from_value(params.weights)
@@ -88,7 +86,6 @@ pub(super) fn handle_list_weight_presets(
     let saved = crate::store::list_weight_presets(&store, scorer_type_str)
         .map_err(|e| mcp_internal_error(format!("Failed to list presets: {e}")))?;
 
-    // Include built-in presets
     let mut presets: Vec<serde_json::Value> = Vec::new();
 
     if scorer_type_str.is_none() || scorer_type_str == Some("transition") {
@@ -123,7 +120,6 @@ pub(super) fn handle_list_weight_presets(
         }
     }
 
-    // Add saved presets
     for entry in saved {
         let weights: serde_json::Value =
             serde_json::from_str(&entry.weights_json).unwrap_or(serde_json::Value::Null);
@@ -150,7 +146,6 @@ pub(super) fn handle_delete_weight_preset(
         ScorerType::Transition => "transition",
     };
 
-    // Don't allow deleting built-in presets
     let built_in = matches!(
         (scorer_type_str, params.name.as_str()),
         ("transition", "balanced" | "harmonic" | "energy" | "genre")

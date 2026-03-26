@@ -4,7 +4,6 @@ mod imp {
 
     const SERVICE: &str = "com.reklawdbox.broker-session";
 
-    /// macOS `errSecItemNotFound` (-25300).
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
     pub fn set_session_token(broker_url: &str, token: &str) -> Result<(), String> {

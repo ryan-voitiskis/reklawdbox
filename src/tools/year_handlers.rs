@@ -246,7 +246,6 @@ pub(super) async fn handle_backfill_years(
 
     let mut auto_enriched = 0usize;
 
-    // Auto-enrich: fetch Bandcamp + MusicBrainz for uncached remaining year-zero tracks.
     if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty())
     {
         let bc_tracks: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
@@ -258,7 +257,6 @@ pub(super) async fn handle_backfill_years(
             "auto_enrich: fetching for {total} uncached year-zero tracks"
         );
 
-        // Fetch Bandcamp.
         for (norm_artist, norm_title, raw_artist, raw_title) in &bc_tracks {
             match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
                 Ok(result) => {
@@ -279,7 +277,6 @@ pub(super) async fn handle_backfill_years(
             }
         }
 
-        // Fetch MusicBrainz.
         for (norm_artist, norm_title, raw_artist, raw_title) in &mb_tracks {
             match lookup_musicbrainz_remote(server, raw_artist, raw_title).await {
                 Ok(result) => {
@@ -300,7 +297,7 @@ pub(super) async fn handle_backfill_years(
             }
         }
 
-        // Second pass: re-scan with updated cache.
+        // Re-scan with updated cache
         let store_conn = server.cache_store_conn()?;
         scan = scan_years(&store_conn, &tracks);
         drop(store_conn);

@@ -48,7 +48,6 @@ fn album_from_folder_path(file_path: &str) -> Option<String> {
     let dir_name = parent.file_name()?.to_str()?;
     let trimmed = dir_name.trim_end();
 
-    // Must end with (YYYY)
     if trimmed.len() < 6 || trimmed.as_bytes()[trimmed.len() - 1] != b')' {
         return None;
     }
@@ -63,7 +62,6 @@ fn album_from_folder_path(file_path: &str) -> Option<String> {
         return None;
     }
 
-    // Strip the (YYYY) suffix
     let mut name = trimmed[..open].trim_end().to_string();
 
     // Repeatedly strip trailing (...) that contain qualifier words
@@ -92,7 +90,6 @@ fn album_from_folder_path(file_path: &str) -> Option<String> {
     Some(name)
 }
 
-/// Read album tag from audio file metadata.
 fn album_from_file_tags(file_path: &str) -> Option<String> {
     let fields = ["album".to_string()];
     let result = tags::read_file_tags(Path::new(file_path), Some(&fields), false);
@@ -113,7 +110,6 @@ fn album_from_file_tags(file_path: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Extract album from enrichment cache for a single provider.
 fn album_from_cache(
     store_conn: &rusqlite::Connection,
     provider: &str,
@@ -145,7 +141,6 @@ fn album_from_cache(
     (has_cache, album)
 }
 
-/// Returns true if the candidate album should be skipped (no useful signal).
 fn is_noise_album(candidate: &str, track_title: &str, artist: &str) -> bool {
     let norm_candidate = normalize::normalize_for_matching(candidate);
     let norm_title = normalize::normalize_for_matching(track_title);
@@ -335,7 +330,6 @@ pub(super) async fn handle_backfill_albums(
             }
         }
 
-        // Re-scan with updated cache
         let store_conn = server.cache_store_conn()?;
         scan = scan_albums(&store_conn, &tracks);
         drop(store_conn);
@@ -426,7 +420,6 @@ mod tests {
 
     #[test]
     fn album_from_folder_preserves_non_qualifier_parens() {
-        // A hypothetical album with non-qualifier parenthetical
         assert_eq!(
             album_from_folder_path("/music/Artist/Music (Is My Life) (2020)/track.flac"),
             Some("Music (Is My Life)".to_string())

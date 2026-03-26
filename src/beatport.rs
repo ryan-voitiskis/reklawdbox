@@ -14,17 +14,14 @@ const BEATPORT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_
 
 #[derive(Debug, thiserror::Error)]
 pub enum BeatportError {
-    /// Non-success HTTP response.
     #[error("Beatport {kind} HTTP {status}{}", .retry_after.as_ref().filter(|r| !r.is_empty()).map(|r| format!(" (Retry-After: {r})")).unwrap_or_default())]
     Http {
         status: reqwest::StatusCode,
         retry_after: Option<String>,
         kind: String,
     },
-    /// Network / request failures.
     #[error("{0}")]
     Request(#[from] reqwest::Error),
-    /// HTML/JSON extraction failures.
     #[error("{0}")]
     Parse(String),
 }
@@ -131,7 +128,6 @@ fn http_status_error(
     }
 }
 
-/// Parse Beatport HTML to extract track data from __NEXT_DATA__ JSON.
 fn parse_beatport_html(
     html: &str,
     artist: &str,
@@ -154,7 +150,6 @@ fn parse_beatport_html(
         }
     };
 
-    // Search every dehydrated query entry for track arrays.
     let queries = match next_data.pointer("/props/pageProps/dehydratedState/queries") {
         Some(v) => v,
         None => {
@@ -213,8 +208,6 @@ fn parse_beatport_html(
                     .unwrap_or("")
                     .to_string();
 
-                // Try publish_date first, then release_date.
-                // Format: "YYYY-MM-DDT00:00:00"
                 let release_date = track
                     .get("publish_date")
                     .or_else(|| track.get("release_date"))
@@ -276,8 +269,8 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
         })
         .unwrap_or_default();
 
-    // Split search artist on comma to handle multi-artist strings like "Burial, Four Tet".
-    // Beatport returns separate artist objects; Rekordbox stores them as a combined string.
+    // Rekordbox stores multi-artist as a combined string ("Burial, Four Tet"),
+    // but Beatport returns separate artist objects.
     let search_parts: Vec<&str> = norm_artist
         .split(',')
         .map(|s| s.trim())
@@ -413,7 +406,6 @@ mod tests {
             .unwrap()
             .expect("expected a beatport match");
 
-        // publish_date takes priority over release_date
         assert_eq!(result.release_date, Some("2023-03-17T00:00:00".to_string()));
     }
 
@@ -488,7 +480,6 @@ mod tests {
 
     #[test]
     fn test_parse_no_match_when_search_title_is_longer_than_track_name() {
-        // A longer search title should not match a shorter track_name.
         // Matching is one-way: track_name must contain the search title, not vice versa.
         let html = build_html_with_tracks(serde_json::json!([
             {
@@ -597,10 +588,7 @@ mod tests {
 
     #[test]
     fn test_parse_returns_first_match_when_multiple_tracks_match() {
-        // When several tracks in the results all satisfy is_track_match,
-        // parse_beatport_html should return the first one it encounters
-        // (it returns early on the first match).
-        let html = build_html_with_tracks(serde_json::json!([
+            let html = build_html_with_tracks(serde_json::json!([
             {
                 "track_id": 100,
                 "track_name": "Archangel",
@@ -634,14 +622,12 @@ mod tests {
             .unwrap()
             .expect("expected a beatport match");
 
-        // Should be the first track (track_id 100), not the second or third.
         assert_eq!(result.track_name, "Archangel");
         assert_eq!(result.bpm, Some(140));
         assert_eq!(result.key, "Am");
         assert_eq!(result.genre, "Bass / Club");
         assert_eq!(result.label, Some("Hyperdub".to_string()));
         assert_eq!(result.artists, vec!["Burial".to_string()]);
-        // Exact title match => fuzzy_match should be false.
         assert!(!result.fuzzy_match);
     }
 
@@ -687,14 +673,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_enforces_minimum_spacing() {
-        // Use a short interval so the test completes quickly.
         // SAFETY: test runs sequentially (no other threads reading this env var).
         unsafe { std::env::set_var("REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS", "50") };
 
         let n = 4;
         let start = Instant::now();
 
-        // Run N calls sequentially — each should wait for the interval.
         for _ in 0..n {
             wait_for_rate_limit().await;
         }
@@ -706,7 +690,6 @@ mod tests {
             "expected >= {min_expected:?}, got {elapsed:?}"
         );
 
-        // Reset stored instant so it doesn't leak into other tests.
         *RATE_LIMITER.get().unwrap().lock().await = None;
 
         // SAFETY: cleaning up test-only env var.

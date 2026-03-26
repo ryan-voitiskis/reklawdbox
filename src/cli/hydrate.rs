@@ -14,10 +14,6 @@ use super::{
     send_cache_message, serialize_cache_payload,
 };
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, PartialEq)]
 enum Provider {
     Discogs,
@@ -108,10 +104,6 @@ pub(crate) struct HydrateArgs {
     yes: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Counters
-// ---------------------------------------------------------------------------
-
 struct ProviderCounters {
     enriched: AtomicU32,
     no_match: AtomicU32,
@@ -128,10 +120,6 @@ impl ProviderCounters {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Cache write messages
-// ---------------------------------------------------------------------------
-
 enum HydrateCacheMsg {
     Enrichment {
         provider: String,
@@ -143,10 +131,6 @@ enum HydrateCacheMsg {
     },
     AudioAnalysis(CliCacheWriteMsg),
 }
-
-// ---------------------------------------------------------------------------
-// Main orchestrator
-// ---------------------------------------------------------------------------
 
 pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cpu_preset = args.cpu;
@@ -360,7 +344,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         );
     }
 
-    // Estimate time
     let enrich_concurrency_est = args.concurrency.unwrap_or(4).clamp(1, 16) as u64;
     let beatport_secs = beatport_pending.len() as u64; // ~1 req/s rate limit
     let discogs_secs = discogs_pending.len() as u64 / enrich_concurrency_est;
@@ -433,7 +416,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     status_pb.set_style(ProgressStyle::with_template("  {msg}").unwrap());
     status_pb.enable_steady_tick(Duration::from_secs(1));
 
-    // Ctrl+C handler
     let cancel_clone = cancel.clone();
     let mp_clone = mp.clone();
     tokio::spawn(async move {
@@ -445,7 +427,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
     });
 
-    // Counters
     let discogs_counters = Arc::new(ProviderCounters::new());
     let beatport_counters = Arc::new(ProviderCounters::new());
     let analysis_counters = Arc::new(ProviderCounters::new());
@@ -525,10 +506,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
     });
 
-    // 9. Spawn provider loops concurrently
-    // Each provider runs in its own task so serial Beatport doesn't block analysis spawning.
-
-    // Status updater
+    // 9. Spawn provider loops concurrently (each in its own task so serial
+    //    Beatport doesn't block analysis spawning)
     let dc = discogs_counters.clone();
     let bc = beatport_counters.clone();
     let ac = analysis_counters.clone();
@@ -571,7 +550,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
     let batch_start = Instant::now();
 
-    // Discogs producer task
     let discogs_task = {
         let cancel = cancel.clone();
         let client = client.clone();
@@ -713,7 +691,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         })
     };
 
-    // Beatport producer task (serial — semaphore=1)
+    // Beatport is serial (semaphore=1) due to rate limits
     let beatport_task = {
         let cancel = cancel.clone();
         let client = client.clone();
@@ -841,7 +819,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         })
     };
 
-    // Analysis producer task (dual semaphore: CPU + memory)
     let analysis_task = {
         let cancel = cancel.clone();
         let cache_tx = cache_tx.clone();
@@ -920,17 +897,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     // Drop our sender so the writer sees EOF when all producer tasks finish
     drop(cache_tx);
 
-    // Await all producer tasks
     let _ = tokio::join!(discogs_task, beatport_task, analysis_task);
-
-    // Stop status updates
     cancel.cancel();
     let _ = status_task.await;
-
-    // Wait for writer to flush
     let _ = writer_handle.await;
-
-    // Clear progress bars
     mp.clear().ok();
 
     // 10. Summary
@@ -986,10 +956,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Discogs auth helper
-// ---------------------------------------------------------------------------
-
 async fn cli_ensure_discogs_auth(
     client: &reqwest::Client,
     store_path: &str,
@@ -1011,19 +977,16 @@ async fn cli_ensure_discogs_auth(
             }
             drop(store_conn);
 
-            // Start device auth flow
             println!("Discogs: starting broker authentication...");
             let pending = discogs::device_session_start(client, &cfg)
                 .await
                 .map_err(|e| format!("Failed to start Discogs auth: {e}"))?;
 
             println!("Please authorize at: {}", pending.auth_url);
-            // Try to open in browser (macOS convenience)
             let _ = std::process::Command::new("open")
                 .arg(&pending.auth_url)
                 .spawn();
 
-            // Poll with spinner
             let spinner = ProgressBar::new_spinner();
             spinner.set_style(
                 ProgressStyle::with_template("{spinner:.green} Waiting for authorization...")
@@ -1078,10 +1041,6 @@ async fn cli_ensure_discogs_auth(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Discogs retry wrapper
-// ---------------------------------------------------------------------------
-
 async fn cli_discogs_lookup_with_retry(
     client: &reqwest::Client,
     cfg: &discogs::BrokerConfig,
@@ -1092,9 +1051,8 @@ async fn cli_discogs_lookup_with_retry(
 ) -> Result<Option<discogs::DiscogsResult>, discogs::LookupError> {
     match discogs::lookup_via_broker(client, cfg, token, artist, title, album).await {
         Ok(result) => Ok(result),
-        // The broker handles Discogs 429s internally and returns 502 on
-        // upstream failure, so this arm is defence-in-depth for platform-
-        // level rate limits (e.g. Cloudflare) or custom broker setups.
+        // Defence-in-depth: the broker handles Discogs 429s internally, but
+        // platform-level rate limits (Cloudflare) or custom brokers may 429.
         Err(discogs::LookupError::Http {
             status: 429,
             ref retry_after,
@@ -1121,10 +1079,6 @@ async fn cli_discogs_lookup_with_retry(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Beatport retry wrapper
-// ---------------------------------------------------------------------------
-
 async fn cli_beatport_lookup_with_retry(
     client: &reqwest::Client,
     artist: &str,
@@ -1137,7 +1091,6 @@ async fn cli_beatport_lookup_with_retry(
             retry_after,
             ..
         }) if status.as_u16() == 429 => {
-            // Parse Retry-After or default to 5s
             let wait = retry_after
                 .as_deref()
                 .and_then(|s| s.parse::<u64>().ok())
@@ -1162,10 +1115,6 @@ async fn cli_beatport_lookup_with_retry(
         Err(e) => Err(e.to_string()),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Analysis helper (reuses analyze module's pattern)
-// ---------------------------------------------------------------------------
 
 async fn cli_analyze_for_hydrate(
     raw_file_path: &str,

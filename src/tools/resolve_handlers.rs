@@ -217,7 +217,6 @@ pub(super) fn handle_cache_coverage(
     let mut enrichment_has_label = 0usize;
 
     {
-        // Pre-compute normalized keys for each track.
         let track_keys: Vec<(String, String, String)> = tracks
             .iter()
             .map(|t| {
@@ -229,7 +228,6 @@ pub(super) fn handle_cache_coverage(
             })
             .collect();
 
-        // Deduplicate artists for enrichment batch queries.
         let unique_artists: Vec<&str> = {
             let mut seen = std::collections::HashSet::new();
             track_keys
@@ -244,7 +242,6 @@ pub(super) fn handle_cache_coverage(
                 .collect()
         };
 
-        // Deduplicate file paths for audio analysis batch query.
         let unique_paths: Vec<&str> = {
             let mut seen = std::collections::HashSet::new();
             track_keys
@@ -400,7 +397,6 @@ pub(super) fn handle_cache_coverage(
 }
 
 /// Build the resolved JSON payload for a single track.
-/// This is a pure function that takes pre-fetched data and produces the output.
 pub(crate) fn resolve_single_track(
     track: &crate::types::Track,
     discogs_cache: Option<&store::EnrichmentCacheEntry>,
@@ -586,14 +582,12 @@ fn resolve_single_track_compact(
     stratum_cache: Option<&store::CachedAudioAnalysis>,
     essentia_cache: Option<&store::CachedAudioAnalysis>,
 ) -> serde_json::Value {
-    // Helper: serialize a BPM range as [min, max] or null.
     let bpm_range_json = |genre: &str| -> serde_json::Value {
         genre::genre_bpm_range(genre)
             .map(|r| serde_json::json!([r.typical_min, r.typical_max]))
             .unwrap_or(serde_json::Value::Null)
     };
 
-    // Current genre canonical (same logic as full version)
     let (current_genre_canonical, current_genre_bpm_range) = if track.genre.is_empty() {
         (serde_json::Value::Null, serde_json::Value::Null)
     } else if let Some(canonical) = genre::canonical_genre_name(&track.genre) {
@@ -617,8 +611,7 @@ fn resolve_single_track_compact(
     };
     let label_inferred_genre = effective_label.and_then(genre::label_genre);
 
-    // Parse Discogs styles and map through taxonomy, keeping only exact/alias matches.
-    // Group by canonical genre name and count how many styles mapped to each.
+    // Group Discogs styles by canonical genre, keeping only exact/alias matches
     let discogs_mapped_genres: serde_json::Value = {
         let mut genre_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -657,8 +650,6 @@ fn resolve_single_track_compact(
         }
     };
 
-    // Parse Beatport genre and map through taxonomy, only keeping exact/alias.
-    // Preserve the raw Beatport genre string alongside the canonical mapping.
     let beatport_val = parse_enrichment_cache(beatport_cache);
     let bp_raw_str = beatport_val
         .as_ref()
@@ -688,7 +679,6 @@ fn resolve_single_track_compact(
         .map(bpm_range_json)
         .unwrap_or(serde_json::Value::Null);
 
-    // Parse stratum cache for bpm, key
     let stratum_json = stratum_cache
         .and_then(|sc| serde_json::from_str::<serde_json::Value>(&sc.features_json).ok());
 
@@ -702,17 +692,14 @@ fn resolve_single_track_compact(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Key and BPM agreement (same as full version)
     let key_agreement = stratum_key
         .as_deref()
         .map(|sk| sk.eq_ignore_ascii_case(&track.key));
     let bpm_agreement = stratum_bpm.map(|sb| (sb - track.bpm).abs() <= 2.0);
 
-    // Parse essentia cache
     let essentia_data = essentia_cache
         .and_then(|ec| serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json).ok());
 
-    // Build audio sub-object
     let audio_obj = if stratum_json.is_some() || essentia_data.is_some() {
         let mut obj = serde_json::json!({
             "stratum_bpm": stratum_bpm,
@@ -763,9 +750,8 @@ fn resolve_single_track_compact(
     })
 }
 
-/// Parse a cached enrichment entry's response_json into a serde_json::Value.
-/// Returns None if cache entry is None or has no response_json.
-/// Injects match_quality and cached_at metadata into the returned object.
+/// Parse a cached enrichment entry's response_json, injecting match_quality
+/// and cached_at metadata into the returned object.
 fn parse_enrichment_cache(
     cache: Option<&store::EnrichmentCacheEntry>,
 ) -> Option<serde_json::Value> {

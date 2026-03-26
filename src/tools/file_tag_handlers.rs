@@ -12,7 +12,6 @@ pub(super) async fn handle_read_file_tags(
     server: &ReklawdboxServer,
     params: ReadFileTagsParams,
 ) -> Result<CallToolResult, McpError> {
-    // Validate exactly one selector
     let selector_count = [
         params.paths.is_some(),
         params.track_ids.is_some(),
@@ -32,7 +31,6 @@ pub(super) async fn handle_read_file_tags(
     let include_cover_art = params.include_cover_art.unwrap_or(false);
     let fields = params.fields;
 
-    // Resolve file paths from the chosen selector
     let mut inline_errors: Vec<tags::FileReadResult> = Vec::new();
     let mut file_paths: Vec<String> = if let Some(paths) = params.paths {
         paths
@@ -74,7 +72,6 @@ pub(super) async fn handle_read_file_tags(
 
     file_paths.truncate(limit);
 
-    // Read tags concurrently with a semaphore (max 8 concurrent)
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
     let mut handles = Vec::with_capacity(file_paths.len());
 
@@ -101,7 +98,6 @@ pub(super) async fn handle_read_file_tags(
     let mut files_failed: usize = inline_errors.len();
     let mut format_counts: HashMap<String, usize> = HashMap::new();
 
-    // Prepend any inline errors from track_id resolution
     results.append(&mut inline_errors);
 
     for handle in handles {
@@ -143,7 +139,6 @@ pub(super) async fn handle_write_file_tags(
 ) -> Result<CallToolResult, McpError> {
     let dry_run = params.dry_run.unwrap_or(false);
 
-    // Build WriteEntry values (per-entry validation happens in tags::write_file_tags)
     let entries: Vec<tags::WriteEntry> = params
         .writes
         .into_iter()
@@ -158,7 +153,6 @@ pub(super) async fn handle_write_file_tags(
         .collect();
 
     if dry_run {
-        // Dry-run is read-only; entries are currently processed sequentially.
         let mut results = Vec::with_capacity(entries.len());
         for entry in entries {
             let result = tokio::task::spawn_blocking(move || tags::write_file_tags_dry_run(&entry))
@@ -189,7 +183,6 @@ pub(super) async fn handle_write_file_tags(
             .map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     } else {
-        // Actual writes: sequential
         let mut results = Vec::with_capacity(entries.len());
         let mut files_written: usize = 0;
         let mut files_failed: usize = 0;
@@ -254,7 +247,6 @@ pub(super) async fn handle_embed_cover_art(
         .picture_type
         .unwrap_or_else(|| "front_cover".to_string());
 
-    // Read image metadata before the embed loop
     let image_size_bytes = tokio::fs::metadata(&image_path)
         .await
         .map(|m| m.len() as usize)
@@ -280,7 +272,6 @@ pub(super) async fn handle_embed_cover_art(
     let mut files_embedded: usize = 0;
     let mut files_failed: usize = 0;
 
-    // Sequential writes to avoid file contention
     for target in params.target_audio_files {
         let img = image_path.clone();
         let tgt = PathBuf::from(&target);

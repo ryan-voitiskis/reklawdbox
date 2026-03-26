@@ -20,7 +20,6 @@ pub(super) async fn handle_lookup_discogs(
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
 
-    // Resolve artist/title/album: from track_id or explicit params
     let (artist, title, album) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
@@ -119,7 +118,6 @@ pub(super) async fn handle_lookup_beatport(
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
 
-    // Resolve artist/title: from track_id or explicit params
     let (artist, title) = if let Some(ref track_id) = params.track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
@@ -379,10 +377,6 @@ pub(super) async fn lookup_musicbrainz_remote(
         .map_err(|e| e.to_string())
 }
 
-// ---------------------------------------------------------------------------
-// Enrichment cache writer message
-// ---------------------------------------------------------------------------
-
 enum EnrichCacheWriteMsg {
     Enrichment {
         provider: String,
@@ -394,10 +388,6 @@ enum EnrichCacheWriteMsg {
     },
 }
 
-// ---------------------------------------------------------------------------
-// Per-track enrichment result
-// ---------------------------------------------------------------------------
-
 struct EnrichTrackResult {
     processed: usize,
     cached: usize,
@@ -406,10 +396,6 @@ struct EnrichTrackResult {
     /// Set when a Discogs auth error is encountered.
     discogs_auth_error: Option<String>,
 }
-
-// ---------------------------------------------------------------------------
-// Per-track enrichment function
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 async fn enrich_single_track(
@@ -439,7 +425,6 @@ async fn enrich_single_track(
         discogs_auth_error: None,
     };
 
-    // Open read-only cache connection for cache checks
     let cache_conn = if skip_cached && !force_refresh {
         match store::open_read_only(&store_path) {
             Ok(c) => Some(c),
@@ -452,7 +437,6 @@ async fn enrich_single_track(
         None
     };
 
-    // Determine which providers need work vs are cached
     let want_discogs = providers.contains(&crate::types::Provider::Discogs);
     let want_beatport = providers.contains(&crate::types::Provider::Beatport);
     let want_bandcamp = providers.contains(&crate::types::Provider::Bandcamp);
@@ -497,8 +481,6 @@ async fn enrich_single_track(
     let need_beatport = want_beatport && !beatport_cached;
     let need_bandcamp = want_bandcamp && !bandcamp_cached;
 
-    // Build futures for each provider
-
     let discogs_fut = {
         let server = server.clone();
         let artist = artist.clone();
@@ -515,7 +497,6 @@ async fn enrich_single_track(
                 return (0usize, 0usize, Vec::new(), None);
             }
 
-            // Check if auth already failed globally
             if *discogs_auth_failed.borrow() {
                 return (
                     0,
@@ -642,7 +623,7 @@ async fn enrich_single_track(
                 return (0usize, 0usize, Vec::new());
             }
 
-            // Acquire Beatport semaphore to limit concurrent scraping
+            // Rate-limit concurrent Beatport scraping
             let _permit = match beatport_sem.acquire().await {
                 Ok(p) => p,
                 Err(_) => {
@@ -821,7 +802,6 @@ async fn enrich_single_track(
         }
     };
 
-    // Run Discogs + Beatport + Bandcamp in parallel when requested
     let (
         (discogs_processed, discogs_skipped, discogs_failures, discogs_auth_err),
         (beatport_processed, beatport_skipped, beatport_failures),
@@ -837,10 +817,6 @@ async fn enrich_single_track(
 
     result
 }
-
-// ---------------------------------------------------------------------------
-// Main batch enrichment handler
-// ---------------------------------------------------------------------------
 
 pub(super) async fn handle_enrich_tracks(
     server: &ReklawdboxServer,
@@ -872,7 +848,6 @@ pub(super) async fn handle_enrich_tracks(
     let total_tracks = tracks.len();
     let total = total_tracks.saturating_mul(providers.len());
 
-    // Compute concurrency
     let concurrency = params.concurrency.map(|n| n.clamp(1, 8)).unwrap_or(4) as usize;
 
     let store_path = server.cache_store_path();
@@ -882,7 +857,6 @@ pub(super) async fn handle_enrich_tracks(
         let _conn = server.cache_store_conn()?;
     }
 
-    // Spawn cache writer task
     let (cache_tx, mut cache_rx) =
         tokio::sync::mpsc::channel::<EnrichCacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path.clone();
@@ -922,17 +896,14 @@ pub(super) async fn handle_enrich_tracks(
         }
     });
 
-    // Discogs auth failure broadcast
     let (auth_fail_tx, auth_fail_rx) = tokio::sync::watch::channel(false);
     let auth_fail_tx = std::sync::Arc::new(auth_fail_tx);
     let auth_fail_rx = std::sync::Arc::new(auth_fail_rx);
 
-    // Semaphores
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let beatport_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
     let bandcamp_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
 
-    // Spawn per-track tasks
     let mut handles = Vec::with_capacity(total_tracks);
 
     for track in &tracks {
@@ -984,7 +955,6 @@ pub(super) async fn handle_enrich_tracks(
         }));
     }
 
-    // Collect results in order
     let mut progress = BatchProgress::new();
 
     for handle in handles {
@@ -1003,7 +973,6 @@ pub(super) async fn handle_enrich_tracks(
         }
     }
 
-    // Shut down writer
     drop(cache_tx);
     if let Err(e) = writer_handle.await {
         progress.failures.push(serde_json::json!({

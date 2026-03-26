@@ -212,8 +212,6 @@ impl ChangeManager {
     /// Restore previously taken changes without overwriting fields the user
     /// touched (staged or cleared) since the snapshot was taken.
     pub fn restore(&self, snapshot: Vec<TrackChange>) -> (usize, usize) {
-        // If clear(None) was called since the last take(), the user expressed
-        // intent to wipe everything — don't resurrect any snapshot fields.
         if self.cleared_all_since_take.load(Ordering::Acquire) {
             tracing::warn!(
                 snapshot_len = snapshot.len(),
@@ -263,7 +261,6 @@ impl ChangeManager {
             None => map.keys().cloned().collect(),
         };
 
-        // Resolve field names once.
         let parsed_fields: Vec<EditableField> = fields
             .iter()
             .filter_map(|f| EditableField::from_str(f.as_str()))
@@ -391,7 +388,6 @@ fn merge_untouched_fields(
     }
 }
 
-/// Record which fields are set in `change` as touched for its track_id.
 fn record_touched_fields(change: &TrackChange, touched: &mut TouchedFields) {
     if !has_any_staged_field(change) {
         return;
@@ -420,7 +416,6 @@ fn record_touched_fields(change: &TrackChange, touched: &mut TouchedFields) {
     }
 }
 
-/// Clear a single field on a `TrackChange`, returning true if the field was set.
 fn clear_field(entry: &mut TrackChange, field: EditableField) -> bool {
     match field {
         EditableField::Genre if entry.genre.is_some() => {
@@ -673,7 +668,7 @@ mod tests {
         }]);
 
         let diffs = cm.preview(&tracks);
-        assert_eq!(diffs.len(), 1); // one track with changes
+        assert_eq!(diffs.len(), 1);
         let td = &diffs[0];
         assert_eq!(td.changes.len(), 3); // genre, comments, rating changed
         assert!(
@@ -708,7 +703,7 @@ mod tests {
             album: None,
         }]);
         let diffs = cm.preview(&tracks);
-        assert!(diffs.is_empty()); // no actual change
+        assert!(diffs.is_empty());
     }
 
     #[test]
@@ -729,8 +724,8 @@ mod tests {
         let modified = cm.apply_changes(&tracks);
         assert_eq!(modified[0].genre, "Deep House");
         assert_eq!(modified[0].rating, 5);
-        assert_eq!(modified[1].genre, "Techno"); // unchanged
-        assert_eq!(modified[1].rating, 2); // unchanged
+        assert_eq!(modified[1].genre, "Techno");
+        assert_eq!(modified[1].rating, 2);
     }
 
     #[test]
@@ -809,7 +804,6 @@ mod tests {
             album: None,
         }]);
 
-        // Clear just the color field
         let (affected, remaining) =
             cm.clear_fields(Some(vec!["t1".to_string()]), &["color".to_string()]);
         assert_eq!(affected, 1);
@@ -868,7 +862,6 @@ mod tests {
             },
         ]);
 
-        // Clear genre from all tracks (no track_ids filter)
         let (affected, remaining) = cm.clear_fields(None, &["genre".to_string()]);
         assert_eq!(affected, 2);
         assert_eq!(remaining, 1); // t1 still has rating, t2 removed entirely
@@ -906,12 +899,11 @@ mod tests {
         ]);
 
         let diffs = cm.preview(&tracks);
-        assert_eq!(diffs.len(), 2); // two tracks
-        // Sorted by track_id
+        assert_eq!(diffs.len(), 2);
         assert_eq!(diffs[0].track_id, "t1");
-        assert_eq!(diffs[0].changes.len(), 2); // genre + rating
+        assert_eq!(diffs[0].changes.len(), 2);
         assert_eq!(diffs[1].track_id, "t2");
-        assert_eq!(diffs[1].changes.len(), 1); // comments
+        assert_eq!(diffs[1].changes.len(), 1);
         assert_eq!(diffs[1].changes[0].field, "comments");
     }
 
@@ -943,7 +935,6 @@ mod tests {
         track.color_code = 0xFF0000;
         let tracks = vec![track];
 
-        // Stage a genre change only, no color change
         cm.stage(vec![TrackChange {
             track_id: "t1".to_string(),
             genre: Some("Techno".to_string()),

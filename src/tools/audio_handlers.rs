@@ -34,7 +34,6 @@ pub(super) async fn handle_analyze_track_audio(
 
     let file_path = resolve_file_path(&track.file_path)?;
 
-    // Stratum-dsp: check cache then analyze
     let stratum_cached = if skip_cached {
         let store = server.cache_store_conn()?;
         check_analysis_cache(
@@ -78,7 +77,6 @@ pub(super) async fn handle_analyze_track_audio(
         )
     };
 
-    // Essentia: check cache then analyze
     let essentia_python = server.essentia_python_path();
     let essentia_available = essentia_python.is_some();
     let mut essentia: Option<serde_json::Value> = None;
@@ -190,7 +188,6 @@ async fn analyze_single_track(
     store_path: String,
     cache_tx: tokio::sync::mpsc::Sender<CacheWriteMsg>,
 ) -> Result<BatchTrackAnalysis, serde_json::Value> {
-    // Resolve file path
     let file_path = audio::resolve_audio_path(&raw_file_path).map_err(|e| {
         serde_json::json!({
             "track_id": &track_id, "artist": &artist, "title": &title,
@@ -199,7 +196,6 @@ async fn analyze_single_track(
         })
     })?;
 
-    // Open read-only cache connection for this task
     let cache_conn = store::open_read_only(&store_path).map_err(|e| {
         serde_json::json!({
             "track_id": &track_id, "artist": &artist, "title": &title,
@@ -208,7 +204,6 @@ async fn analyze_single_track(
         })
     })?;
 
-    // Check stratum cache
     let stratum_cached = if skip_cached {
         check_analysis_cache(
             &cache_conn,
@@ -222,7 +217,6 @@ async fn analyze_single_track(
         None
     };
 
-    // Check essentia cache
     let essentia_cached = if skip_cached && essentia_python.is_some() {
         check_analysis_cache(
             &cache_conn,
@@ -236,10 +230,10 @@ async fn analyze_single_track(
         None
     };
 
-    // Drop the read connection before running analysis
+    // Drop read connection before running analysis (avoids holding it across awaits)
     drop(cache_conn);
 
-    // Run uncached analyzers in parallel via tokio::join!
+    // Run stratum and essentia in parallel
     let stratum_fut = async {
         if let Some(json_str) = &stratum_cached {
             let val: serde_json::Value =
@@ -364,7 +358,6 @@ pub(super) async fn handle_analyze_audio_batch(
 
     let total = tracks.len();
 
-    // Compute concurrency
     let concurrency = match params.concurrency {
         Some(n) => n.clamp(1, 4),
         None => {
@@ -384,7 +377,6 @@ pub(super) async fn handle_analyze_audio_batch(
         let _conn = server.cache_store_conn()?;
     }
 
-    // Spawn cache writer task
     let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<CacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path.clone();
     let writer_handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -428,7 +420,6 @@ pub(super) async fn handle_analyze_audio_batch(
         Ok(())
     });
 
-    // Spawn analysis tasks bounded by semaphore
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(total);
 
@@ -463,7 +454,6 @@ pub(super) async fn handle_analyze_audio_batch(
         }));
     }
 
-    // Collect results in order
     let mut progress = BatchProgress::new();
     let mut essentia_analyzed = 0usize;
     let mut essentia_cached = 0usize;
@@ -504,7 +494,6 @@ pub(super) async fn handle_analyze_audio_batch(
         }
     }
 
-    // Shut down writer
     drop(cache_tx);
     match writer_handle.await {
         Ok(Ok(())) => {}
@@ -596,8 +585,7 @@ pub(super) async fn handle_setup_essentia(
         mcp_internal_error("Cannot determine home directory for venv location".to_string())
     })?;
 
-    // Find a suitable Python 3 and try venv+pip with each candidate,
-    // falling through to the next on failure
+    // Try each Python candidate, falling through to the next on failure
     let python_candidates: &[&str] = &[
         "python3.13",
         "python3.12",
@@ -610,7 +598,6 @@ pub(super) async fn handle_setup_essentia(
     let mut last_error = String::new();
 
     for &python_bin in python_candidates {
-        // Check this candidate exists
         let bin_ok = tokio::task::spawn_blocking({
             let bin = python_bin.to_string();
             move || {
@@ -630,7 +617,6 @@ pub(super) async fn handle_setup_essentia(
             continue;
         }
 
-        // Create parent directories
         if let Some(parent) = venv_dir.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 mcp_internal_error(format!(
@@ -668,7 +654,6 @@ pub(super) async fn handle_setup_essentia(
         let venv_pip = venv_dir.join("bin/pip");
         let venv_python = venv_dir.join("bin/python");
 
-        // Install essentia
         let pip_output = tokio::task::spawn_blocking({
             let pip = venv_pip.clone();
             move || {
@@ -691,7 +676,6 @@ pub(super) async fn handle_setup_essentia(
             continue;
         }
 
-        // Validate the installation
         let venv_python_str = venv_python.to_string_lossy().to_string();
         let validate_output = tokio::task::spawn_blocking({
             let py = venv_python_str.clone();
@@ -721,7 +705,7 @@ pub(super) async fn handle_setup_essentia(
             .trim()
             .to_string();
 
-        // Set the override so it's available immediately (no restart)
+        // Available immediately without restart
         let mut guard = server
             .state
             .essentia_python_override

@@ -126,7 +126,6 @@ pub(super) fn handle_query_transition_candidates(
     );
     let limit = params.limit.unwrap_or(10).min(50) as usize;
 
-    // Load from-track
     let from_track = {
         let conn = server.rekordbox_conn()?;
         db::get_track(&conn, &params.source_track_id)
@@ -139,7 +138,6 @@ pub(super) fn handle_query_transition_candidates(
             })?
     };
 
-    // Load pool tracks
     let pool_tracks = {
         let conn = server.rekordbox_conn()?;
         if let Some(ref ids) = params.candidate_track_ids {
@@ -160,7 +158,6 @@ pub(super) fn handle_query_transition_candidates(
         ));
     }
 
-    // Build profiles
     let from_profile = {
         let store = server.cache_store_conn()?;
         build_track_profile(from_track, &store)
@@ -185,7 +182,6 @@ pub(super) fn handle_query_transition_candidates(
         }
     }
 
-    // Score each candidate
     let ctx = ScoringContext::default();
     let reference_bpm = params.target_bpm.unwrap_or(from_profile.bpm);
     let play_bpms = params.target_bpm.map(|target| (from_profile.bpm, target));
@@ -208,7 +204,6 @@ pub(super) fn handle_query_transition_candidates(
         })
         .collect();
 
-    // Sort by composite descending
     scored.sort_by(|a, b| {
         b.1.composite
             .partial_cmp(&a.1.composite)
@@ -218,7 +213,6 @@ pub(super) fn handle_query_transition_candidates(
     let total_pool_size = scored.len();
     scored.truncate(limit);
 
-    // Build output
     let candidates_json: Vec<serde_json::Value> = scored
         .iter()
         .map(|(profile, scores)| {
@@ -371,7 +365,6 @@ pub(super) fn handle_build_set(
             .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?,
     };
 
-    // Compute BPM trajectory if bpm_range is set
     let bpm_trajectory = params
         .bpm_range
         .map(|(start, end)| compute_bpm_trajectory(&phases, start, end));
@@ -421,7 +414,6 @@ pub(super) fn handle_build_set(
             })
             .collect()
     } else {
-        // Beam search path
         let mut all_plans = Vec::new();
         for start_id in &start_tracks {
             let mut beam_plans = build_candidate_plan_beam(
@@ -438,10 +430,8 @@ pub(super) fn handle_build_set(
             );
             all_plans.append(&mut beam_plans);
         }
-        // Deduplicate across start tracks
         let mut seen_track_sequences: HashSet<Vec<String>> = HashSet::new();
         all_plans.retain(|plan| seen_track_sequences.insert(plan.ordered_ids.clone()));
-        // Sort by mean composite descending, keep top beam_width
         all_plans.sort_by(|a, b| {
             let a_mean = if a.transitions.is_empty() {
                 0.0
@@ -487,7 +477,6 @@ pub(super) fn handle_build_set(
                         "genre": profile.track.genre,
                     });
 
-                    // Enrich with BPM trajectory fields when bpm_range is set
                     if let Some(ref trajectory) = bpm_trajectory
                         && let Some(&target_bpm) = trajectory.get(pos)
                     {

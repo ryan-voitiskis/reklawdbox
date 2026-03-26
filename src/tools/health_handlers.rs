@@ -12,10 +12,6 @@ use crate::tools::params::{
     ScanPlaylistCoverageParams,
 };
 
-// ---------------------------------------------------------------------------
-// scan_playlist_coverage
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_scan_playlist_coverage(
     conn: std::sync::MutexGuard<'_, rusqlite::Connection>,
     params: ScanPlaylistCoverageParams,
@@ -45,10 +41,6 @@ pub(super) fn handle_scan_playlist_coverage(
         .map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
-
-// ---------------------------------------------------------------------------
-// scan_broken_links
-// ---------------------------------------------------------------------------
 
 pub(super) async fn handle_scan_broken_links(
     server: &ReklawdboxServer,
@@ -164,10 +156,6 @@ pub(super) async fn handle_scan_broken_links(
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
-// ---------------------------------------------------------------------------
-// scan_orphan_files
-// ---------------------------------------------------------------------------
-
 pub(super) async fn handle_scan_orphan_files(
     server: &ReklawdboxServer,
     params: ScanOrphanFilesParams,
@@ -238,7 +226,6 @@ pub(super) async fn handle_scan_orphan_files(
 
     let orphan_count = all_orphans.len();
 
-    // Group by parent directory, apply limit
     let mut by_dir: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for (reported, (path, size)) in all_orphans.iter().enumerate() {
         if reported >= limit {
@@ -279,10 +266,6 @@ pub(super) async fn handle_scan_orphan_files(
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
-
-// ---------------------------------------------------------------------------
-// scan_duplicates
-// ---------------------------------------------------------------------------
 
 pub(super) async fn handle_scan_duplicates(
     server: &ReklawdboxServer,
@@ -367,14 +350,13 @@ async fn handle_duplicates_exact(
     server: &ReklawdboxServer,
     params: ScanDuplicatesParams,
 ) -> Result<CallToolResult, McpError> {
-    // Phase 1: Get all track paths from DB (scoped to drop conn before await)
+    // Scoped to drop conn before await
     let track_paths = {
         let conn = server.rekordbox_conn()?;
         db::all_track_paths(&conn, params.path_prefix.as_deref())
             .map_err(db_error)?
     };
 
-    // Phase 2: Resolve paths and group by file size
     let size_groups: HashMap<u64, Vec<(String, String)>> = tokio::task::spawn_blocking(move || {
         let mut sizes: HashMap<u64, Vec<(String, String)>> = HashMap::new();
         for entry in &track_paths {
@@ -404,7 +386,6 @@ async fn handle_duplicates_exact(
         return Ok(CallToolResult::success(vec![Content::text(json)]));
     }
 
-    // Phase 3: Hash files with bounded concurrency
     let sem = Arc::new(tokio::sync::Semaphore::new(8));
     let mut handles = Vec::new();
 
@@ -459,7 +440,6 @@ async fn handle_duplicates_exact(
         return Ok(CallToolResult::success(vec![Content::text(json)]));
     }
 
-    // Phase 4: Fetch track details (scoped to drop conn)
     let all_ids: Vec<String> = groups_to_report
         .iter()
         .flat_map(|(_, ids)| ids.iter().cloned())
@@ -516,10 +496,6 @@ async fn handle_duplicates_exact(
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn hash_file(path: &str) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};

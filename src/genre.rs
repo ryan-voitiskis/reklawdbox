@@ -49,7 +49,6 @@ pub const GENRES: &[&str] = &[
     "UK Bass",
 ];
 
-/// Returns the canonical casing of a genre if it's in the taxonomy.
 pub fn canonical_genre_name(genre: &str) -> Option<&'static str> {
     let genre = genre.trim();
     GENRES
@@ -202,7 +201,6 @@ fn build_alias_map(aliases: &[(&str, &'static str)]) -> HashMap<String, &'static
     map
 }
 
-/// Static alias map built once via OnceLock. Maps lowercase ASCII alias → canonical genre.
 pub fn genre_alias_map() -> &'static HashMap<String, &'static str> {
     static MAP: OnceLock<HashMap<String, &'static str>> = OnceLock::new();
     MAP.get_or_init(|| build_alias_map(ALIASES))
@@ -215,7 +213,6 @@ pub fn canonical_genre_from_alias(genre: &str) -> Option<&'static str> {
         .copied()
 }
 
-/// Static label-genre map built once via OnceLock. Maps lowercase ASCII label name → canonical genre.
 pub fn label_genre_map() -> &'static HashMap<String, &'static str> {
     static MAP: OnceLock<HashMap<String, &'static str>> = OnceLock::new();
     MAP.get_or_init(|| build_alias_map(LABEL_GENRES))
@@ -230,9 +227,8 @@ const LABEL_SUFFIXES: &[&str] = &[
     " label",
 ];
 
-/// Returns the canonical genre for a label name, if known.
-/// Tries exact match first, then strips common suffixes.
-/// Uses ASCII case-folding only; non-ASCII characters are compared byte-for-byte.
+/// Tries exact match first, then strips common suffixes like " records".
+/// ASCII case-folding only.
 pub fn label_genre(label: &str) -> Option<&'static str> {
     let normalized = label.trim().to_ascii_lowercase();
     if let Some(&genre) = label_genre_map().get(&normalized) {
@@ -356,9 +352,7 @@ pub fn genre_depth(canonical: &str) -> u8 {
     }
 }
 
-/// Map a canonical genre name to its family. Input should be canonical
-/// (via `canonical_genre_name` or `canonical_genre_from_alias`); non-canonical names
-/// fall through to `Other`.
+/// Non-canonical names fall through to `Other`.
 pub fn genre_family(canonical: &str) -> GenreFamily {
     match canonical {
         "House" | "Deep House" | "Tech House" | "Afro House" | "Gospel House"
@@ -542,7 +536,6 @@ mod tests {
 
     #[test]
     fn all_taxonomy_genres_have_family() {
-        // Verify key family assignments to catch mapping errors
         assert_eq!(genre_family("House"), GenreFamily::House);
         assert_eq!(genre_family("Deep House"), GenreFamily::House);
         assert_eq!(genre_family("Techno"), GenreFamily::Techno);
@@ -728,7 +721,6 @@ mod tests {
         assert_eq!(dnb.typical_min, 168.0);
         assert_eq!(dnb.typical_max, 180.0);
 
-        // Genres without diagnostic BPM ranges return None
         assert!(genre_bpm_range("IDM").is_none());
         assert!(genre_bpm_range("Experimental").is_none());
         assert!(genre_bpm_range("Jazz").is_none());

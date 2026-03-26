@@ -3,7 +3,6 @@ use rmcp::ErrorData as McpError;
 use crate::audio;
 use crate::audio::AUDIO_EXTENSIONS;
 
-/// Scan a directory for audio files, optionally recursive, with optional glob filter.
 pub(super) fn scan_audio_directory(
     dir: &str,
     recursive: bool,
@@ -14,7 +13,6 @@ pub(super) fn scan_audio_directory(
         return Err(format!("Not a directory: {dir}"));
     }
 
-    // Compile glob matcher if a pattern was provided
     let glob_matcher = match glob_pattern {
         Some(pattern) => {
             let glob = globset::GlobBuilder::new(pattern)
@@ -47,7 +45,7 @@ pub(super) fn scan_audio_directory(
                 continue;
             }
 
-            // Must be an audio file regardless of glob
+            // Audio extension check applies even when glob is set
             let is_audio = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -56,7 +54,6 @@ pub(super) fn scan_audio_directory(
                 continue;
             }
 
-            // Apply glob filter against the filename
             if let Some(ref matcher) = glob_matcher {
                 let file_name = match path.file_name().and_then(|n| n.to_str()) {
                     Some(n) => n,

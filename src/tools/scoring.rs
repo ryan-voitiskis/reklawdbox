@@ -5,23 +5,18 @@ use rusqlite::Connection;
 use super::*;
 use crate::genre;
 
-// Energy curve preset phase boundaries
 const WARMUP_PHASE_END: f64 = 0.15;
 const BUILD_PHASE_END: f64 = 0.45;
 const PEAK_PHASE_END: f64 = 0.75;
 const PEAKONLY_BUILD_END: f64 = 0.10;
 const PEAKONLY_RELEASE_END: f64 = 0.85;
 
-// Scoring factors
 const BPM_DRIFT_PENALTY_FACTOR: f64 = 0.7;
-// Harmonic penalty factor is now per-style; see harmonic_penalty_factor()
 
-// Brightness axis thresholds (Hz)
 const BRIGHTNESS_SIMILAR_HZ: f64 = 300.0;
 const BRIGHTNESS_SHIFT_HZ: f64 = 800.0;
 const BRIGHTNESS_JUMP_HZ: f64 = 1500.0;
 
-// Rhythm regularity thresholds
 const RHYTHM_MATCHED_DELTA: f64 = 0.1;
 const RHYTHM_MANAGEABLE_DELTA: f64 = 0.25;
 const RHYTHM_CHALLENGING_DELTA: f64 = 0.5;
@@ -256,9 +251,7 @@ pub(super) fn build_candidate_plan(
     let mut remaining: HashSet<String> = profiles_by_id.keys().cloned().collect();
     remaining.remove(start_track_id);
 
-    // Track genre run length for stickiness scoring
     let mut genre_run_length: u32 = 0;
-    // Track start BPM for trajectory drift penalty
     let start_bpm = profiles_by_id
         .get(start_track_id)
         .map(|p| p.bpm)
@@ -306,9 +299,8 @@ pub(super) fn build_candidate_plan(
             })
             .collect();
 
-        // BPM trajectory coherence penalty (percentage-based)
         if start_bpm > 0.0 && target_tracks > 1 {
-            let position = ordered_ids.len(); // tracks already placed (progress through set)
+            let position = ordered_ids.len();
             let max_position = (target_tracks - 1) as f64;
             let budget_pct = bpm_drift_pct * (position as f64 / max_position);
             let budget_bpm = start_bpm * budget_pct / 100.0;
@@ -348,7 +340,6 @@ pub(super) fn build_candidate_plan(
         let pick_rank = transition_pick_rank(variation_index, ordered_ids.len(), scored_next.len());
         let (next_track_id, transition_scores) = scored_next[pick_rank].clone();
 
-        // Update genre run length
         if let Some(next_profile) = profiles_by_id.get(&next_track_id) {
             if next_profile.genre_family == from_profile.genre_family
                 && from_profile.genre_family != GenreFamily::Other
@@ -441,7 +432,6 @@ pub(super) fn build_candidate_plan_beam(
 
         for beam in &beams {
             if beam.remaining.is_empty() {
-                // No more tracks to add; carry forward as-is
                 expansions.push(beam.clone());
                 continue;
             }
@@ -484,7 +474,6 @@ pub(super) fn build_candidate_plan_beam(
                     play_bpms,
                 );
 
-                // BPM trajectory coherence penalty (same as greedy)
                 if start_bpm > 0.0 && target_tracks > 1 {
                     let max_position = (target_tracks - 1) as f64;
                     let budget_pct = bpm_drift_pct * (step as f64 / max_position);
@@ -536,8 +525,6 @@ pub(super) fn build_candidate_plan_beam(
             }
         }
 
-        // Sort by mean composite (cumulative / transition_count) descending,
-        // break ties by ordered_ids for determinism
         expansions.sort_by(|a, b| {
             let a_mean = if a.transitions.is_empty() {
                 0.0
@@ -555,12 +542,10 @@ pub(super) fn build_candidate_plan_beam(
                 .then_with(|| a.ordered_ids.cmp(&b.ordered_ids))
         });
 
-        // Keep top K
         expansions.truncate(beam_width);
         beams = expansions;
     }
 
-    // Deduplicate identical plans (by ordered_ids)
     let mut seen_plans: HashSet<Vec<String>> = HashSet::new();
     beams
         .into_iter()
@@ -587,7 +572,6 @@ pub(super) fn compute_bpm_trajectory(
         return Vec::new();
     }
 
-    // Find span indices for build and release phases
     let build_start = phases.iter().position(|p| *p == EnergyPhase::Build);
     let build_end = phases.iter().rposition(|p| *p == EnergyPhase::Build);
     let release_start = phases.iter().position(|p| *p == EnergyPhase::Release);
@@ -727,9 +711,6 @@ pub(super) fn score_transition_profiles(
     ctx: &ScoringContext,
     play_bpms: Option<(f64, f64)>,
 ) -> TransitionScores {
-    // When play_bpms is set, both tracks are pitched to target BPMs.
-    // Compute effective keys based on the pitch shift from native BPM to play BPM.
-    // When play_bpms is None, fall back to the existing master_tempo logic.
     let (
         effective_to_key,
         pitch_shift_semitones,
@@ -739,7 +720,6 @@ pub(super) fn score_transition_profiles(
         exact_from_shift,
         exact_to_shift,
     ) = if let Some((from_play_bpm, to_play_bpm)) = play_bpms {
-        // Compute effective keys for both tracks based on play BPMs
         let exact_from = if from.bpm > 0.0 && from_play_bpm > 0.0 {
             12.0 * (from_play_bpm / from.bpm).log2()
         } else {
@@ -771,7 +751,6 @@ pub(super) fn score_transition_profiles(
             None
         };
 
-        // BPM axis scores how close the candidate's native BPM is to its target
         let bpm_score = score_bpm_axis(to_play_bpm, to.bpm);
 
         (
@@ -784,7 +763,6 @@ pub(super) fn score_transition_profiles(
             if master_tempo { 0.0 } else { exact_to },
         )
     } else {
-        // Original master_tempo logic
         let (eff_to_key, shift, exact_to) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
             let exact = 12.0 * (from.bpm / to.bpm).log2();
             let integer_shift = exact.round() as i32;
@@ -819,10 +797,8 @@ pub(super) fn score_transition_profiles(
         )
     };
 
-    // Use continuous pitch-shift-aware key scoring when master tempo is off
-    // and there's a nonzero shift. This interpolates between the two bracketing
-    // integer transpositions to avoid the cliff effect where rounding a
-    // fractional semitone shift causes a 7-position Camelot wheel jump.
+    // Interpolate between bracketing integer transpositions to avoid the cliff
+    // where rounding a fractional semitone shift jumps 7 Camelot positions.
     let key = if exact_from_shift.abs() > 0.01 || exact_to_shift.abs() > 0.01 {
         score_key_with_pitch_shifts(
             from.camelot_key,
@@ -871,9 +847,8 @@ pub(super) fn score_transition_profiles(
 
     let mut adjustments = Vec::new();
 
-    // Report axis-level bonuses/penalties as composite adjustments.
-    // These were already applied to the axis scores above; compute their
-    // weighted impact on the composite for transparency.
+    // Axis bonuses/penalties were already baked into axis scores; compute
+    // their weighted composite impact for transparency reporting.
     let mut total_weight = weights.key + weights.bpm + weights.energy + weights.genre;
     if brightness_available {
         total_weight += weights.brightness;
@@ -882,7 +857,6 @@ pub(super) fn score_transition_profiles(
         total_weight += weights.rhythm;
     }
     if total_weight > f64::EPSILON {
-        // Genre streak bonus (+0.1 on genre axis)
         if genre.label.contains("streak bonus") {
             let delta = weights.genre * 0.1 / total_weight;
             adjustments.push(ScoreAdjustment {
@@ -892,7 +866,6 @@ pub(super) fn score_transition_profiles(
                 reason: "Genre family streak bonus (+0.1 on genre axis)".to_string(),
             });
         }
-        // Genre early switch penalty (-0.1 on genre axis)
         if genre.label.contains("early switch penalty") {
             let delta = -(weights.genre * 0.1 / total_weight);
             adjustments.push(ScoreAdjustment {
@@ -902,7 +875,6 @@ pub(super) fn score_transition_profiles(
                 reason: "Genre family switched too early (-0.1 on genre axis)".to_string(),
             });
         }
-        // Phase boundary boost (+0.1 on energy axis)
         if energy.label.contains("dynamic boundary boost") {
             let delta = weights.energy * 0.1 / total_weight;
             adjustments.push(ScoreAdjustment {
@@ -912,7 +884,6 @@ pub(super) fn score_transition_profiles(
                 reason: "Phase boundary with dynamic range (+0.1 on energy axis)".to_string(),
             });
         }
-        // Sustained peak boost (+0.05 on energy axis)
         if energy.label.contains("sustained-peak consistency boost") {
             let delta = weights.energy * 0.05 / total_weight;
             adjustments.push(ScoreAdjustment {
@@ -925,8 +896,6 @@ pub(super) fn score_transition_profiles(
         }
     }
 
-    // Harmonic style modulation gate: penalize transitions where key score
-    // falls below the minimum threshold for the current phase × style.
     if let Some(style) = harmonic_style {
         let min_key = harmonic_style_min_key(style, to_phase);
         if key.value < min_key {
@@ -1188,7 +1157,6 @@ pub(super) fn score_genre_axis(
         }
     };
 
-    // Genre stickiness: bonus for staying in the same family, penalty for early switch
     if genre_compatible
         && from_family != GenreFamily::Other
         && genre_run_length > 0
@@ -1284,9 +1252,7 @@ fn score_rhythm_axis(from_regularity: Option<f64>, to_regularity: Option<f64>) -
 // Pool-specific axis functions (symmetric, no sequential context)
 // ---------------------------------------------------------------------------
 
-/// Pool BPM axis: symmetric variant using max(a, b) as denominator.
-/// The transition scorer's `score_bpm_axis` uses `from_bpm` as denominator,
-/// which is asymmetric. For pools we need score(A,B) == score(B,A).
+/// Symmetric BPM axis using max(a, b) as denominator.
 pub(super) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
     if a_bpm <= 0.0 || b_bpm <= 0.0 {
         return AxisScore {
@@ -1315,8 +1281,7 @@ pub(super) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
     }
 }
 
-/// Pool energy axis: Gaussian decay on absolute energy distance.
-/// Tracks at similar energy levels score high.
+/// Gaussian decay on absolute energy distance.
 pub(super) fn score_pool_energy_axis(a_energy: f64, b_energy: f64) -> AxisScore {
     let delta = (a_energy - b_energy).abs();
     // exp(-25 * delta^2): 0.0 → 1.0, 0.1 → 0.78, 0.2 → 0.37, 0.3 → 0.11
@@ -1333,8 +1298,7 @@ pub(super) fn score_pool_energy_axis(a_energy: f64, b_energy: f64) -> AxisScore 
     AxisScore { value, label }
 }
 
-/// Pool genre axis: simple match without streak logic.
-/// Same genre = 1.0, same family = 0.7, different = 0.3.
+/// Genre match without streak logic (1.0 / 0.7 / 0.3).
 pub(super) fn score_pool_genre_axis(
     genre_a: Option<&str>,
     genre_b: Option<&str>,
@@ -1372,7 +1336,7 @@ pub(super) fn score_pool_genre_axis(
     }
 }
 
-/// Pool timbral axis: Euclidean distance on z-score-normalized vectors.
+/// Euclidean distance on z-score-normalized timbral vectors.
 /// Returns None if either track lacks timbral data.
 pub(super) fn score_pool_timbral_axis(
     a: &TrackProfile,
@@ -1509,17 +1473,14 @@ pub(super) fn composite_score(
     }
 }
 
-// BPM proxy normalization (typical club tempo range)
 const BPM_PROXY_FLOOR: f64 = 95.0;
-const BPM_PROXY_RANGE: f64 = 50.0; // 145 - 95
+const BPM_PROXY_RANGE: f64 = 50.0;
 
-// Essentia descriptor normalization bounds
 const DANCEABILITY_MAX: f64 = 3.0;
 const LOUDNESS_FLOOR_LUFS: f64 = -30.0;
 const LOUDNESS_RANGE_LUFS: f64 = 30.0;
 const ONSET_RATE_MAX: f64 = 10.0;
 
-// Composite energy weights
 const ENERGY_W_DANCE: f64 = 0.4;
 const ENERGY_W_LOUDNESS: f64 = 0.3;
 const ENERGY_W_ONSET: f64 = 0.3;
@@ -1556,8 +1517,6 @@ pub(super) fn compute_track_energy(
 // Timbral vector construction and z-score normalization (pool kernel)
 // ---------------------------------------------------------------------------
 
-/// Build a timbral feature vector from raw components.
-/// Returns None if any slice is empty (indicating missing data).
 fn assemble_timbral_vector(
     mfcc_mean: &[f64],
     mfcc_std: &[f64],
@@ -1575,8 +1534,6 @@ fn assemble_timbral_vector(
     vec
 }
 
-/// Concatenate timbral fields into a single feature vector.
-/// Returns None if timbral features are missing.
 pub(super) fn build_timbral_vector(profile: &TrackProfile) -> Option<Vec<f64>> {
     let t = profile.timbral.as_ref()?;
     Some(assemble_timbral_vector(
@@ -1598,8 +1555,7 @@ fn build_timbral_vector_from_essentia(essentia: &crate::audio::EssentiaOutput) -
     ))
 }
 
-/// Compute per-dimension mean and stddev for timbral vectors across all
-/// Essentia cache entries using Welford's online algorithm.
+/// Welford's online algorithm over all Essentia cache entries.
 pub(super) fn compute_timbral_norm_stats(
     store_conn: &Connection,
 ) -> Result<crate::store::TimbralNormStats, String> {
@@ -1640,7 +1596,7 @@ pub(super) fn compute_timbral_norm_stats(
             m2s = vec![0.0; vec.len()];
         }
         if vec.len() != means.len() {
-            continue; // Dimension mismatch, skip
+            continue;
         }
         count += 1;
 
@@ -1669,8 +1625,6 @@ pub(super) fn compute_timbral_norm_stats(
     })
 }
 
-/// Z-score normalize a raw timbral vector using precomputed stats.
-/// Returns None on dimension mismatch.
 pub(super) fn normalize_timbral_vector(
     raw: &[f64],
     stats: &crate::store::TimbralNormStats,
@@ -1686,8 +1640,7 @@ pub(super) fn normalize_timbral_vector(
     )
 }
 
-/// Get or recompute timbral norm stats. Recomputes if missing or cache has
-/// grown by >10% since last computation.
+/// Recomputes if missing or cache has grown >10% since last computation.
 pub(super) fn ensure_timbral_norm_stats(
     store_conn: &Connection,
 ) -> Result<Option<crate::store::TimbralNormStats>, String> {
@@ -1724,7 +1677,6 @@ pub(super) fn ensure_timbral_norm_stats(
         }
     }
 
-    // Recompute
     let stats = compute_timbral_norm_stats(store_conn)?;
     crate::store::save_timbral_norm_stats(store_conn, &stats)
         .map_err(|e| format!("Failed to save norm stats: {e}"))?;
@@ -1864,7 +1816,6 @@ pub(super) fn format_camelot(key: CamelotKey) -> String {
 /// +1 semitone = +7 Camelot positions mod 12 (circle of fifths).
 /// Letter (A/B) is unchanged.
 pub(super) fn transpose_camelot_key(key: CamelotKey, semitones: i32) -> CamelotKey {
-    // Each semitone = +7 positions on the Camelot wheel (mod 12)
     let steps = ((semitones % 12) * 7).rem_euclid(12);
     let new_number = ((key.number as i32 - 1 + steps) % 12 + 1) as u8;
     CamelotKey {
@@ -1895,18 +1846,9 @@ fn bracketed_keys(key: CamelotKey, exact_shift: f64) -> [(CamelotKey, f64); 2] {
     [(floor_k, 1.0 - frac), (ceil_k, frac)]
 }
 
-/// Score key compatibility with continuous pitch shift handling.
-///
-/// Instead of rounding a fractional semitone shift to the nearest integer
-/// (which causes a cliff: +1 chromatic semitone = 7 Camelot positions),
-/// this function interpolates between the two bracketing integer transpositions.
-///
-/// For example, a 0.51 semitone shift scores as:
-///   0.49 × score(floor_key) + 0.51 × score(ceil_key)
-/// instead of rounding to 1 semitone and scoring only the transposed key.
-///
-/// Handles both from and to shifts (for the play_bpms path where both tracks
-/// may be pitched). Uses bilinear interpolation across all 4 key combinations.
+/// Interpolates between bracketing integer transpositions to avoid the cliff
+/// where +1 chromatic semitone = 7 Camelot positions. Both from and to tracks
+/// may be shifted; uses bilinear interpolation across all 4 key combinations.
 pub(super) fn score_key_with_pitch_shifts(
     from: Option<CamelotKey>,
     to: Option<CamelotKey>,
@@ -1920,7 +1862,6 @@ pub(super) fn score_key_with_pitch_shifts(
         return score_key_axis(from, to);
     };
 
-    // No shift at all — use standard scoring
     if from_shift.abs() < 0.01 && to_shift.abs() < 0.01 {
         return score_key_axis(Some(from_key), Some(to_key));
     }
@@ -1928,7 +1869,6 @@ pub(super) fn score_key_with_pitch_shifts(
     let from_keys = bracketed_keys(from_key, from_shift);
     let to_keys = bracketed_keys(to_key, to_shift);
 
-    // Bilinear interpolation across all key combinations
     let mut blended = 0.0;
     let mut best_label = String::new();
     let mut best_weight = 0.0_f64;
@@ -2041,7 +1981,6 @@ impl PoolAxisScores {
     }
 }
 
-/// Score pool compatibility between two tracks (symmetric).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn score_pool_compatibility_pair(
     a: &TrackProfile,
@@ -2051,7 +1990,6 @@ pub(super) fn score_pool_compatibility_pair(
     weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> PoolAxisScores {
-    // Key scoring: use continuous detuning model when master tempo is off
     let key = if !master_tempo && ref_bpm > 0.0 {
         score_key_with_pitch_shifts(
             a.camelot_key,
@@ -2076,7 +2014,6 @@ pub(super) fn score_pool_compatibility_pair(
 
     let timbral = norm_stats.and_then(|stats| score_pool_timbral_axis(a, b, stats));
 
-    // Dynamic weight renormalization (same pattern as composite_score)
     let brightness_available = a.brightness.is_some() && b.brightness.is_some();
     let rhythm_available = a.rhythm_regularity.is_some() && b.rhythm_regularity.is_some();
     let mut weighted_sum = (weights.bpm * bpm.value)
@@ -2123,7 +2060,6 @@ pub(super) struct CandidatePoolScore {
     pub per_member: Vec<(String, PoolAxisScores)>,
 }
 
-/// Score one candidate against every member of a pool.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn score_candidate_vs_pool(
     candidate: &TrackProfile,
@@ -2179,7 +2115,6 @@ pub(super) struct PoolCohesionResult {
     pub per_pair: Vec<(String, String, PoolAxisScores)>,
 }
 
-/// Compute all-pairs pool cohesion.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compute_pool_cohesion(
     profiles: &[&TrackProfile],
@@ -2204,7 +2139,6 @@ pub(super) fn compute_pool_cohesion(
     let mut global_sum = 0.0;
     let pair_count = n * (n - 1) / 2;
 
-    // Per-member: track min and mean scores to others
     let mut member_min: Vec<f64> = vec![f64::INFINITY; n];
     let mut member_sum: Vec<f64> = vec![0.0; n];
 
@@ -2248,14 +2182,12 @@ pub(super) fn compute_pool_cohesion(
         0.0
     };
 
-    // Weakest member: lowest min-score to any other member
     let weakest_idx = member_min
         .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i);
 
-    // Medoid: highest mean-score to others
     let medoid_idx = member_sum
         .iter()
         .enumerate()
@@ -2306,7 +2238,6 @@ pub(super) fn discover_pools(
         return Vec::new();
     }
 
-    // Build pairwise compatibility matrix
     let mut compat: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in (i + 1)..n {
@@ -2323,7 +2254,6 @@ pub(super) fn discover_pools(
         }
     }
 
-    // Build adjacency list from thresholded graph
     let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
     for i in 0..n {
         for j in (i + 1)..n {
@@ -2334,7 +2264,6 @@ pub(super) fn discover_pools(
         }
     }
 
-    // Enumerate maximal cliques
     let mut cliques: Vec<Vec<usize>> = Vec::new();
     let all: HashSet<usize> = (0..n).collect();
     bron_kerbosch_pivot(
@@ -2346,7 +2275,6 @@ pub(super) fn discover_pools(
         max_size,
     );
 
-    // Filter, score, rank
     let mut pools: Vec<DiscoveredPool> = cliques
         .into_iter()
         .filter(|c| c.len() >= min_size && c.len() <= max_size)
@@ -2360,7 +2288,6 @@ pub(super) fn discover_pools(
             .then_with(|| b.track_ids.len().cmp(&a.track_ids.len()))
     });
 
-    // Greedy dedup — skip subsets of already-selected pools
     let mut selected: Vec<DiscoveredPool> = Vec::new();
     for pool in pools {
         if selected.len() >= max_pools {
@@ -2510,8 +2437,6 @@ pub(super) fn find_bridge_tracks(pools: &[DiscoveredPool]) -> Vec<(String, Vec<u
     bridges
 }
 
-/// Map a genre/style string through the taxonomy.
-/// Returns (maps_to, mapping_type) where mapping_type is "exact", "alias", or "unknown".
 pub(super) fn map_genre_through_taxonomy(style: &str) -> (Option<String>, &'static str) {
     if let Some(canonical) = genre::canonical_genre_name(style) {
         (Some(canonical.to_string()), "exact")

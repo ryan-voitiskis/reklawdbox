@@ -104,10 +104,6 @@ pub(crate) struct EmbedArtArgs {
     json: bool,
 }
 
-// ---------------------------------------------------------------------------
-// read-tags
-// ---------------------------------------------------------------------------
-
 fn print_tags_human(result: &tags::FileReadResult) {
     match result {
         tags::FileReadResult::Single {
@@ -196,10 +192,6 @@ pub(crate) fn run_read_tags(args: ReadTagsArgs) -> Result<(), Box<dyn std::error
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// write-tags
-// ---------------------------------------------------------------------------
 
 fn build_tags_from_args(args: &WriteTagsArgs) -> HashMap<String, Option<String>> {
     let mut tags = HashMap::new();
@@ -370,10 +362,6 @@ pub(crate) fn run_write_tags(args: WriteTagsArgs) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// extract-art
-// ---------------------------------------------------------------------------
-
 pub(crate) fn run_extract_art(args: ExtractArtArgs) -> Result<(), Box<dyn std::error::Error>> {
     let path = Path::new(&args.path);
     let output = args.output.as_deref().map(Path::new);
@@ -397,10 +385,6 @@ pub(crate) fn run_extract_art(args: ExtractArtArgs) -> Result<(), Box<dyn std::e
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// embed-art
-// ---------------------------------------------------------------------------
 
 pub(crate) fn run_embed_art(args: EmbedArtArgs) -> Result<(), Box<dyn std::error::Error>> {
     let image_path = Path::new(&args.image);

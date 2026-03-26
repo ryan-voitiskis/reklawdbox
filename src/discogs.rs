@@ -16,11 +16,8 @@ pub struct BrokerConfig {
     pub broker_token: Option<String>,
 }
 
-/// Result of attempting to load broker config from the environment.
 pub enum BrokerConfigStatus {
-    /// Config loaded successfully.
     Ok(BrokerConfig),
-    /// Env var set but URL is malformed.
     InvalidUrl(String),
 }
 

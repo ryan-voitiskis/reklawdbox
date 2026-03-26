@@ -19,8 +19,7 @@ pub(super) struct BackfillLabelsParams {
     pub auto_enrich: Option<bool>,
 }
 
-/// Filter out Discogs "Not On Label" entries (self-released, no useful signal).
-/// Everything else passes through unchanged.
+/// Filters out Discogs "Not On Label" entries (self-released, no useful signal).
 fn normalize_label(label: &str) -> Option<String> {
     if label.starts_with("Not On Label") {
         return None;
@@ -30,7 +29,6 @@ fn normalize_label(label: &str) -> Option<String> {
 
 use super::enrichment_cache::cache_lookup_result;
 
-/// Try to extract a label from the enrichment cache for a single provider.
 fn label_from_cache(
     store_conn: &rusqlite::Connection,
     provider: &str,
@@ -178,7 +176,6 @@ pub(super) async fn handle_backfill_labels(
 
     let mut auto_enriched = 0usize;
 
-    // Auto-enrich: fetch Bandcamp for tracks with no cached Bandcamp data.
     if auto_enrich && !scan.uncached_bandcamp.is_empty() {
         let to_enrich: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
         let total = to_enrich.len();
@@ -207,13 +204,12 @@ pub(super) async fn handle_backfill_labels(
             }
         }
 
-        // Second pass: re-scan with updated cache.
         let store_conn = server.cache_store_conn()?;
         scan = scan_labels(&store_conn, &tracks);
         drop(store_conn);
     }
 
-    // Collect IDs of tracks getting labels staged before to_stage is moved.
+    // Collect before to_stage is moved by stage().
     let staged_label_ids: std::collections::HashSet<String> = scan
         .to_stage
         .iter()
@@ -257,10 +253,8 @@ pub(super) async fn handle_backfill_labels(
         );
     }
 
-    // Build a research queue: count remaining unlabeled tracks grouped by artist.
-    // This gives the agent a concrete on-ramp to step 3 (label research).
-    // Subtract tracks just staged by this backfill — they're still unlabeled in the
-    // read-only DB but will resolve on export, so they don't need research.
+    // Excludes tracks just staged — they're unlabeled in the read-only DB
+    // but will resolve on export, so they don't need research.
     let unlabeled_count = {
         let rb_conn = server.rekordbox_conn()?;
         let search_params = db::SearchParams {
@@ -312,10 +306,7 @@ pub(super) async fn handle_backfill_labels(
         count
     };
 
-    // Update the gate so write_xml can enforce label research.
-    // Always write — including 0 when all labels are filled — so the gate
-    // clears automatically after a successful re-run.
-    // Skip on dry_run: a preview should not have side effects.
+    // Always write (including 0) so the gate clears after a successful re-run.
     if !dry_run {
         server
             .state

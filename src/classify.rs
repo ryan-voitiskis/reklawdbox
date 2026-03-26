@@ -12,10 +12,6 @@ use serde::Serialize;
 
 use crate::genre::{self, GenreFamily};
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ClassificationConfidence {
@@ -64,10 +60,6 @@ pub(crate) struct ClassificationResult {
     pub(crate) review_hint: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Input types — pure data, no DB handles
-// ---------------------------------------------------------------------------
-
 /// Mapped genre from an enrichment source.
 pub(crate) struct MappedGenre {
     pub(crate) genre: &'static str,
@@ -106,10 +98,6 @@ pub(crate) struct TrackEvidence {
     pub(crate) has_audio: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EnergyBucket {
     NonDancefloor,
@@ -131,7 +119,7 @@ enum CharFlag {
 struct AudioProfile {
     bucket: EnergyBucket,
     flags: Vec<CharFlag>,
-    bpm: f64, // effective BPM for thresholds (rekordbox preferred)
+    bpm: f64,
 }
 
 /// A single vote for a genre from one evidence source.
@@ -146,38 +134,28 @@ struct GenreVote {
 /// BPM tolerance: ±5 BPM around the defined genre range.
 const BPM_TOLERANCE: f64 = 5.0;
 
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
 pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
     let audio_profile = evidence.audio.as_ref().map(compute_audio_profile);
 
-    // Step B.3: Check audio vetoes first
     if let Some(profile) = audio_profile.as_ref()
         && let Some(result) = check_audio_vetoes(evidence, profile)
     {
         return result;
     }
 
-    // Gather votes from all sources (Step A)
     let votes = gather_votes(evidence, audio_profile.as_ref());
 
-    // Steps C/D: Find consensus or do audio-only inference
     let (genre, confidence, ev_lines, mut flags) = if votes.is_empty() {
         audio_only_inference(evidence, audio_profile.as_ref())
     } else {
         find_consensus(evidence, &votes, audio_profile.as_ref())
     };
 
-    // Step E: Compare to current genre
     let current_canonical = resolve_current_canonical(&evidence.current_genre);
     let action = compare_to_current(current_canonical, genre);
 
-    // Build candidates list from votes
     let candidates = build_candidates(&votes, genre);
 
-    // Add data source flags (before review hint so it can see them)
     if !evidence.has_discogs && !evidence.has_beatport {
         flags.push("no-enrichment".into());
     }
@@ -185,7 +163,6 @@ pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
         flags.push("no-audio".into());
     }
 
-    // Build review hint for low/insufficient
     let review_hint = match confidence {
         ClassificationConfidence::Low | ClassificationConfidence::Insufficient => {
             Some(build_review_hint(evidence, &flags))
@@ -208,15 +185,10 @@ pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Step B: Audio profile computation
-// ---------------------------------------------------------------------------
-
 fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
     let bpm = audio.rekordbox_bpm;
     let danceability = audio.danceability.unwrap_or(1.5);
 
-    // B.1: Energy bucket
     let bucket = if danceability < 1.0 {
         EnergyBucket::NonDancefloor
     } else if danceability < 1.5 {
@@ -227,7 +199,6 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
         EnergyBucket::HighEnergy
     };
 
-    // B.2: Character flags
     let mut flags = Vec::new();
     let dc = audio.dynamic_complexity.unwrap_or(0.0);
     let rr = audio.rhythm_regularity.unwrap_or(0.85);
@@ -259,10 +230,6 @@ fn has_flag(profile: &AudioProfile, flag: CharFlag) -> bool {
     profile.flags.contains(&flag)
 }
 
-// ---------------------------------------------------------------------------
-// Step B.3: Audio vetoes
-// ---------------------------------------------------------------------------
-
 fn veto_result(
     evidence: &TrackEvidence,
     genre: &'static str,
@@ -292,7 +259,6 @@ fn check_audio_vetoes(
 ) -> Option<ClassificationResult> {
     let current_canonical = resolve_current_canonical(&evidence.current_genre);
 
-    // non_dancefloor + ambient → Ambient
     if profile.bucket == EnergyBucket::NonDancefloor && has_flag(profile, CharFlag::Ambient) {
         let action = compare_to_current(current_canonical, Some("Ambient"));
         return Some(veto_result(
@@ -305,7 +271,6 @@ fn check_audio_vetoes(
         ));
     }
 
-    // non_dancefloor + slow → Downtempo family
     if profile.bucket == EnergyBucket::NonDancefloor && has_flag(profile, CharFlag::Slow) {
         let dt_genre = find_family_genre(evidence, GenreFamily::Downtempo).unwrap_or("Downtempo");
         let action = compare_to_current(current_canonical, Some(dt_genre));
@@ -322,7 +287,6 @@ fn check_audio_vetoes(
         ));
     }
 
-    // non_dancefloor + neither ambient nor slow → Downtempo or Other
     if profile.bucket == EnergyBucket::NonDancefloor {
         let dt_genre = find_family_genre(evidence, GenreFamily::Downtempo).unwrap_or("Downtempo");
         let action = compare_to_current(current_canonical, Some(dt_genre));
@@ -339,7 +303,7 @@ fn check_audio_vetoes(
         ));
     }
 
-    // fast + at least low-energy → Bass family (only if enrichment agrees or is absent)
+    // Bass veto only fires if enrichment agrees or is absent
     if has_flag(profile, CharFlag::Fast) && profile.bucket != EnergyBucket::NonDancefloor {
         let has_enrichment =
             !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
@@ -373,7 +337,6 @@ fn check_audio_vetoes(
         }
     }
 
-    // low_energy + atmospheric + all enrichment dancefloor → prefer Downtempo family
     if profile.bucket == EnergyBucket::LowEnergy
         && has_flag(profile, CharFlag::Atmospheric)
         && all_enrichment_dancefloor(evidence)
@@ -399,7 +362,6 @@ fn check_audio_vetoes(
     None
 }
 
-/// Check if all enrichment genres are from dancefloor families (House/Techno/Bass).
 fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
     let has_any = !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
     if !has_any {
@@ -420,15 +382,12 @@ fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
     all_dance && bp_dance
 }
 
-/// Find the best genre from enrichment in a specific family.
 fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'static str> {
-    // Check Beatport first (single, precise)
     if let Some(bp) = evidence.beatport_genre
         && genre::genre_family(bp) == family
     {
         return Some(bp);
     }
-    // Check Discogs (highest style_count in family)
     evidence
         .discogs_mapped
         .iter()
@@ -437,15 +396,11 @@ fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'
         .map(|mg| mg.genre)
 }
 
-// ---------------------------------------------------------------------------
-// Step A: Gather genre votes
-// ---------------------------------------------------------------------------
-
 fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) -> Vec<GenreVote> {
     let mut votes = Vec::new();
     let effective_bpm = audio_profile.map(|p| p.bpm).unwrap_or(evidence.bpm);
 
-    // Beatport: weight 1.0 (halved if BPM-implausible), single precise genre
+    // Beatport: weight 1.0, halved if BPM-implausible
     if let Some(bp) = evidence.beatport_genre {
         let plausible = bpm_plausible(bp, effective_bpm);
         votes.push(GenreVote {
@@ -456,7 +411,7 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
         });
     }
 
-    // Discogs: weight based on style_count, normalized
+    // Discogs: weight proportional to style_count, halved if BPM-implausible
     let total_styles: usize = evidence.discogs_mapped.iter().map(|m| m.style_count).sum();
     for mg in &evidence.discogs_mapped {
         let base_weight = if total_styles > 0 {
@@ -477,13 +432,12 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
         });
     }
 
-    // Label: weight 0.6 (or 0.4 when confirming an existing vote; halved if BPM-implausible)
+    // Label: weight 0.6, reduced to 0.4 when confirming to avoid double-counting
     if let Some(lg) = evidence.label_genre {
         let plausible = bpm_plausible(lg, effective_bpm);
-        // Check if label confirms an existing vote
         let confirms = votes.iter().any(|v| v.genre == lg);
         let weight = if confirms {
-            0.4 // Reduced when confirming — avoids double-counting while still adding weight
+            0.4
         } else {
             0.6
         };
@@ -510,10 +464,6 @@ fn bpm_plausible(genre: &str, bpm: f64) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Step C: Find consensus
-// ---------------------------------------------------------------------------
-
 fn find_consensus(
     evidence: &TrackEvidence,
     votes: &[GenreVote],
@@ -524,7 +474,6 @@ fn find_consensus(
     Vec<String>,
     Vec<String>,
 ) {
-    // Tally votes by genre
     let mut tally: HashMap<&'static str, f32> = HashMap::new();
     for v in votes {
         *tally.entry(v.genre).or_default() += v.weight;
@@ -542,11 +491,9 @@ fn find_consensus(
     let margin = top_score - second.map_or(0.0, |s| s.1);
     let total_weight: f32 = ranked.iter().map(|(_, w)| w).sum();
 
-    // Build evidence lines
     let mut ev = Vec::new();
     let mut flags = Vec::new();
 
-    // Discogs evidence
     if !evidence.discogs_mapped.is_empty() {
         let parts: Vec<String> = evidence
             .discogs_mapped
@@ -563,7 +510,6 @@ fn find_consensus(
         ev.push(format!("discogs: {}", parts.join(", ")));
     }
 
-    // Beatport evidence
     if let Some(bp) = evidence.beatport_genre {
         let raw = evidence.beatport_raw.as_deref().unwrap_or(bp);
         let bpm_note = if !bpm_plausible(bp, audio_profile.map_or(0.0, |p| p.bpm)) {
@@ -578,13 +524,11 @@ fn find_consensus(
         }
     }
 
-    // Label evidence
     if let Some(lg) = evidence.label_genre {
         let label_name = evidence.label.as_deref().unwrap_or("?");
         ev.push(format!("label: {} → {}", label_name, lg));
     }
 
-    // Audio evidence
     if let Some(profile) = audio_profile.as_ref() {
         let bucket_name = match profile.bucket {
             EnergyBucket::NonDancefloor => "non-dancefloor",
@@ -617,9 +561,7 @@ fn find_consensus(
         ev.push(audio_str);
     }
 
-    // Determine confidence
     let mut confidence = if ranked.len() == 1 && top_score >= 1.0 {
-        // Single genre, strong signal
         if votes
             .iter()
             .filter(|v| v.genre == top_genre)
@@ -635,7 +577,6 @@ fn find_consensus(
         let same_family = genre::genre_family(top_genre) == genre::genre_family(second_genre);
 
         if margin / total_weight > 0.4 {
-            // Clear winner
             if votes
                 .iter()
                 .filter(|v| v.genre == top_genre)
@@ -647,7 +588,6 @@ fn find_consensus(
                 ClassificationConfidence::Medium
             }
         } else if margin / total_weight > 0.15 {
-            // Moderate winner — check same-family specificity (C rule 9a)
             if same_family {
                 top_genre = resolve_same_family_specificity(
                     top_genre,
@@ -660,9 +600,7 @@ fn find_consensus(
                 ClassificationConfidence::Medium
             }
         } else {
-            // Close contest
             if same_family {
-                // C rule 9a/9b: depth-based resolution
                 top_genre = resolve_same_family_specificity(
                     top_genre,
                     second_genre,
@@ -671,7 +609,6 @@ fn find_consensus(
                 );
                 ClassificationConfidence::Low
             } else {
-                // C rule 9c/9d: cross-family
                 if let Some(profile) = audio_profile.as_ref() {
                     if audio_clearly_favors_family(profile, top_genre) {
                         flags.push("audio-assisted-tiebreak".into());
@@ -685,7 +622,6 @@ fn find_consensus(
             }
         }
     } else {
-        // Single genre, weak signal — check BPM plausibility
         if !votes
             .iter()
             .filter(|v| v.genre == top_genre)
@@ -700,8 +636,7 @@ fn find_consensus(
 
     let mut final_genre = top_genre;
 
-    // Post-consensus: BPM preference override
-    // If the top genre is BPM-implausible and there's a plausible alternative, swap.
+    // Swap to a BPM-plausible alternative if the winner is implausible
     let effective_bpm = audio_profile.map(|p| p.bpm).unwrap_or(evidence.bpm);
     if !bpm_plausible(final_genre, effective_bpm)
         && let Some((alt_genre, _)) = ranked
@@ -715,8 +650,7 @@ fn find_consensus(
         ));
         flags.push("bpm-override".into());
         final_genre = alt_genre;
-        // Downgrade confidence by one level — the runner-up was elevated by BPM
-        // elimination, not by evidence weight
+        // Downgrade: runner-up was elevated by BPM elimination, not evidence weight
         confidence = match confidence {
             ClassificationConfidence::High => ClassificationConfidence::Medium,
             ClassificationConfidence::Medium => ClassificationConfidence::Low,
@@ -724,17 +658,14 @@ fn find_consensus(
         };
     }
 
-    // Post-consensus: energy-based depth demotion
-    // HighEnergy always demotes deep variants to their shallower parent.
-    // Dancefloor demotes only when the shallower alternative has its own votes
-    // (i.e. enrichment evidence supports both, and audio doesn't favour depth).
+    // HighEnergy always demotes deep variants (e.g. Deep Techno → Techno).
+    // Dancefloor demotes only when the shallower variant also has votes.
     if let Some(profile) = audio_profile.as_ref()
         && let Some(shallower) = shallower_alternative(final_genre)
     {
         let demote = match profile.bucket {
             EnergyBucket::HighEnergy => true,
             EnergyBucket::Dancefloor => {
-                // Only demote if the shallower variant is also in the ranked list
                 ranked.iter().any(|(g, _)| *g == shallower)
                     && !has_flag(profile, CharFlag::Atmospheric)
             }
@@ -755,7 +686,6 @@ fn find_consensus(
         }
     }
 
-    // Step C2: Note secondary influences
     let primary_family = genre::genre_family(final_genre);
     for mg in &evidence.discogs_mapped {
         if genre::genre_family(mg.genre) != primary_family && mg.style_count >= 2 {
@@ -774,9 +704,7 @@ fn find_consensus(
     (Some(final_genre), confidence, ev, flags)
 }
 
-/// C rule 9a: Same-family, different specificity.
-/// Uses genre depth and audio profile to pick between two same-family genres.
-/// Returns the preferred genre (may be different from `top`).
+/// Picks between two same-family genres using genre depth and audio energy.
 fn resolve_same_family_specificity(
     top: &'static str,
     second: &'static str,
@@ -826,9 +754,6 @@ fn resolve_same_family_specificity(
     }
 }
 
-/// Map "deep" genre variants to their shallower parent genre.
-/// Used by the high-energy depth demotion: if audio is HighEnergy, a "deep" genre
-/// is unlikely — prefer the shallower driving variant.
 fn shallower_alternative(genre: &str) -> Option<&'static str> {
     match genre {
         "Deep Techno" | "Dub Techno" | "Ambient Techno" | "Drone Techno" => Some("Techno"),
@@ -837,7 +762,6 @@ fn shallower_alternative(genre: &str) -> Option<&'static str> {
     }
 }
 
-/// C rule 9c: Check if audio flags clearly favor one family.
 fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool {
     let family = genre::genre_family(candidate);
     match family {
@@ -864,7 +788,6 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
     }
 }
 
-// Implement PartialOrd for EnergyBucket for comparisons
 impl PartialOrd for EnergyBucket {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -884,10 +807,6 @@ impl Ord for EnergyBucket {
         rank(self).cmp(&rank(other))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Step D: Audio-only inference
-// ---------------------------------------------------------------------------
 
 fn audio_only_inference(
     evidence: &TrackEvidence,
@@ -942,7 +861,6 @@ fn audio_only_inference(
         }
         EnergyBucket::LowEnergy => {
             if profile.bpm > 145.0 {
-                // High BPM + low energy → still likely bass family, not Electro/IDM
                 candidates.extend_from_slice(&["Jungle", "Breakbeat"]);
                 ev.push(format!(
                     "D.1: low-energy but fast ({}bpm) → Jungle/Breakbeat",
@@ -1005,15 +923,13 @@ fn audio_only_inference(
         }
     }
 
-    // D.3: Spectral centroid refinement — reorder candidates by tonal character.
-    // Preference lists are aesthetic/provisional — replace with empirically derived
-    // rankings once issue #19 produces real classification data by centroid range.
+    // D.3: Spectral centroid refinement.
+    // Preference lists are provisional — refine once issue #19 has empirical data.
     if let Some(centroid) = sc
         && candidates.len() > 1
     {
         let first_before = candidates[0];
         let (centroid_hint, reordered) = if centroid < 1200.0 {
-            // Dark/warm — prefer deeper, darker genres
             let preferred: &[&str] = &[
                 "Downtempo",
                 "Ambient",
@@ -1037,7 +953,6 @@ fn audio_only_inference(
                 candidates[0] != first_before,
             )
         } else if centroid >= 2500.0 {
-            // Bright/aggressive — prefer energetic, brighter genres
             let preferred: &[&str] = &[
                 "Hard Techno",
                 "Breakbeat",
@@ -1056,7 +971,6 @@ fn audio_only_inference(
                 candidates[0] != first_before,
             )
         } else {
-            // Mid centroid (1200–2500): D.2 order is appropriate
             ("mid centroid", false)
         };
 
@@ -1079,7 +993,6 @@ fn audio_only_inference(
     } else if candidates.is_empty() {
         (None, ClassificationConfidence::Insufficient)
     } else {
-        // Pick the most plausible by BPM, or first if all equal
         let best = candidates
             .iter()
             .find(|&&g| bpm_plausible(g, profile.bpm))
@@ -1095,10 +1008,6 @@ fn audio_only_inference(
 
     (genre, confidence, ev, flags)
 }
-
-// ---------------------------------------------------------------------------
-// Step E: Compare to current genre
-// ---------------------------------------------------------------------------
 
 fn resolve_current_canonical(current_genre: &str) -> Option<&'static str> {
     if current_genre.is_empty() {
@@ -1120,10 +1029,6 @@ fn compare_to_current(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn build_candidates(votes: &[GenreVote], top_genre: Option<&str>) -> Vec<GenreCandidate> {
     let mut tally: HashMap<&'static str, (f32, bool)> = HashMap::new();
     for v in votes {
@@ -1136,7 +1041,7 @@ fn build_candidates(votes: &[GenreVote], top_genre: Option<&str>) -> Vec<GenreCa
 
     let mut candidates: Vec<GenreCandidate> = tally
         .into_iter()
-        .filter(|(g, _)| Some(*g) != top_genre) // exclude the primary recommendation
+        .filter(|(g, _)| Some(*g) != top_genre)
         .map(|(g, (score, bpm))| GenreCandidate {
             genre: g,
             score,
@@ -1322,7 +1227,6 @@ mod tests {
         });
         ev.has_audio = true;
         let result = classify_track(&ev);
-        // Should still suggest Deep House but at lower confidence due to BPM
         assert_eq!(result.genre, Some("Deep House"));
         assert!(matches!(
             result.confidence,
@@ -1333,7 +1237,6 @@ mod tests {
     #[test]
     fn audio_veto_ambient() {
         let mut ev = make_evidence("");
-        // Enrichment says Techno, but audio is clearly non-dancefloor ambient
         ev.beatport_genre = Some("Techno");
         ev.has_beatport = true;
         ev.audio = Some(AudioFeatures {
@@ -1376,7 +1279,6 @@ mod tests {
     #[test]
     fn depth_prefers_shallower_when_high_energy() {
         let mut ev = make_evidence("");
-        // Discogs says Deep Techno, Beatport says Techno
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Deep Techno",
             style_count: 2,
@@ -1384,26 +1286,20 @@ mod tests {
         ev.has_discogs = true;
         ev.beatport_genre = Some("Techno");
         ev.has_beatport = true;
-        // Audio is high energy — should prefer Techno over Deep Techno
         ev.audio = Some(AudioFeatures {
             rekordbox_bpm: 135.0,
             stratum_bpm: Some(135.0),
             bpm_agreement: Some(true),
-            danceability: Some(2.8), // high energy
+            danceability: Some(2.8),
             dynamic_complexity: Some(2.0),
             rhythm_regularity: Some(0.95),
             spectral_centroid_mean: Some(2500.0),
         });
         ev.has_audio = true;
         let result = classify_track(&ev);
-        // With high energy, should prefer Techno (shallower) over Deep Techno
         assert_eq!(result.genre, Some("Techno"));
         assert!(result.evidence.iter().any(|e| e.contains("depth:")));
     }
-
-    // -----------------------------------------------------------------------
-    // Collection-derived test cases
-    // -----------------------------------------------------------------------
 
     // 1. Marcel Dettmann - Aim: full consensus Techno
     // Discogs Techno(x1), Beatport Techno, label Ostgut Ton → Techno, BPM 130
@@ -1434,8 +1330,7 @@ mod tests {
         assert_eq!(result.action, ClassificationAction::Suggest);
     }
 
-    // 2. Kassian - Actions: BPM-implausible Deep House (132 > 126+5=131)
-    // Beatport Deep House only, BPM 132, no Discogs genres
+    // 2. Kassian - Actions: BPM-implausible Deep House (132 > range max 131)
     #[test]
     fn collection_kassian_actions_bpm_implausible_deep_house() {
         let ev = TrackEvidence {
@@ -1455,8 +1350,6 @@ mod tests {
             has_audio: false,
         };
         let result = classify_track(&ev);
-        // Deep House is BPM-implausible at 132 (range 118-126+5=131)
-        // Should NOT be high confidence
         assert!(
             !matches!(result.confidence, ClassificationConfidence::High),
             "BPM-implausible single vote should not be High confidence"
@@ -1579,10 +1472,7 @@ mod tests {
         assert_eq!(result.genre, Some("Drum & Bass"));
     }
 
-    // 6. Alarico - 0 Kelvin: Deep Techno BPM-implausible, Techno plausible
-    // Discogs: Techno(x1). Beatport: Deep Techno. BPM 145. No audio.
-    // Deep Techno range 120-132+5=137 < 145 → implausible
-    // Techno range 128-140+5=145 → plausible (just barely)
+    // 6. Alarico - 0 Kelvin: Deep Techno BPM-implausible at 145, Techno barely plausible
     #[test]
     fn collection_alarico_0_kelvin_depth_bpm_override() {
         let ev = TrackEvidence {
@@ -1748,10 +1638,7 @@ mod tests {
         assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
     }
 
-    // 11. Daniel Stefanik - #four: BPM 119 makes Techno implausible
-    // Beatport: Techno. Discogs: House, Tech House, Techno. BPM 119. Current: Tech House.
-    // Techno range 128-140, with tolerance 123-145. BPM 119 < 123 → implausible
-    // Tech House range 124-132, with tolerance 119-137. BPM 119 ≥ 119 → plausible
+    // 11. Daniel Stefanik - #four: BPM 119 makes Techno implausible, Tech House plausible
     #[test]
     fn collection_stefanik_four_bpm_prefers_tech_house() {
         let ev = TrackEvidence {
@@ -1789,7 +1676,6 @@ mod tests {
             Some("Techno"),
             "Techno is BPM-implausible at 119, should prefer a plausible alternative"
         );
-        // Tech House or House are both acceptable
         assert!(
             result.genre == Some("Tech House") || result.genre == Some("House"),
             "Should prefer BPM-plausible Tech House or House over implausible Techno, got {:?}",
@@ -1831,8 +1717,7 @@ mod tests {
     }
 
     // 13. Flying Lotus - ...And The World Laughs With You: enrichment overrides bass veto
-    // Discogs: Downtempo, Experimental, IDM. Beatport: unmapped. Audio: 165bpm, low-energy, irregular.
-    // Bass veto should NOT fire because enrichment points to Downtempo/IDM family, not bass.
+    // Enrichment says Downtempo/IDM, not bass — veto should not fire despite 165bpm.
     #[test]
     fn collection_flylo_enrichment_overrides_bass_veto() {
         let ev = TrackEvidence {
@@ -1855,7 +1740,7 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None, // "Electronica" doesn't map
+            beatport_genre: None, // "Electronica" unmapped
             beatport_raw: Some("Electronica".into()),
             label: None,
             label_genre: None,
@@ -1878,7 +1763,6 @@ mod tests {
             Some("Breakbeat"),
             "Bass veto should not override enrichment that says IDM/Experimental/Downtempo"
         );
-        // IDM, Experimental, or Downtempo are all acceptable
         let acceptable = [Some("IDM"), Some("Experimental"), Some("Downtempo")];
         assert!(
             acceptable.contains(&result.genre),
@@ -2004,7 +1888,6 @@ mod tests {
             Some("Electro"),
             "At 154bpm, Electro is implausible even with low energy"
         );
-        // Jungle, Breakbeat, or Drum & Bass would be acceptable
         let bass_family = [Some("Jungle"), Some("Breakbeat"), Some("Drum & Bass")];
         assert!(
             bass_family.contains(&result.genre),
@@ -2164,11 +2047,7 @@ mod tests {
         assert_eq!(result.action, ClassificationAction::Conflict);
     }
 
-    // H5: Conflicting enrichment sources resolved by audio tiebreaker
-    // Discogs says House, Beatport says Techno — cross-family disagreement.
-    // Votes: Beatport Techno=1.0, Discogs House=0.9 → margin/total ≈ 0.053 → close contest.
-    // Audio: 130bpm, dancefloor energy, regular rhythm → favors Techno family.
-    // Expected: Techno wins at Low confidence with "audio-assisted-tiebreak" flag.
+    // H5: Cross-family conflict (Discogs House vs Beatport Techno) resolved by audio tiebreaker
     #[test]
     fn test_conflicting_enrichment_resolved_by_audio() {
         let ev = TrackEvidence {
@@ -2189,9 +2068,9 @@ mod tests {
                 rekordbox_bpm: 130.0,
                 stratum_bpm: Some(130.0),
                 bpm_agreement: Some(true),
-                danceability: Some(2.2),       // dancefloor bucket
-                dynamic_complexity: Some(3.0), // not ambient/atmospheric
-                rhythm_regularity: Some(0.92), // regular — no broken flag
+                danceability: Some(2.2),
+                dynamic_complexity: Some(3.0),
+                rhythm_regularity: Some(0.92),
                 spectral_centroid_mean: Some(1800.0),
             }),
             has_discogs: true,

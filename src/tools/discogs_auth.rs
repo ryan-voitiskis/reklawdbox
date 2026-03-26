@@ -4,7 +4,6 @@ use crate::beatport;
 use crate::discogs;
 use crate::store;
 
-/// Resolved session state for broker-based Discogs access.
 enum SessionState {
     /// A persisted session token that hasn't expired yet.
     Valid(String),
@@ -14,7 +13,6 @@ enum SessionState {
     None,
 }
 
-/// Resolved pending device-auth state.
 enum PendingState {
     /// User has authorized in-browser; ready to finalize.
     Authorized(discogs::PendingDeviceSession),
@@ -26,7 +24,7 @@ enum PendingState {
     None,
 }
 
-/// Pure function: examine persisted session and return session state.
+/// Pure: no I/O or mutation.
 fn resolve_session_state(
     persisted: Option<&store::BrokerDiscogsSession>,
     now: i64,
@@ -40,7 +38,7 @@ fn resolve_session_state(
     }
 }
 
-/// Pure function: examine pending device-auth flow and broker status response.
+/// Pure: no I/O or mutation.
 fn resolve_pending_state(
     pending: Option<&discogs::PendingDeviceSession>,
     status: Option<&str>,
@@ -57,8 +55,7 @@ fn resolve_pending_state(
     }
 }
 
-/// Fetch the pending device-auth state, making a broker status call only when
-/// a non-expired pending session exists.
+/// Only makes a broker status call when a non-expired pending session exists.
 async fn fetch_pending_state(
     server: &ReklawdboxServer,
     cfg: &discogs::BrokerConfig,
@@ -97,8 +94,6 @@ async fn fetch_pending_state(
     ))
 }
 
-/// Handle the resolved pending state: finalize, return auth-required, or
-/// start a new session.
 async fn dispatch_pending(
     server: &ReklawdboxServer,
     cfg: &discogs::BrokerConfig,
@@ -258,7 +253,6 @@ pub(super) async fn lookup_discogs_remote(
                 SessionState::None => {}
             }
 
-            // No valid session — check pending device-auth state
             let pending = fetch_pending_state(server, &cfg, now).await?;
             return dispatch_pending(server, &cfg, pending, artist, title, album).await;
         }

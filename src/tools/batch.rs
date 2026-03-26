@@ -1,4 +1,3 @@
-/// Shared progress counters and failure tracking for batch operations.
 pub(super) struct BatchProgress {
     pub(super) processed: usize,
     pub(super) cached: usize,

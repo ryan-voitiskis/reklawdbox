@@ -30,8 +30,6 @@ use std::sync::OnceLock;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
-/// Resolve the project root directory.
-///
 /// Checks, in order:
 /// 1. `REKLAWDBOX_PROJECT_ROOT` env var
 /// 2. Ancestor of the running binary (works when binary is at `target/{profile}/reklawdbox`)

@@ -28,7 +28,6 @@ pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("reklawdbox").join(CONFIG_FILENAME))
 }
 
-/// Load the config file, returning `Config::default()` if it doesn't exist.
 /// Warns on stderr if the file exists but cannot be read or parsed.
 pub fn load() -> Config {
     let Some(path) = config_path() else {
@@ -54,9 +53,6 @@ pub fn load() -> Config {
     }
 }
 
-/// Populate environment variables from the config file.
-/// Only sets variables that are not already present in the environment.
-///
 /// SAFETY: must be called from main() before any threads are spawned.
 pub unsafe fn load_into_env() {
     let cfg = load();
@@ -72,8 +68,7 @@ pub unsafe fn load_into_env() {
     }
 }
 
-/// Write a config to disk, creating the directory if needed.
-/// Sets owner-only permissions (0600) on the config file.
+/// Sets owner-only permissions (0600) on the written file.
 pub fn save(cfg: &Config) -> Result<(), String> {
     let path = config_path().ok_or("Could not determine config directory")?;
     if let Some(parent) = path.parent() {

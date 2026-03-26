@@ -21,8 +21,6 @@ pub(super) fn get_fresh_analysis_entry(
     }
 }
 
-/// Check analysis cache. Returns `Some(json_string)` on valid hit (matching
-/// schema_version), `None` on miss.
 pub(super) fn check_analysis_cache(
     store: &Connection,
     raw_file_path: &str,
@@ -38,7 +36,6 @@ pub(super) fn check_analysis_cache(
     }
 }
 
-/// Decode audio and run stratum-dsp analysis (uses `spawn_blocking`).
 pub(super) async fn analyze_stratum(file_path: &str) -> Result<audio::StratumResult, String> {
     let path = file_path.to_string();
     let (samples, sample_rate) =

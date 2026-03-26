@@ -130,7 +130,6 @@ fn is_sampler_path(path: &str) -> bool {
     path.contains(SAMPLER_PATH_FRAGMENT)
 }
 
-/// Validate that a string is a valid ISO date (YYYY-MM-DD) with real calendar values.
 pub fn validate_iso_date(s: &str, field: &str) -> Result<String, String> {
     let err = || format!("{field} must be a valid ISO date (YYYY-MM-DD), got: {s:?}");
     let b = s.as_bytes();
@@ -298,7 +297,6 @@ fn apply_search_filters(
         bind_values.push(Box::new(sampler_path_like_pattern()));
     }
 
-    // Playlist filter: join through djmdSongPlaylist
     if let Some(ref playlist_id) = params.playlist {
         let idx = bind_values.len() + 1;
         sql.push_str(&format!(
@@ -502,13 +500,12 @@ pub(crate) fn content_roots(
         return Ok(Vec::new());
     }
 
-    // Extract parent directory for each path (strip the filename component).
     let dirs: Vec<Vec<&str>> = paths
         .iter()
         .filter_map(|p| {
             let trimmed = p.trim_end_matches('/');
             let last_slash = trimmed.rfind('/')?;
-            let parent = &p[..=last_slash]; // include trailing slash
+            let parent = &p[..=last_slash];
             Some(
                 parent
                     .split('/')
@@ -522,7 +519,6 @@ pub(crate) fn content_roots(
         return Ok(Vec::new());
     }
 
-    // Find the longest common prefix (by path segments).
     let mut common = dirs[0].clone();
     for dir in &dirs[1..] {
         let len = common
@@ -534,13 +530,11 @@ pub(crate) fn content_roots(
     }
     let common_depth = common.len();
 
-    // If common prefix is at least 2 segments deep (e.g. /Users/testuser/Music), return it.
     if common_depth >= 2 {
         let root = format!("/{}/", common.join("/"));
         return Ok(vec![root]);
     }
 
-    // Otherwise, collect distinct directories at common_depth + 1.
     let mut roots: Vec<String> = dirs
         .iter()
         .filter_map(|segments| {
@@ -759,7 +753,6 @@ pub fn get_sessions(
         return Ok(vec![]);
     }
 
-    // Batch-compute durations for returned session IDs
     let placeholders: Vec<String> = (1..=sessions.len()).map(|i| format!("?{i}")).collect();
     let duration_sql = format!(
         "SELECT sh.HistoryID,
@@ -849,7 +842,6 @@ pub fn get_play_stats(
 ) -> Result<Vec<TrackPlayStats>, rusqlite::Error> {
     let limit = limit.unwrap_or(200).min(500);
 
-    // Played tracks
     let mut sql = String::from(
         "SELECT c.ID AS TrackID, COALESCE(c.Title, '') AS Title, COALESCE(a.Name, '') AS ArtistName,
            COUNT(sh.ID) AS PlayCount, COUNT(DISTINCT sh.HistoryID) AS SessionCount,
@@ -896,7 +888,6 @@ pub fn get_play_stats(
         })?
         .collect::<Result<_, _>>()?;
 
-    // Unplayed tracks
     if include_unplayed {
         let mut unplayed_sql = String::from(
             "SELECT c.ID AS TrackID, COALESCE(c.Title, '') AS Title, COALESCE(a.Name, '') AS ArtistName
@@ -949,8 +940,6 @@ pub fn default_db_path() -> Option<String> {
     }
 }
 
-/// Return the set of `FolderPath` values from `djmdContent` under a scope prefix.
-/// Only non-deleted rows (`rb_local_deleted = 0`) are included.
 pub fn paths_imported_in_scope(
     conn: &Connection,
     scope: &str,
@@ -981,7 +970,6 @@ pub fn resolve_db_path() -> Option<String> {
 // Library health queries
 // ---------------------------------------------------------------------------
 
-/// A track's path info for broken link scanning.
 #[derive(Clone)]
 pub(crate) struct TrackPathEntry {
     pub id: String,
@@ -990,21 +978,18 @@ pub(crate) struct TrackPathEntry {
     pub path: String,
 }
 
-/// Result of playlist coverage query.
 pub(crate) struct PlaylistCoverageResult {
     pub tracks: Vec<Track>,
     pub uncovered_count: i64,
     pub total_tracks: i64,
 }
 
-/// A group of tracks sharing the same artist + title (metadata duplicates).
 pub(crate) struct DuplicateGroup {
     pub artist: String,
     pub title: String,
     pub track_ids: Vec<String>,
 }
 
-/// Tracks not in any playlist.
 pub(crate) fn tracks_not_in_any_playlist(
     conn: &Connection,
     search: &SearchParams,
@@ -1018,7 +1003,6 @@ pub(crate) fn tracks_not_in_any_playlist(
          LEFT JOIN djmdColor col ON c.ColorID = col.ID \
          LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID";
 
-    // 1. Total tracks matching filters
     let mut total_sql =
         format!("SELECT COUNT(*) FROM djmdContent c {filter_joins} WHERE c.rb_local_deleted = 0");
     let mut total_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
@@ -1028,7 +1012,6 @@ pub(crate) fn tracks_not_in_any_playlist(
     let total_tracks: i64 =
         conn.query_row(&total_sql, total_params.as_slice(), |row| row.get(0))?;
 
-    // 2. Count uncovered tracks
     let mut uncov_sql = format!(
         "SELECT COUNT(*) FROM djmdContent c {filter_joins} \
          WHERE c.rb_local_deleted = 0 \
@@ -1041,7 +1024,6 @@ pub(crate) fn tracks_not_in_any_playlist(
     let uncovered_count: i64 =
         conn.query_row(&uncov_sql, uncov_params.as_slice(), |row| row.get(0))?;
 
-    // 3. Fetch tracks page
     let mut sql = format!(
         "{TRACK_SELECT} WHERE c.rb_local_deleted = 0 \
          AND NOT EXISTS (SELECT 1 FROM djmdSongPlaylist sp WHERE sp.ContentID = c.ID)"
@@ -1126,8 +1108,6 @@ pub(crate) fn find_metadata_duplicates(
         .collect())
 }
 
-/// Get all track paths for broken link scanning.
-/// Excludes samplers. Optional path_prefix scope.
 pub(crate) fn all_track_paths(
     conn: &Connection,
     path_prefix: Option<&str>,
@@ -1165,7 +1145,6 @@ pub(crate) fn all_track_paths(
     .collect()
 }
 
-/// Count playlist memberships for a set of track IDs.
 pub(crate) fn playlist_membership_counts(
     conn: &Connection,
     track_ids: &[String],
@@ -1201,8 +1180,6 @@ pub(crate) fn playlist_membership_counts(
     Ok(result)
 }
 
-/// Open a real Rekordbox DB from the backup tarball for integration tests.
-/// Returns None if the tarball is missing (allows graceful skip on CI).
 #[cfg(test)]
 pub(crate) fn open_real_db() -> Option<Connection> {
     use std::path::Path;
@@ -1223,7 +1200,6 @@ pub(crate) fn open_real_db() -> Option<Connection> {
     let dest = "/tmp/reklawdbox-test";
     let db_path = format!("{dest}/master.db");
 
-    // Ensure extraction happens exactly once across all test threads
     let ok = EXTRACTED.get_or_init(|| {
         if Path::new(&db_path).exists() {
             return true;
@@ -1413,7 +1389,7 @@ mod tests {
         let conn = create_test_db();
         let params = SearchParams::default();
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 6); // includes sampler track
+        assert_eq!(tracks.len(), 6);
     }
 
     #[test]
@@ -1424,7 +1400,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 5); // sampler track excluded
+        assert_eq!(tracks.len(), 5);
         assert!(!tracks.iter().any(|t| t.file_path.contains("Sampler")));
     }
 
@@ -1436,7 +1412,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 2); // Archangel + Endorphin
+        assert_eq!(tracks.len(), 2);
         assert!(tracks.iter().all(|t| t.genre == "Dubstep"));
     }
 
@@ -1449,7 +1425,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 2); // 139.5 and 140.0
+        assert_eq!(tracks.len(), 2);
         assert!(tracks.iter().all(|t| t.bpm >= 130.0 && t.bpm <= 145.0));
     }
 
@@ -1461,7 +1437,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 1); // Unknown Track has no genre
+        assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].title, "Unknown Track");
     }
 
@@ -1473,7 +1449,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 2); // Archangel (4 stars) + Endorphin (3 stars)
+        assert_eq!(tracks.len(), 2);
     }
 
     #[test]
@@ -1512,13 +1488,12 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 2); // Archangel + R.I.P.
+        assert_eq!(tracks.len(), 2);
     }
 
     #[test]
     fn test_search_by_path_substring() {
         let conn = create_test_db();
-        // Substring: "Burial" matches t1 and t2 (anywhere in path)
         let params = SearchParams {
             path: Some("Burial".to_string()),
             ..Default::default()
@@ -1531,7 +1506,6 @@ mod tests {
     #[test]
     fn test_search_by_path_prefix() {
         let conn = create_test_db();
-        // Prefix: scopes to /Users/testuser/Music/Burial/ — matches t1 and t2
         let params = SearchParams {
             path_prefix: Some("/Users/testuser/Music/Burial/".to_string()),
             ..Default::default()
@@ -1548,7 +1522,6 @@ mod tests {
     #[test]
     fn test_path_prefix_excludes_substring_matches() {
         let conn = create_test_db();
-        // "Music" appears in all paths as a substring but none start with it.
         let params = SearchParams {
             path_prefix: Some("Music".to_string()),
             ..Default::default()
@@ -1556,7 +1529,6 @@ mod tests {
         let tracks = search_tracks(&conn, &params).unwrap();
         assert_eq!(tracks.len(), 0);
 
-        // Same term with substring match finds all 6 tracks.
         let params = SearchParams {
             path: Some("Music".to_string()),
             ..Default::default()
@@ -1568,7 +1540,6 @@ mod tests {
     #[test]
     fn test_path_prefix_scopes_to_user_root() {
         let conn = create_test_db();
-        // /Users/testuser/ matches t1-t5 but not t6 (/Users/alice/)
         let params = SearchParams {
             path_prefix: Some("/Users/testuser/".to_string()),
             ..Default::default()
@@ -1585,13 +1556,12 @@ mod tests {
     #[test]
     fn test_path_prefix_escapes_like_chars() {
         let conn = create_test_db();
-        // A prefix containing LIKE wildcards should be escaped, not interpreted.
         let params = SearchParams {
             path_prefix: Some("/Users/%/Music".to_string()),
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 0); // literal "%" doesn't appear in any path
+        assert_eq!(tracks.len(), 0);
     }
 
     #[test]
@@ -1665,21 +1635,18 @@ mod tests {
     #[test]
     fn test_library_stats() {
         let conn = create_test_db();
-        // Default: excludes samples
         let stats = get_library_stats(&conn).unwrap();
-        assert_eq!(stats.total_tracks, 5); // sampler excluded
+        assert_eq!(stats.total_tracks, 5);
         assert_eq!(stats.rated_count, 3);
         assert_eq!(stats.unrated_count, 2);
-        assert_eq!(stats.playlist_count, 1); // only non-folder playlists
+        assert_eq!(stats.playlist_count, 1);
         assert!(stats.avg_bpm > 0.0);
         assert!(!stats.genres.is_empty());
         assert!(!stats.key_distribution.is_empty());
-        // All non-sampler tracks share /Users/testuser/Music/
         assert_eq!(stats.content_roots, vec!["/Users/testuser/Music/"]);
 
-        // With samples included — paths diverge at /Users/ level
         let stats_all = get_library_stats_filtered(&conn, false).unwrap();
-        assert_eq!(stats_all.total_tracks, 6); // includes sampler
+        assert_eq!(stats_all.total_tracks, 6);
         assert_eq!(
             stats_all.content_roots,
             vec!["/Users/alice/", "/Users/testuser/"]
@@ -1719,7 +1686,6 @@ mod tests {
     #[test]
     fn test_get_tracks_by_ids() {
         let conn = create_test_db();
-        // Request t3 before t1 — verify caller order is preserved.
         let tracks = get_tracks_by_ids(&conn, &["t3".to_string(), "t1".to_string()]).unwrap();
         assert_eq!(tracks.len(), 2);
         assert_eq!(tracks[0].id, "t3");
@@ -1741,10 +1707,9 @@ mod tests {
     fn test_get_sessions() {
         let conn = create_test_db();
         let sessions = get_sessions(&conn, None, None).unwrap();
-        // Should return h1, h2 (not folder hf1), ordered by DateCreated desc
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].id, "h1"); // 2025-03-01
-        assert_eq!(sessions[1].id, "h2"); // 2025-02-15
+        assert_eq!(sessions[0].id, "h1");
+        assert_eq!(sessions[1].id, "h2");
         assert_eq!(sessions[0].track_count, 3);
         assert_eq!(sessions[1].track_count, 1);
     }
@@ -1762,7 +1727,7 @@ mod tests {
         let conn = create_test_db();
         let sessions = get_sessions(&conn, Some(1), None).unwrap();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "h1"); // most recent
+        assert_eq!(sessions[0].id, "h1");
     }
 
     #[test]
@@ -1770,9 +1735,7 @@ mod tests {
         let conn = create_test_db();
         let sessions = get_sessions(&conn, None, None).unwrap();
         let h1 = &sessions[0];
-        // h1 span: 22:00 to 22:10 = 600s + last track length (t2=300s) = 900s
         assert_eq!(h1.duration_seconds, Some(900));
-        // h2 has only 1 track — duration should be None
         let h2 = &sessions[1];
         assert_eq!(h2.duration_seconds, None);
     }
@@ -1805,11 +1768,9 @@ mod tests {
         let conn = create_test_db();
         let params = SearchParams::default();
         let stats = get_play_stats(&conn, &params, false, None).unwrap();
-        // t1 played in h1 + h2 = 2 times, 2 sessions
         let t1 = stats.iter().find(|s| s.track_id == "t1").unwrap();
         assert_eq!(t1.play_count, 2);
         assert_eq!(t1.session_count, 2);
-        // t3 played in h1 = 1 time
         let t3 = stats.iter().find(|s| s.track_id == "t3").unwrap();
         assert_eq!(t3.play_count, 1);
         assert_eq!(t3.session_count, 1);
@@ -1823,7 +1784,6 @@ mod tests {
             ..Default::default()
         };
         let stats = get_play_stats(&conn, &params, false, None).unwrap();
-        // Only t1 and t2 are Dubstep; t2 is in h1, t1 is in h1+h2
         assert_eq!(stats.len(), 2);
         assert!(
             stats
@@ -1840,7 +1800,6 @@ mod tests {
             ..Default::default()
         };
         let stats = get_play_stats(&conn, &params, true, None).unwrap();
-        // Played: t1, t2, t3 (3 tracks). Unplayed (non-sampler): t4, t5 (2 tracks).
         let unplayed: Vec<_> = stats.iter().filter(|s| s.play_count == 0).collect();
         assert_eq!(unplayed.len(), 2);
         assert!(unplayed.iter().any(|s| s.track_id == "t4"));
@@ -1868,7 +1827,6 @@ mod tests {
             ..Default::default()
         };
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        // t1, t3 are in p1; t2, t4, t5 are not (t6 is sampler, excluded)
         assert_eq!(result.total_tracks, 5);
         assert_eq!(result.uncovered_count, 3);
         assert_eq!(result.tracks.len(), 3);
@@ -1883,8 +1841,8 @@ mod tests {
         let conn = create_test_db();
         let search = SearchParams::default();
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        assert_eq!(result.total_tracks, 6); // includes sampler
-        assert_eq!(result.uncovered_count, 4); // t2, t4, t5, t6
+        assert_eq!(result.total_tracks, 6);
+        assert_eq!(result.uncovered_count, 4);
     }
 
     #[test]
@@ -1900,8 +1858,8 @@ mod tests {
             ..Default::default()
         };
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        assert_eq!(result.total_tracks, 4); // was 5, t2 deleted
-        assert_eq!(result.uncovered_count, 2); // t4, t5 (t2 deleted)
+        assert_eq!(result.total_tracks, 4);
+        assert_eq!(result.uncovered_count, 2);
         assert!(!result.tracks.iter().any(|t| t.id == "t2"));
     }
 
@@ -1909,15 +1867,14 @@ mod tests {
     fn test_all_track_paths() {
         let conn = create_test_db();
         let entries = all_track_paths(&conn, None).unwrap();
-        assert_eq!(entries.len(), 5); // excludes sampler t6
-        // Verify field mapping is correct
+        assert_eq!(entries.len(), 5);
         let t1 = entries.iter().find(|e| e.id == "t1").unwrap();
         assert_eq!(t1.artist, "Burial");
         assert_eq!(t1.title, "Archangel");
         assert!(t1.path.contains("Archangel"));
 
         let entries = all_track_paths(&conn, Some("/Users/testuser/Music/Burial/")).unwrap();
-        assert_eq!(entries.len(), 2); // t1, t2
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]
@@ -1947,7 +1904,6 @@ mod tests {
     #[test]
     fn test_find_metadata_duplicates_case_insensitive() {
         let conn = create_test_db();
-        // Insert duplicate with different casing and whitespace
         conn.execute(
             "INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at) \
              VALUES ('t1_dup', '  ARCHANGEL  ', 'a1', 'g1', 13950, 240, '/Users/testuser/Music/Burial/Archangel_copy.flac', 320, 44100, 5, '2023-05-01')",
@@ -1965,9 +1921,9 @@ mod tests {
         let conn = create_test_db();
         let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
         let counts = playlist_membership_counts(&conn, &ids).unwrap();
-        assert_eq!(counts.get("t1"), Some(&1)); // in p1
-        assert_eq!(counts.get("t3"), Some(&1)); // in p1
-        assert_eq!(counts.get("t2"), None); // not in any playlist
+        assert_eq!(counts.get("t1"), Some(&1));
+        assert_eq!(counts.get("t3"), Some(&1));
+        assert_eq!(counts.get("t2"), None);
     }
 
     // ==================== Integration tests (real DB) — history ====================
@@ -1999,7 +1955,6 @@ mod tests {
             "session {} has no tracks",
             sessions[0].id
         );
-        // Verify positions are sequential
         for (i, t) in tracks.iter().enumerate() {
             assert_eq!(
                 t.position,
@@ -2009,7 +1964,6 @@ mod tests {
         }
     }
 
-    /// Load all tracks from the DB by paging with OFFSET.
     fn load_all_tracks(conn: &Connection) -> Vec<Track> {
         let mut all = Vec::new();
         let page_size = 200;
@@ -2078,7 +2032,6 @@ mod tests {
     #[ignore]
     fn test_real_db_schema_columns() {
         let conn = open_real_db().expect("backup tarball not found");
-        // Verify critical columns exist by running a minimal query on each
         let checks = [
             (
                 "djmdContent",
@@ -2125,7 +2078,6 @@ mod tests {
     fn test_real_db_search_returns_results() {
         let conn = open_real_db().expect("backup tarball not found");
 
-        // Unfiltered search
         let params = SearchParams {
             limit: Some(10),
             ..Default::default()
@@ -2133,7 +2085,6 @@ mod tests {
         let tracks = search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "unfiltered search returned no results");
 
-        // BPM range search
         let params = SearchParams {
             bpm_min: Some(120.0),
             bpm_max: Some(130.0),
@@ -2163,28 +2114,24 @@ mod tests {
         let tracks = search_tracks(&conn, &params).unwrap();
 
         for t in &tracks {
-            // BPM: 0 (unanalyzed) or 30-300 reasonable range
             assert!(
                 t.bpm == 0.0 || (t.bpm >= 30.0 && t.bpm <= 300.0),
                 "track '{}' has unreasonable BPM: {}",
                 t.title,
                 t.bpm
             );
-            // Rating: 0-5
             assert!(
                 t.rating <= 5,
                 "track '{}' has invalid rating: {}",
                 t.title,
                 t.rating
             );
-            // Length: should be positive for real tracks
             assert!(
                 t.length > 0,
                 "track '{}' has non-positive length: {}",
                 t.title,
                 t.length
             );
-            // file_path should be non-empty
             assert!(
                 !t.file_path.is_empty(),
                 "track '{}' has empty file_path",
@@ -2198,7 +2145,6 @@ mod tests {
     fn test_real_db_null_handling() {
         let conn = open_real_db().expect("backup tarball not found");
 
-        // has_genre=false should work without panic
         let params = SearchParams {
             has_genre: Some(false),
             limit: Some(50),
@@ -2214,7 +2160,6 @@ mod tests {
             );
         }
 
-        // has_genre=true
         let params = SearchParams {
             has_genre: Some(true),
             limit: Some(50),
@@ -2236,13 +2181,11 @@ mod tests {
         let conn = open_real_db().expect("backup tarball not found");
         let all = load_all_tracks(&conn);
 
-        // Find any tracks with non-ASCII characters
         let unicode_tracks: Vec<_> = all
             .iter()
             .filter(|t| !t.title.is_ascii() || !t.artist.is_ascii())
             .collect();
 
-        // Verify they survive serde round-trip
         for t in &unicode_tracks {
             let json = serde_json::to_string(t).unwrap();
             let back: crate::types::Track = serde_json::from_str(&json).unwrap();
@@ -2250,7 +2193,6 @@ mod tests {
             assert_eq!(t.artist, back.artist, "unicode artist round-trip failed");
         }
 
-        // Even if no unicode tracks exist, no panic means success
     }
 
     #[test]
@@ -2262,13 +2204,11 @@ mod tests {
 
         let has_folder = playlists.iter().any(|p| p.is_folder);
         let has_regular = playlists.iter().any(|p| !p.is_folder && !p.is_smart);
-        // At least one type should exist
         assert!(
             has_folder || has_regular,
             "no folders or regular playlists found"
         );
 
-        // For regular playlists with tracks, verify track loading
         for p in playlists
             .iter()
             .filter(|p| !p.is_folder && p.track_count > 0)
@@ -2289,7 +2229,6 @@ mod tests {
     fn test_real_db_get_track_by_id() {
         let conn = open_real_db().expect("backup tarball not found");
 
-        // Get a track via search, then fetch by ID
         let params = SearchParams {
             limit: Some(1),
             ..Default::default()
@@ -2311,7 +2250,6 @@ mod tests {
         let conn = open_real_db().expect("backup tarball not found");
         let stats = get_library_stats(&conn).unwrap();
 
-        // rated + unrated = total
         assert_eq!(
             stats.rated_count + stats.unrated_count,
             stats.total_tracks,
@@ -2321,7 +2259,6 @@ mod tests {
             stats.total_tracks
         );
 
-        // genre counts sum to total
         let genre_sum: i32 = stats.genres.iter().map(|g| g.count).sum();
         assert_eq!(
             genre_sum, stats.total_tracks,
@@ -2329,7 +2266,6 @@ mod tests {
             stats.total_tracks
         );
 
-        // key counts sum to total
         let key_sum: i32 = stats.key_distribution.iter().map(|k| k.count).sum();
         assert_eq!(
             key_sum, stats.total_tracks,
@@ -2372,7 +2308,6 @@ mod tests {
         let all = load_all_tracks(&conn);
         assert!(all.len() > 2000, "expected >2000 tracks, got {}", all.len());
 
-        // Every track should have a non-empty ID
         for t in &all {
             assert!(!t.id.is_empty(), "track has empty ID");
         }
@@ -2399,7 +2334,6 @@ mod tests {
                 limit: Some(5),
                 ..Default::default()
             };
-            // Should not panic or error
             let result = search_tracks(&conn, &params);
             assert!(result.is_ok(), "search panicked on input: {input:?}");
         }
@@ -2413,7 +2347,6 @@ mod tests {
         let stats_filtered = get_library_stats(&conn).unwrap();
         let stats_all = get_library_stats_filtered(&conn, false).unwrap();
 
-        // Filtered count should be less than or equal to unfiltered
         assert!(
             stats_filtered.total_tracks <= stats_all.total_tracks,
             "filtered {} > unfiltered {}",
@@ -2421,14 +2354,12 @@ mod tests {
             stats_all.total_tracks
         );
 
-        // Verify the difference is the sampler tracks
         let diff = stats_all.total_tracks - stats_filtered.total_tracks;
         eprintln!(
             "[integration] Sample exclusion: {} sampler tracks filtered out",
             diff
         );
 
-        // Search with exclude_samples=true should not return sampler paths
         let params = SearchParams {
             exclude_samples: true,
             limit: Some(200),
@@ -2473,7 +2404,6 @@ mod tests {
             eprintln!("  {g}");
         }
 
-        // Most tracks should be canonical or alias-able
         assert!(
             alias_count > 100,
             "expected >100 alias-able tracks, got {alias_count}"

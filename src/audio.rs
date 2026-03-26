@@ -13,19 +13,14 @@ use symphonia::default::get_probe;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
-    /// File I/O failures (open, path resolution, not found).
     #[error("{0}")]
     Io(String),
-    /// Symphonia probe/decode/format failures.
     #[error("{0}")]
     Decode(String),
-    /// Essentia subprocess spawn/exit/stderr failures.
     #[error("{0}")]
     Subprocess(String),
-    /// Essentia JSON output parse failures.
     #[error("{0}")]
     Parse(String),
-    /// stratum-dsp analysis errors.
     #[error("{0}")]
     Analysis(String),
 }
@@ -53,12 +48,11 @@ pub struct StratumResult {
     pub warnings: Vec<String>,
 }
 
-/// Audio file extensions accepted by all directory scanners.
 pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["flac", "wav", "mp3", "m4a", "aac", "aiff"];
 
-/// Canonical analyzer name for stratum-dsp (used as DB cache key).
+/// DB cache key for stratum-dsp.
 pub const ANALYZER_STRATUM: &str = "stratum-dsp";
-/// Canonical analyzer name for Essentia (used as DB cache key).
+/// DB cache key for Essentia.
 pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
@@ -639,8 +633,6 @@ mod tests {
 
     #[test]
     fn stratum_notation_to_camelot_converts_all_major_keys() {
-        // stratum-dsp A (major) → standard Camelot B (major)
-        // number = (stratum + 6) % 12 + 1
         assert_eq!(stratum_notation_to_camelot("1A"), "8B"); // C
         assert_eq!(stratum_notation_to_camelot("2A"), "9B"); // G
         assert_eq!(stratum_notation_to_camelot("3A"), "10B"); // D
@@ -657,7 +649,6 @@ mod tests {
 
     #[test]
     fn stratum_notation_to_camelot_converts_all_minor_keys() {
-        // stratum-dsp B (minor) → standard Camelot A (minor)
         assert_eq!(stratum_notation_to_camelot("1B"), "8A"); // Am
         assert_eq!(stratum_notation_to_camelot("2B"), "9A"); // Em
         assert_eq!(stratum_notation_to_camelot("3B"), "10A"); // Bm
@@ -1087,7 +1078,6 @@ def column_stack(cols):
     #[test]
     #[ignore]
     fn test_real_audio_analysis() {
-        // Find a real track from the Rekordbox DB
         let conn = crate::db::open_real_db().expect("backup tarball not found");
         let params = crate::db::SearchParams {
             query: None,
@@ -1113,7 +1103,6 @@ def column_stack(cols):
         let tracks = crate::db::search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "no tracks found for analysis test");
 
-        // Find a track whose file actually exists
         let track = tracks
             .iter()
             .find(|t| {
@@ -1202,7 +1191,6 @@ def column_stack(cols):
     #[test]
     #[ignore]
     fn test_audio_analysis_cache_round_trip() {
-        // Analyze a real track, verify it can be cached and retrieved
         let conn = crate::db::open_real_db().expect("backup tarball not found");
         let params = crate::db::SearchParams {
             query: None,
@@ -1248,12 +1236,10 @@ def column_stack(cols):
                 .to_string()
         };
 
-        // Decode + analyze
         let (samples, sample_rate) = decode_to_samples(&file_path).unwrap();
         let result = analyze_with_stratum(&samples, sample_rate).unwrap();
         let features_json = serde_json::to_string(&result).unwrap();
 
-        // Write to a temp store
         let dir = tempfile::tempdir().unwrap();
         let store_path = dir.path().join("test-cache.sqlite3");
         let store_conn = crate::store::open(store_path.to_str().unwrap()).unwrap();
@@ -1278,7 +1264,6 @@ def column_stack(cols):
         )
         .unwrap();
 
-        // Read back
         let cached = crate::store::get_audio_analysis(&store_conn, &file_path, "stratum-dsp")
             .unwrap()
             .expect("should find cached entry");

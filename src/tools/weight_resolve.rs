@@ -3,10 +3,6 @@ use rusqlite::Connection;
 use super::params::*;
 use super::scoring::{PoolWeights, PriorityWeights};
 
-// ---------------------------------------------------------------------------
-// Transition weight resolution
-// ---------------------------------------------------------------------------
-
 pub(super) fn resolve_transition_weights(
     spec: Option<&TransitionWeightSpec>,
     store: &Connection,
@@ -36,7 +32,6 @@ pub(super) fn resolve_transition_weights(
 }
 
 fn resolve_transition_named(name: &str, store: &Connection) -> Result<PriorityWeights, String> {
-    // Try built-in first
     match name {
         "balanced" => {
             return Ok(super::scoring::priority_weights(
@@ -53,7 +48,6 @@ fn resolve_transition_named(name: &str, store: &Connection) -> Result<PriorityWe
         _ => {}
     }
 
-    // Try saved preset
     let json = crate::store::get_weight_preset(store, name, "transition")
         .map_err(|e| format!("DB error: {e}"))?
         .ok_or_else(|| {
@@ -124,10 +118,6 @@ pub(super) fn renormalize_transition(w: &mut PriorityWeights) -> Result<(), Stri
     w.rhythm /= sum;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Pool weight resolution
-// ---------------------------------------------------------------------------
 
 pub(super) fn resolve_pool_weights(
     spec: Option<&PoolWeightSpec>,
@@ -238,10 +228,6 @@ pub(super) fn renormalize_pool(w: &mut PoolWeights) -> Result<(), String> {
     w.rhythm /= sum;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Serialization helpers (for saving presets)
-// ---------------------------------------------------------------------------
 
 pub(super) fn transition_weights_to_json(w: &PriorityWeights) -> serde_json::Value {
     serde_json::json!({

@@ -279,7 +279,6 @@ fn batch_enrichment_query(
     if artists.is_empty() {
         return Ok(HashSet::new());
     }
-    // Reserve 1 bind var for provider, rest for the IN list.
     const MAX_IN_VARS: usize = 899;
     let mut result = HashSet::new();
     for chunk in artists.chunks(MAX_IN_VARS) {
@@ -306,7 +305,6 @@ fn batch_enrichment_query(
     Ok(result)
 }
 
-/// Batch existence check for enrichment cache entries.
 pub fn batch_enrichment_existence(
     conn: &Connection,
     provider: &str,
@@ -414,8 +412,6 @@ pub fn get_audio_analysis(
     }
 }
 
-/// Batch existence check for audio analysis cache entries.
-/// Returns `(file_path, analyzer)` pairs present in the cache.
 pub fn batch_audio_analysis_existence(
     conn: &Connection,
     file_paths: &[&str],
@@ -652,7 +648,6 @@ pub fn get_broker_discogs_session(
         )?;
     }
 
-    // Fetch the real token from Keychain.
     match crate::keychain::get_session_token(broker_url) {
         Ok(Some(token)) => {
             session.session_token = token;
@@ -868,9 +863,9 @@ pub fn get_audit_issues(
 ) -> Result<Vec<AuditIssue>, rusqlite::Error> {
     let pattern = format!("{}%", escape_like(scope));
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    param_values.push(Box::new(pattern)); // ?1
-    param_values.push(Box::new(limit)); // ?2
-    param_values.push(Box::new(offset)); // ?3
+    param_values.push(Box::new(pattern));
+    param_values.push(Box::new(limit));
+    param_values.push(Box::new(offset));
 
     let mut conditions = String::new();
     if let Some(s) = status {
@@ -1147,7 +1142,6 @@ mod tests {
         let path = dir.path().join("test.sqlite3");
         let path_str = path.to_str().unwrap();
 
-        // Open twice — second open should not fail
         let conn1 = open(path_str).unwrap();
         drop(conn1);
         let conn2 = open(path_str).unwrap();
@@ -1233,7 +1227,6 @@ mod tests {
     fn test_enrichment_cache_round_trip() {
         let (_dir, conn) = open_temp_store();
 
-        // Write
         set_enrichment(
             &conn,
             "discogs",
@@ -1245,7 +1238,6 @@ mod tests {
         )
         .unwrap();
 
-        // Read
         let entry = get_enrichment(&conn, "discogs", "burial", "archangel", Some("untrue"))
             .unwrap()
             .expect("should find cached entry");
@@ -1301,7 +1293,6 @@ mod tests {
     fn test_enrichment_cache_no_match() {
         let (_dir, conn) = open_temp_store();
 
-        // Cache a "no match" result
         set_enrichment(
             &conn,
             "discogs",
@@ -1406,7 +1397,6 @@ mod tests {
         assert!(!row.created_at.is_empty());
         assert!(!row.updated_at.is_empty());
 
-        // SQLite column should be empty (secret is in Keychain).
         let db_token: String = conn
             .query_row(
                 "SELECT session_token FROM broker_discogs_session WHERE broker_url = ?1",
@@ -1437,7 +1427,6 @@ mod tests {
         // Ensure clean keychain state.
         let _ = crate::keychain::delete_session_token(url);
 
-        // Simulate legacy: write plaintext token directly to SQLite.
         conn.execute(
             "INSERT INTO broker_discogs_session (broker_url, session_token, expires_at)
              VALUES (?1, ?2, ?3)",
@@ -1445,13 +1434,11 @@ mod tests {
         )
         .unwrap();
 
-        // Reading should transparently migrate to Keychain.
         let row = get_broker_discogs_session(&conn, url)
             .unwrap()
             .expect("session should exist after migration");
         assert_eq!(row.session_token, "legacy-plaintext-token");
 
-        // SQLite column should now be empty.
         let db_token: String = conn
             .query_row(
                 "SELECT session_token FROM broker_discogs_session WHERE broker_url = ?1",
@@ -1464,11 +1451,9 @@ mod tests {
             "plaintext token should be cleared from SQLite"
         );
 
-        // Keychain should have the token.
         let kc_token = crate::keychain::get_session_token(url).unwrap();
         assert_eq!(kc_token.as_deref(), Some("legacy-plaintext-token"));
 
-        // Clean up.
         clear_broker_discogs_session(&conn, url).unwrap();
     }
 
@@ -1562,7 +1547,6 @@ mod tests {
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
-        // Simulate user accepting
         resolve_audit_issues(
             &conn,
             &[1],
@@ -1572,7 +1556,6 @@ mod tests {
         )
         .unwrap();
 
-        // Re-scan upserts the same issue — should preserve accepted status
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t3").unwrap();
 
         let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
@@ -1594,7 +1577,6 @@ mod tests {
         )
         .unwrap();
 
-        // Resolve the issue
         resolve_audit_issues(
             &conn,
             &[1],
@@ -1610,7 +1592,6 @@ mod tests {
         assert_eq!(issue.note.as_deref(), Some("fixed upstream"));
         assert_eq!(issue.resolved_at.as_deref(), Some("t2"));
 
-        // Re-scan detects the issue again — should reopen and clear stale fields
         upsert_audit_issue(
             &conn,
             "/music/track.flac",
@@ -1658,7 +1639,6 @@ mod tests {
         )
         .unwrap();
 
-        // Should still be only one issue, with updated detail
         let issues = get_audit_issues(&conn, "/music/", None, None, 100, 0).unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].detail.as_deref(), Some("d2"));
@@ -1736,7 +1716,6 @@ mod tests {
         assert_eq!(issue.resolution.as_deref(), Some("accepted_as_is"));
         assert_eq!(issue.note.as_deref(), Some("intentional"));
 
-        // Issue 2 remains open
         let issue2 = get_audit_issue_by_id(&conn, 2).unwrap().unwrap();
         assert_eq!(issue2.status, "open");
     }
@@ -1766,17 +1745,14 @@ mod tests {
         )
         .unwrap();
 
-        // Filter by status
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].issue_type, "WAV_TAG3_MISSING");
 
-        // Filter by issue_type
         let wav =
             get_audit_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
         assert_eq!(wav.len(), 1);
 
-        // Filter by both
         let both = get_audit_issues(
             &conn,
             "/music/",
@@ -1890,7 +1866,6 @@ mod tests {
         .unwrap();
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
-        // Mark resolved except GENRE_SET which is still detected
         let count = mark_issues_resolved_for_path(&conn, "/music/track.flac", &["GENRE_SET"], "t2")
             .unwrap();
         assert_eq!(count, 2);
@@ -1900,15 +1875,12 @@ mod tests {
         assert_eq!(open[0].issue_type, "GENRE_SET");
     }
 
-    // Verify SQL LIKE wildcards in scope paths are escaped and matched literally.
     #[test]
     fn test_audit_files_in_scope_escapes_like_wildcards() {
         let (_dir, conn) = open_temp_store();
-        // Path containing SQL LIKE wildcards
         upsert_audit_file(&conn, "/music/100%_done/track.flac", "t", "m", 100).unwrap();
         upsert_audit_file(&conn, "/music/100X_done/track.flac", "t", "m", 200).unwrap();
 
-        // Scope with % — should only match the exact prefix, not wildcard-expand
         let files = get_audit_files_in_scope(&conn, "/music/100%_done/").unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/music/100%_done/track.flac");
@@ -1948,25 +1920,20 @@ mod tests {
         )
         .unwrap();
 
-        // Discogs: artist_a has two titles
         let discogs =
             batch_enrichment_existence(&conn, "discogs", &["artist_a", "artist_b"]).unwrap();
         assert!(discogs.contains(&("artist_a".to_string(), "title_1".to_string())));
         assert!(discogs.contains(&("artist_a".to_string(), "title_2".to_string())));
-        // artist_b has no discogs entry
         assert!(!discogs.contains(&("artist_b".to_string(), "title_3".to_string())));
 
-        // Beatport: artist_b has one title
         let beatport =
             batch_enrichment_existence(&conn, "beatport", &["artist_a", "artist_b"]).unwrap();
         assert!(beatport.contains(&("artist_b".to_string(), "title_3".to_string())));
         assert!(!beatport.contains(&("artist_a".to_string(), "title_1".to_string())));
 
-        // Empty input
         let empty = batch_enrichment_existence(&conn, "discogs", &[]).unwrap();
         assert!(empty.is_empty());
 
-        // Unknown artist
         let unknown = batch_enrichment_existence(&conn, "discogs", &["nobody"]).unwrap();
         assert!(unknown.is_empty());
     }
@@ -2005,10 +1972,8 @@ mod tests {
         assert!(result.contains(&("/music/a.flac".to_string(), "stratum-dsp".to_string())));
         assert!(result.contains(&("/music/a.flac".to_string(), "essentia".to_string())));
         assert!(result.contains(&("/music/b.flac".to_string(), "stratum-dsp".to_string())));
-        // c.flac not cached
         assert!(!result.contains(&("/music/c.flac".to_string(), "stratum-dsp".to_string())));
 
-        // Empty input
         let empty = batch_audio_analysis_existence(&conn, &[]).unwrap();
         assert!(empty.is_empty());
     }
@@ -2034,7 +1999,6 @@ mod tests {
     #[test]
     fn test_batch_enrichment_existence_chunking() {
         let (_dir, conn) = open_temp_store();
-        // Seed 1000 artists to exercise multi-chunk path (chunk size = 899).
         let artists: Vec<String> = (0..1000).map(|i| format!("artist_{i}")).collect();
         for a in &artists {
             set_enrichment(
@@ -2061,7 +2025,6 @@ mod tests {
     fn test_batch_enrichment_with_results() {
         let (_dir, conn) = open_temp_store();
 
-        // exact match — should appear
         set_enrichment(
             &conn,
             "discogs",
@@ -2073,7 +2036,6 @@ mod tests {
         )
         .unwrap();
 
-        // fuzzy match — should appear
         set_enrichment(
             &conn,
             "discogs",
@@ -2085,7 +2047,6 @@ mod tests {
         )
         .unwrap();
 
-        // no match (match_quality = "none") — should NOT appear
         set_enrichment(
             &conn,
             "discogs",
@@ -2097,7 +2058,6 @@ mod tests {
         )
         .unwrap();
 
-        // error entry — should NOT appear (excluded by base query)
         set_enrichment(
             &conn,
             "discogs",
@@ -2109,7 +2069,6 @@ mod tests {
         )
         .unwrap();
 
-        // NULL match_quality — should NOT appear
         set_enrichment(
             &conn,
             "discogs",
@@ -2127,7 +2086,6 @@ mod tests {
         assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
         assert!(results.contains(&("artist_a".to_string(), "title_2".to_string())));
 
-        // Empty input
         let empty = batch_enrichment_with_results(&conn, "discogs", &[]).unwrap();
         assert!(empty.is_empty());
     }
@@ -2136,7 +2094,6 @@ mod tests {
     fn test_batch_enrichment_with_label() {
         let (_dir, conn) = open_temp_store();
 
-        // Has label — should appear
         set_enrichment(
             &conn,
             "beatport",
@@ -2148,7 +2105,6 @@ mod tests {
         )
         .unwrap();
 
-        // Empty label — should NOT appear
         set_enrichment(
             &conn,
             "beatport",
@@ -2160,7 +2116,6 @@ mod tests {
         )
         .unwrap();
 
-        // No label key — should NOT appear
         set_enrichment(
             &conn,
             "beatport",
@@ -2172,7 +2127,6 @@ mod tests {
         )
         .unwrap();
 
-        // match_quality = "none" — should NOT appear even if label present
         set_enrichment(
             &conn,
             "beatport",
@@ -2184,7 +2138,6 @@ mod tests {
         )
         .unwrap();
 
-        // Null response_json — should NOT appear
         set_enrichment(
             &conn,
             "beatport",
@@ -2201,7 +2154,6 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
 
-        // Empty input
         let empty = batch_enrichment_with_label(&conn, "beatport", &[]).unwrap();
         assert!(empty.is_empty());
     }
@@ -2210,18 +2162,15 @@ mod tests {
     fn test_timbral_norm_stats_round_trip() {
         let (_dir, conn) = open_temp_store();
 
-        // Initially empty
         let none = get_timbral_norm_stats(&conn).unwrap();
         assert!(none.is_none());
 
-        // Save stats
         let stats = TimbralNormStats {
             dims: vec![(0.5, 0.1), (1.2, 0.3), (-0.8, 0.05)],
             sample_count: 42,
         };
         save_timbral_norm_stats(&conn, &stats).unwrap();
 
-        // Read back
         let loaded = get_timbral_norm_stats(&conn)
             .unwrap()
             .expect("should find stats");
@@ -2234,7 +2183,6 @@ mod tests {
         assert!((loaded.dims[2].1 - 0.05).abs() < f64::EPSILON);
         assert_eq!(loaded.sample_count, 42);
 
-        // Overwrite with new stats — old rows should be replaced
         let stats2 = TimbralNormStats {
             dims: vec![(10.0, 2.0)],
             sample_count: 99,
@@ -2251,11 +2199,9 @@ mod tests {
     fn test_weight_preset_crud() {
         let (_dir, conn) = open_temp_store();
 
-        // Initially empty
         let all = list_weight_presets(&conn, None).unwrap();
         assert!(all.is_empty());
 
-        // Save two presets of different types
         save_weight_preset(&conn, "chill", "transition", r#"{"energy":0.3,"key":0.7}"#).unwrap();
         save_weight_preset(
             &conn,
@@ -2266,14 +2212,11 @@ mod tests {
         .unwrap();
         save_weight_preset(&conn, "club", "pool", r#"{"bpm":0.8}"#).unwrap();
 
-        // List all
         let all = list_weight_presets(&conn, None).unwrap();
         assert_eq!(all.len(), 3);
 
-        // List filtered by type
         let transition = list_weight_presets(&conn, Some("transition")).unwrap();
         assert_eq!(transition.len(), 2);
-        // Ordered by name
         assert_eq!(transition[0].name, "chill");
         assert_eq!(transition[1].name, "high-energy");
 
@@ -2281,36 +2224,29 @@ mod tests {
         assert_eq!(pool.len(), 1);
         assert_eq!(pool[0].name, "club");
 
-        // Get specific preset
         let json = get_weight_preset(&conn, "chill", "transition")
             .unwrap()
             .expect("should find preset");
         assert!(json.contains("energy"));
 
-        // Miss: wrong type
         let miss = get_weight_preset(&conn, "chill", "pool").unwrap();
         assert!(miss.is_none());
 
-        // Miss: wrong name
         let miss2 = get_weight_preset(&conn, "nonexistent", "transition").unwrap();
         assert!(miss2.is_none());
 
-        // Update existing preset (upsert)
         save_weight_preset(&conn, "chill", "transition", r#"{"energy":0.2,"key":0.8}"#).unwrap();
         let updated = get_weight_preset(&conn, "chill", "transition")
             .unwrap()
             .unwrap();
         assert!(updated.contains("0.2"));
 
-        // Delete
         let deleted = delete_weight_preset(&conn, "chill", "transition").unwrap();
         assert!(deleted);
 
-        // Delete again — should return false
         let deleted_again = delete_weight_preset(&conn, "chill", "transition").unwrap();
         assert!(!deleted_again);
 
-        // Verify only 2 remain
         let remaining = list_weight_presets(&conn, None).unwrap();
         assert_eq!(remaining.len(), 2);
     }

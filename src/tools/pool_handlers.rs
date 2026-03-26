@@ -6,10 +6,6 @@ use rmcp::model::{CallToolResult, Content};
 use super::*;
 use crate::db;
 
-// ---------------------------------------------------------------------------
-// score_pool_compatibility
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_score_pool_compatibility(
     server: &ReklawdboxServer,
     params: ScorePoolCompatibilityParams,
@@ -21,7 +17,6 @@ pub(super) fn handle_score_pool_compatibility(
             .map_err(|e| McpError::invalid_params(e, None))?
     };
 
-    // Detect mode from params
     let mode = if params.track_a.is_some() && params.track_b.is_some() {
         PoolMode::Pairwise
     } else if params.track_id.is_some() && params.pool_track_ids.is_some() {
@@ -239,10 +234,6 @@ pub(super) fn handle_score_pool_compatibility(
     }
 }
 
-// ---------------------------------------------------------------------------
-// expand_pool
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_expand_pool(
     server: &ReklawdboxServer,
     params: ExpandPoolParams,
@@ -263,7 +254,6 @@ pub(super) fn handle_expand_pool(
         ));
     }
 
-    // Load seed tracks
     let seed_tracks = {
         let conn = server.rekordbox_conn()?;
         db::get_tracks_by_ids(&conn, &params.seed_track_ids)
@@ -277,7 +267,6 @@ pub(super) fn handle_expand_pool(
         ));
     }
 
-    // Build seed profiles
     let store = server.cache_store_conn()?;
     let seed_built = build_profiles(seed_tracks, &store);
     let seed_profiles = seed_built.profiles;
@@ -298,18 +287,17 @@ pub(super) fn handle_expand_pool(
         None
     });
 
-    // Compute BPM pre-filter range (seed_bpms guaranteed non-empty)
+    // seed_bpms guaranteed non-empty by the check above
     let min_seed_bpm = seed_bpms.iter().copied().reduce(f64::min).unwrap();
     let max_seed_bpm = seed_bpms.iter().copied().reduce(f64::max).unwrap();
     let bpm_low = min_seed_bpm * 0.92;
     let bpm_high = max_seed_bpm * 1.08;
 
-    // Collect seed genre families for pre-filter
     let seed_families: HashSet<GenreFamily> =
         seed_profiles.iter().map(|p| p.genre_family).collect();
     let seed_ids: HashSet<String> = seed_profiles.iter().map(|p| p.track.id.clone()).collect();
 
-    // Load candidate universe — intersect user BPM filters with seed-derived range
+    // Intersect user BPM filters with seed-derived range
     let mut candidate_filters = params.filters;
     candidate_filters.bpm_min = Some(match candidate_filters.bpm_min {
         Some(user_min) => user_min.max(bpm_low),
@@ -337,7 +325,6 @@ pub(super) fn handle_expand_pool(
         )?
     };
 
-    // Build candidate profiles, filtering by genre family if needed
     let mut candidate_profiles: Vec<TrackProfile> = Vec::new();
     for track in candidate_tracks {
         if seed_ids.contains(&track.id) {
@@ -356,7 +343,6 @@ pub(super) fn handle_expand_pool(
 
     let candidates_scanned = candidate_profiles.len();
 
-    // Iterative greedy expansion
     let mut pool: Vec<TrackProfile> = seed_profiles;
     let mut added: Vec<AdditionResult> = Vec::new();
     let quality_threshold = 0.4;
@@ -368,7 +354,6 @@ pub(super) fn handle_expand_pool(
 
         let pool_refs: Vec<&TrackProfile> = pool.iter().collect();
 
-        // Score all candidates against current pool
         let mut best_idx = 0;
         let mut best_min = f64::NEG_INFINITY;
         let mut best_mean = 0.0;
@@ -396,13 +381,12 @@ pub(super) fn handle_expand_pool(
         }
 
         if best_min < quality_threshold {
-            break; // Quality threshold not met
+            break;
         }
 
         let chosen = candidate_profiles.swap_remove(best_idx);
         let result = best_result.unwrap();
 
-        // Build rationale
         let rationale = build_addition_rationale(&result);
 
         added.push(AdditionResult {
@@ -419,7 +403,6 @@ pub(super) fn handle_expand_pool(
 
     let stopped_early = added.len() < additions;
 
-    // Compute final pool cohesion
     let pool_refs: Vec<&TrackProfile> = pool.iter().collect();
     let final_cohesion = compute_pool_cohesion(
         &pool_refs,
@@ -463,10 +446,6 @@ pub(super) fn handle_expand_pool(
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
-// ---------------------------------------------------------------------------
-// describe_pool
-// ---------------------------------------------------------------------------
-
 pub(super) fn handle_describe_pool(
     server: &ReklawdboxServer,
     params: DescribePoolParams,
@@ -485,7 +464,6 @@ pub(super) fn handle_describe_pool(
         ));
     }
 
-    // Load pool tracks
     let pool_tracks = {
         let conn = server.rekordbox_conn()?;
         if let Some(ref ids) = params.pool_track_ids {
@@ -524,7 +502,6 @@ pub(super) fn handle_describe_pool(
     let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
     let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
 
-    // Compute cohesion
     let profile_refs: Vec<&TrackProfile> = profiles.iter().collect();
     let cohesion = compute_pool_cohesion(
         &profile_refs,
@@ -534,7 +511,7 @@ pub(super) fn handle_describe_pool(
         norm_stats.as_ref(),
     );
 
-    // Compute stats (profiles guaranteed to have >=2 entries)
+    // profiles guaranteed >=2 by the check above
     let energies: Vec<f64> = profiles.iter().map(|p| p.energy).collect();
     let energy_min = energies.iter().copied().reduce(f64::min).unwrap();
     let energy_max = energies.iter().copied().reduce(f64::max).unwrap();
@@ -544,7 +521,6 @@ pub(super) fn handle_describe_pool(
     let bpm_center = median_bpm(&bpms);
     let bpm_spread = bpm_max - bpm_min;
 
-    // Key neighborhood
     let key_neighborhood: Vec<String> = profiles
         .iter()
         .filter_map(|p| {
@@ -558,7 +534,6 @@ pub(super) fn handle_describe_pool(
         })
         .collect();
 
-    // Dominant genre
     let mut genre_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for p in &profiles {
         if let Some(ref g) = p.canonical_genre {
@@ -570,8 +545,7 @@ pub(super) fn handle_describe_pool(
         .max_by_key(|(_, c)| *c)
         .map(|(g, _)| g.to_string());
 
-    // Weak members: tracks with min-compatibility < 0.5 to any other
-    // Collect IDs involved in any pair below threshold
+    // Tracks with min-compatibility < 0.5 to any pool member
     let weak_candidates: HashSet<&str> = cohesion
         .per_pair
         .iter()
@@ -619,16 +593,13 @@ pub(super) fn handle_describe_pool(
         result["skipped_tracks"] = serde_json::json!(built.skipped);
     }
 
-    // Reference BPM sweep for master_tempo=false
     if !master_tempo {
         let median_ref = median_bpm(&bpms);
 
-        // Sweep reference BPMs in 0.5 steps, constrained so no track shifts > 1 semitone
         let sweep_result = sweep_optimal_reference_bpm(&profiles, &bpms);
 
         result["reference_bpm_used"] = serde_json::json!(round_to_3_decimals(ref_bpm));
         if let Some((optimal_bpm, optimal_stability)) = sweep_result {
-            // Compute stability at median for comparison
             let median_stability = compute_key_stability_at_bpm(&profiles, median_ref);
             result["optimal_reference_bpm"] = serde_json::json!(round_to_3_decimals(optimal_bpm));
             result["key_stability_at_optimal"] =
@@ -647,10 +618,6 @@ pub(super) fn handle_describe_pool(
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 struct BuildProfilesResult {
     profiles: Vec<TrackProfile>,
@@ -759,7 +726,6 @@ fn build_addition_rationale(result: &CandidatePoolScore) -> serde_json::Value {
         .map(|(id, _)| id.as_str())
         .unwrap_or("");
 
-    // Find strongest and weakest axes across all pair scores
     let mut axis_sums: std::collections::HashMap<&str, (f64, u32)> =
         std::collections::HashMap::new();
     for (_, scores) in &result.per_member {
@@ -835,10 +801,9 @@ pub(super) fn sweep_optimal_reference_bpm(
     }
 
     if interval_lo > interval_hi || interval_lo <= 0.0 {
-        return None; // No valid reference BPM exists
+        return None;
     }
 
-    // Sweep within the valid interval at 0.1 BPM steps
     let step = 0.1;
     let mut best_bpm = interval_lo;
     let mut best_stability = f64::NEG_INFINITY;
@@ -892,10 +857,6 @@ fn compute_key_stability_at_bpm(profiles: &[TrackProfile], ref_bpm: f64) -> f64 
 
     if count > 0 { sum / count as f64 } else { 1.0 }
 }
-
-// ---------------------------------------------------------------------------
-// discover_pools
-// ---------------------------------------------------------------------------
 
 pub(super) fn handle_discover_pools(
     server: &ReklawdboxServer,

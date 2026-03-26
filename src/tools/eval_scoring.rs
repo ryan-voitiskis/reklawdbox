@@ -11,20 +11,12 @@ mod tests {
     use crate::tools::params::*;
     use crate::tools::scoring::*;
 
-    // -----------------------------------------------------------------------
-    // Quality gate thresholds
-    // -----------------------------------------------------------------------
-
     const MEAN_COMPOSITE_MIN: f64 = 0.65;
     const MIN_COMPOSITE_MIN: f64 = 0.30;
     const COMPOSITE_VARIANCE_MAX: f64 = 0.08;
-    const HARMONIC_COHERENCE_MIN: f64 = 0.50; // fraction of transitions with key ≥ 0.8
-    const ENERGY_FIDELITY_MIN: f64 = 0.40; // fraction of transitions with energy = 1.0
-    const MAX_PITCH_ADJUSTMENT: f64 = 8.0; // max BPM pct across all transitions
-
-    // -----------------------------------------------------------------------
-    // Helper: build a TrackProfile without DB access
-    // -----------------------------------------------------------------------
+    const HARMONIC_COHERENCE_MIN: f64 = 0.50;
+    const ENERGY_FIDELITY_MIN: f64 = 0.40;
+    const MAX_PITCH_ADJUSTMENT: f64 = 8.0;
 
     #[allow(clippy::too_many_arguments)]
     fn synth_profile(
@@ -79,10 +71,6 @@ mod tests {
     fn simple_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) -> TrackProfile {
         synth_profile(id, key, bpm, energy, genre, None, None, None)
     }
-
-    // -----------------------------------------------------------------------
-    // Evaluation reporting
-    // -----------------------------------------------------------------------
 
     struct EvalMetrics {
         mean_composite: f64,
@@ -181,10 +169,6 @@ mod tests {
             .collect()
     }
 
-    // -----------------------------------------------------------------------
-    // Pool: Camelot walk — 8 tracks forming a perfect harmonic path
-    // -----------------------------------------------------------------------
-
     fn pool_camelot_walk() -> HashMap<String, TrackProfile> {
         build_pool(vec![
             simple_profile("cw1", "8A", 124.0, 0.35, "Deep House"),
@@ -225,7 +209,6 @@ mod tests {
         let metrics = compute_metrics(&plan, &phases);
         assert_quality_gates(&metrics, "camelot_walk_greedy");
 
-        // Key-specific: harmonic priority on a perfect walk should achieve near-100% coherence
         assert!(
             metrics.harmonic_coherence >= 0.85,
             "camelot walk should have ≥85% harmonic coherence, got {:.2}",
@@ -260,15 +243,10 @@ mod tests {
             "beam search should produce at least one plan"
         );
 
-        // Best beam plan should pass quality gates
         let best = &plans[0];
         let metrics = compute_metrics(best, &phases);
         assert_quality_gates(&metrics, "camelot_walk_beam");
     }
-
-    // -----------------------------------------------------------------------
-    // Pool: Adversarial — hostile distributions
-    // -----------------------------------------------------------------------
 
     fn pool_adversarial() -> HashMap<String, TrackProfile> {
         build_pool(vec![
@@ -298,12 +276,11 @@ mod tests {
             0,
             true,
             Some(HarmonicMixingStyle::Balanced),
-            12.0, // wide drift tolerance for adversarial pool
+            12.0,
             None,
         );
         assert_eq!(plan.ordered_ids.len(), 6, "should use all 6 tracks");
 
-        // Adversarial pool: very relaxed gates (no good transitions exist)
         let metrics = compute_metrics(&plan, &phases);
         assert!(
             metrics.mean_composite >= 0.15,
@@ -316,10 +293,6 @@ mod tests {
             metrics.min_composite,
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Pool: Iso key/BPM — forces differentiation on energy/genre/brightness
-    // -----------------------------------------------------------------------
 
     fn pool_iso_key_bpm() -> HashMap<String, TrackProfile> {
         build_pool(vec![
@@ -433,16 +406,11 @@ mod tests {
         let metrics = compute_metrics(&plan, &phases);
         assert_quality_gates(&metrics, "iso_key_bpm");
 
-        // Key and BPM are identical → key=1.0, bpm=1.0 always
         assert!(
             metrics.harmonic_coherence >= 1.0 - f64::EPSILON,
             "iso pool should have 100% harmonic coherence",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Pool: Realistic club — 20 tracks, 3 genre families
-    // -----------------------------------------------------------------------
 
     fn pool_realistic_club() -> HashMap<String, TrackProfile> {
         build_pool(vec![
@@ -710,10 +678,6 @@ mod tests {
         assert_quality_gates(&metrics, "realistic_club_beam");
     }
 
-    // -----------------------------------------------------------------------
-    // Beam ≥ greedy quality assertion
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_beam_at_least_as_good_as_greedy() {
         let pool = pool_realistic_club();
@@ -756,16 +720,11 @@ mod tests {
             .map(|p| compute_metrics(p, &phases).mean_composite)
             .fold(0.0_f64, f64::max);
 
-        // Beam should be at least as good as greedy (within small tolerance)
         assert!(
             beam_best_mean >= greedy_mean - 0.01,
             "beam best mean {beam_best_mean:.3} should be ≥ greedy mean {greedy_mean:.3} - 0.01",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Priority axis shift verification
-    // -----------------------------------------------------------------------
 
     #[test]
     fn eval_harmonic_priority_improves_key_scores() {
@@ -821,10 +780,6 @@ mod tests {
             "harmonic priority key mean {harmonic_key_mean:.3} should be ≥ balanced {balanced_key_mean:.3} - 0.05",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Determinism
-    // -----------------------------------------------------------------------
 
     #[test]
     fn eval_deterministic_output() {
@@ -882,13 +837,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Sensitivity smoke test
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_bpm_curve_monotonic() {
-        // Verify the exponential BPM curve is monotonically decreasing
         let base_bpm = 128.0;
         let mut prev_value = 1.0;
         for pct_x10 in 1..=200 {
@@ -940,10 +890,6 @@ mod tests {
             balanced.composite,
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Adjustment presence/absence tests
-    // -----------------------------------------------------------------------
 
     #[test]
     fn eval_clean_transition_has_no_adjustments() {
@@ -1010,7 +956,6 @@ mod tests {
         let from = simple_profile("gs-from", "8A", 128.0, 0.5, "House");
         let to = simple_profile("gs-to", "9A", 128.0, 0.55, "House");
 
-        // Run length > 0 and < 5, same family → streak bonus
         let scores = score_transition_profiles(
             &from,
             &to,
@@ -1029,10 +974,6 @@ mod tests {
             "same-family transition with run_length=2 should produce genre_streak adjustment",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Pool compatibility kernel tests
-    // -----------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
     fn synth_profile_timbral(
@@ -1060,7 +1001,6 @@ mod tests {
             rhythm,
             loudness_range,
         );
-        // Construct TimbralFeatures only when all 5 fields are present
         p.timbral = match (
             mfcc_mean,
             mfcc_std,
@@ -1109,7 +1049,6 @@ mod tests {
             ba.composite,
         );
 
-        // Individual axis checks
         assert!(
             (ab.bpm.value - ba.bpm.value).abs() < 1e-10,
             "BPM axis should be symmetric",
@@ -1146,7 +1085,6 @@ mod tests {
             simple_profile("dist6", "1A", 142.0, 0.88, "Techno"),
         ];
 
-        // Mean internal compatibility of tight cluster should be high
         let tight_refs: Vec<&TrackProfile> = tight.iter().collect();
         let tight_cohesion = compute_pool_cohesion(
             &tight_refs,
@@ -1162,7 +1100,6 @@ mod tests {
             tight_cohesion.mean_pairwise,
         );
 
-        // Mean compatibility between tight and distractor should be low
         let mut cross_scores = Vec::new();
         for t in &tight {
             for d in &distractors {
@@ -1219,7 +1156,6 @@ mod tests {
 
         let ref_bpm = 126.5;
 
-        // Greedy expansion: pick best candidate iteratively
         let mut pool = seeds;
         let mut remaining = all_candidates;
         let mut selected_ids = Vec::new();
@@ -1253,7 +1189,6 @@ mod tests {
             pool.push(chosen);
         }
 
-        // All 4 selected should be from the "good" set
         let good_ids: HashSet<&str> = ["good1", "good2", "good3", "good4"]
             .iter()
             .copied()
@@ -1283,7 +1218,6 @@ mod tests {
 
         let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
 
-        // Optimal reference should be near the median (128.0)
         let result = super::super::pool_handlers::sweep_optimal_reference_bpm(&profiles, &bpms);
 
         assert!(
@@ -1304,7 +1238,6 @@ mod tests {
 
     #[test]
     fn eval_pool_energy_axis_gaussian() {
-        // Same energy → 1.0
         let same = score_pool_energy_axis(0.5, 0.5);
         assert!(
             (same.value - 1.0).abs() < 1e-10,
@@ -1312,7 +1245,6 @@ mod tests {
             same.value,
         );
 
-        // Small delta → high score
         let close = score_pool_energy_axis(0.5, 0.55);
         assert!(
             close.value > 0.9,
@@ -1320,7 +1252,6 @@ mod tests {
             close.value,
         );
 
-        // Large delta → low score
         let far = score_pool_energy_axis(0.3, 0.8);
         assert!(
             far.value < 0.1,
@@ -1328,7 +1259,6 @@ mod tests {
             far.value,
         );
 
-        // Symmetric
         let ab = score_pool_energy_axis(0.3, 0.6);
         let ba = score_pool_energy_axis(0.6, 0.3);
         assert!(
@@ -1336,10 +1266,6 @@ mod tests {
             "pool energy should be symmetric",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Timbral axis unit tests
-    // -----------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
     fn make_timbral_profile(
@@ -1380,7 +1306,6 @@ mod tests {
 
     #[test]
     fn eval_build_timbral_vector_requires_all_fields() {
-        // All fields present → Some
         let full = make_timbral_profile(
             "tv1",
             "8A",
@@ -1400,7 +1325,6 @@ mod tests {
         );
         assert_eq!(vec.unwrap().len(), 13 + 13 + 6 + 1 + 1, "expected 34 dims");
 
-        // Missing timbral → None (structural invariant: all-or-nothing)
         let mut missing = full.clone();
         missing.timbral = None;
         assert!(
@@ -1430,17 +1354,14 @@ mod tests {
             dims: vec![(0.0, 1.0); 3],
             sample_count: 50,
         };
-        // Too long
         assert!(
             normalize_timbral_vector(&[1.0; 5], &stats).is_none(),
             "longer raw should return None",
         );
-        // Too short
         assert!(
             normalize_timbral_vector(&[1.0; 2], &stats).is_none(),
             "shorter raw should return None",
         );
-        // Exact match
         assert!(
             normalize_timbral_vector(&[1.0; 3], &stats).is_some(),
             "matching dims should succeed",
@@ -1449,7 +1370,7 @@ mod tests {
 
     #[test]
     fn eval_pool_timbral_axis_identical_vectors() {
-        let dims = 34; // 13+13+6+1+1
+        let dims = 34;
         let stats = dummy_norm_stats(dims);
         let a = make_timbral_profile(
             "ta1",
@@ -1534,7 +1455,6 @@ mod tests {
 
     #[test]
     fn eval_pool_timbral_axis_dimension_mismatch_returns_none() {
-        // Stats for 34 dims, but track has 30 dims (short spectral_contrast)
         let stats = dummy_norm_stats(34);
         let a = make_timbral_profile(
             "tdm1",
@@ -1546,7 +1466,7 @@ mod tests {
             vec![0.5; 13],
             vec![0.3; 2],
             0.4,
-            0.2, // only 2 spectral contrast
+            0.2,
         );
         let b = a.clone();
         assert!(
@@ -1602,7 +1522,6 @@ mod tests {
             None,
         );
 
-        // With timbral data + near-identical vectors, score should differ
         assert!(
             (with_timbral.composite - without_timbral.composite).abs() > 0.001,
             "timbral axis should affect composite: with={:.4} without={:.4}",
@@ -1624,7 +1543,6 @@ mod tests {
         let dims = 34;
         let stats = dummy_norm_stats(dims);
 
-        // Two tracks with identical timbral vectors but different keys
         let a = make_timbral_profile(
             "pt1",
             "8A",
@@ -1642,7 +1560,7 @@ mod tests {
             "2A",
             126.0,
             0.5,
-            "Techno", // clash key + different genre
+            "Techno",
             vec![1.0; 13],
             vec![0.5; 13],
             vec![0.3; 6],
@@ -1667,8 +1585,6 @@ mod tests {
             Some(&stats),
         );
 
-        // Timbral preset should score higher because timbral match is perfect
-        // but key clashes — timbral preset downweights key
         assert!(
             timbral.composite > balanced.composite,
             "timbral preset should score higher for timbral-matched key-clashing pair: \
@@ -1678,19 +1594,13 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Quality threshold / early stopping
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_expand_pool_stops_below_quality_threshold() {
-        // Seeds in one cluster, all candidates in a completely different space
         let seeds = vec![
             simple_profile("qs1", "8A", 126.0, 0.55, "Deep House"),
             simple_profile("qs2", "9A", 126.5, 0.58, "Deep House"),
         ];
 
-        // All candidates are wildly incompatible
         let candidates = vec![
             simple_profile("qc1", "2A", 140.0, 0.85, "Techno"),
             simple_profile("qc2", "5B", 145.0, 0.90, "Drum & Bass"),
@@ -1737,13 +1647,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // BPM sweep edge cases
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_bpm_sweep_too_wide_returns_none() {
-        // Tracks spanning 100 to 140 BPM — way too wide for a single reference
         let profiles = vec![
             simple_profile("wide1", "8A", 100.0, 0.5, "House"),
             simple_profile("wide2", "8A", 140.0, 0.5, "House"),
@@ -1759,7 +1664,6 @@ mod tests {
 
     #[test]
     fn eval_bpm_sweep_tight_range_succeeds() {
-        // 126-128 BPM — very tight, should easily find optimal
         let profiles = vec![
             simple_profile("tight1", "8A", 126.0, 0.5, "House"),
             simple_profile("tight2", "8A", 127.0, 0.5, "House"),
@@ -1780,9 +1684,6 @@ mod tests {
 
     #[test]
     fn eval_bpm_sweep_narrow_interval_found() {
-        // 100 and 112 BPM — valid interval is ~[105.71, 105.95], only 0.23 BPM wide.
-        // The analytical interval computation should find it even though a 0.5-step
-        // grid search would miss it.
         let profiles = vec![
             simple_profile("narrow1", "8A", 100.0, 0.5, "House"),
             simple_profile("narrow2", "8A", 112.0, 0.5, "House"),
@@ -1801,10 +1702,6 @@ mod tests {
             "optimal should be near 105.8, got {optimal:.2}",
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Pool edge cases
-    // -----------------------------------------------------------------------
 
     #[test]
     fn eval_pool_cohesion_single_track() {
@@ -1848,17 +1745,11 @@ mod tests {
         assert!(result.per_member.is_empty());
     }
 
-    // -----------------------------------------------------------------------
-    // master_tempo=false pairwise scoring
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_pool_scoring_master_tempo_off_changes_key() {
-        // Two tracks with same native key but different BPMs
         let a = simple_profile("mto-a", "8A", 126.0, 0.5, "House");
         let b = simple_profile("mto-b", "8A", 132.0, 0.5, "House");
 
-        // With master tempo ON: same key → key score should be 1.0
         let mt_on = score_pool_compatibility_pair(
             &a,
             &b,
@@ -1873,7 +1764,6 @@ mod tests {
             mt_on.key.value,
         );
 
-        // With master tempo OFF: pitch shift affects key scoring
         let mt_off = score_pool_compatibility_pair(
             &a,
             &b,
@@ -1883,7 +1773,6 @@ mod tests {
             None,
         );
 
-        // The key scores should differ because pitch shifting changes effective keys
         assert!(
             (mt_on.key.value - mt_off.key.value).abs() > 0.01,
             "master_tempo OFF should change key scoring: on={:.3} off={:.3}",
@@ -1922,10 +1811,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Genre axis edge cases
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_pool_genre_axis_unknown() {
         let score =
@@ -1939,7 +1824,6 @@ mod tests {
 
     #[test]
     fn eval_pool_genre_axis_other_family_not_matched() {
-        // Two tracks with GenreFamily::Other should NOT get the 0.7 "same family" score
         let score = score_pool_genre_axis(
             Some("Noise"),
             Some("Field Recording"),
@@ -1953,13 +1837,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // discover_pools (Bron-Kerbosch) tests
-    // -----------------------------------------------------------------------
-
     #[test]
     fn eval_discover_pools_finds_planted_clusters() {
-        // Two distinct clusters with no cross-cluster edges at threshold 0.7
         let cluster_a = vec![
             simple_profile("da1", "8A", 126.0, 0.55, "Deep House"),
             simple_profile("da2", "9A", 126.5, 0.58, "Deep House"),
@@ -1994,7 +1873,6 @@ mod tests {
             pools.len(),
         );
 
-        // Each pool should have members primarily from one cluster
         let a_ids: HashSet<&str> = ["da1", "da2", "da3", "da4"].into();
         let b_ids: HashSet<&str> = ["db1", "db2", "db3"].into();
 
@@ -2022,7 +1900,6 @@ mod tests {
             .collect();
         let refs: Vec<&TrackProfile> = profiles.iter().collect();
 
-        // min_size=4, max_size=6
         let pools = discover_pools(
             &refs,
             true,
@@ -2101,7 +1978,6 @@ mod tests {
             10,
         );
 
-        // Higher threshold produces tighter pools with higher min compatibility
         if let (Some(best_low), Some(best_high)) = (pools_low.first(), pools_high.first()) {
             assert!(
                 best_high.min_compatibility >= best_low.min_compatibility - 0.05,
@@ -2141,7 +2017,6 @@ mod tests {
 
     #[test]
     fn eval_discover_pools_max_pools_cap() {
-        // 8 identical tracks → many cliques. Cap at 2.
         let profiles: Vec<TrackProfile> = (0..8)
             .map(|i| simple_profile(&format!("mc{i}"), "8A", 126.0, 0.5, "House"))
             .collect();
@@ -2156,7 +2031,7 @@ mod tests {
             0.5,
             2,
             12,
-            2, // max_pools = 2
+            2,
         );
         assert!(
             pools.len() <= 2,
@@ -2168,7 +2043,6 @@ mod tests {
 
     #[test]
     fn eval_discover_pools_no_subset_duplicates() {
-        // All returned pools should not be subsets of each other
         let profiles: Vec<TrackProfile> = (0..8)
             .map(|i| simple_profile(&format!("sd{i}"), "8A", 126.0, 0.5, "House"))
             .collect();
@@ -2203,7 +2077,6 @@ mod tests {
 
     #[test]
     fn eval_discover_pools_all_incompatible() {
-        // 5 tracks that are all wildly incompatible — no edges at threshold 0.8
         let profiles = [
             simple_profile("inc1", "1A", 100.0, 0.2, "Ambient"),
             simple_profile("inc2", "5B", 140.0, 0.9, "Drum & Bass"),
@@ -2233,13 +2106,11 @@ mod tests {
 
     #[test]
     fn eval_discover_pools_core_edge_classification() {
-        // 4 tight tracks + 1 marginal track
         let profiles = [
             simple_profile("ce1", "8A", 126.0, 0.55, "House"),
             simple_profile("ce2", "9A", 126.5, 0.57, "House"),
             simple_profile("ce3", "8A", 127.0, 0.56, "House"),
             simple_profile("ce4", "8B", 126.0, 0.58, "House"),
-            // Marginal: different BPM range + key
             simple_profile("ce5", "3A", 130.0, 0.70, "Techno"),
         ];
         let refs: Vec<&TrackProfile> = profiles.iter().collect();
@@ -2256,7 +2127,6 @@ mod tests {
             10,
         );
 
-        // Find the pool containing ce5 (if any)
         for pool in &pools {
             if pool.track_ids.contains(&"ce5".to_string()) {
                 assert!(

@@ -30,7 +30,6 @@ pub(super) async fn handle_audit_state(
                 let conn = store::open(&store_path)
                     .map_err(|e| format!("Failed to open internal store: {e}"))?;
 
-                // Try to load Rekordbox imported paths for annotation
                 let imported = rekordbox_db_path.and_then(|db_path| match db::open(&db_path) {
                     Ok(rb_conn) => match db::paths_imported_in_scope(&rb_conn, &path_prefix) {
                         Ok(set) => Some(set),

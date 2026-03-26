@@ -518,10 +518,6 @@ pub struct ScoreTransitionParams {
     pub harmonic_style: Option<HarmonicMixingStyle>,
 }
 
-// ---------------------------------------------------------------------------
-// Pool discovery params
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
@@ -530,10 +526,6 @@ pub enum PoolPreset {
     Balanced,
     Timbral,
 }
-
-// ---------------------------------------------------------------------------
-// Tunable weight specs (preset name, preset+overrides, or custom weights)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
 #[schemars(inline)]
@@ -727,10 +719,6 @@ pub struct DiscoverPoolsParams {
     pub preset: Option<PoolWeightSpec>,
 }
 
-// ---------------------------------------------------------------------------
-// Weight preset management params
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SaveWeightPresetParams {
     #[schemars(description = "Name for the preset (e.g. 'deep_techno_pool')")]
@@ -757,10 +745,6 @@ pub struct DeleteWeightPresetParams {
     pub scorer_type: ScorerType,
 }
 
-// ---------------------------------------------------------------------------
-// History / play stats params
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetSessionsParams {
     #[schemars(description = "Max sessions to return (default 20, max 100)")]
@@ -786,10 +770,6 @@ pub struct GetPlayStatsParams {
     #[schemars(description = "Max results (default 200, max 500)")]
     pub limit: Option<u32>,
 }
-
-// ---------------------------------------------------------------------------
-// Native tag tool params
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct ReadFileTagsParams {
@@ -914,10 +894,6 @@ pub(super) enum AuditOperation {
         path_prefix: String,
     },
 }
-
-// ---------------------------------------------------------------------------
-// Library health params
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(super) struct ScanBrokenLinksParams {

@@ -60,7 +60,6 @@ pub fn path_to_rekordbox_location_uri(file_path: &str) -> String {
         normalized.insert(0, '/');
     }
 
-    // Encode everything except unreserved chars and path separators.
     const ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'-')
         .remove(b'_')
@@ -124,7 +123,6 @@ fn write_collection_track(out: &mut String, track: &Track, track_id: usize) {
     )
     .unwrap();
 
-    // Add Colour attribute if color is set (hex format: 0xRRGGBB)
     if track.color_code > 0 {
         write!(out, " Colour=\"0x{:06X}\"", track.color_code).unwrap();
     }
@@ -570,7 +568,6 @@ mod tests {
         let tracks = load_real_tracks(100).expect("backup tarball not found");
         let xml = generate_xml(&tracks);
 
-        // Structural checks
         assert!(xml.starts_with("<?xml"));
         assert!(xml.contains("<COLLECTION Entries=\"100\">"));
         let track_count = xml.matches("<TRACK ").count();
@@ -579,7 +576,6 @@ mod tests {
             "expected 100 TRACK elements, got {track_count}"
         );
 
-        // No NUL or control characters (except newline/tab)
         for (i, c) in xml.chars().enumerate() {
             if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
                 panic!("control char U+{:04X} at position {i}", c as u32);
@@ -593,14 +589,10 @@ mod tests {
         let tracks = load_real_tracks(200).expect("backup tarball not found");
         let xml = generate_xml(&tracks);
 
-        // Check no unescaped characters in attribute values.
-        // Every attribute value is between quotes. Scan for patterns that indicate
-        // broken escaping: =" followed by content with raw & < " before the closing "
         for line in xml.lines() {
             if !line.contains("<TRACK ") {
                 continue;
             }
-            // Simple check: no raw & that isn't an entity reference
             let mut in_attr = false;
             let chars: Vec<char> = line.chars().collect();
             let mut i = 0;
@@ -608,7 +600,6 @@ mod tests {
                 if chars[i] == '"' {
                     in_attr = !in_attr;
                 } else if in_attr && chars[i] == '&' {
-                    // Must be followed by amp; lt; gt; quot; apos; or #
                     let rest: String = chars[i + 1..].iter().take(6).collect();
                     assert!(
                         rest.starts_with("amp;")
@@ -646,7 +637,6 @@ mod tests {
                 track.title
             );
 
-            // BPM format: X.XX
             let expected_bpm = format!("AverageBpm=\"{:.2}\"", track.bpm);
             assert!(
                 xml.contains(&expected_bpm),
@@ -656,7 +646,6 @@ mod tests {
             );
         }
 
-        // All Location values should start with file://localhost/
         for line in xml.lines() {
             if let Some(loc_start) = line.find("Location=\"") {
                 let after = &line[loc_start + 10..];
@@ -683,7 +672,6 @@ mod tests {
         assert!(content.starts_with("<?xml"));
         assert!(content.contains("<COLLECTION Entries=\"50\">"));
 
-        // File should be reasonable size (roughly 500-2000 bytes per track)
         let size = std::fs::metadata(&path).unwrap().len();
         assert!(size > 50 * 200, "file too small: {size} bytes");
         assert!(size < 50 * 5000, "file too large: {size} bytes");
@@ -694,7 +682,6 @@ mod tests {
     fn test_real_full_library_xml_generation() {
         let conn = crate::db::open_real_db().expect("backup tarball not found");
 
-        // Load all tracks via paging
         let mut all = Vec::new();
         let page_size: u32 = 200;
         let mut offset: u32 = 0;
@@ -723,11 +710,9 @@ mod tests {
 
         let xml = generate_xml(&all);
 
-        // Entries count matches
         let expected = format!("<COLLECTION Entries=\"{}\">", all.len());
         assert!(xml.contains(&expected), "Entries count mismatch");
 
-        // TRACK element count matches
         let track_count = xml.matches("<TRACK ").count();
         assert_eq!(
             track_count,
@@ -736,7 +721,6 @@ mod tests {
             all.len()
         );
 
-        // Reasonable file size: ~500-3000 bytes per track
         let size = xml.len();
         assert!(
             size > all.len() * 200,

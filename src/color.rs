@@ -1,5 +1,4 @@
 /// Standard Rekordbox color palette (8 colors).
-/// Values are the integer representation of the hex color codes used in Rekordbox XML.
 pub const COLORS: &[(&str, i32)] = &[
     ("Blue", 0x0000FF),
     ("Green", 0x00FF00),
@@ -11,7 +10,6 @@ pub const COLORS: &[(&str, i32)] = &[
     ("Violet", 0x660099),
 ];
 
-/// Convert a color name to its Rekordbox hex code. Case-insensitive.
 pub fn color_name_to_code(name: &str) -> Option<i32> {
     let name = name.trim();
     COLORS
@@ -20,7 +18,6 @@ pub fn color_name_to_code(name: &str) -> Option<i32> {
         .map(|(_, code)| *code)
 }
 
-/// Returns the canonical casing of a color name, or None if unknown.
 pub fn canonical_color_name(name: &str) -> Option<&'static str> {
     let name = name.trim();
     COLORS

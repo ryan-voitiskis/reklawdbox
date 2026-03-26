@@ -83,7 +83,6 @@ pub(super) fn cache_error(e: rusqlite::Error) -> McpError {
     McpError::internal_error(format!("Cache error: {e}"), None)
 }
 
-/// Inner shared state (not Clone).
 pub(super) struct ServerState {
     pub(super) db: OnceLock<Result<Mutex<Connection>, String>>,
     pub(super) internal_db: OnceLock<Result<Mutex<Connection>, String>>,
@@ -568,10 +567,6 @@ impl ReklawdboxServer {
         handle_cache_coverage(self, params.0)
     }
 
-    // -----------------------------------------------------------------------
-    // Genre classification and audit
-    // -----------------------------------------------------------------------
-
     #[tool(
         description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Cache-only — never triggers external calls."
     )]
@@ -591,10 +586,6 @@ impl ReklawdboxServer {
     ) -> Result<CallToolResult, McpError> {
         handle_audit_genres(self, params.0)
     }
-
-    // -----------------------------------------------------------------------
-    // Native file-tag tools
-    // -----------------------------------------------------------------------
 
     #[tool(
         description = "Read metadata tags directly from audio files on disk. Supports FLAC, MP3, WAV, M4A, AAC, AIFF. Provide exactly one input selector: paths, track_ids, or directory."
@@ -632,10 +623,6 @@ impl ReklawdboxServer {
         handle_embed_cover_art(params.0).await
     }
 
-    // -----------------------------------------------------------------------
-    // Audit engine
-    // -----------------------------------------------------------------------
-
     #[tool(
         description = "Collection audit engine. Scan files for convention violations, query/resolve issues, and get summaries. Operations: scan, query_issues, resolve_issues, get_summary."
     )]
@@ -646,10 +633,6 @@ impl ReklawdboxServer {
         let rb_db_path = self.state.db_path.clone().or_else(db::resolve_db_path);
         handle_audit_state(self.cache_store_path(), rb_db_path, params.0).await
     }
-
-    // -----------------------------------------------------------------------
-    // Library health tools
-    // -----------------------------------------------------------------------
 
     #[tool(
         description = "Scan for tracks with missing audio files on disk. Optionally suggests relocated files by matching filenames across content roots."

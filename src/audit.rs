@@ -350,9 +350,7 @@ pub fn classify_track_context(
         None => return AuditContext::LooseTrack,
     };
 
-    // Check for disc subdirectories (CD1, CD2, Disc 1, etc.)
     let (effective_parent, effective_dir_name) = if is_disc_subdir(dir_name) {
-        // Go up one more level for the album dir
         match parent.parent() {
             Some(album_dir) => match album_dir.file_name().and_then(|n| n.to_str()) {
                 Some(n) => (album_dir, n),
@@ -369,9 +367,7 @@ pub fn classify_track_context(
         return AuditContext::AlbumTrack;
     }
 
-    // Pre-pass detected album directory (2+ files with track-number prefixes).
-    // Check both effective parent (grandparent for disc subdirs) and direct parent
-    // (the disc subdir itself, which is what the pre-pass registers).
+    // Check both effective parent and direct parent (disc subdir case).
     if album_dirs.contains(effective_parent) || album_dirs.contains(parent) {
         return AuditContext::AlbumTrack;
     }
@@ -472,7 +468,6 @@ fn parse_album_filename(stem: &str) -> ParsedFilename {
         try_parse_track_number(first_two, stem)
     };
 
-    // Try to split remainder on " - " for artist - title
     if let Some(sep_pos) = remainder.find(" - ") {
         let artist = remainder[..sep_pos].trim();
         let title = remainder[sep_pos + 3..].trim();
@@ -514,7 +509,6 @@ fn parse_album_filename(stem: &str) -> ParsedFilename {
 fn try_parse_track_number<'a>(first_two: &str, stem: &'a str) -> (Option<String>, &'a str) {
     let bytes = stem.as_bytes();
     if first_two.chars().all(|c| c.is_ascii_digit()) {
-        // Check for 3-digit track number (e.g. "100 Artist - Title")
         if bytes.len() > 2
             && bytes[2].is_ascii_digit()
             && (bytes.len() == 3 || bytes[3] == b' ' || bytes[3] == b'-' || bytes[3] == b'.')
@@ -667,7 +661,6 @@ pub fn check_tags(
         return issues;
     }
 
-    // EMPTY_ARTIST
     if !skip.contains(&IssueType::EmptyArtist) && tag_is_empty(read_result, "artist") {
         issues.push(DetectedIssue {
             issue_type: IssueType::EmptyArtist,
@@ -675,7 +668,6 @@ pub fn check_tags(
         });
     }
 
-    // EMPTY_TITLE
     if !skip.contains(&IssueType::EmptyTitle) && tag_is_empty(read_result, "title") {
         issues.push(DetectedIssue {
             issue_type: IssueType::EmptyTitle,
@@ -709,7 +701,6 @@ pub fn check_tags(
         }
     }
 
-    // ARTIST_IN_TITLE
     if !skip.contains(&IssueType::ArtistInTitle)
         && let (Some(artist), Some(title)) = (
             get_tag_value(read_result, "artist"),
@@ -749,7 +740,6 @@ pub fn check_tags(
             ..
         } = read_result
     {
-        // WAV_TAG3_MISSING
         if !skip.contains(&IssueType::WavTag3Missing) && !tag3_missing.is_empty() {
             issues.push(DetectedIssue {
                 issue_type: IssueType::WavTag3Missing,
@@ -757,7 +747,6 @@ pub fn check_tags(
             });
         }
 
-        // WAV_TAG_DRIFT
         if !skip.contains(&IssueType::WavTagDrift) {
             let mut drifted = Vec::new();
             for field in &["artist", "title", "album", "genre", "year", "comment"] {
@@ -788,7 +777,6 @@ pub fn check_tags(
         }
     }
 
-    // GENRE_SET
     if !skip.contains(&IssueType::GenreSet) && !tag_is_empty(read_result, "genre") {
         let genre_val = get_tag_value(read_result, "genre").unwrap();
         issues.push(DetectedIssue {
@@ -831,7 +819,6 @@ pub fn check_filename(
         });
     }
 
-    // TECH_SPECS_IN_DIR
     if !skip.contains(&IssueType::TechSpecsInDir)
         && let Some((_, dir_name)) = effective_album_dir_name(path)
     {
@@ -867,7 +854,6 @@ pub fn check_filename(
         });
     }
 
-    // Parse filename and check drift / bad filename
     let parsed = parse_filename(path, context);
 
     // BAD_FILENAME — filename doesn't match canonical or acceptable alternates
@@ -903,7 +889,6 @@ pub fn check_filename(
         }
     }
 
-    // FILENAME_TAG_DRIFT
     if !skip.contains(&IssueType::FilenameTagDrift)
         && !matches!(read_result, FileReadResult::Error { .. })
     {
@@ -1032,7 +1017,6 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
                 }
             };
 
-            // Skip symlinks
             if file_type.is_symlink() {
                 continue;
             }
@@ -1129,7 +1113,6 @@ pub fn scan(
     let existing_map: HashMap<String, store::AuditFile> =
         existing.into_iter().map(|f| (f.path.clone(), f)).collect();
 
-    // Track disk paths for missing-file detection
     let disk_path_set: HashSet<String> =
         disk_files.iter().map(|p| p.display().to_string()).collect();
 
@@ -1187,7 +1170,7 @@ pub fn scan(
         let existing_file = existing_map.get(&path_str);
 
         let needs_scan = match existing_file {
-            None => true, // New file
+            None => true,
             Some(ef) => {
                 if revalidate {
                     true
@@ -1200,13 +1183,9 @@ pub fn scan(
         if !needs_scan {
             skipped_unchanged += 1;
         } else {
-            // Read tags
             let read_result = tags::read_file_tags(file_path, None, false);
-
-            // Determine context
             let context = classify_track_context(file_path, &album_dirs);
 
-            // Run checks
             let mut detected: Vec<DetectedIssue> = Vec::new();
             if !matches!(read_result, FileReadResult::Error { .. }) {
                 detected.extend(check_tags(
@@ -1246,11 +1225,9 @@ pub fn scan(
                 }
             }
 
-            // Upsert audit_file
             store::upsert_audit_file(&tx, &path_str, &now, &mtime, size)
                 .map_err(|e| format!("DB error upserting file: {e}"))?;
 
-            // Upsert detected issues
             let detected_types: Vec<&str> =
                 detected.iter().map(|d| d.issue_type.as_str()).collect();
             for issue in &detected {
@@ -1301,7 +1278,6 @@ pub fn scan(
         }
     }
 
-    // Commit final batch
     tx.commit()
         .map_err(|e| format!("DB error committing final batch: {e}"))?;
 
@@ -2051,7 +2027,6 @@ mod tests {
         for it in IssueType::iter() {
             let _ = it.safety_tier();
         }
-        // Spot-check specific tiers
         assert_eq!(IssueType::ArtistInTitle.safety_tier(), SafetyTier::Safe);
         assert_eq!(IssueType::WavTag3Missing.safety_tier(), SafetyTier::Safe);
         assert_eq!(IssueType::WavTagDrift.safety_tier(), SafetyTier::Safe);
@@ -2069,7 +2044,6 @@ mod tests {
 
     // -- Bug-fix regression tests --
 
-    /// Helper: build a tag map from key-value pairs, filling missing fields with None.
     fn make_tags(fields: &[(&str, &str)]) -> HashMap<String, Option<String>> {
         let mut tags = HashMap::new();
         for &f in tags::ALL_FIELDS {
@@ -2126,7 +2100,6 @@ mod tests {
     // Finding 3: ARTIST_IN_TITLE new_title is correct with unicode
     #[test]
     fn check_tags_artist_in_title_new_title_correct() {
-        // Ensure the new_title slice is correct even with varying case
         let tags = make_tags(&[("artist", "DJ Test"), ("title", "DJ Test - The Track")]);
         let result = FileReadResult::Single {
             path: "/x.flac".to_string(),
@@ -2210,7 +2183,7 @@ mod tests {
         let parsed = parse_filename(p, &AuditContext::AlbumTrack);
         assert_eq!(parsed.track_num.as_deref(), Some("05"));
         assert_eq!(parsed.title.as_deref(), Some("Invisible Dance"));
-        assert_eq!(parsed.artist, None); // Alternate format, no artist in filename
+        assert_eq!(parsed.artist, None);
     }
 
     // Finding 10: Missing-space format is bad filename
@@ -2706,14 +2679,11 @@ mod tests {
 
     // -- query_issues & resolve_issues --
 
-    /// Helper: open a temp store and seed it with audit files and issues for
-    /// query/resolve tests.
     fn seed_query_resolve_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.sqlite3");
         let conn = store::open(db_path.to_str().unwrap()).unwrap();
 
-        // Two audit files
         store::upsert_audit_file(&conn, "/music/a/track1.flac", "t1", "m1", 100).unwrap();
         store::upsert_audit_file(&conn, "/music/b/track2.wav", "t1", "m1", 200).unwrap();
 
