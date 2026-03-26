@@ -156,8 +156,7 @@ fn migrate_enrichment_cache(conn: &Connection) -> Result<(), rusqlite::Error> {
                  match_quality,
                  response_json,
                  created_at
-             FROM enrichment_cache
-             WHERE COALESCE(match_quality, '') != 'error'",
+             FROM enrichment_cache",
             [],
         )?;
         tx.execute_batch(
@@ -165,11 +164,6 @@ fn migrate_enrichment_cache(conn: &Connection) -> Result<(), rusqlite::Error> {
              ALTER TABLE enrichment_cache_new RENAME TO enrichment_cache;",
         )?;
         tx.commit()?;
-    } else {
-        conn.execute(
-            "DELETE FROM enrichment_cache WHERE COALESCE(match_quality, '') = 'error'",
-            [],
-        )?;
     }
 
     Ok(())
@@ -218,6 +212,42 @@ pub fn get_enrichment(
            AND query_title = ?3
            AND query_album = ?4
            AND COALESCE(match_quality, '') != 'error'",
+    )?;
+    let mut rows = stmt.query_map(params![provider, artist, title, album], |row| {
+        Ok(EnrichmentCacheEntry {
+            provider: row.get(0)?,
+            query_artist: row.get(1)?,
+            query_title: row.get(2)?,
+            query_album: row.get(3)?,
+            match_quality: row.get(4)?,
+            response_json: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?;
+    match rows.next() {
+        Some(Ok(entry)) => Ok(Some(entry)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+/// Like `get_enrichment` but includes error entries. Used by the hydrate CLI
+/// to detect previously-failed lookups for `--no-retry-errors`.
+pub fn get_enrichment_any(
+    conn: &Connection,
+    provider: &str,
+    artist: &str,
+    title: &str,
+    album: Option<&str>,
+) -> Result<Option<EnrichmentCacheEntry>, rusqlite::Error> {
+    let album = album.unwrap_or("");
+    let mut stmt = conn.prepare(
+        "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
+         FROM enrichment_cache
+         WHERE provider = ?1
+           AND query_artist = ?2
+           AND query_title = ?3
+           AND query_album = ?4",
     )?;
     let mut rows = stmt.query_map(params![provider, artist, title, album], |row| {
         Ok(EnrichmentCacheEntry {
@@ -327,10 +357,6 @@ pub fn set_enrichment(
     match_quality: Option<&str>,
     response_json: Option<&str>,
 ) -> Result<(), rusqlite::Error> {
-    if matches!(match_quality, Some("error")) {
-        return Ok(());
-    }
-
     let album = album.unwrap_or("");
     conn.execute(
         "INSERT INTO enrichment_cache (
@@ -2029,5 +2055,270 @@ mod tests {
         for a in &artists {
             assert!(result.contains(&(a.clone(), "title".to_string())));
         }
+    }
+
+    #[test]
+    fn test_batch_enrichment_with_results() {
+        let (_dir, conn) = open_temp_store();
+
+        // exact match — should appear
+        set_enrichment(
+            &conn,
+            "discogs",
+            "artist_a",
+            "title_1",
+            None,
+            Some("exact"),
+            Some(r#"{"title":"T1"}"#),
+        )
+        .unwrap();
+
+        // fuzzy match — should appear
+        set_enrichment(
+            &conn,
+            "discogs",
+            "artist_a",
+            "title_2",
+            None,
+            Some("fuzzy"),
+            Some(r#"{"title":"T2"}"#),
+        )
+        .unwrap();
+
+        // no match (match_quality = "none") — should NOT appear
+        set_enrichment(
+            &conn,
+            "discogs",
+            "artist_a",
+            "title_3",
+            None,
+            Some("none"),
+            None,
+        )
+        .unwrap();
+
+        // error entry — should NOT appear (excluded by base query)
+        set_enrichment(
+            &conn,
+            "discogs",
+            "artist_a",
+            "title_4",
+            None,
+            Some("error"),
+            None,
+        )
+        .unwrap();
+
+        // NULL match_quality — should NOT appear
+        set_enrichment(&conn, "discogs", "artist_a", "title_5", None, None, Some("{}")).unwrap();
+
+        let results =
+            batch_enrichment_with_results(&conn, "discogs", &["artist_a"]).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
+        assert!(results.contains(&("artist_a".to_string(), "title_2".to_string())));
+
+        // Empty input
+        let empty = batch_enrichment_with_results(&conn, "discogs", &[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_batch_enrichment_with_label() {
+        let (_dir, conn) = open_temp_store();
+
+        // Has label — should appear
+        set_enrichment(
+            &conn,
+            "beatport",
+            "artist_a",
+            "title_1",
+            None,
+            Some("exact"),
+            Some(r#"{"label":"Hyperdub","title":"T1"}"#),
+        )
+        .unwrap();
+
+        // Empty label — should NOT appear
+        set_enrichment(
+            &conn,
+            "beatport",
+            "artist_a",
+            "title_2",
+            None,
+            Some("exact"),
+            Some(r#"{"label":"","title":"T2"}"#),
+        )
+        .unwrap();
+
+        // No label key — should NOT appear
+        set_enrichment(
+            &conn,
+            "beatport",
+            "artist_a",
+            "title_3",
+            None,
+            Some("fuzzy"),
+            Some(r#"{"title":"T3"}"#),
+        )
+        .unwrap();
+
+        // match_quality = "none" — should NOT appear even if label present
+        set_enrichment(
+            &conn,
+            "beatport",
+            "artist_a",
+            "title_4",
+            None,
+            Some("none"),
+            Some(r#"{"label":"Warp"}"#),
+        )
+        .unwrap();
+
+        // Null response_json — should NOT appear
+        set_enrichment(
+            &conn,
+            "beatport",
+            "artist_a",
+            "title_5",
+            None,
+            Some("exact"),
+            None,
+        )
+        .unwrap();
+
+        let results =
+            batch_enrichment_with_label(&conn, "beatport", &["artist_a"]).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
+
+        // Empty input
+        let empty = batch_enrichment_with_label(&conn, "beatport", &[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_timbral_norm_stats_round_trip() {
+        let (_dir, conn) = open_temp_store();
+
+        // Initially empty
+        let none = get_timbral_norm_stats(&conn).unwrap();
+        assert!(none.is_none());
+
+        // Save stats
+        let stats = TimbralNormStats {
+            dims: vec![(0.5, 0.1), (1.2, 0.3), (-0.8, 0.05)],
+            sample_count: 42,
+        };
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+
+        // Read back
+        let loaded = get_timbral_norm_stats(&conn).unwrap().expect("should find stats");
+        assert_eq!(loaded.dims.len(), 3);
+        assert!((loaded.dims[0].0 - 0.5).abs() < f64::EPSILON);
+        assert!((loaded.dims[0].1 - 0.1).abs() < f64::EPSILON);
+        assert!((loaded.dims[1].0 - 1.2).abs() < f64::EPSILON);
+        assert!((loaded.dims[1].1 - 0.3).abs() < f64::EPSILON);
+        assert!((loaded.dims[2].0 - (-0.8)).abs() < f64::EPSILON);
+        assert!((loaded.dims[2].1 - 0.05).abs() < f64::EPSILON);
+        assert_eq!(loaded.sample_count, 42);
+
+        // Overwrite with new stats — old rows should be replaced
+        let stats2 = TimbralNormStats {
+            dims: vec![(10.0, 2.0)],
+            sample_count: 99,
+        };
+        save_timbral_norm_stats(&conn, &stats2).unwrap();
+
+        let loaded2 = get_timbral_norm_stats(&conn).unwrap().unwrap();
+        assert_eq!(loaded2.dims.len(), 1);
+        assert!((loaded2.dims[0].0 - 10.0).abs() < f64::EPSILON);
+        assert_eq!(loaded2.sample_count, 99);
+    }
+
+    #[test]
+    fn test_weight_preset_crud() {
+        let (_dir, conn) = open_temp_store();
+
+        // Initially empty
+        let all = list_weight_presets(&conn, None).unwrap();
+        assert!(all.is_empty());
+
+        // Save two presets of different types
+        save_weight_preset(
+            &conn,
+            "chill",
+            "transition",
+            r#"{"energy":0.3,"key":0.7}"#,
+        )
+        .unwrap();
+        save_weight_preset(
+            &conn,
+            "high-energy",
+            "transition",
+            r#"{"energy":0.9,"key":0.5}"#,
+        )
+        .unwrap();
+        save_weight_preset(
+            &conn,
+            "club",
+            "pool",
+            r#"{"bpm":0.8}"#,
+        )
+        .unwrap();
+
+        // List all
+        let all = list_weight_presets(&conn, None).unwrap();
+        assert_eq!(all.len(), 3);
+
+        // List filtered by type
+        let transition = list_weight_presets(&conn, Some("transition")).unwrap();
+        assert_eq!(transition.len(), 2);
+        // Ordered by name
+        assert_eq!(transition[0].name, "chill");
+        assert_eq!(transition[1].name, "high-energy");
+
+        let pool = list_weight_presets(&conn, Some("pool")).unwrap();
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool[0].name, "club");
+
+        // Get specific preset
+        let json = get_weight_preset(&conn, "chill", "transition")
+            .unwrap()
+            .expect("should find preset");
+        assert!(json.contains("energy"));
+
+        // Miss: wrong type
+        let miss = get_weight_preset(&conn, "chill", "pool").unwrap();
+        assert!(miss.is_none());
+
+        // Miss: wrong name
+        let miss2 = get_weight_preset(&conn, "nonexistent", "transition").unwrap();
+        assert!(miss2.is_none());
+
+        // Update existing preset (upsert)
+        save_weight_preset(
+            &conn,
+            "chill",
+            "transition",
+            r#"{"energy":0.2,"key":0.8}"#,
+        )
+        .unwrap();
+        let updated = get_weight_preset(&conn, "chill", "transition").unwrap().unwrap();
+        assert!(updated.contains("0.2"));
+
+        // Delete
+        let deleted = delete_weight_preset(&conn, "chill", "transition").unwrap();
+        assert!(deleted);
+
+        // Delete again — should return false
+        let deleted_again = delete_weight_preset(&conn, "chill", "transition").unwrap();
+        assert!(!deleted_again);
+
+        // Verify only 2 remain
+        let remaining = list_weight_presets(&conn, None).unwrap();
+        assert_eq!(remaining.len(), 2);
     }
 }

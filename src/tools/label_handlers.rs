@@ -28,54 +28,7 @@ fn normalize_label(label: &str) -> Option<String> {
     Some(label.to_string())
 }
 
-/// Cache a lookup result (hit or miss). Returns 1 if the result had data, 0 if miss.
-fn cache_lookup_result<T: serde::Serialize + HasScore>(
-    server: &ReklawdboxServer,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    result: Option<&T>,
-) -> Result<usize, McpError> {
-    let store_conn = server.cache_store_conn()?;
-    match result {
-        Some(r) => {
-            let json = serde_json::to_string(r).ok();
-            let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some(quality),
-                json.as_deref(),
-            );
-            Ok(1)
-        }
-        None => {
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some("none"),
-                None,
-            );
-            Ok(0)
-        }
-    }
-}
-
-trait HasScore {
-    fn score(&self) -> i32;
-}
-
-impl HasScore for crate::bandcamp::BandcampResult {
-    fn score(&self) -> i32 {
-        self.score
-    }
-}
+use super::enrichment_cache::cache_lookup_result;
 
 /// Try to extract a label from the enrichment cache for a single provider.
 fn label_from_cache(
@@ -375,4 +328,88 @@ pub(super) async fn handle_backfill_labels(
     let json =
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── normalize_label ──────────────────────────────────────────────
+
+    #[test]
+    fn normalize_label_filters_not_on_label_exact() {
+        assert_eq!(normalize_label("Not On Label"), None);
+    }
+
+    #[test]
+    fn normalize_label_filters_not_on_label_with_suffix() {
+        // Discogs uses "Not On Label (Artist Self-released)" and similar variants
+        assert_eq!(normalize_label("Not On Label (Artist Self-released)"), None);
+        assert_eq!(
+            normalize_label("Not On Label (Some Other Variant)"),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_label_passes_regular_labels() {
+        assert_eq!(
+            normalize_label("Warp Records"),
+            Some("Warp Records".to_string())
+        );
+        assert_eq!(
+            normalize_label("Planet Mu"),
+            Some("Planet Mu".to_string())
+        );
+        assert_eq!(
+            normalize_label("Hyperdub"),
+            Some("Hyperdub".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_label_passes_empty_string() {
+        // Empty labels are not "Not On Label" — caller filters empties separately
+        assert_eq!(normalize_label(""), Some(String::new()));
+    }
+
+    #[test]
+    fn normalize_label_is_case_sensitive() {
+        // "not on label" (lowercase) is not filtered — Discogs always uses title case
+        assert_eq!(
+            normalize_label("not on label"),
+            Some("not on label".to_string())
+        );
+        assert_eq!(
+            normalize_label("NOT ON LABEL"),
+            Some("NOT ON LABEL".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_label_preserves_similar_names() {
+        // Labels that happen to contain "Not On Label" as a substring but don't
+        // start with it should pass through
+        assert_eq!(
+            normalize_label("Definitely Not On Label Records"),
+            Some("Definitely Not On Label Records".to_string())
+        );
+    }
+
+    // ── BackfillLabelsScanResult default ─────────────────────────────
+
+    #[test]
+    fn scan_result_default_is_zeroed() {
+        let r = BackfillLabelsScanResult::default();
+        assert_eq!(r.filled, 0);
+        assert_eq!(r.already_labeled, 0);
+        assert!(r.conflicts.is_empty());
+        assert_eq!(r.no_enrichment, 0);
+        assert_eq!(r.no_discogs, 0);
+        assert_eq!(r.no_musicbrainz, 0);
+        assert_eq!(r.no_bandcamp, 0);
+        assert_eq!(r.no_beatport, 0);
+        assert!(r.to_stage.is_empty());
+        assert!(r.uncached_bandcamp.is_empty());
+    }
 }

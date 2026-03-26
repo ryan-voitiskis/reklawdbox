@@ -1,5 +1,4 @@
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -44,28 +43,13 @@ pub struct BeatportResult {
     pub artists: Vec<String>,
     pub release_date: Option<String>,
     pub label: Option<String>,
+    #[serde(default)]
+    pub fuzzy_match: bool,
 }
 
 async fn wait_for_rate_limit() {
-    let interval_ms: u64 = std::env::var("REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1000);
-    let interval = Duration::from_millis(interval_ms);
-
-    let mut last = RATE_LIMITER
-        .get_or_init(|| TokioMutex::new(None))
-        .lock()
-        .await;
-
-    if let Some(prev) = *last {
-        let elapsed = prev.elapsed();
-        if elapsed < interval {
-            tokio::time::sleep(interval - elapsed).await;
-        }
-    }
-
-    *last = Some(Instant::now());
+    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
+    crate::rate_limit::wait(last, "REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS", 1000).await;
 }
 
 pub async fn lookup(
@@ -244,6 +228,7 @@ fn parse_beatport_html(
                     .filter(|l| !l.is_empty())
                     .map(|s| s.to_string());
 
+                let fuzzy_match = !track_name.eq_ignore_ascii_case(title.trim());
                 return Ok(Some(BeatportResult {
                     genre,
                     bpm,
@@ -252,6 +237,7 @@ fn parse_beatport_html(
                     artists,
                     release_date,
                     label,
+                    fuzzy_match,
                 }));
             }
         }
@@ -279,15 +265,28 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
         return false;
     }
 
-    let artist_match = track
+    let bp_artists: Vec<String> = track
         .get("artists")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|a| a.get("artist_name").and_then(|n| n.as_str()))
-                .any(|name| name.to_lowercase() == norm_artist)
+                .map(|name| name.trim().to_lowercase())
+                .collect()
         })
-        .unwrap_or(false);
+        .unwrap_or_default();
+
+    // Split search artist on comma to handle multi-artist strings like "Burial, Four Tet".
+    // Beatport returns separate artist objects; Rekordbox stores them as a combined string.
+    let search_parts: Vec<&str> = norm_artist
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let artist_match = bp_artists
+        .iter()
+        .any(|bp| search_parts.iter().any(|part| bp == part));
 
     let track_name = track
         .get("track_name")
@@ -305,6 +304,8 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn build_html_with_queries(queries: serde_json::Value) -> String {
@@ -592,6 +593,56 @@ mod tests {
         assert!(!is_track_match(&track, "Burial", ""));
         assert!(!is_track_match(&track, "   ", "Archangel"));
         assert!(!is_track_match(&track, "Burial", "   "));
+    }
+
+    #[test]
+    fn test_parse_returns_first_match_when_multiple_tracks_match() {
+        // When several tracks in the results all satisfy is_track_match,
+        // parse_beatport_html should return the first one it encounters
+        // (it returns early on the first match).
+        let html = build_html_with_tracks(serde_json::json!([
+            {
+                "track_id": 100,
+                "track_name": "Archangel",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 140,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Bass / Club"}],
+                "label": {"label_id": 1, "label_name": "Hyperdub"}
+            },
+            {
+                "track_id": 200,
+                "track_name": "Archangel (Extended Mix)",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 138,
+                "key_name": "Cm",
+                "genre": [{"genre_name": "Leftfield Bass"}],
+                "label": {"label_id": 2, "label_name": "Other Label"}
+            },
+            {
+                "track_id": 300,
+                "track_name": "Archangel (Remaster)",
+                "artists": [{"artist_name": "Burial"}],
+                "bpm": 140,
+                "key_name": "Am",
+                "genre": [{"genre_name": "Electronica"}],
+                "label": {"label_id": 3, "label_name": "Third Label"}
+            }
+        ]));
+
+        let result = parse_beatport_html(&html, "Burial", "Archangel")
+            .unwrap()
+            .expect("expected a beatport match");
+
+        // Should be the first track (track_id 100), not the second or third.
+        assert_eq!(result.track_name, "Archangel");
+        assert_eq!(result.bpm, Some(140));
+        assert_eq!(result.key, "Am");
+        assert_eq!(result.genre, "Bass / Club");
+        assert_eq!(result.label, Some("Hyperdub".to_string()));
+        assert_eq!(result.artists, vec!["Burial".to_string()]);
+        // Exact title match => fuzzy_match should be false.
+        assert!(!result.fuzzy_match);
     }
 
     #[test]

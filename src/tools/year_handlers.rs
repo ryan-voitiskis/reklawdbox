@@ -22,60 +22,7 @@ pub(super) struct BackfillYearsParams {
     pub auto_enrich: Option<bool>,
 }
 
-/// Cache a lookup result (hit or miss). Returns 1 if the result had data, 0 if miss.
-fn cache_lookup_result<T: serde::Serialize + HasScore>(
-    server: &ReklawdboxServer,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    result: Option<&T>,
-) -> Result<usize, McpError> {
-    let store_conn = server.cache_store_conn()?;
-    match result {
-        Some(r) => {
-            let json = serde_json::to_string(r).ok();
-            let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some(quality),
-                json.as_deref(),
-            );
-            Ok(1)
-        }
-        None => {
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some("none"),
-                None,
-            );
-            Ok(0)
-        }
-    }
-}
-
-trait HasScore {
-    fn score(&self) -> i32;
-}
-
-impl HasScore for crate::bandcamp::BandcampResult {
-    fn score(&self) -> i32 {
-        self.score
-    }
-}
-
-impl HasScore for crate::musicbrainz::MusicBrainzResult {
-    fn score(&self) -> i32 {
-        self.score
-    }
-}
+use super::enrichment_cache::cache_lookup_result;
 
 fn parse_year_str(s: &str) -> Option<i32> {
     // Accept "2019", "2019-01-15", etc. — take first 4 digits.

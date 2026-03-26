@@ -191,7 +191,7 @@ fn build_alias_map(aliases: &[(&str, &'static str)]) -> HashMap<String, &'static
             "alias '{}' must be lowercase ASCII",
             alias
         );
-        let key = alias.to_ascii_lowercase();
+        let key = alias.to_string();
         let previous = map.insert(key.clone(), canonical);
         assert!(
             previous.is_none(),
@@ -329,8 +329,8 @@ pub fn genre_depth(canonical: &str) -> u8 {
         "Deep House" => 5,
 
         // Techno family
-        "Hard Techno" => 1,
-        "Acid" | "Electro" => 2,
+        "Hard Techno" | "Psytrance" => 1,
+        "Acid" | "Electro" | "Trance" => 2,
         "Techno" => 3,
         "Minimal" => 4,
         "Deep Techno" => 5,
@@ -365,7 +365,7 @@ pub fn genre_family(canonical: &str) -> GenreFamily {
         | "Progressive House" | "Garage" | "Speed Garage" | "Disco" => GenreFamily::House,
 
         "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno" | "Hard Techno"
-        | "Drone Techno" | "Acid" | "Electro" => GenreFamily::Techno,
+        | "Drone Techno" | "Acid" | "Electro" | "Trance" | "Psytrance" => GenreFamily::Techno,
 
         "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "UK Bass" | "Grime" | "Bassline"
         | "Broken Beat" => GenreFamily::Bass,
@@ -542,8 +542,21 @@ mod tests {
 
     #[test]
     fn all_taxonomy_genres_have_family() {
+        // Verify key family assignments to catch mapping errors
+        assert_eq!(genre_family("House"), GenreFamily::House);
+        assert_eq!(genre_family("Deep House"), GenreFamily::House);
+        assert_eq!(genre_family("Techno"), GenreFamily::Techno);
+        assert_eq!(genre_family("Hard Techno"), GenreFamily::Techno);
+        assert_eq!(genre_family("Trance"), GenreFamily::Techno);
+        assert_eq!(genre_family("Psytrance"), GenreFamily::Techno);
+        assert_eq!(genre_family("Drum & Bass"), GenreFamily::Bass);
+        assert_eq!(genre_family("Dubstep"), GenreFamily::Bass);
+        assert_eq!(genre_family("Ambient"), GenreFamily::Downtempo);
+        assert_eq!(genre_family("Downtempo"), GenreFamily::Downtempo);
+
+        // Every taxonomy genre must resolve without panicking
         for g in GENRES {
-            let _ = genre_family(g); // should not panic
+            let _ = genre_family(g);
         }
     }
 

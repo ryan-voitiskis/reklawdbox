@@ -154,54 +154,7 @@ fn is_noise_album(candidate: &str, track_title: &str, artist: &str) -> bool {
     norm_candidate == norm_title || norm_candidate == norm_artist
 }
 
-trait HasScore {
-    fn score(&self) -> i32;
-}
-
-impl HasScore for crate::bandcamp::BandcampResult {
-    fn score(&self) -> i32 {
-        self.score
-    }
-}
-
-/// Cache a lookup result (hit or miss). Returns 1 if the result had data, 0 if miss.
-fn cache_lookup_result<T: serde::Serialize + HasScore>(
-    server: &ReklawdboxServer,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    result: Option<&T>,
-) -> Result<usize, McpError> {
-    let store_conn = server.cache_store_conn()?;
-    match result {
-        Some(r) => {
-            let json = serde_json::to_string(r).ok();
-            let quality = if r.score() >= 90 { "exact" } else { "fuzzy" };
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some(quality),
-                json.as_deref(),
-            );
-            Ok(1)
-        }
-        None => {
-            let _ = store::set_enrichment(
-                &store_conn,
-                provider,
-                norm_artist,
-                norm_title,
-                None,
-                Some("none"),
-                None,
-            );
-            Ok(0)
-        }
-    }
-}
+use super::enrichment_cache::cache_lookup_result;
 
 #[derive(Default)]
 struct BackfillAlbumsScanResult {

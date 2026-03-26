@@ -1,5 +1,4 @@
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use regex::Regex;
 use reqwest::Client;
@@ -14,7 +13,7 @@ static URL_RE: OnceLock<Regex> = OnceLock::new();
 
 fn url_re() -> &'static Regex {
     URL_RE.get_or_init(|| {
-        Regex::new(r#"<a\s+href="(https?://[^"]+\.bandcamp\.com/track/[^"?]+)"#).unwrap()
+        Regex::new(r#"<a\b[^>]*\bhref="(https?://[^"]+\.bandcamp\.com/track/[^"?]+)"#).unwrap()
     })
 }
 
@@ -46,25 +45,8 @@ pub struct BandcampResult {
 // ── Rate limiting ────────────────────────────────────────────────────────
 
 async fn wait_for_rate_limit() {
-    let interval_ms: u64 = std::env::var("REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1500);
-    let interval = Duration::from_millis(interval_ms);
-
-    let mut last = RATE_LIMITER
-        .get_or_init(|| TokioMutex::new(None))
-        .lock()
-        .await;
-
-    if let Some(prev) = *last {
-        let elapsed = prev.elapsed();
-        if elapsed < interval {
-            tokio::time::sleep(interval - elapsed).await;
-        }
-    }
-
-    *last = Some(Instant::now());
+    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
+    crate::rate_limit::wait(last, "REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS", 1500).await;
 }
 
 // ── Public lookup ────────────────────────────────────────────────────────
@@ -631,6 +613,8 @@ fn normalized_levenshtein(a: &str, b: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     // ── strip_title_noise ────────────────────────────────────────────

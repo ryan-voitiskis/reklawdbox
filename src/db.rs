@@ -496,8 +496,7 @@ pub(crate) fn content_roots(
     ))?;
     let paths: Vec<String> = stmt
         .query_map(bind_params, |row| row.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     if paths.is_empty() {
         return Ok(Vec::new());

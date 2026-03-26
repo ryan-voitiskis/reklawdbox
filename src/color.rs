@@ -13,6 +13,7 @@ pub const COLORS: &[(&str, i32)] = &[
 
 /// Convert a color name to its Rekordbox hex code. Case-insensitive.
 pub fn color_name_to_code(name: &str) -> Option<i32> {
+    let name = name.trim();
     COLORS
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))

@@ -1159,15 +1159,18 @@ fn embed_cover_art_inner(
     let image_data =
         fs::read(image_path).map_err(|e| TagError::Io(format!("Failed to read image: {e}")))?;
 
-    // Detect MIME type from the data
-    let mut cursor = std::io::Cursor::new(&image_data);
-    let detected = Picture::from_reader(&mut cursor)
-        .map_err(|e| TagError::Io(format!("Failed to parse image: {e}")))?;
+    // Detect MIME type from the data, then drop the temporary Picture to free its copy
+    let mime = {
+        let mut cursor = std::io::Cursor::new(&image_data);
+        let detected = Picture::from_reader(&mut cursor)
+            .map_err(|e| TagError::Io(format!("Failed to parse image: {e}")))?;
+        detected.mime_type().cloned()
+    };
 
     // Build a new picture with the desired PictureType and detected MIME
     let mut builder = Picture::unchecked(image_data).pic_type(pic_type);
-    if let Some(mime) = detected.mime_type() {
-        builder = builder.mime_type(mime.clone());
+    if let Some(mime) = mime {
+        builder = builder.mime_type(mime);
     }
     let picture = builder.build();
 

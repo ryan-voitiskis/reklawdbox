@@ -17,6 +17,7 @@ mod corpus_helpers;
 mod discogs_auth;
 mod enrich_handlers;
 mod enrichment;
+mod enrichment_cache;
 pub(crate) mod essentia;
 mod file_tag_handlers;
 mod health_handlers;
@@ -128,9 +129,12 @@ impl ReklawdboxServer {
         &self,
     ) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
         let result = self.state.internal_db.get_or_init(|| {
-            let path = std::env::var("CRATE_DIG_STORE_PATH")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| store::default_path());
+            let path = match self.state.store_path {
+                Some(ref p) => std::path::PathBuf::from(p),
+                None => std::env::var("CRATE_DIG_STORE_PATH")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| store::default_path()),
+            };
             let path_str = path.to_string_lossy().to_string();
             match store::open(&path_str) {
                 Ok(conn) => Ok(Mutex::new(conn)),

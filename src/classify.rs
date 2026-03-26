@@ -2166,4 +2166,56 @@ mod tests {
         );
         assert_eq!(result.action, ClassificationAction::Conflict);
     }
+
+    // H5: Conflicting enrichment sources resolved by audio tiebreaker
+    // Discogs says House, Beatport says Techno — cross-family disagreement.
+    // Votes: Beatport Techno=1.0, Discogs House=0.9 → margin/total ≈ 0.053 → close contest.
+    // Audio: 130bpm, dancefloor energy, regular rhythm → favors Techno family.
+    // Expected: Techno wins at Low confidence with "audio-assisted-tiebreak" flag.
+    #[test]
+    fn test_conflicting_enrichment_resolved_by_audio() {
+        let ev = TrackEvidence {
+            track_id: "test-h5".into(),
+            artist: "Test Artist".into(),
+            title: "Conflict Tiebreak".into(),
+            current_genre: "".into(),
+            bpm: 130.0,
+            discogs_mapped: vec![MappedGenre {
+                genre: "House",
+                style_count: 1,
+            }],
+            beatport_genre: Some("Techno"),
+            beatport_raw: Some("Techno (Peak Time / Driving)".into()),
+            label: None,
+            label_genre: None,
+            audio: Some(AudioFeatures {
+                rekordbox_bpm: 130.0,
+                stratum_bpm: Some(130.0),
+                bpm_agreement: Some(true),
+                danceability: Some(2.2),         // dancefloor bucket
+                dynamic_complexity: Some(3.0),   // not ambient/atmospheric
+                rhythm_regularity: Some(0.92),   // regular — no broken flag
+                spectral_centroid_mean: Some(1800.0),
+            }),
+            has_discogs: true,
+            has_beatport: true,
+            has_audio: true,
+        };
+        let result = classify_track(&ev);
+        assert_eq!(
+            result.genre,
+            Some("Techno"),
+            "Audio tiebreaker should resolve cross-family conflict in favor of Techno"
+        );
+        assert_eq!(
+            result.confidence,
+            ClassificationConfidence::Low,
+            "Cross-family tiebreak via audio should yield Low confidence"
+        );
+        assert!(
+            result.flags.contains(&"audio-assisted-tiebreak".to_string()),
+            "Should flag that audio assisted the tiebreak, flags: {:?}",
+            result.flags
+        );
+    }
 }

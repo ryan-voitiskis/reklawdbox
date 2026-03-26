@@ -1,5 +1,4 @@
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ pub enum MusicBrainzError {
     Http {
         status: reqwest::StatusCode,
         body: String,
+        retry_after: Option<String>,
     },
     #[error("{0}")]
     Parse(String),
@@ -39,25 +39,8 @@ pub struct MusicBrainzResult {
 }
 
 async fn wait_for_rate_limit() {
-    let interval_ms: u64 = std::env::var("REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1100);
-    let interval = Duration::from_millis(interval_ms);
-
-    let mut last = RATE_LIMITER
-        .get_or_init(|| TokioMutex::new(None))
-        .lock()
-        .await;
-
-    if let Some(prev) = *last {
-        let elapsed = prev.elapsed();
-        if elapsed < interval {
-            tokio::time::sleep(interval - elapsed).await;
-        }
-    }
-
-    *last = Some(Instant::now());
+    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
+    crate::rate_limit::wait(last, "REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS", 1100).await;
 }
 
 pub async fn lookup(
@@ -83,8 +66,17 @@ pub async fn lookup(
 
     let status = resp.status();
     if !status.is_success() {
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         let body = resp.text().await.unwrap_or_default();
-        return Err(MusicBrainzError::Http { status, body });
+        return Err(MusicBrainzError::Http {
+            status,
+            body,
+            retry_after,
+        });
     }
 
     let body = resp.text().await?;
@@ -157,10 +149,19 @@ pub async fn lookup(
             .map(|s| s.to_string())
     });
 
-    // Look up release for label
+    // Look up release for label — degrade gracefully on failure
     let label = if let Some(ref release_id) = best_release_id {
         wait_for_rate_limit().await;
-        lookup_release_label(client, release_id).await?
+        match lookup_release_label(client, release_id).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(
+                    release_id,
+                    "MusicBrainz label lookup failed, returning without label: {e}"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -192,8 +193,17 @@ async fn lookup_release_label(
 
     let status = resp.status();
     if !status.is_success() {
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         let body = resp.text().await.unwrap_or_default();
-        return Err(MusicBrainzError::Http { status, body });
+        return Err(MusicBrainzError::Http {
+            status,
+            body,
+            retry_after,
+        });
     }
 
     let body = resp.text().await?;
@@ -279,6 +289,8 @@ fn score_release(release: &serde_json::Value) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]

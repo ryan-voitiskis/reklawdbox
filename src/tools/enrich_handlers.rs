@@ -169,8 +169,9 @@ pub(super) async fn handle_lookup_beatport(
 
     let (match_quality, response_json) = match &result {
         Some(r) => {
+            let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
             let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            (Some("exact"), Some(json))
+            (Some(quality), Some(json))
         }
         None => (Some("none"), None),
     };
@@ -253,8 +254,9 @@ pub(super) async fn handle_lookup_musicbrainz(
 
     let (match_quality, response_json) = match &result {
         Some(r) => {
+            let quality = if r.score >= 100 { "exact" } else { "fuzzy" };
             let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            (Some("exact"), Some(json))
+            (Some(quality), Some(json))
         }
         None => (Some("none"), None),
     };
@@ -670,13 +672,14 @@ async fn enrich_single_track(
                             );
                         }
                     };
+                    let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
                     let _ = cache_tx
                         .send(EnrichCacheWriteMsg::Enrichment {
                             provider: "beatport".to_string(),
                             norm_artist,
                             norm_title,
                             norm_album: None,
-                            match_quality: Some("exact".to_string()),
+                            match_quality: Some(quality.to_string()),
                             response_json: Some(json_str),
                         })
                         .await;

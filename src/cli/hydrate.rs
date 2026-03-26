@@ -114,6 +114,7 @@ pub(crate) struct HydrateArgs {
 
 struct ProviderCounters {
     enriched: AtomicU32,
+    no_match: AtomicU32,
     errors: AtomicU32,
 }
 
@@ -121,6 +122,7 @@ impl ProviderCounters {
     fn new() -> Self {
         Self {
             enriched: AtomicU32::new(0),
+            no_match: AtomicU32::new(0),
             errors: AtomicU32::new(0),
         }
     }
@@ -229,7 +231,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
         if want_discogs {
-            match store::get_enrichment(
+            match store::get_enrichment_any(
                 &store_conn,
                 "discogs",
                 &norm_artist,
@@ -253,7 +255,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
 
         if want_beatport {
-            match store::get_enrichment(&store_conn, "beatport", &norm_artist, &norm_title, None)? {
+            match store::get_enrichment_any(&store_conn, "beatport", &norm_artist, &norm_title, None)? {
                 Some(entry) => {
                     if entry.match_quality.as_deref() == Some("error") {
                         beatport_errors += 1;
@@ -353,7 +355,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
 
     // Estimate time
-    let enrich_concurrency_est = args.concurrency.unwrap_or(4).max(1) as u64;
+    let enrich_concurrency_est = args.concurrency.unwrap_or(4).clamp(1, 16) as u64;
     let beatport_secs = beatport_pending.len() as u64; // ~1 req/s rate limit
     let discogs_secs = discogs_pending.len() as u64 / enrich_concurrency_est;
     // stratum-dsp ≈ 18s/track, essentia subprocess adds ≈ 30s/track
@@ -668,7 +670,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 tracing::error!("{e}");
                                 counters.errors.fetch_add(1, Ordering::Relaxed);
                             } else {
-                                counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                counters.no_match.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                         Err(err) => {
@@ -677,6 +679,19 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 track.artist,
                                 track.title
                             );
+                            let _ = send_cache_message(
+                                &cache_tx,
+                                HydrateCacheMsg::Enrichment {
+                                    provider: "discogs".to_string(),
+                                    norm_artist,
+                                    norm_title,
+                                    norm_album,
+                                    match_quality: Some("error".to_string()),
+                                    response_json: None,
+                                },
+                                "discogs error",
+                            )
+                            .await;
                             counters.errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -743,7 +758,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                             norm_artist,
                                             norm_title,
                                             norm_album: None,
-                                            match_quality: Some("exact".to_string()),
+                                            match_quality: Some(
+                                                if r.fuzzy_match { "fuzzy" } else { "exact" }
+                                                    .to_string(),
+                                            ),
                                             response_json: Some(response_json),
                                         },
                                         "beatport enrichment",
@@ -780,7 +798,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 tracing::error!("{e}");
                                 counters.errors.fetch_add(1, Ordering::Relaxed);
                             } else {
-                                counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                counters.no_match.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                         Err(err) => {
@@ -789,6 +807,19 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 track.artist,
                                 track.title
                             );
+                            let _ = send_cache_message(
+                                &cache_tx,
+                                HydrateCacheMsg::Enrichment {
+                                    provider: "beatport".to_string(),
+                                    norm_artist,
+                                    norm_title,
+                                    norm_album: None,
+                                    match_quality: Some("error".to_string()),
+                                    response_json: None,
+                                },
+                                "beatport error",
+                            )
+                            .await;
                             counters.errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -904,10 +935,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     println!("\nDone ({mins}m {secs}s)");
     if want_discogs {
         let enriched = discogs_counters.enriched.load(Ordering::Relaxed);
+        let no_match = discogs_counters.no_match.load(Ordering::Relaxed);
         let errors = discogs_counters.errors.load(Ordering::Relaxed);
         println!(
-            "  Discogs:  {} enriched, {} errors",
+            "  Discogs:  {} enriched, {} no match, {} errors",
             style(enriched).green(),
+            style(no_match).dim(),
             if errors > 0 {
                 style(errors).red()
             } else {
@@ -917,10 +950,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
     if want_beatport {
         let enriched = beatport_counters.enriched.load(Ordering::Relaxed);
+        let no_match = beatport_counters.no_match.load(Ordering::Relaxed);
         let errors = beatport_counters.errors.load(Ordering::Relaxed);
         println!(
-            "  Beatport: {} enriched, {} errors",
+            "  Beatport: {} enriched, {} no match, {} errors",
             style(enriched).green(),
+            style(no_match).dim(),
             if errors > 0 {
                 style(errors).red()
             } else {

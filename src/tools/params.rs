@@ -288,7 +288,7 @@ pub struct AnalyzeAudioBatchParams {
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
     #[schemars(
-        description = "Max concurrent track analyses (default: half CPU cores, min 2, max 16)"
+        description = "Max concurrent track analyses (default: half CPU cores, min 1, max 4)"
     )]
     pub concurrency: Option<u32>,
 }

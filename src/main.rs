@@ -16,6 +16,7 @@ mod genre;
 mod keychain;
 mod musicbrainz;
 mod normalize;
+mod rate_limit;
 mod store;
 mod tags;
 mod tools;
@@ -78,7 +79,9 @@ fn load_env_from_mcp_json() {
     for (key, val) in env {
         if let Some(val) = val.as_str() {
             if std::env::var_os(key).is_none() {
-                // SAFETY: called at the top of main() before any threads are spawned.
+                // SAFETY: only sets vars that are unset (is_none guard), and runs
+                // before any application code reads these vars. Tokio worker threads
+                // exist but do not access env during this early init phase.
                 unsafe { std::env::set_var(key, val) };
             }
         }

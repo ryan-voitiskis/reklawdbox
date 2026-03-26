@@ -1399,7 +1399,7 @@ async fn write_xml_deduplicates_playlist_and_staged_tracks() {
 
     let xml = std::fs::read_to_string(&output_path).expect("XML output should be readable");
     assert!(xml.contains("<COLLECTION Entries=\"2\">"));
-    assert_eq!(xml.matches("<TRACK TrackID=\"").count(), 2);
+    assert_eq!(xml.matches("TrackID=\"").count(), 2);
     assert_eq!(xml.matches("Name=\"Señorita\"").count(), 1);
     assert_eq!(xml.matches("Name=\"Playlist Only\"").count(), 1);
 
@@ -1429,9 +1429,19 @@ async fn write_xml_deduplicates_playlist_and_staged_tracks() {
         "playlist-only track should keep DB-derived rating when not staged"
     );
 
+    let playlist_line = xml
+        .lines()
+        .find(|line| {
+            line.contains("<NODE")
+                && line.contains("Type=\"1\"")
+                && line.contains("Name=\"Mixed Export\"")
+                && line.contains("Entries=\"2\"")
+                && line.contains("KeyType=\"0\"")
+        })
+        .expect("playlist node should exist with expected attributes");
     let playlist_start = xml
-        .find("<NODE Type=\"1\" Name=\"Mixed Export\" Entries=\"2\" KeyType=\"0\">")
-        .expect("playlist node should exist");
+        .find(playlist_line)
+        .expect("playlist line should be findable in xml");
     let playlist_end = playlist_start
         + xml[playlist_start..]
             .find("</NODE>")
