@@ -912,7 +912,7 @@ pub(super) enum AuditOperation {
 pub(super) struct ScanBrokenLinksParams {
     #[schemars(description = "Scope to tracks whose file path starts with this prefix")]
     pub path_prefix: Option<String>,
-    #[schemars(description = "Attempt fuzzy filename matching for relocations (default true)")]
+    #[schemars(description = "Attempt case-insensitive filename matching for relocations (default true)")]
     pub suggest_relocations: Option<bool>,
     #[schemars(description = "Max broken links to report (default 200)")]
     pub limit: Option<u32>,

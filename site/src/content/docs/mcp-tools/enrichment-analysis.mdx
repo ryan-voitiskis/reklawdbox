@@ -109,7 +109,7 @@ Analyze one track. Returns BPM, key, and (with Essentia) energy descriptors.
 | `track_id` | string | **yes** | Track ID |
 | `skip_cached` | boolean | | Skip if already cached (default: `true`) |
 
-Cache validates file size and modification time — changed files are automatically re-analyzed.
+Cache is keyed by file path and analysis schema version. A schema version bump invalidates stale entries.
 
 ---
 

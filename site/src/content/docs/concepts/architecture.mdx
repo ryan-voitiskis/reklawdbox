@@ -43,13 +43,13 @@ Rekordbox 6/7 encrypt `master.db` with SQLCipher 4 (AES-256-CBC). The key is uni
 
 | Table | Purpose |
 |-------|---------|
-| `DjmdContent` | Tracks — title, ArtistID, GenreID, BPM (int × 100), KeyID, Rating, `Commnt` (actual column name) |
-| `djmdArtist` | Artist names (FK from DjmdContent) |
-| `djmdAlbum` | Album names (FK from DjmdContent) |
-| `djmdGenre` | Genre names (FK from DjmdContent) |
-| `djmdKey` | Musical key names (FK from DjmdContent) |
+| `djmdContent` | Tracks — title, ArtistID, GenreID, BPM (int × 100), KeyID, Rating, `Commnt` (actual column name) |
+| `djmdArtist` | Artist names (FK from djmdContent) |
+| `djmdAlbum` | Album names (FK from djmdContent) |
+| `djmdGenre` | Genre names (FK from djmdContent) |
+| `djmdKey` | Musical key names (FK from djmdContent) |
 | `djmdLabel` | Record label names |
-| `djmdColor` | Color tag names (FK from DjmdContent) |
+| `djmdColor` | Color tag names (FK from djmdContent) |
 | `djmdPlaylist` | Playlists/folders (Attribute 0 = playlist, 1 = folder, 4 = smart) |
 | `djmdSongPlaylist` | Track-to-playlist join table |
 
@@ -71,7 +71,7 @@ TypeScript companion on Cloudflare Workers + D1. Acts as an OAuth proxy — rekl
 
 3. After approval, the broker stores your OAuth token and returns a session token to reklawdbox.
 
-4. Subsequent calls use the session token automatically. Deleting the internal database requires re-authorization.
+4. Subsequent calls use the session token automatically. The token is stored in the macOS Keychain and mirrored in the internal database.
 
 </Steps>
 
@@ -92,7 +92,7 @@ Rust library embedded in the binary. Provides key detection (Camelot notation) a
 Python subprocess adding advanced descriptors: danceability, rhythm regularity, spectral centroid (brightness), loudness (LUFS), onset rate, and dynamic complexity. Requires a Python venv — see [Getting Started](/getting-started/).
 
 <Aside type="note">
-  Without Essentia, energy falls back to a BPM proxy and brightness/rhythm axes score at a neutral 0.5.
+  Without Essentia, energy falls back to a BPM proxy and brightness/rhythm axes are excluded from the composite (remaining weights renormalized).
 </Aside>
 
 Analysis runs once per track per backend. Use `skip_cached: false` to force re-analysis.

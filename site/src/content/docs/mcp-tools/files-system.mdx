@@ -59,7 +59,7 @@ Each write entry:
 | `append` | Insert after existing, separated by ` \| ` |
 
 <Aside type="caution">
-  Rekordbox reads only RIFF INFO from WAV files. Always write both layers (the default) to keep tags in sync. WAV writes use atomic copy-write-rename to prevent split-state files from partial failures.
+  Rekordbox reads only RIFF INFO from WAV files. Always write both layers (the default) to keep tags in sync. Dual-layer WAV writes use atomic copy-write-rename to prevent split-state files from partial failures.
 </Aside>
 
 ---
@@ -96,12 +96,12 @@ Scan the Rekordbox library for structural problems: broken file links, orphan fi
 
 ### `scan_broken_links`
 
-Scan for tracks with missing audio files on disk. Optionally suggests relocated files by matching filenames across content roots.
+Scan for tracks with missing audio files on disk. Optionally suggests relocated files by case-insensitive filename matching across content roots.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `path_prefix` | string | | Scope to tracks whose file path starts with this prefix |
-| `suggest_relocations` | boolean | | Attempt fuzzy filename matching for relocations (default: `true`) |
+| `suggest_relocations` | boolean | | Attempt case-insensitive filename matching for relocations (default: `true`) |
 | `limit` | integer | | Max broken links to report (default: `200`) |
 | `offset` | integer | | Offset for pagination |
 

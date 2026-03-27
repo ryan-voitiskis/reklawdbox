@@ -146,7 +146,7 @@ Present: scope, files scanned, pass rate, fixes by type, deferred items, next st
 | `EMPTY_TITLE` | Review | `title` field empty/null | Parse from filename |
 | `MISSING_TRACK_NUM` | Review | `track` field empty/null | Parse from filename |
 | `MISSING_ALBUM` | Review | `album` field empty/null | Directory name or enrichment lookup |
-| `MISSING_YEAR` | Review | `year`/`date` both empty/null | Enrichment lookup |
+| `MISSING_YEAR` | Review | `year` field empty/null | Enrichment lookup |
 | `ARTIST_IN_TITLE` | Safe | `title` starts with `{artist} - ` | Strip prefix |
 | `WAV_TAG3_MISSING` | Safe | WAV file with `tag3_missing` non-empty | Copy from tag 2 |
 | `WAV_TAG_DRIFT` | Safe | WAV `id3v2` and `riff_info` values differ | Sync to tag 2 |

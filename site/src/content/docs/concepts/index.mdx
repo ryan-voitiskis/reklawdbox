@@ -14,7 +14,7 @@ reklawdbox is an MCP server that sits between an AI agent and Rekordbox 7.x. It 
 reklawdbox opens the Rekordbox `master.db` **read-only** via SQLCipher (AES-256-CBC, PBKDF2-HMAC-SHA512). The database is never modified.
 
 - Auto-detects at `~/Library/Pioneer/rekordbox/master.db` (override with `REKORDBOX_DB_PATH`)
-- Key tables: `DjmdContent` (tracks), `djmdPlaylist`, `djmdSongPlaylist`, plus lookup tables for artists, albums, genres, keys, labels, and colors
+- Key tables: `djmdContent` (tracks), `djmdPlaylist`, `djmdSongPlaylist`, plus lookup tables for artists, albums, genres, keys, labels, and colors
 - BPM is stored as integer × 100 (128.50 BPM = `12850`) — converted to float automatically
 
 <Aside type="caution">
@@ -23,7 +23,7 @@ reklawdbox opens the Rekordbox `master.db` **read-only** via SQLCipher (AES-256-
 
 ## In-memory change staging
 
-Changes to genre, comments, rating, color, or label are staged in memory — not written anywhere. You can review, modify, or discard freely before exporting.
+Changes to genre, comments, rating, color, label, year, or album are staged in memory — not written anywhere. You can review, modify, or discard freely before exporting.
 
 - `update_tracks` — stage changes for one or more tracks
 - `preview_changes` — review everything staged so far
@@ -48,7 +48,7 @@ Nothing touches disk until you call `write_xml`. If the server restarts, staged 
 A separate SQLite database (WAL mode) caches enrichment, audio analysis, and broker sessions. Safe to delete — data is re-fetched on next use.
 
 - **Default:** `~/Library/Application Support/reklawdbox/internal.sqlite3` (override with `CRATE_DIG_STORE_PATH`)
-- **Enrichment cache:** Discogs and Beatport metadata keyed by search terms
+- **Enrichment cache:** Discogs, Beatport, MusicBrainz, and Bandcamp metadata keyed by search terms
 - **Audio analysis cache:** stratum-dsp and Essentia results keyed by file path and analyzer
 - **Broker sessions:** OAuth tokens for the Discogs broker
 

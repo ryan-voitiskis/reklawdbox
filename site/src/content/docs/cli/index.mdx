@@ -46,7 +46,7 @@ reklawdbox hydrate [options]
 | `--rating-min` | | 1-5 | | Minimum star rating |
 | `--max-tracks` | | integer | unlimited | Cap number of tracks to process |
 | `--no-retry-errors` | | flag | | Don't retry previously-errored enrichments |
-| `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (max cores) |
+| `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (cores - 2) |
 | `--concurrency` | `-j` | integer | `4` | Enrichment concurrency (min `1`, max `16`) |
 | `--yes` | `-y` | flag | | Skip confirmation prompt |
 
@@ -105,10 +105,10 @@ reklawdbox analyze [options]
 | `--max-tracks` | | integer | `200` | Max tracks to process |
 | `--no-skip-cached` | | flag | | Re-analyze already-cached tracks |
 | `--stratum-only` | | flag | | Skip Essentia, run stratum-dsp only |
-| `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (max cores) |
+| `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (cores - 2) |
 | `--concurrency` | `-j` | integer | auto | Override analysis concurrency (overrides `--cpu` preset, min `1`, max `16`) |
 
-Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Changed files are automatically re-analyzed.
+Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Cache is invalidated when the analysis schema version changes.
 
 ### Example
 

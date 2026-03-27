@@ -13,7 +13,7 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ### `get_genre_taxonomy` <Badge text="no params" variant="note" />
 
-Returns the canonical genre list and alias mappings (45+ genres optimized for DJ mixing).
+Returns the canonical genre list and alias mappings (43 genres optimized for DJ mixing).
 
 ---
 
@@ -45,7 +45,7 @@ Apply the genre decision tree to ungenred tracks using cached enrichment and aud
 | `offset` | integer | | Skip first N tracks for pagination |
 | `genre_overrides` | array | | Remap genre strings before scoring (e.g., `[{"from": "Melodic House & Techno", "to": "Deep Techno"}]`) |
 
-Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=false`.
+Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=false` when using filters (bypassed when `track_ids` are provided explicitly).
 
 ---
 
@@ -61,7 +61,7 @@ Verify existing genre tags against enrichment and audio evidence. Returns only c
 | `offset` | integer | | Skip first N tracks for pagination |
 | `include_confirmed` | boolean | | Include confirmed tracks in results (default: `false`) |
 
-Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=true`.
+Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=true` when using filters (bypassed when `track_ids` are provided explicitly).
 
 ---
 
