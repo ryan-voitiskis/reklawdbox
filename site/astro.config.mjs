@@ -21,6 +21,16 @@ export default defineConfig({
           tag: 'link',
           attrs: {
             rel: 'preload',
+            href: '/fonts/InterVariable-Latin.woff2',
+            as: 'font',
+            type: 'font/woff2',
+            crossorigin: '',
+          },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'preload',
             href: '/fonts/BerkeleyMonoVariable-Regular.woff2',
             as: 'font',
             type: 'font/woff2',
