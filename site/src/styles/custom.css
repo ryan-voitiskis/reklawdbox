@@ -232,3 +232,46 @@ nav.sidebar a {
 .sl-badge {
 	border-radius: 1rem;
 }
+
+/* ── Keyboard shortcuts page ──────────────────────────────── */
+
+kbd {
+	display: inline-block;
+	padding: 0.15em 0.45em;
+	font-family: var(--sl-font-mono);
+	font-size: 0.82em;
+	font-weight: 130;
+	line-height: 1.4;
+	color: var(--sl-color-white);
+	background: hsl(224, 12%, 18%);
+	border: 1px solid hsl(224, 10%, 28%);
+	border-radius: 0.3rem;
+	box-shadow: 0 1px 0 hsl(224, 10%, 10%);
+	white-space: nowrap;
+}
+
+:root[data-theme='light'] kbd {
+	color: hsl(224, 15%, 25%);
+	background: hsl(224, 10%, 94%);
+	border-color: hsl(224, 10%, 75%);
+	box-shadow: 0 1px 0 hsl(224, 10%, 65%);
+}
+
+/* Compact shortcut tables */
+.shortcut-table table {
+	font-size: 0.9em;
+}
+
+.shortcut-table td:first-child,
+.shortcut-table th:first-child {
+	white-space: nowrap;
+}
+
+/* Deck columns layout */
+.deck-table td:nth-child(2),
+.deck-table td:nth-child(3),
+.deck-table th:nth-child(2),
+.deck-table th:nth-child(3) {
+	text-align: center;
+	white-space: nowrap;
+}
