@@ -112,20 +112,20 @@ const phases = [
     height: auto;
   }
   .axis-label {
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--sl-font);
     font-size: 10px;
     fill: var(--sl-color-text);
     opacity: 0.6;
   }
   .axis-title {
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--sl-font);
     font-size: 10.5px;
     fill: var(--sl-color-text);
     opacity: 0.7;
     font-weight: 500;
   }
   .phase-label {
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--sl-font);
     font-size: 9.5px;
     fill: var(--sl-color-text-accent);
     opacity: 0.6;
@@ -146,7 +146,8 @@ const phases = [
     align-items: center;
     gap: 0.35rem;
     white-space: nowrap;
-    font-family: ui-monospace, monospace;
+    font-family: var(--sl-font-mono);
+    font-weight: 130;
   }
   .swatch {
     width: 18px;

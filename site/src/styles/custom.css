@@ -236,6 +236,12 @@ table {
 	overflow: hidden;
 }
 
+/* Tabular figures for numeric data alignment */
+.sl-markdown-content td,
+.sl-markdown-content th {
+	font-variant-numeric: tabular-nums;
+}
+
 /* ── Sidebar refinement ────────────────────────────────────── */
 
 nav.sidebar a {
