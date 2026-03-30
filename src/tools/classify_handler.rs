@@ -22,12 +22,12 @@ pub(super) fn handle_classify_tracks(
     server: &ReklawdboxServer,
     params: ClassifyTracksParams,
 ) -> Result<CallToolResult, McpError> {
-    if let Some(ref ids) = params.track_ids {
-        if ids.is_empty() {
-            return Err(mcp_internal_error(
-                "track_ids was provided but empty — nothing to classify.".into(),
-            ));
-        }
+    if let Some(ref ids) = params.track_ids
+        && ids.is_empty()
+    {
+        return Err(mcp_internal_error(
+            "track_ids was provided but empty — nothing to classify.".into(),
+        ));
     }
 
     // Force has_genre=false when using filter-based selection. When track_ids
@@ -124,12 +124,12 @@ pub(super) fn handle_audit_genres(
     server: &ReklawdboxServer,
     params: AuditGenresParams,
 ) -> Result<CallToolResult, McpError> {
-    if let Some(ref ids) = params.track_ids {
-        if ids.is_empty() {
-            return Err(mcp_internal_error(
-                "track_ids was provided but empty — nothing to audit.".into(),
-            ));
-        }
+    if let Some(ref ids) = params.track_ids
+        && ids.is_empty()
+    {
+        return Err(mcp_internal_error(
+            "track_ids was provided but empty — nothing to audit.".into(),
+        ));
     }
 
     // Force has_genre=true when using filter-based selection. When track_ids
