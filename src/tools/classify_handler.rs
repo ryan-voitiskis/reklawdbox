@@ -95,10 +95,7 @@ pub(super) fn handle_classify_tracks(
         let track_changes: Vec<TrackChange> = results
             .iter()
             .filter(|r| {
-                r.genre.is_some()
-                    && levels
-                        .iter()
-                        .any(|l| l.matches_confidence(&r.confidence))
+                r.genre.is_some() && levels.iter().any(|l| l.matches_confidence(&r.confidence))
             })
             .map(|r| TrackChange {
                 track_id: r.track_id.clone(),
@@ -324,10 +321,7 @@ pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serd
             let mut by_conf = serde_json::Map::new();
             for level in &["high", "medium", "low", "insufficient"] {
                 if let Some(artists) = conf_map.get(level) {
-                    by_conf.insert(
-                        level.to_string(),
-                        serde_json::json!(artists.len()),
-                    );
+                    by_conf.insert(level.to_string(), serde_json::json!(artists.len()));
                 }
             }
 

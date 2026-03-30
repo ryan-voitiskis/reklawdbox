@@ -290,8 +290,7 @@ pub(super) async fn handle_backfill_albums(
             exclude_samples: true,
             ..Default::default()
         };
-        let tracks = db::search_tracks_unbounded(&rb_conn, &search_params)
-            .map_err(db_error)?;
+        let tracks = db::search_tracks_unbounded(&rb_conn, &search_params).map_err(db_error)?;
         drop(rb_conn);
 
         let store_conn = server.cache_store_conn()?;

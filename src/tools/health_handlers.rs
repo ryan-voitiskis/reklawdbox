@@ -21,8 +21,7 @@ pub(super) fn handle_scan_playlist_coverage(
         .into_search_params(true, params.limit, params.offset)
         .map_err(mcp_internal_error)?;
 
-    let result = db::tracks_not_in_any_playlist(&conn, &search)
-        .map_err(db_error)?;
+    let result = db::tracks_not_in_any_playlist(&conn, &search).map_err(db_error)?;
 
     let coverage_pct = if result.total_tracks > 0 {
         ((result.total_tracks - result.uncovered_count) as f64 / result.total_tracks as f64) * 100.0
@@ -53,13 +52,10 @@ pub(super) async fn handle_scan_broken_links(
     // Phase 1: DB queries (scoped to drop conn before await)
     let (all_paths, roots) = {
         let conn = server.rekordbox_conn()?;
-        let all_paths = db::all_track_paths(&conn, params.path_prefix.as_deref())
-            .map_err(db_error)?;
+        let all_paths =
+            db::all_track_paths(&conn, params.path_prefix.as_deref()).map_err(db_error)?;
         let roots = if suggest_relocations {
-            Some(
-                db::content_roots(&conn, true)
-                    .map_err(db_error)?,
-            )
+            Some(db::content_roots(&conn, true).map_err(db_error)?)
         } else {
             None
         };
@@ -168,14 +164,12 @@ pub(super) async fn handle_scan_orphan_files(
         let roots = if let Some(ref prefix) = params.path_prefix {
             vec![prefix.clone()]
         } else {
-            db::content_roots(&conn, true)
-                .map_err(db_error)?
+            db::content_roots(&conn, true).map_err(db_error)?
         };
 
         let mut imported_by_root: Vec<(String, usize, HashSet<String>)> = Vec::new();
         for root in &roots {
-            let imported = db::paths_imported_in_scope(&conn, root)
-                .map_err(db_error)?;
+            let imported = db::paths_imported_in_scope(&conn, root).map_err(db_error)?;
             let raw_count = imported.len();
             let mut expanded = HashSet::new();
             for path in &imported {
@@ -300,10 +294,8 @@ async fn handle_duplicates_metadata(
         .iter()
         .flat_map(|g| g.track_ids.iter().cloned())
         .collect();
-    let tracks = db::get_tracks_by_ids(&conn, &all_ids)
-        .map_err(db_error)?;
-    let memberships = db::playlist_membership_counts(&conn, &all_ids)
-        .map_err(db_error)?;
+    let tracks = db::get_tracks_by_ids(&conn, &all_ids).map_err(db_error)?;
+    let memberships = db::playlist_membership_counts(&conn, &all_ids).map_err(db_error)?;
     drop(conn);
 
     let track_map: HashMap<&str, &crate::types::Track> =
@@ -353,8 +345,7 @@ async fn handle_duplicates_exact(
     // Scoped to drop conn before await
     let track_paths = {
         let conn = server.rekordbox_conn()?;
-        db::all_track_paths(&conn, params.path_prefix.as_deref())
-            .map_err(db_error)?
+        db::all_track_paths(&conn, params.path_prefix.as_deref()).map_err(db_error)?
     };
 
     let size_groups: HashMap<u64, Vec<(String, String)>> = tokio::task::spawn_blocking(move || {
@@ -446,10 +437,8 @@ async fn handle_duplicates_exact(
         .collect();
     let (tracks, memberships) = {
         let conn = server.rekordbox_conn()?;
-        let tracks = db::get_tracks_by_ids(&conn, &all_ids)
-            .map_err(db_error)?;
-        let memberships = db::playlist_membership_counts(&conn, &all_ids)
-            .map_err(db_error)?;
+        let tracks = db::get_tracks_by_ids(&conn, &all_ids).map_err(db_error)?;
+        let memberships = db::playlist_membership_counts(&conn, &all_ids).map_err(db_error)?;
         (tracks, memberships)
     };
 

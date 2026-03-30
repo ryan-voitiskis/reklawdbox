@@ -89,7 +89,9 @@ pub(super) fn handle_score_pool_compatibility(
         }
 
         PoolMode::OneVsPool => {
-            let candidate_id = params.track_id.expect("track_id is Some in OneVsPool branch");
+            let candidate_id = params
+                .track_id
+                .expect("track_id is Some in OneVsPool branch");
             let pool_ids = params
                 .pool_track_ids
                 .expect("pool_track_ids is Some in OneVsPool branch");
@@ -101,8 +103,7 @@ pub(super) fn handle_score_pool_compatibility(
                     .ok_or_else(|| {
                         McpError::invalid_params(format!("Track '{candidate_id}' not found"), None)
                     })?;
-                let pool = db::get_tracks_by_ids(&conn, &pool_ids)
-                    .map_err(db_error)?;
+                let pool = db::get_tracks_by_ids(&conn, &pool_ids).map_err(db_error)?;
                 (candidate, pool)
             };
 
@@ -190,8 +191,7 @@ pub(super) fn handle_score_pool_compatibility(
 
             let pool_tracks = {
                 let conn = server.rekordbox_conn()?;
-                db::get_tracks_by_ids(&conn, &pool_ids)
-                    .map_err(db_error)?
+                db::get_tracks_by_ids(&conn, &pool_ids).map_err(db_error)?
             };
 
             let store = server.cache_store_conn()?;
@@ -256,8 +256,7 @@ pub(super) fn handle_expand_pool(
 
     let seed_tracks = {
         let conn = server.rekordbox_conn()?;
-        db::get_tracks_by_ids(&conn, &params.seed_track_ids)
-            .map_err(db_error)?
+        db::get_tracks_by_ids(&conn, &params.seed_track_ids).map_err(db_error)?
     };
 
     if seed_tracks.is_empty() {
@@ -467,12 +466,10 @@ pub(super) fn handle_describe_pool(
     let pool_tracks = {
         let conn = server.rekordbox_conn()?;
         if let Some(ref ids) = params.pool_track_ids {
-            db::get_tracks_by_ids(&conn, ids)
-                .map_err(db_error)?
+            db::get_tracks_by_ids(&conn, ids).map_err(db_error)?
         } else {
             let pid = params.playlist_id.as_ref().unwrap();
-            db::get_playlist_tracks(&conn, pid, None)
-                .map_err(db_error)?
+            db::get_playlist_tracks(&conn, pid, None).map_err(db_error)?
         }
     };
 

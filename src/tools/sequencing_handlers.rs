@@ -141,11 +141,9 @@ pub(super) fn handle_query_transition_candidates(
     let pool_tracks = {
         let conn = server.rekordbox_conn()?;
         if let Some(ref ids) = params.candidate_track_ids {
-            db::get_tracks_by_ids(&conn, ids)
-                .map_err(db_error)?
+            db::get_tracks_by_ids(&conn, ids).map_err(db_error)?
         } else if let Some(ref playlist_id) = params.playlist_id {
-            db::get_playlist_tracks(&conn, playlist_id, None)
-                .map_err(db_error)?
+            db::get_playlist_tracks(&conn, playlist_id, None).map_err(db_error)?
         } else {
             vec![]
         }
@@ -323,8 +321,7 @@ pub(super) fn handle_build_set(
 
     let tracks = {
         let conn = server.rekordbox_conn()?;
-        db::get_tracks_by_ids(&conn, &deduped_ids)
-            .map_err(db_error)?
+        db::get_tracks_by_ids(&conn, &deduped_ids).map_err(db_error)?
     };
     if tracks.is_empty() {
         return Err(McpError::invalid_params(

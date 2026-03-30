@@ -1398,9 +1398,21 @@ mod tests {
     fn test_take_some_returns_only_requested_ids() {
         let cm = ChangeManager::new();
         cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-            TrackChange { track_id: "t2".into(), genre: Some("Techno".into()), ..Default::default() },
-            TrackChange { track_id: "t3".into(), genre: Some("Trance".into()), ..Default::default() },
+            TrackChange {
+                track_id: "t1".into(),
+                genre: Some("House".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "t2".into(),
+                genre: Some("Techno".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "t3".into(),
+                genre: Some("Trance".into()),
+                ..Default::default()
+            },
         ]);
 
         let taken = cm.take(Some(vec!["t1".into(), "t3".into()]));
@@ -1417,9 +1429,11 @@ mod tests {
     #[test]
     fn test_take_some_skips_absent_ids() {
         let cm = ChangeManager::new();
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("House".into()),
+            ..Default::default()
+        }]);
 
         let taken = cm.take(Some(vec!["t1".into(), "nonexistent".into()]));
         assert_eq!(taken.len(), 1);
@@ -1431,9 +1445,21 @@ mod tests {
     fn test_take_some_preserves_input_order() {
         let cm = ChangeManager::new();
         cm.stage(vec![
-            TrackChange { track_id: "a".into(), genre: Some("House".into()), ..Default::default() },
-            TrackChange { track_id: "b".into(), genre: Some("Techno".into()), ..Default::default() },
-            TrackChange { track_id: "c".into(), genre: Some("Trance".into()), ..Default::default() },
+            TrackChange {
+                track_id: "a".into(),
+                genre: Some("House".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "b".into(),
+                genre: Some("Techno".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "c".into(),
+                genre: Some("Trance".into()),
+                ..Default::default()
+            },
         ]);
 
         // Request in reverse order — result should match request order, not sort order
@@ -1447,8 +1473,16 @@ mod tests {
     fn test_take_some_does_not_reset_cleared_all_flag() {
         let cm = ChangeManager::new();
         cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-            TrackChange { track_id: "t2".into(), genre: Some("Techno".into()), ..Default::default() },
+            TrackChange {
+                track_id: "t1".into(),
+                genre: Some("House".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "t2".into(),
+                genre: Some("Techno".into()),
+                ..Default::default()
+            },
         ]);
 
         // clear(None) sets the cleared_all_since_take flag
@@ -1456,9 +1490,11 @@ mod tests {
         assert_eq!(cm.pending_count(), 0);
 
         // Stage fresh data
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("Trance".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("Trance".into()),
+            ..Default::default()
+        }]);
 
         // take(Some) does NOT reset cleared_all_since_take
         let snapshot = cm.take(Some(vec!["t1".into()]));
@@ -1477,17 +1513,21 @@ mod tests {
     #[test]
     fn test_restore_returns_snapshot_len_regardless_of_merge() {
         let cm = ChangeManager::new();
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("House".into()),
+            ..Default::default()
+        }]);
 
         let snapshot = cm.take(None);
         assert_eq!(snapshot.len(), 1);
 
         // Stage a new value for the same field before restore
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("Techno".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("Techno".into()),
+            ..Default::default()
+        }]);
 
         // Restore — the genre field is touched so snapshot's genre won't overwrite
         let (restored_count, total) = cm.restore(snapshot);
@@ -1508,8 +1548,16 @@ mod tests {
     fn test_stage_duplicate_ids_merges_within_call() {
         let cm = ChangeManager::new();
         let (staged, total) = cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-            TrackChange { track_id: "t1".into(), comments: Some("dup".into()), ..Default::default() },
+            TrackChange {
+                track_id: "t1".into(),
+                genre: Some("House".into()),
+                ..Default::default()
+            },
+            TrackChange {
+                track_id: "t1".into(),
+                comments: Some("dup".into()),
+                ..Default::default()
+            },
         ]);
         // Both count toward staged
         assert_eq!(staged, 2);
@@ -1529,9 +1577,11 @@ mod tests {
     #[test]
     fn test_clear_fields_unknown_field_is_ignored() {
         let cm = ChangeManager::new();
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("House".into()),
+            ..Default::default()
+        }]);
 
         let (affected, total) = cm.clear_fields(None, &["nonexistent_field".into()]);
         assert_eq!(affected, 0);
@@ -1545,9 +1595,11 @@ mod tests {
     #[test]
     fn test_clear_fields_empty_fields_slice() {
         let cm = ChangeManager::new();
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("House".into()),
+            ..Default::default()
+        }]);
 
         let (affected, total) = cm.clear_fields(None, &[]);
         assert_eq!(affected, 0);
@@ -1576,14 +1628,18 @@ mod tests {
         let tracks = vec![make_track("t1", "House", 3)];
 
         // Stage a genre change in the live state
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("Techno".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("Techno".into()),
+            ..Default::default()
+        }]);
 
         // apply_snapshot uses a separate snapshot, not the staged state
-        let snapshot = vec![
-            TrackChange { track_id: "t1".into(), comments: Some("from snapshot".into()), ..Default::default() },
-        ];
+        let snapshot = vec![TrackChange {
+            track_id: "t1".into(),
+            comments: Some("from snapshot".into()),
+            ..Default::default()
+        }];
         let modified = cm.apply_snapshot(&tracks, &snapshot);
         assert_eq!(modified[0].comments, "from snapshot");
         // Genre should be unchanged (snapshot didn't touch it, staged state is irrelevant)
@@ -1611,9 +1667,11 @@ mod tests {
     #[test]
     fn test_restore_empty_snapshot() {
         let cm = ChangeManager::new();
-        cm.stage(vec![
-            TrackChange { track_id: "t1".into(), genre: Some("House".into()), ..Default::default() },
-        ]);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".into(),
+            genre: Some("House".into()),
+            ..Default::default()
+        }]);
 
         let (restored, total) = cm.restore(vec![]);
         assert_eq!(restored, 0);

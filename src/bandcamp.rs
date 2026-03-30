@@ -83,9 +83,7 @@ pub async fn lookup(
     let mut best: Option<(SearchResult, i32)> = None;
     for candidate in candidates {
         let score = score_match(artist, title, &candidate.artist, &candidate.title);
-        if score >= 65
-            && best.as_ref().is_none_or(|(_, s)| score > *s)
-        {
+        if score >= 65 && best.as_ref().is_none_or(|(_, s)| score > *s) {
             best = Some((candidate, score));
         }
     }

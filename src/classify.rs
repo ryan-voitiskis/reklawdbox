@@ -476,11 +476,7 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
     if let Some(lg) = evidence.label_genre {
         let plausible = bpm_plausible(lg, effective_bpm);
         let confirms = votes.iter().any(|v| v.genre == lg);
-        let weight = if confirms {
-            0.4
-        } else {
-            0.6
-        };
+        let weight = if confirms { 0.4 } else { 0.6 };
         votes.push(GenreVote {
             genre: lg,
             weight: if plausible { weight } else { weight * 0.5 },

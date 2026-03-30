@@ -717,8 +717,16 @@ fn estimate_bpm_tempogram_impl(
         method_agreement += 1;
     }
 
-    let seed_names = seed_variants.iter().map(|v| v.name).collect::<Vec<_>>().join("+");
-    let score_names = score_variants.iter().map(|v| v.name).collect::<Vec<_>>().join("+");
+    let seed_names = seed_variants
+        .iter()
+        .map(|v| v.name)
+        .collect::<Vec<_>>()
+        .join("+");
+    let score_names = score_variants
+        .iter()
+        .map(|v| v.name)
+        .collect::<Vec<_>>()
+        .join("+");
     log::debug!(
         "Tempogram metrical selection: chosen {:.2} BPM (score={:.3}, conf={:.3}, fft_norm={:.3}, autocorr_norm={:.3}), primary FFT={:.2} (conf={:.3}), primary Autocorr={:.2} (conf={:.3}), variants=seed=[{}], score=[{}]",
         best.bpm,

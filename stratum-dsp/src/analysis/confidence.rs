@@ -135,8 +135,7 @@ pub fn compute_confidence(result: &AnalysisResult) -> AnalysisConfidence {
     // If any component failed (confidence = 0), reduce overall confidence
     let overall_confidence = if bpm_confidence > 0.0 && key_confidence > 0.0 {
         // All components succeeded: weighted average
-        (bpm_confidence * 0.4 + key_confidence * 0.3 + grid_stability * 0.3)
-            .clamp(0.0, 1.0)
+        (bpm_confidence * 0.4 + key_confidence * 0.3 + grid_stability * 0.3).clamp(0.0, 1.0)
     } else if bpm_confidence > 0.0 {
         // Only BPM succeeded: use BPM confidence with penalty
         bpm_confidence * 0.6

@@ -2192,7 +2192,6 @@ mod tests {
             assert_eq!(t.title, back.title, "unicode title round-trip failed");
             assert_eq!(t.artist, back.artist, "unicode artist round-trip failed");
         }
-
     }
 
     #[test]

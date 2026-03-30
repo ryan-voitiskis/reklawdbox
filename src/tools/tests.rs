@@ -5369,7 +5369,12 @@ fn genre_distribution_top_artists_capped_and_counted() {
         ));
     }
     // Artist 0 appears at two confidence levels -- should show "(2)"
-    results.push(make_result(Some("Techno"), C::Medium, A::Suggest, "Artist 0"));
+    results.push(make_result(
+        Some("Techno"),
+        C::Medium,
+        A::Suggest,
+        "Artist 0",
+    ));
 
     let dist = classify_handler::build_genre_distribution(&results);
     let arr = dist.as_array().unwrap();

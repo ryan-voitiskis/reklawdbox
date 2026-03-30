@@ -167,8 +167,7 @@ pub(super) fn handle_suggest_normalizations(
     let min_count = params.min_genre_count.unwrap_or(1);
     let stage_aliases = params.stage_aliases.unwrap_or(false);
 
-    let stats =
-        db::get_library_stats(&conn).map_err(db_error)?;
+    let stats = db::get_library_stats(&conn).map_err(db_error)?;
 
     // Grouped alias: (current_genre, canonical) → [track_ids]
     let mut alias_groups: Vec<(String, &'static str, Vec<String>)> = Vec::new();
@@ -185,8 +184,7 @@ pub(super) fn handle_suggest_normalizations(
         }
 
         if let Some(canonical) = genre::canonical_genre_from_alias(&gc.name) {
-            let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
-                .map_err(db_error)?;
+            let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true).map_err(db_error)?;
             let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
             if stage_aliases {
                 for id in &track_ids {
@@ -204,8 +202,7 @@ pub(super) fn handle_suggest_normalizations(
                 "count": gc.count,
             }));
         } else {
-            let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
-                .map_err(db_error)?;
+            let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true).map_err(db_error)?;
             let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
             unknown_groups.push((gc.name.clone(), track_ids));
         }
@@ -286,8 +283,7 @@ pub(super) fn handle_preview_changes(
     }
 
     let conn = server.rekordbox_conn()?;
-    let current_tracks = db::get_tracks_by_ids(&conn, &ids)
-        .map_err(db_error)?;
+    let current_tracks = db::get_tracks_by_ids(&conn, &ids).map_err(db_error)?;
 
     let diffs = server.state.changes.preview(&current_tracks);
     if diffs.is_empty() {
@@ -467,8 +463,7 @@ pub(super) fn handle_clear_changes(
 
 pub(super) fn handle_clear_caches(server: &ReklawdboxServer) -> Result<CallToolResult, McpError> {
     let conn = server.cache_store_conn()?;
-    let result =
-        crate::store::clear_caches(&conn).map_err(cache_error)?;
+    let result = crate::store::clear_caches(&conn).map_err(cache_error)?;
 
     let staged = server.state.changes.clear(None).0;
 

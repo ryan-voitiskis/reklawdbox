@@ -188,12 +188,9 @@ pub(super) async fn lookup_discogs_remote(
     }
 
     match discogs::BrokerConfig::from_env() {
-        discogs::BrokerConfigStatus::InvalidUrl(raw) => {
-            Err(discogs::LookupError::message(format!(
-                "Invalid broker URL in {}: {raw}",
-                discogs::BROKER_URL_ENV
-            )))
-        }
+        discogs::BrokerConfigStatus::InvalidUrl(raw) => Err(discogs::LookupError::message(
+            format!("Invalid broker URL in {}: {raw}", discogs::BROKER_URL_ENV),
+        )),
         discogs::BrokerConfigStatus::Ok(cfg) => {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

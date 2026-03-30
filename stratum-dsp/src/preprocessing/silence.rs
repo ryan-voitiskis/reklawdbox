@@ -291,7 +291,10 @@ mod tests {
     ) -> Vec<f32> {
         let mut samples = vec![0.0f32; total_samples];
         // Add audio signal in the middle
-        for (i, sample) in samples[audio_start..audio_end.min(total_samples)].iter_mut().enumerate() {
+        for (i, sample) in samples[audio_start..audio_end.min(total_samples)]
+            .iter_mut()
+            .enumerate()
+        {
             *sample = amplitude * ((audio_start + i) as f32 / 1000.0).sin(); // Simple sine wave
         }
         samples

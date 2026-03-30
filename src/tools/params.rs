@@ -366,10 +366,7 @@ pub enum StageLevel {
 }
 
 impl StageLevel {
-    pub fn matches_confidence(
-        &self,
-        conf: &crate::classify::ClassificationConfidence,
-    ) -> bool {
+    pub fn matches_confidence(&self, conf: &crate::classify::ClassificationConfidence) -> bool {
         use crate::classify::ClassificationConfidence;
         matches!(
             (self, conf),
@@ -947,7 +944,9 @@ pub(super) enum AuditOperation {
 pub(super) struct ScanBrokenLinksParams {
     #[schemars(description = "Scope to tracks whose file path starts with this prefix")]
     pub path_prefix: Option<String>,
-    #[schemars(description = "Attempt case-insensitive filename matching for relocations (default true)")]
+    #[schemars(
+        description = "Attempt case-insensitive filename matching for relocations (default true)"
+    )]
     pub suggest_relocations: Option<bool>,
     #[schemars(description = "Max broken links to report (default 200)")]
     pub limit: Option<u32>,
@@ -992,41 +991,6 @@ pub(super) struct ScanDuplicatesParams {
     pub path_prefix: Option<String>,
     #[schemars(description = "Max duplicate groups to report (default 50)")]
     pub limit: Option<u32>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::classify::ClassificationConfidence;
-
-    #[test]
-    fn stage_level_matches_only_corresponding_confidence() {
-        let cases = [
-            (StageLevel::High, ClassificationConfidence::High, true),
-            (StageLevel::High, ClassificationConfidence::Medium, false),
-            (StageLevel::High, ClassificationConfidence::Low, false),
-            (StageLevel::High, ClassificationConfidence::Insufficient, false),
-            (StageLevel::Medium, ClassificationConfidence::High, false),
-            (StageLevel::Medium, ClassificationConfidence::Medium, true),
-            (StageLevel::Medium, ClassificationConfidence::Low, false),
-            (StageLevel::Medium, ClassificationConfidence::Insufficient, false),
-            (StageLevel::Low, ClassificationConfidence::High, false),
-            (StageLevel::Low, ClassificationConfidence::Medium, false),
-            (StageLevel::Low, ClassificationConfidence::Low, true),
-            (StageLevel::Low, ClassificationConfidence::Insufficient, false),
-            (StageLevel::Insufficient, ClassificationConfidence::High, false),
-            (StageLevel::Insufficient, ClassificationConfidence::Medium, false),
-            (StageLevel::Insufficient, ClassificationConfidence::Low, false),
-            (StageLevel::Insufficient, ClassificationConfidence::Insufficient, true),
-        ];
-        for (level, conf, expected) in cases {
-            assert_eq!(
-                level.matches_confidence(&conf),
-                expected,
-                "{level:?} vs {conf:?}"
-            );
-        }
-    }
 }
 
 impl schemars::JsonSchema for AuditOperation {
@@ -1088,5 +1052,68 @@ impl schemars::JsonSchema for AuditOperation {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::classify::ClassificationConfidence;
+
+    #[test]
+    fn stage_level_matches_only_corresponding_confidence() {
+        let cases = [
+            (StageLevel::High, ClassificationConfidence::High, true),
+            (StageLevel::High, ClassificationConfidence::Medium, false),
+            (StageLevel::High, ClassificationConfidence::Low, false),
+            (
+                StageLevel::High,
+                ClassificationConfidence::Insufficient,
+                false,
+            ),
+            (StageLevel::Medium, ClassificationConfidence::High, false),
+            (StageLevel::Medium, ClassificationConfidence::Medium, true),
+            (StageLevel::Medium, ClassificationConfidence::Low, false),
+            (
+                StageLevel::Medium,
+                ClassificationConfidence::Insufficient,
+                false,
+            ),
+            (StageLevel::Low, ClassificationConfidence::High, false),
+            (StageLevel::Low, ClassificationConfidence::Medium, false),
+            (StageLevel::Low, ClassificationConfidence::Low, true),
+            (
+                StageLevel::Low,
+                ClassificationConfidence::Insufficient,
+                false,
+            ),
+            (
+                StageLevel::Insufficient,
+                ClassificationConfidence::High,
+                false,
+            ),
+            (
+                StageLevel::Insufficient,
+                ClassificationConfidence::Medium,
+                false,
+            ),
+            (
+                StageLevel::Insufficient,
+                ClassificationConfidence::Low,
+                false,
+            ),
+            (
+                StageLevel::Insufficient,
+                ClassificationConfidence::Insufficient,
+                true,
+            ),
+        ];
+        for (level, conf, expected) in cases {
+            assert_eq!(
+                level.matches_confidence(&conf),
+                expected,
+                "{level:?} vs {conf:?}"
+            );
+        }
     }
 }

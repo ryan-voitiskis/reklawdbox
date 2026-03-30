@@ -161,8 +161,8 @@ pub fn estimate_bpm_from_comb_filter(
         // Lower BPM = larger tolerance (more forgiving)
         // Formula: tolerance = base_tolerance * (reference_bpm / bpm)
         // Clamped to [MIN_TOLERANCE, MAX_TOLERANCE]
-        let adaptive_tolerance = (DEFAULT_TOLERANCE * (REFERENCE_BPM / bpm))
-            .clamp(MIN_TOLERANCE, MAX_TOLERANCE);
+        let adaptive_tolerance =
+            (DEFAULT_TOLERANCE * (REFERENCE_BPM / bpm)).clamp(MIN_TOLERANCE, MAX_TOLERANCE);
 
         let score = score_bpm_candidate(&sorted_onsets, sample_rate, bpm, adaptive_tolerance)?;
 

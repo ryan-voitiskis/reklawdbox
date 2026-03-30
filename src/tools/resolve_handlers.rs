@@ -271,8 +271,8 @@ pub(super) fn handle_cache_coverage(
         let discogs_label_set =
             store::batch_enrichment_with_label(&store, "discogs", &unique_artists)
                 .map_err(cache_error)?;
-        let audio_set = store::batch_audio_analysis_existence(&store, &unique_paths)
-            .map_err(cache_error)?;
+        let audio_set =
+            store::batch_audio_analysis_existence(&store, &unique_paths).map_err(cache_error)?;
 
         // Build borrowed-key sets to avoid per-track clones during counting.
         let discogs_ref: std::collections::HashSet<(&str, &str)> = discogs_set

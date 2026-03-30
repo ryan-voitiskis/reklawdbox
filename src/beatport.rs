@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_parse_returns_first_match_when_multiple_tracks_match() {
-            let html = build_html_with_tracks(serde_json::json!([
+        let html = build_html_with_tracks(serde_json::json!([
             {
                 "track_id": 100,
                 "track_name": "Archangel",

@@ -1197,20 +1197,17 @@ async fn cli_analyze_for_hydrate(
         }
     }
 
-    if needs_essentia
-        && let Some(python) = essentia_python
-    {
+    if needs_essentia && let Some(python) = essentia_python {
         match audio::run_essentia(python, &file_path).await {
             Ok(features) => {
-                let features_json =
-                    match serialize_cache_payload(&features, "essentia analysis") {
-                        Ok(json) => json,
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            ok = false;
-                            return ok;
-                        }
-                    };
+                let features_json = match serialize_cache_payload(&features, "essentia analysis") {
+                    Ok(json) => json,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        ok = false;
+                        return ok;
+                    }
+                };
                 if let Err(e) = send_cache_message(
                     cache_tx,
                     HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
