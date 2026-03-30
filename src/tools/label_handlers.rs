@@ -17,6 +17,10 @@ pub(super) struct BackfillLabelsParams {
         description = "Automatically enrich uncached tracks via Bandcamp before backfilling (default false). Fetches Bandcamp data for tracks missing from all enrichment caches, then re-scans."
     )]
     pub auto_enrich: Option<bool>,
+    #[schemars(
+        description = "Max conflict entries to include in the response (default 50). Use search_tracks to page through remaining conflicts."
+    )]
+    pub max_conflicts: Option<usize>,
 }
 
 /// Filters out Discogs "Not On Label" entries (self-released, no useful signal).
@@ -225,12 +229,17 @@ pub(super) async fn handle_backfill_labels(
 
     let pending = server.state.changes.pending_ids().len();
 
+    let max_conflicts = params.max_conflicts.unwrap_or(50);
+    let total_conflicts = scan.conflicts.len();
+    let conflicts_truncated = total_conflicts > max_conflicts;
+    scan.conflicts.truncate(max_conflicts);
+
     let mut result = serde_json::json!({
         "summary": {
             "total_scanned": tracks.len(),
             "filled": scan.filled,
             "already_labeled": scan.already_labeled,
-            "conflicts": scan.conflicts.len(),
+            "conflicts": total_conflicts,
             "no_enrichment": scan.no_enrichment,
             "no_enrichment_by_provider": {
                 "no_discogs": scan.no_discogs,
@@ -244,6 +253,9 @@ pub(super) async fn handle_backfill_labels(
         "dry_run": dry_run,
         "conflicts": scan.conflicts,
     });
+    if conflicts_truncated {
+        result["conflicts_truncated"] = serde_json::json!(true);
+    }
 
     if auto_enrich {
         result.as_object_mut().unwrap().insert(
@@ -288,16 +300,6 @@ pub(super) async fn handle_backfill_labels(
                 serde_json::json!({
                     "total_unlabeled": count,
                     "top_artists": top_artists,
-                    "action": format!(
-                        "IMPORTANT: {} tracks have no label. The metadata backfill SOP \
-                         requires researching these before export. Use the top_artists list \
-                         above to prioritize research. Fetch the first batch with \
-                         search_tracks(has_label=false, max_tracks=50), then research labels \
-                         via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp. \
-                         write_xml will block export unless skip_label_gate=true is passed \
-                         after research is complete.",
-                        count
-                    ),
                 }),
             );
         }

@@ -326,7 +326,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels; reports conflicts where Rekordbox and enrichment disagree. Set auto_enrich=true to automatically fetch Bandcamp data for uncached tracks before backfilling. Use preview_changes then write_xml to export."
+        description = "Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels; reports conflicts (capped at max_conflicts, default 50) where Rekordbox and enrichment disagree. Set auto_enrich=true to automatically fetch Bandcamp data for uncached tracks before backfilling. Use preview_changes then write_xml to export."
     )]
     async fn backfill_labels(
         &self,

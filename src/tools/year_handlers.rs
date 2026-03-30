@@ -195,7 +195,6 @@ fn scan_years(
                 "track_id": track.id,
                 "artist": track.artist,
                 "title": track.title,
-                "file_path": track.file_path,
             }));
         } else {
             let discogs_year = discogs_year_for_track(store_conn, track);
