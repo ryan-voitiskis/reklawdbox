@@ -83,8 +83,8 @@ pub(super) fn handle_score_pool_compatibility(
                 "scores": scores.to_json(),
             });
 
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
 
@@ -172,8 +172,8 @@ pub(super) fn handle_score_pool_compatibility(
                 result["skipped_tracks"] = serde_json::json!(built.skipped);
             }
 
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
 
@@ -227,8 +227,8 @@ pub(super) fn handle_score_pool_compatibility(
                 result["skipped_tracks"] = serde_json::json!(built.skipped);
             }
 
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
     }
@@ -440,8 +440,7 @@ pub(super) fn handle_expand_pool(
         result["skipped_seed_tracks"] = serde_json::json!(seed_built.skipped);
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -611,8 +610,7 @@ pub(super) fn handle_describe_pool(
         }
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -1017,7 +1015,6 @@ pub(super) fn handle_discover_pools(
         result["skipped_tracks"] = serde_json::json!(built.skipped);
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

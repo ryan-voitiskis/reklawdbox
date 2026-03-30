@@ -68,8 +68,7 @@ pub(super) fn handle_save_weight_preset(
         "weights": normalized_json,
     });
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -132,8 +131,7 @@ pub(super) fn handle_list_weight_presets(
     }
 
     let result = serde_json::json!({ "presets": presets });
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -167,7 +165,6 @@ pub(super) fn handle_delete_weight_preset(
         "name": params.name,
         "scorer_type": scorer_type_str,
     });
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

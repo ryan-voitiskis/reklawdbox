@@ -24,29 +24,6 @@ fn extract_json(result: &CallToolResult) -> serde_json::Value {
     serde_json::from_str(text).expect("tool text content should be valid JSON")
 }
 
-fn assert_has_provenance(payload: &serde_json::Value) {
-    let docs = payload
-        .get("consulted_documents")
-        .and_then(serde_json::Value::as_array)
-        .expect("consulted_documents should be an array");
-    assert!(
-        !docs.is_empty(),
-        "consulted_documents should include at least one document"
-    );
-    assert!(
-        docs.iter().all(serde_json::Value::is_string),
-        "consulted_documents should contain document paths"
-    );
-    let manifest_status = payload
-        .get("manifest_status")
-        .and_then(serde_json::Value::as_str)
-        .expect("manifest_status should be a string");
-    assert!(
-        !manifest_status.is_empty(),
-        "manifest_status should not be empty"
-    );
-}
-
 async fn call_tool_via_router(
     tool_name: &str,
     arguments: Option<serde_json::Map<String, serde_json::Value>>,
@@ -1114,7 +1091,7 @@ async fn essentia_python_override_takes_precedence() {
 }
 
 #[tokio::test]
-async fn write_xml_no_change_path_includes_provenance() {
+async fn write_xml_no_change_path_returns_message() {
     let server = ReklawdboxServer::new(None);
 
     let result = server
@@ -1134,11 +1111,10 @@ async fn write_xml_no_change_path_includes_provenance() {
             .expect("message should be present"),
         "No changes to write."
     );
-    assert_has_provenance(&payload);
 }
 
 #[tokio::test]
-async fn write_xml_no_change_path_via_router_includes_provenance() {
+async fn write_xml_no_change_path_via_router_returns_message() {
     let result = call_tool_via_router("write_xml", None).await;
     let payload = extract_json(&result);
 
@@ -1149,7 +1125,6 @@ async fn write_xml_no_change_path_via_router_includes_provenance() {
             .expect("message should be present"),
         "No changes to write."
     );
-    assert_has_provenance(&payload);
 }
 
 #[tokio::test]
@@ -1576,7 +1551,7 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
 }
 
 #[tokio::test]
-async fn update_tracks_includes_provenance() {
+async fn update_tracks_stages_changes() {
     let server = ReklawdboxServer::new(None);
     let known_genre = genre::GENRES
         .first()
@@ -1615,7 +1590,6 @@ async fn update_tracks_includes_provenance() {
             .expect("total_pending should be present"),
         1
     );
-    assert_has_provenance(&payload);
     assert!(
         payload.get("changes").is_none(),
         "update_tracks should not echo changes back"
@@ -1623,7 +1597,7 @@ async fn update_tracks_includes_provenance() {
 }
 
 #[tokio::test]
-async fn update_tracks_via_router_includes_provenance() {
+async fn update_tracks_via_router_warns_non_taxonomy_genre() {
     let result = call_tool_via_router(
         "update_tracks",
         serde_json::json!({
@@ -1653,11 +1627,10 @@ async fn update_tracks_via_router_includes_provenance() {
         !warnings.is_empty(),
         "warnings should include at least one non-taxonomy genre warning"
     );
-    assert_has_provenance(&payload);
 }
 
 #[tokio::test]
-async fn get_genre_taxonomy_via_router_includes_provenance() {
+async fn get_genre_taxonomy_via_router_returns_genres() {
     let result = call_tool_via_router("get_genre_taxonomy", None).await;
     let payload = extract_json(&result);
 
@@ -1669,7 +1642,6 @@ async fn get_genre_taxonomy_via_router_includes_provenance() {
         !genres.is_empty(),
         "genres should include configured taxonomy entries"
     );
-    assert_has_provenance(&payload);
 }
 
 #[test]

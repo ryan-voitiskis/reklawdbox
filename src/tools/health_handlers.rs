@@ -36,8 +36,8 @@ pub(super) fn handle_scan_playlist_coverage(
         "tracks": result.tracks,
     });
 
-    let json = serde_json::to_string_pretty(&json_result)
-        .map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json =
+        serde_json::to_string(&json_result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -147,8 +147,7 @@ pub(super) async fn handle_scan_broken_links(
         "broken_links": broken_results,
     });
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -256,8 +255,7 @@ pub(super) async fn handle_scan_orphan_files(
         );
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -280,7 +278,7 @@ async fn handle_duplicates_metadata(
         .map_err(db_error)?;
 
     if groups.is_empty() {
-        let json = serde_json::to_string_pretty(&serde_json::json!({
+        let json = serde_json::to_string(&serde_json::json!({
             "detection_level": "metadata",
             "group_count": 0,
             "total_duplicate_tracks": 0,
@@ -333,8 +331,7 @@ async fn handle_duplicates_metadata(
         "duplicate_groups": dup_groups,
     });
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -367,7 +364,7 @@ async fn handle_duplicates_exact(
     .map_err(|e| mcp_internal_error(format!("Task join error: {e}")))?;
 
     if size_groups.is_empty() {
-        let json = serde_json::to_string_pretty(&serde_json::json!({
+        let json = serde_json::to_string(&serde_json::json!({
             "detection_level": "exact",
             "group_count": 0,
             "total_duplicate_tracks": 0,
@@ -426,8 +423,8 @@ async fn handle_duplicates_exact(
         if hash_errors_count > 0 {
             result["hash_errors_count"] = serde_json::json!(hash_errors_count);
         }
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json =
+            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
         return Ok(CallToolResult::success(vec![Content::text(json)]));
     }
 
@@ -481,8 +478,7 @@ async fn handle_duplicates_exact(
         result["hash_errors_count"] = serde_json::json!(hash_errors_count);
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 

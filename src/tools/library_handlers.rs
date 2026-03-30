@@ -22,8 +22,7 @@ pub(super) fn handle_search_tracks(
         .map_err(|e| McpError::invalid_params(e, None))?;
     search.playlist = params.playlist;
     let tracks = db::search_tracks(&conn, &search).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -34,8 +33,7 @@ pub(super) fn handle_get_track(
     let track = db::get_track(&conn, &params.track_id).map_err(db_error)?;
     match track {
         Some(t) => {
-            let json =
-                serde_json::to_string_pretty(&t).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(&t).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
         None => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -49,8 +47,7 @@ pub(super) fn handle_get_playlists(
     conn: MutexGuard<'_, Connection>,
 ) -> Result<CallToolResult, McpError> {
     let playlists = db::get_playlists(&conn).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&playlists).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&playlists).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -60,8 +57,7 @@ pub(super) fn handle_get_playlist_tracks(
 ) -> Result<CallToolResult, McpError> {
     let tracks =
         db::get_playlist_tracks(&conn, &params.playlist_id, params.limit).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -69,8 +65,7 @@ pub(super) fn handle_get_library_summary(
     conn: MutexGuard<'_, Connection>,
 ) -> Result<CallToolResult, McpError> {
     let stats = db::get_library_stats(&conn).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&stats).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&stats).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -88,14 +83,12 @@ pub(super) fn handle_get_genre_taxonomy() -> Result<CallToolResult, McpError> {
             })
         })
         .collect();
-    let mut result = serde_json::json!({
+    let result = serde_json::json!({
         "genres": genres,
         "aliases": aliases,
         "bpm_ranges": bpm_ranges,
         "description": "Flat genre taxonomy. Not a closed list — arbitrary genres are accepted. This list provides consistency suggestions. Aliases map non-canonical genre names to their canonical forms. bpm_ranges shows typical BPM ranges for genres where BPM is diagnostic; genres not listed have ranges too wide to be useful."
     });
-    attach_corpus_provenance(&mut result, consult_genre_workflow_docs());
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

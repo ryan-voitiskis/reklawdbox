@@ -369,8 +369,7 @@ pub(super) async fn handle_backfill_albums(
         );
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 

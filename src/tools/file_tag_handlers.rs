@@ -129,8 +129,7 @@ pub(super) async fn handle_read_file_tags(
         "results": results,
     });
 
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -179,8 +178,8 @@ pub(super) async fn handle_write_file_tags(
             "results": results,
         });
 
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json =
+            serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     } else {
         let mut results = Vec::with_capacity(entries.len());
@@ -212,8 +211,8 @@ pub(super) async fn handle_write_file_tags(
             "results": results,
         });
 
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json =
+            serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }
@@ -234,8 +233,7 @@ pub(super) async fn handle_extract_cover_art(
     .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
     .map_err(|e| mcp_internal_error(e.to_string()))?;
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -297,7 +295,6 @@ pub(super) async fn handle_embed_cover_art(
         "results": results,
     });
 
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

@@ -50,8 +50,8 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json = serde_json::to_string_pretty(&summary)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
 
@@ -81,8 +81,8 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json = serde_json::to_string_pretty(&issues)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&issues).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
 
@@ -101,8 +101,8 @@ pub(super) async fn handle_audit_state(
             .map_err(mcp_internal_error)?;
 
             let json = serde_json::json!({ "resolved": count });
-            let text = serde_json::to_string_pretty(&json)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let text =
+                serde_json::to_string(&json).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(text)]))
         }
 
@@ -116,8 +116,8 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json = serde_json::to_string_pretty(&summary)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
     }

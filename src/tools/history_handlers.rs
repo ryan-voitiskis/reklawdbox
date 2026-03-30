@@ -18,8 +18,7 @@ pub(super) fn handle_get_sessions(
         .transpose()
         .map_err(|e| McpError::invalid_params(e, None))?;
     let sessions = db::get_sessions(&conn, params.limit, after.as_deref()).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&sessions).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&sessions).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -34,8 +33,7 @@ pub(super) fn handle_get_session_tracks(
             params.session_id
         ))]));
     }
-    let json =
-        serde_json::to_string_pretty(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&tracks).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -50,7 +48,6 @@ pub(super) fn handle_get_play_stats(
         .into_search_params(true, None, None)
         .map_err(|e| McpError::invalid_params(e, None))?;
     let stats = db::get_play_stats(&conn, &search, include_unplayed, limit).map_err(db_error)?;
-    let json =
-        serde_json::to_string_pretty(&stats).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&stats).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

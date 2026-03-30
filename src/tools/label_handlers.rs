@@ -314,8 +314,7 @@ pub(super) async fn handle_backfill_labels(
             .store(unlabeled_count as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 

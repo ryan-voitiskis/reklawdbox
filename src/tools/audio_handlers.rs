@@ -150,8 +150,7 @@ pub(super) async fn handle_analyze_track_audio(
     if !essentia_available {
         result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
     }
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -540,8 +539,7 @@ pub(super) async fn handle_analyze_audio_batch(
     if !essentia_available {
         result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
     }
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -571,8 +569,8 @@ pub(super) async fn handle_setup_essentia(
                 "python_path": path,
                 "message": "Essentia is already available.",
             });
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
         // Stale override - clear it and proceed with fresh install
@@ -722,8 +720,8 @@ pub(super) async fn handle_setup_essentia(
             "venv_dir": venv_dir.to_string_lossy(),
             "message": "Essentia installed successfully. Audio analysis will now include Essentia features — no restart needed.",
         });
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let json =
+            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
         return Ok(CallToolResult::success(vec![Content::text(json)]));
     }
 

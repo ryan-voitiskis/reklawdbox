@@ -67,8 +67,8 @@ pub(super) async fn handle_lookup_discogs(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
     }
@@ -107,8 +107,7 @@ pub(super) async fn handle_lookup_discogs(
         false,
         None,
     );
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -155,8 +154,8 @@ pub(super) async fn handle_lookup_beatport(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
     }
@@ -192,8 +191,7 @@ pub(super) async fn handle_lookup_beatport(
         false,
         None,
     );
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -240,8 +238,8 @@ pub(super) async fn handle_lookup_musicbrainz(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
     }
@@ -277,8 +275,7 @@ pub(super) async fn handle_lookup_musicbrainz(
         false,
         None,
     );
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -325,8 +322,8 @@ pub(super) async fn handle_lookup_bandcamp(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json =
+                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
             return Ok(CallToolResult::success(vec![Content::text(json)]));
         }
     }
@@ -362,8 +359,7 @@ pub(super) async fn handle_lookup_bandcamp(
         false,
         None,
     );
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -993,7 +989,6 @@ pub(super) async fn handle_enrich_tracks(
         },
         "failures": progress.failures,
     });
-    let json =
-        serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

@@ -150,8 +150,7 @@ pub(super) fn handle_classify_tracks(
         output["staging"] = staging_info;
     }
 
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
@@ -226,8 +225,7 @@ pub(super) fn handle_audit_genres(
         "results": visible,
     });
 
-    let json =
-        serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 

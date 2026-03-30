@@ -7,10 +7,13 @@ mod classify;
 mod cli;
 mod color;
 mod config;
+#[cfg(test)]
 mod corpus;
 mod db;
 mod discogs;
+#[cfg(test)]
 mod eval_routing;
+#[cfg(test)]
 mod eval_tasks;
 mod genre;
 mod keychain;
