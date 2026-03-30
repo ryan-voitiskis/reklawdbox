@@ -27,40 +27,34 @@ Repeat until all providers reach 100%. Report progress between batches.
 ### 1. Normalize aliases
 
 ```
-suggest_normalizations()
+suggest_normalizations(stage_aliases=true)
 ```
 
-Stage non-debatable fixes (e.g. `Hip-Hop` → `Hip Hop`, `DnB` → `Drum & Bass`):
+This auto-stages all non-debatable alias mappings (e.g. `Hip-Hop` → `Hip Hop`, `DnB` → `Drum & Bass`) and returns grouped results showing each mapping and its track count.
+
+Review the staged aliases. If any are debatable, unstage them with `clear_changes(track_ids=[...])` and ask the user. Store overrides for Step 2.
+
+**Unknown genres** (non-canonical, no alias mapping) must be classified through the same pipeline as ungenred tracks. Collect their track IDs from the `unknown` section for Step 2.
+
+### 2. Classify and get approval policy
+
+Get the confidence distribution first using `format="summary"`:
 
 ```
-update_tracks(changes=[{"track_id": "...", "genre": "..."}])
+classify_tracks(max_tracks=200, format="summary", genre_overrides=[...])
 ```
 
-For debatable aliases, ask the user. Store overrides for Step 2.
-
-**Unknown genres** (non-canonical, no alias mapping) must be classified through the same pipeline as ungenred tracks. Collect their track IDs for Step 2.
-
-### 2. Classify all tracks
-
-Classify the full scope before reviewing anything. This gives an accurate confidence distribution and enables efficient review.
+Paginate with `offset` until all ungenred tracks are processed. Also classify unknown-genre tracks from Step 1:
 
 ```
-classify_tracks(max_tracks=50, format="compact", genre_overrides=[...])
+classify_tracks(track_ids=[...unknown IDs...], format="summary", genre_overrides=[...])
 ```
 
-Paginate with `offset` until all ungenred tracks are processed. Then classify the unknown-genre tracks from Step 1:
-
-```
-classify_tracks(track_ids=[...unknown IDs...], format="compact", genre_overrides=[...])
-```
-
-Collect all results into a roster. Report the aggregate distribution:
+The summary format returns genre-grouped counts with top artists per genre — no per-track data. Report the aggregate distribution:
 
 ```
 "N tracks classified: X high, Y medium, Z low, W insufficient."
 ```
-
-### 3. Set approval policy
 
 Present the confidence distribution and ask the user which tiers to auto-approve:
 
@@ -68,26 +62,23 @@ Present the confidence distribution and ask the user which tiers to auto-approve
 
 Default recommendation: approve high, present medium as summary, full review for low/insufficient.
 
-### 4. Stage auto-approved tiers
+### 3. Stage approved tiers
 
-#### High confidence
-
-Present a genre-grouped summary before staging:
+Re-run classification with `auto_stage` to stage the approved tiers in one shot:
 
 ```
-High confidence (N tracks):
-  Techno: 58 — G-Man (30), Aril Brikha (14), Marcel Dettmann (8), ...
-  Breakbeat: 12 — Octo Octa (4), Gacha Bakradze (4), ...
-  House: 7 — Tim Deluxe (2), Enliven (2), ...
+classify_tracks(max_tracks=200, format="summary", auto_stage=["high", "medium"], genre_overrides=[...])
 ```
 
-Stage after user confirms.
+Paginate with `offset` until all tracks are staged. The response includes a `staging` field with the staged count. No separate `update_tracks` call is needed.
 
-#### Medium confidence
+For medium-confidence tracks that are NOT auto-approved, use `format="compact"` to get the per-track list for review:
 
-If the user auto-approved medium, present the same genre-grouped summary and stage.
+```
+classify_tracks(max_tracks=200, format="compact", genre_overrides=[...])
+```
 
-If not auto-approved, present as a numbered list grouped by genre. Highlight which evidence sources agree vs disagree:
+Present as a numbered list grouped by genre. Highlight which evidence sources agree vs disagree:
 
 ```
 → Techno (8):
@@ -100,20 +91,20 @@ Ask: **"Approve all, or reject/change specific numbers. Say 'investigate #N' for
 
 For investigated tracks, use `resolve_tracks_data` to get full evidence, then check artist context via `search_tracks`.
 
-Stage approved changes.
+Stage approved changes with `update_tracks`.
 
-### 5. Review low and insufficient confidence
+### 4. Review low and insufficient confidence
 
 These tracks need per-track reasoning — do not batch-approve them. Use subagents to parallelize the work.
 
-#### 5.1 Group by artist
+#### 4.1 Group by artist
 
 From the compact roster, group low/insufficient tracks by artist:
 
 - Artists with 5+ tracks → dedicated subagent
 - Remaining artists → batch into subagents of ~15–20 tracks
 
-#### 5.2 Dispatch review subagents
+#### 4.2 Dispatch review subagents
 
 Launch subagents in parallel (3–4 at a time). Each subagent receives:
 
@@ -146,7 +137,7 @@ Launch subagents in parallel (3–4 at a time). Each subagent receives:
 > **Tracks to classify:**
 > [track list here]
 
-#### 5.3 Present recommendations
+#### 4.3 Present recommendations
 
 As each subagent completes, present its recommendations to the user in the `#N Artist — Title / Evidence / Library / Recommend` format.
 
@@ -156,7 +147,7 @@ Stage approved changes. Repeat until all subagents have reported.
 
 Report cumulative progress: `"Review complete: N classified, M changes staged, K remaining."`
 
-### 6. Export
+### 5. Export
 
 ```
 preview_changes()

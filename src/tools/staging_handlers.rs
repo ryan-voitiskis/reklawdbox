@@ -145,27 +145,10 @@ pub(super) fn handle_update_tracks(
         })
         .collect();
 
-    let echo: Vec<serde_json::Value> = track_changes
-        .iter()
-        .map(|c| {
-            serde_json::json!({
-                "track_id": c.track_id,
-                "genre": c.genre,
-                "comments": c.comments,
-                "rating": c.rating,
-                "color": c.color,
-                "label": c.label,
-                "year": c.year,
-                "album": c.album,
-            })
-        })
-        .collect();
-
     let (staged, total) = changes.stage(track_changes);
     let mut result = serde_json::json!({
         "staged": staged,
         "total_pending": total,
-        "changes": echo,
     });
     if !warnings.is_empty() {
         result["warnings"] = serde_json::json!(warnings);
@@ -178,16 +161,20 @@ pub(super) fn handle_update_tracks(
 
 pub(super) fn handle_suggest_normalizations(
     conn: MutexGuard<'_, Connection>,
+    changes: &ChangeManager,
     params: SuggestNormalizationsParams,
 ) -> Result<CallToolResult, McpError> {
     let min_count = params.min_genre_count.unwrap_or(1);
+    let stage_aliases = params.stage_aliases.unwrap_or(false);
 
     let stats =
         db::get_library_stats(&conn).map_err(db_error)?;
 
-    let mut alias_suggestions = Vec::new();
-    let mut unknown_items = Vec::new();
+    // Grouped alias: (current_genre, canonical) → [track_ids]
+    let mut alias_groups: Vec<(String, &'static str, Vec<String>)> = Vec::new();
+    let mut unknown_groups: Vec<(String, Vec<String>)> = Vec::new();
     let mut canonical_items = Vec::new();
+    let mut all_alias_changes: Vec<TrackChange> = Vec::new();
 
     for gc in &stats.genres {
         if gc.name == "(none)" || gc.name.is_empty() {
@@ -200,16 +187,17 @@ pub(super) fn handle_suggest_normalizations(
         if let Some(canonical) = genre::canonical_genre_from_alias(&gc.name) {
             let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
                 .map_err(db_error)?;
-            for t in tracks {
-                alias_suggestions.push(crate::types::NormalizationSuggestion {
-                    track_id: t.id,
-                    title: t.title,
-                    artist: t.artist,
-                    current_genre: gc.name.clone(),
-                    suggested_genre: Some(canonical.to_string()),
-                    confidence: crate::types::Confidence::Alias,
-                });
+            let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+            if stage_aliases {
+                for id in &track_ids {
+                    all_alias_changes.push(TrackChange {
+                        track_id: id.clone(),
+                        genre: Some(canonical.to_string()),
+                        ..Default::default()
+                    });
+                }
             }
+            alias_groups.push((gc.name.clone(), canonical, track_ids));
         } else if genre::is_known_genre(&gc.name) {
             canonical_items.push(serde_json::json!({
                 "genre": gc.name,
@@ -218,29 +206,58 @@ pub(super) fn handle_suggest_normalizations(
         } else {
             let tracks = db::get_tracks_by_exact_genre(&conn, &gc.name, true)
                 .map_err(db_error)?;
-            for t in tracks {
-                unknown_items.push(crate::types::NormalizationSuggestion {
-                    track_id: t.id,
-                    title: t.title,
-                    artist: t.artist,
-                    current_genre: gc.name.clone(),
-                    suggested_genre: None,
-                    confidence: crate::types::Confidence::Unknown,
-                });
-            }
+            let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+            unknown_groups.push((gc.name.clone(), track_ids));
         }
     }
 
+    let alias_track_count: usize = alias_groups.iter().map(|(_, _, ids)| ids.len()).sum();
+    let unknown_track_count: usize = unknown_groups.iter().map(|(_, ids)| ids.len()).sum();
+
+    // Build grouped alias output
+    let alias_output: Vec<serde_json::Value> = alias_groups
+        .iter()
+        .map(|(current, canonical, ids)| {
+            serde_json::json!({
+                "from": current,
+                "to": canonical,
+                "count": ids.len(),
+                "track_ids": ids,
+            })
+        })
+        .collect();
+
+    // Build grouped unknown output
+    let unknown_output: Vec<serde_json::Value> = unknown_groups
+        .iter()
+        .map(|(current, ids)| {
+            serde_json::json!({
+                "genre": current,
+                "count": ids.len(),
+                "track_ids": ids,
+            })
+        })
+        .collect();
+
     let mut result = serde_json::json!({
-        "alias": alias_suggestions,
-        "unknown": unknown_items,
+        "alias": alias_output,
+        "unknown": unknown_output,
         "canonical": canonical_items,
         "summary": {
-            "alias_tracks": alias_suggestions.len(),
-            "unknown_tracks": unknown_items.len(),
+            "alias_tracks": alias_track_count,
+            "unknown_tracks": unknown_track_count,
             "canonical_genres": canonical_items.len(),
         }
     });
+
+    if stage_aliases && !all_alias_changes.is_empty() {
+        let (staged, total_pending) = changes.stage(all_alias_changes);
+        result["staging"] = serde_json::json!({
+            "staged": staged,
+            "total_pending": total_pending,
+        });
+    }
+
     attach_corpus_provenance(&mut result, consult_genre_workflow_docs());
     let json =
         serde_json::to_string_pretty(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;

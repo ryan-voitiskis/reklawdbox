@@ -19,13 +19,13 @@ scoring, and greedy set sequencing with energy-curve shaping.
 
 ## MCP Development Loop
 
-This project IS the MCP server. The user's MCP config normally points to the Homebrew-installed binary (`"command": "reklawdbox"`). To find the config, look for the `.mcp.json` containing `"reklawdbox"` under `~/.claude/projects/`. To test local changes:
+This project IS the MCP server. The user's MCP config (`.mcp.json` in the repo root) normally resolves `reklawdbox` from PATH, which points to the Homebrew-installed binary in the Cellar. Claude Code ignores config file edits for running servers — `/mcp` always re-resolves the command from PATH. To test local changes:
 
 1. `cargo build --release`
-2. Edit the MCP config: change `"command": "reklawdbox"` to `"command": "<path-to-repo>/target/release/reklawdbox"`
-3. Ask the user to run `/mcp` to reconnect — the running server is the old binary until restarted.
+2. Overwrite the Homebrew binary: `sudo cp target/release/reklawdbox /opt/homebrew/Cellar/reklawdbox/$(brew list --versions reklawdbox | awk '{print $2}')/bin/reklawdbox`
+3. Ask the user to run `/mcp` to reconnect with the new binary.
 4. Smoke-test the changed functionality by calling the affected MCP tools. Include at least one happy-path call and one edge-case or error-path call per changed tool.
-5. When all testing is done (not between build-test cycles), revert the config: change command back to `"reklawdbox"`. The running server process is unaffected — the config is only read at connection time.
+5. The Cellar binary stays overwritten until the next `brew upgrade` or release, so no manual revert is needed.
 
 ## Releasing
 

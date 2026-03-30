@@ -243,24 +243,6 @@ pub struct KeyCount {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct NormalizationSuggestion {
-    pub track_id: String,
-    pub title: String,
-    pub artist: String,
-    pub current_genre: String,
-    pub suggested_genre: Option<String>,
-    pub confidence: Confidence,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Confidence {
-    Alias,
-    Unknown,
-    Canonical,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "lowercase")]

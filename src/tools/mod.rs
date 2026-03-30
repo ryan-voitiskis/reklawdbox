@@ -290,13 +290,13 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Analyze all genres in the library and suggest normalizations. Returns alias (known mapping), unknown (needs manual decision), and canonical (already correct) sections."
+        description = "Analyze all genres in the library and suggest normalizations. Returns alias mappings grouped by genre (e.g. 'Hip-Hop' → 'Hip Hop', 5 tracks), unknown genres needing manual classification, and canonical genre counts. Use stage_aliases=true to auto-stage all alias normalizations in one shot."
     )]
     async fn suggest_normalizations(
         &self,
         params: Parameters<SuggestNormalizationsParams>,
     ) -> Result<CallToolResult, McpError> {
-        handle_suggest_normalizations(self.rekordbox_conn()?, params.0)
+        handle_suggest_normalizations(self.rekordbox_conn()?, &self.state.changes, params.0)
     }
 
     #[tool(description = "Preview all staged changes, showing what will differ from current state")]
@@ -568,7 +568,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Use format=\"compact\" when classifying all tracks upfront (returns only track_id, artist, title, genre, confidence, action). Follow up with resolve_tracks_data(format=\"classification\") for full evidence on tracks that need review. When track_ids are provided explicitly, tracks with existing (non-canonical) genres can also be classified. Cache-only — never triggers external calls."
+        description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Use format=\"compact\" when classifying all tracks upfront (returns only track_id, artist, title, genre, confidence, action). Use format=\"summary\" to get only confidence distribution and genre-grouped counts without per-track results. Follow up with resolve_tracks_data(format=\"classification\") for full evidence on tracks that need review. When track_ids are provided explicitly, tracks with existing (non-canonical) genres can also be classified. Use auto_stage=[\"high\",\"medium\"] to directly stage results at specified confidence levels, eliminating the need for a separate update_tracks call. Cache-only — never triggers external calls."
     )]
     async fn classify_tracks(
         &self,

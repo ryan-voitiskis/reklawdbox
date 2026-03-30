@@ -2,9 +2,6 @@
 //!
 //! Applies evidence-based genre classification using cached enrichment data
 //! (Discogs, Beatport, label mapping) and audio analysis features (Essentia).
-//!
-//! The `ClassificationConfidence` enum here is distinct from `crate::types::Confidence`
-//! which models normalization state (alias/unknown/canonical).
 
 use std::collections::HashMap;
 

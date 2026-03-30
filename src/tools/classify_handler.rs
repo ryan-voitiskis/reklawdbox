@@ -17,6 +17,7 @@ use crate::genre;
 use crate::normalize;
 use crate::store;
 use crate::tools::params::{AuditGenresParams, ClassifyFormat, ClassifyTracksParams};
+use crate::types::TrackChange;
 
 pub(super) fn handle_classify_tracks(
     server: &ReklawdboxServer,
@@ -88,8 +89,34 @@ pub(super) fn handle_classify_tracks(
         summary["cache_read_errors"] = cache_errors.into();
     }
 
+    // --- Auto-staging ---
+    let mut staging_info = serde_json::Value::Null;
+    if let Some(ref levels) = params.auto_stage {
+        let track_changes: Vec<TrackChange> = results
+            .iter()
+            .filter(|r| {
+                r.genre.is_some()
+                    && levels
+                        .iter()
+                        .any(|l| l.matches_confidence(&r.confidence))
+            })
+            .map(|r| TrackChange {
+                track_id: r.track_id.clone(),
+                genre: r.genre.map(String::from),
+                ..Default::default()
+            })
+            .collect();
+
+        let (staged, total_pending) = server.state.changes.stage(track_changes);
+        staging_info = serde_json::json!({
+            "staged": staged,
+            "total_pending": total_pending,
+        });
+    }
+
+    // --- Format output ---
     let format = params.format.unwrap_or_default();
-    let output = match format {
+    let mut output = match format {
         ClassifyFormat::Full => serde_json::json!({
             "summary": summary,
             "results": results.iter()
@@ -113,7 +140,18 @@ pub(super) fn handle_classify_tracks(
                 "results": compact,
             })
         }
+        ClassifyFormat::Summary => {
+            let by_genre = build_genre_distribution(&results);
+            serde_json::json!({
+                "summary": summary,
+                "by_genre": by_genre,
+            })
+        }
     };
+
+    if !staging_info.is_null() {
+        output["staging"] = staging_info;
+    }
 
     let json =
         serde_json::to_string_pretty(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
@@ -220,6 +258,87 @@ fn count_by_action(results: &[ClassificationResult]) -> (u32, u32, u32, u32) {
         }
     }
     (suggest, conflict, confirm, manual)
+}
+
+/// Build a genre-grouped distribution for the summary format.
+/// Groups by recommended genre, then by confidence level, with artist counts.
+pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serde_json::Value {
+    // genre → { confidence → [artists] }
+    let mut genre_map: HashMap<&str, HashMap<&str, Vec<&str>>> = HashMap::new();
+
+    for r in results {
+        if matches!(r.action, ClassificationAction::Confirm) {
+            continue;
+        }
+        let Some(genre) = r.genre else {
+            continue;
+        };
+        let conf = match r.confidence {
+            ClassificationConfidence::High => "high",
+            ClassificationConfidence::Medium => "medium",
+            ClassificationConfidence::Low => "low",
+            ClassificationConfidence::Insufficient => "insufficient",
+        };
+        genre_map
+            .entry(genre)
+            .or_default()
+            .entry(conf)
+            .or_default()
+            .push(&r.artist);
+    }
+
+    // Build sorted output: genre → { count, by_confidence: { high: N, ... }, top_artists: [...] }
+    let mut genres: Vec<_> = genre_map
+        .into_iter()
+        .map(|(genre, conf_map)| {
+            let total: usize = conf_map.values().map(|v| v.len()).sum();
+            (genre, conf_map, total)
+        })
+        .collect();
+    genres.sort_by(|a, b| b.2.cmp(&a.2));
+
+    genres
+        .into_iter()
+        .map(|(genre, conf_map, total)| {
+            // Count artists across all confidence levels
+            let mut artist_counts: HashMap<&str, usize> = HashMap::new();
+            for artists in conf_map.values() {
+                for &a in artists {
+                    *artist_counts.entry(a).or_default() += 1;
+                }
+            }
+            let mut top: Vec<_> = artist_counts.into_iter().collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1));
+            let top_artists: Vec<String> = top
+                .iter()
+                .take(5)
+                .map(|(a, c)| {
+                    if *c > 1 {
+                        format!("{a} ({c})")
+                    } else {
+                        a.to_string()
+                    }
+                })
+                .collect();
+
+            let mut by_conf = serde_json::Map::new();
+            for level in &["high", "medium", "low", "insufficient"] {
+                if let Some(artists) = conf_map.get(level) {
+                    by_conf.insert(
+                        level.to_string(),
+                        serde_json::json!(artists.len()),
+                    );
+                }
+            }
+
+            serde_json::json!({
+                "genre": genre,
+                "count": total,
+                "by_confidence": by_conf,
+                "top_artists": top_artists,
+            })
+        })
+        .collect()
 }
 
 fn classify_batch(

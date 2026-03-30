@@ -1616,6 +1616,10 @@ async fn update_tracks_includes_provenance() {
         1
     );
     assert_has_provenance(&payload);
+    assert!(
+        payload.get("changes").is_none(),
+        "update_tracks should not echo changes back"
+    );
 }
 
 #[tokio::test]
@@ -5281,4 +5285,96 @@ fn tool_schemas_are_claude_api_compatible() {
     check::<ReadFileTagsParams>("ReadFileTagsParams");
     check::<ExtractCoverArtParams>("ExtractCoverArtParams");
     check::<EmbedCoverArtParams>("EmbedCoverArtParams");
+}
+
+// --- build_genre_distribution tests ---
+
+fn make_result(
+    genre: Option<&'static str>,
+    confidence: crate::classify::ClassificationConfidence,
+    action: crate::classify::ClassificationAction,
+    artist: &str,
+) -> crate::classify::ClassificationResult {
+    crate::classify::ClassificationResult {
+        track_id: String::new(),
+        artist: artist.to_string(),
+        title: String::new(),
+        current_genre: String::new(),
+        genre,
+        confidence,
+        action,
+        evidence: vec![],
+        candidates: vec![],
+        flags: vec![],
+        review_hint: None,
+    }
+}
+
+#[test]
+fn genre_distribution_empty_input() {
+    let dist = classify_handler::build_genre_distribution(&[]);
+    assert_eq!(dist, serde_json::json!([]));
+}
+
+#[test]
+fn genre_distribution_excludes_confirm_and_genreless() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Confirm, "Artist A"),
+        make_result(None, C::Insufficient, A::Suggest, "Artist B"),
+        make_result(Some("House"), C::Medium, A::Suggest, "Artist C"),
+    ];
+    let dist = classify_handler::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only House should appear");
+    assert_eq!(arr[0]["genre"], "House");
+    assert_eq!(arr[0]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_groups_and_sorts_by_count() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Suggest, "A"),
+        make_result(Some("Techno"), C::High, A::Suggest, "B"),
+        make_result(Some("Techno"), C::Medium, A::Suggest, "A"),
+        make_result(Some("House"), C::High, A::Suggest, "C"),
+    ];
+    let dist = classify_handler::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    // Techno (3) should be first, House (1) second
+    assert_eq!(arr[0]["genre"], "Techno");
+    assert_eq!(arr[0]["count"], 3);
+    assert_eq!(arr[0]["by_confidence"]["high"], 2);
+    assert_eq!(arr[0]["by_confidence"]["medium"], 1);
+    assert_eq!(arr[1]["genre"], "House");
+    assert_eq!(arr[1]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_top_artists_capped_and_counted() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let mut results = Vec::new();
+    // 6 different artists -- top_artists should cap at 5
+    for i in 0..6 {
+        results.push(make_result(
+            Some("Techno"),
+            C::High,
+            A::Suggest,
+            &format!("Artist {i}"),
+        ));
+    }
+    // Artist 0 appears at two confidence levels -- should show "(2)"
+    results.push(make_result(Some("Techno"), C::Medium, A::Suggest, "Artist 0"));
+
+    let dist = classify_handler::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    let top = arr[0]["top_artists"].as_array().unwrap();
+    assert_eq!(top.len(), 5, "top_artists capped at 5");
+    // First entry should be "Artist 0 (2)" since it has the highest count
+    assert_eq!(top[0].as_str().unwrap(), "Artist 0 (2)");
 }

@@ -189,6 +189,10 @@ pub struct SuggestNormalizationsParams {
     #[schemars(description = "Only show genres with at least this many tracks (default 1)")]
     #[serde(rename = "min_count")]
     pub min_genre_count: Option<i32>,
+    #[schemars(
+        description = "Auto-stage all alias normalizations (default false). When true, non-debatable alias mappings (e.g. 'Hip-Hop' → 'Hip Hop') are staged immediately."
+    )]
+    pub stage_aliases: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -332,9 +336,13 @@ pub struct ClassifyTracksParams {
     )]
     pub genre_overrides: Option<Vec<GenreOverrideInput>>,
     #[schemars(
-        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents."
+        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents. 'summary' returns only confidence distribution and genre-grouped counts with no per-track results — use to get the lay of the land before deciding what to stage."
     )]
     pub format: Option<ClassifyFormat>,
+    #[schemars(
+        description = "Auto-stage results at these confidence levels after classification. Example: [\"high\", \"medium\"]. Only results with a recommended genre are staged. Omit to classify without staging (default)."
+    )]
+    pub auto_stage: Option<Vec<StageLevel>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
@@ -344,6 +352,33 @@ pub enum ClassifyFormat {
     #[default]
     Full,
     Compact,
+    Summary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum StageLevel {
+    High,
+    Medium,
+    Low,
+    Insufficient,
+}
+
+impl StageLevel {
+    pub fn matches_confidence(
+        &self,
+        conf: &crate::classify::ClassificationConfidence,
+    ) -> bool {
+        use crate::classify::ClassificationConfidence;
+        matches!(
+            (self, conf),
+            (Self::High, ClassificationConfidence::High)
+                | (Self::Medium, ClassificationConfidence::Medium)
+                | (Self::Low, ClassificationConfidence::Low)
+                | (Self::Insufficient, ClassificationConfidence::Insufficient)
+        )
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -957,6 +992,41 @@ pub(super) struct ScanDuplicatesParams {
     pub path_prefix: Option<String>,
     #[schemars(description = "Max duplicate groups to report (default 50)")]
     pub limit: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::classify::ClassificationConfidence;
+
+    #[test]
+    fn stage_level_matches_only_corresponding_confidence() {
+        let cases = [
+            (StageLevel::High, ClassificationConfidence::High, true),
+            (StageLevel::High, ClassificationConfidence::Medium, false),
+            (StageLevel::High, ClassificationConfidence::Low, false),
+            (StageLevel::High, ClassificationConfidence::Insufficient, false),
+            (StageLevel::Medium, ClassificationConfidence::High, false),
+            (StageLevel::Medium, ClassificationConfidence::Medium, true),
+            (StageLevel::Medium, ClassificationConfidence::Low, false),
+            (StageLevel::Medium, ClassificationConfidence::Insufficient, false),
+            (StageLevel::Low, ClassificationConfidence::High, false),
+            (StageLevel::Low, ClassificationConfidence::Medium, false),
+            (StageLevel::Low, ClassificationConfidence::Low, true),
+            (StageLevel::Low, ClassificationConfidence::Insufficient, false),
+            (StageLevel::Insufficient, ClassificationConfidence::High, false),
+            (StageLevel::Insufficient, ClassificationConfidence::Medium, false),
+            (StageLevel::Insufficient, ClassificationConfidence::Low, false),
+            (StageLevel::Insufficient, ClassificationConfidence::Insufficient, true),
+        ];
+        for (level, conf, expected) in cases {
+            assert_eq!(
+                level.matches_confidence(&conf),
+                expected,
+                "{level:?} vs {conf:?}"
+            );
+        }
+    }
 }
 
 impl schemars::JsonSchema for AuditOperation {
