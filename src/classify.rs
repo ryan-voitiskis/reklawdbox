@@ -413,13 +413,13 @@ fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
     let all_dance = evidence.discogs_mapped.iter().all(|mg| {
         matches!(
             genre::genre_family(mg.genre),
-            GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass
+            GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass | GenreFamily::Hardcore
         )
     });
     let bp_dance = evidence.beatport_genre.is_none_or(|g| {
         matches!(
             genre::genre_family(g),
-            GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass
+            GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass | GenreFamily::Hardcore
         )
     });
     all_dance && bp_dance
@@ -826,6 +826,11 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
                 && !has_flag(profile, CharFlag::Broken)
                 && profile.bpm >= 118.0
                 && profile.bpm <= 132.0
+        }
+        GenreFamily::Hardcore => {
+            profile.bucket >= EnergyBucket::Dancefloor
+                && !has_flag(profile, CharFlag::Broken)
+                && profile.bpm >= 138.0
         }
         _ => false,
     }

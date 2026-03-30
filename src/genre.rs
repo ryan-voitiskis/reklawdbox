@@ -24,10 +24,15 @@ pub const GENRES: &[&str] = &[
     "Dubstep",
     "Electro",
     "Experimental",
+    "Gabber",
     "Garage",
     "Gospel House",
     "Grime",
+    "Happy Hardcore",
     "Hard Techno",
+    "Hard Trance",
+    "Hardcore",
+    "Hardstyle",
     "Highlife",
     "Hip Hop",
     "House",
@@ -70,16 +75,15 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("dance / electro pop", "Synth-pop"),
     ("dance-pop", "Synth-pop"),
     ("dnb", "Drum & Bass"),
-    ("gabber", "Hard Techno"),
     ("garage house", "House"),
     ("glitch", "IDM"),
-    ("hard dance", "Hard Techno"),
-    ("hard trance", "Trance"),
     ("hip-hop", "Hip Hop"),
+    ("industrial hardcore", "Hardcore"),
     ("italodance", "Disco"),
     ("loop (hip-hop)", "Hip Hop"),
     ("loop (trance)", "Trance"),
     ("mainstage", "Trance"),
+    ("mainstream hardcore", "Hardcore"),
     ("melodic house & techno", "Deep Techno"),
     ("minimal / deep tech", "Minimal"),
     ("minimal techno", "Minimal"),
@@ -87,9 +91,13 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("tech trance", "Trance"),
     ("techno (peak time / driving)", "Techno"),
     ("techno (raw / deep / hypnotic)", "Deep Techno"),
+    ("terror", "Hardcore"),
     ("trance (main floor)", "Trance"),
     ("trance (raw / deep / hypnotic)", "Trance"),
+    ("uk / happy hardcore", "Happy Hardcore"),
     ("uk garage", "Garage"),
+    ("uk hardcore", "Happy Hardcore"),
+    ("uptempo", "Hardcore"),
 ];
 
 /// Label-to-genre mapping. Keys are lowercase ASCII label names.
@@ -115,6 +123,7 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("defected", "House"),
     ("dekmantel", "Techno"),
     ("delsin", "Deep Techno"),
+    ("dirty workz", "Hardstyle"),
     ("dirtybird", "Tech House"),
     ("dispatch", "Drum & Bass"),
     ("drumcode", "Techno"),
@@ -130,15 +139,20 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("hotflush", "UK Bass"),
     ("hyperdub", "UK Bass"),
     ("ilian tape", "Techno"),
+    ("industrial strength", "Gabber"),
     ("klockworks", "Techno"),
+    ("kniteforce", "Happy Hardcore"),
     ("kompakt", "Minimal"),
     ("lobster theremin", "House"),
     ("mac ii", "Drum & Bass"),
     ("mala", "Dubstep"),
+    ("masters of hardcore", "Hardcore"),
     ("metalheadz", "Drum & Bass"),
+    ("mokum", "Gabber"),
     ("mord", "Hard Techno"),
     ("mote-evolver", "Deep Techno"),
     ("mute", "Synth-pop"),
+    ("neophyte", "Hardcore"),
     ("ninja tune", "Downtempo"),
     ("non standard", "Experimental"),
     ("nonplus", "Techno"),
@@ -152,8 +166,10 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("r&s", "Techno"),
     ("ram", "Drum & Bass"),
     ("raster-noton", "Experimental"),
+    ("rotterdam", "Gabber"),
     ("running back", "Disco"),
     ("rushed", "Hard Techno"),
+    ("scantraxx", "Hardstyle"),
     ("semantica", "Deep Techno"),
     ("shogun audio", "Drum & Bass"),
     ("soma", "Techno"),
@@ -165,8 +181,11 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("swamp 81", "UK Bass"),
     ("tectonic", "UK Bass"),
     ("tempa", "Dubstep"),
+    ("thunderdome", "Hardcore"),
     ("timedance", "UK Bass"),
     ("toolroom", "Tech House"),
+    ("tracid traxxx", "Hard Trance"),
+    ("traxtorm", "Hardcore"),
     ("tresor", "Techno"),
     ("truesoul", "Techno"),
     ("type", "Ambient"),
@@ -280,10 +299,15 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Dub Reggae" => Some(BpmRange::new(60.0, 90.0)),
         "Dub Techno" => Some(BpmRange::new(118.0, 132.0)),
         "Dubstep" => Some(BpmRange::new(136.0, 144.0)),
+        "Gabber" => Some(BpmRange::new(160.0, 190.0)),
         "Garage" => Some(BpmRange::new(130.0, 138.0)),
         "Gospel House" => Some(BpmRange::new(120.0, 128.0)),
         "Grime" => Some(BpmRange::new(138.0, 145.0)),
+        "Happy Hardcore" => Some(BpmRange::new(165.0, 180.0)),
         "Hard Techno" => Some(BpmRange::new(145.0, 160.0)),
+        "Hard Trance" => Some(BpmRange::new(138.0, 150.0)),
+        "Hardcore" => Some(BpmRange::new(160.0, 180.0)),
+        "Hardstyle" => Some(BpmRange::new(148.0, 160.0)),
         "House" => Some(BpmRange::new(120.0, 130.0)),
         "Jungle" => Some(BpmRange::new(160.0, 175.0)),
         "Minimal" => Some(BpmRange::new(120.0, 132.0)),
@@ -303,6 +327,7 @@ pub enum GenreFamily {
     House,
     Techno,
     Bass,
+    Hardcore,
     Downtempo,
     Other,
 }
@@ -323,6 +348,13 @@ pub fn genre_depth(canonical: &str) -> u8 {
         "House" | "Tech House" => 3,
         "Progressive House" => 4,
         "Deep House" => 5,
+
+        // Hardcore family — 1 = most commercial/euphoric, 5 = most raw/aggressive
+        "Hardstyle" => 1,
+        "Happy Hardcore" => 2,
+        "Hard Trance" => 3,
+        "Hardcore" => 4,
+        "Gabber" => 5,
 
         // Techno family
         "Hard Techno" | "Psytrance" => 1,
@@ -360,6 +392,10 @@ pub fn genre_family(canonical: &str) -> GenreFamily {
 
         "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno" | "Hard Techno"
         | "Drone Techno" | "Acid" | "Electro" | "Trance" | "Psytrance" => GenreFamily::Techno,
+
+        "Hardcore" | "Gabber" | "Hardstyle" | "Happy Hardcore" | "Hard Trance" => {
+            GenreFamily::Hardcore
+        }
 
         "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "UK Bass" | "Grime" | "Bassline"
         | "Broken Beat" => GenreFamily::Bass,
@@ -419,8 +455,13 @@ mod tests {
     fn normalize_known_aliases() {
         assert_eq!(canonical_genre_from_alias("Hip-Hop"), Some("Hip Hop"));
         assert_eq!(canonical_genre_from_alias("DnB"), Some("Drum & Bass"));
-        assert_eq!(canonical_genre_from_alias("Gabber"), Some("Hard Techno"));
         assert_eq!(canonical_genre_from_alias("Glitch"), Some("IDM"));
+        assert_eq!(canonical_genre_from_alias("Terror"), Some("Hardcore"));
+        assert_eq!(canonical_genre_from_alias("Uptempo"), Some("Hardcore"));
+        assert_eq!(
+            canonical_genre_from_alias("UK / Happy Hardcore"),
+            Some("Happy Hardcore")
+        );
         assert_eq!(
             canonical_genre_from_alias("140 / Deep Dubstep / Grime"),
             Some("Dubstep")
@@ -464,8 +505,8 @@ mod tests {
     fn alias_map_not_empty() {
         let aliases = genre_alias_map();
         assert!(
-            aliases.len() >= 23,
-            "expected at least 23 aliases, got {}",
+            aliases.len() >= 26,
+            "expected at least 26 aliases, got {}",
             aliases.len()
         );
     }
@@ -544,6 +585,11 @@ mod tests {
         assert_eq!(genre_family("Psytrance"), GenreFamily::Techno);
         assert_eq!(genre_family("Drum & Bass"), GenreFamily::Bass);
         assert_eq!(genre_family("Dubstep"), GenreFamily::Bass);
+        assert_eq!(genre_family("Hardcore"), GenreFamily::Hardcore);
+        assert_eq!(genre_family("Gabber"), GenreFamily::Hardcore);
+        assert_eq!(genre_family("Hardstyle"), GenreFamily::Hardcore);
+        assert_eq!(genre_family("Happy Hardcore"), GenreFamily::Hardcore);
+        assert_eq!(genre_family("Hard Trance"), GenreFamily::Hardcore);
         assert_eq!(genre_family("Ambient"), GenreFamily::Downtempo);
         assert_eq!(genre_family("Downtempo"), GenreFamily::Downtempo);
 
@@ -700,6 +746,14 @@ mod tests {
     }
 
     #[test]
+    fn depth_ordering_hardcore() {
+        assert!(genre_depth("Gabber") > genre_depth("Hardcore"));
+        assert!(genre_depth("Hardcore") > genre_depth("Hard Trance"));
+        assert!(genre_depth("Hard Trance") > genre_depth("Happy Hardcore"));
+        assert!(genre_depth("Happy Hardcore") > genre_depth("Hardstyle"));
+    }
+
+    #[test]
     fn depth_ordering_bass() {
         assert!(genre_depth("Broken Beat") > genre_depth("Drum & Bass"));
         assert!(genre_depth("Dubstep") > genre_depth("Drum & Bass"));
@@ -720,6 +774,26 @@ mod tests {
         let dnb = genre_bpm_range("Drum & Bass").unwrap();
         assert_eq!(dnb.typical_min, 168.0);
         assert_eq!(dnb.typical_max, 180.0);
+
+        let hardcore = genre_bpm_range("Hardcore").unwrap();
+        assert_eq!(hardcore.typical_min, 160.0);
+        assert_eq!(hardcore.typical_max, 180.0);
+
+        let gabber = genre_bpm_range("Gabber").unwrap();
+        assert_eq!(gabber.typical_min, 160.0);
+        assert_eq!(gabber.typical_max, 190.0);
+
+        let hardstyle = genre_bpm_range("Hardstyle").unwrap();
+        assert_eq!(hardstyle.typical_min, 148.0);
+        assert_eq!(hardstyle.typical_max, 160.0);
+
+        let happy_hc = genre_bpm_range("Happy Hardcore").unwrap();
+        assert_eq!(happy_hc.typical_min, 165.0);
+        assert_eq!(happy_hc.typical_max, 180.0);
+
+        let hard_trance = genre_bpm_range("Hard Trance").unwrap();
+        assert_eq!(hard_trance.typical_min, 138.0);
+        assert_eq!(hard_trance.typical_max, 150.0);
 
         assert!(genre_bpm_range("IDM").is_none());
         assert!(genre_bpm_range("Experimental").is_none());
