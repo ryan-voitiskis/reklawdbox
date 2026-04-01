@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::MutexGuard;
 
@@ -288,8 +288,61 @@ pub(super) fn handle_preview_changes(
         )]));
     }
 
-    let json = serde_json::to_string(&diffs).map_err(|e| mcp_internal_error(format!("{e}")))?;
+    let format = params.format.unwrap_or_default();
+    let json = match format {
+        PreviewFormat::Full => {
+            serde_json::to_string(&diffs).map_err(|e| mcp_internal_error(format!("{e}")))?
+        }
+        PreviewFormat::Summary => {
+            let summary = build_preview_summary(&diffs);
+            serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?
+        }
+    };
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+fn build_preview_summary(diffs: &[crate::types::TrackDiff]) -> serde_json::Value {
+    let total_tracks = diffs.len();
+    let mut by_field: HashMap<&str, usize> = HashMap::new();
+    let mut by_genre: HashMap<&str, usize> = HashMap::new();
+
+    for diff in diffs {
+        for change in &diff.changes {
+            *by_field.entry(&change.field).or_default() += 1;
+            if change.field == "genre" {
+                *by_genre.entry(&change.new_value).or_default() += 1;
+            }
+        }
+    }
+
+    let total_field_changes: usize = by_field.values().sum();
+
+    let mut by_field_sorted: Vec<_> = by_field.into_iter().collect();
+    by_field_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut by_genre_sorted: Vec<_> = by_genre.into_iter().collect();
+    by_genre_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let by_field_arr: Vec<_> = by_field_sorted
+        .into_iter()
+        .map(|(k, v)| serde_json::json!({"field": k, "count": v}))
+        .collect();
+
+    let mut result = serde_json::json!({
+        "total_tracks": total_tracks,
+        "total_field_changes": total_field_changes,
+        "by_field": by_field_arr,
+    });
+
+    if !by_genre_sorted.is_empty() {
+        let by_genre_arr: Vec<_> = by_genre_sorted
+            .into_iter()
+            .map(|(k, v)| serde_json::json!({"genre": k, "count": v}))
+            .collect();
+        result["by_genre"] = serde_json::json!(by_genre_arr);
+    }
+
+    result
 }
 
 pub(super) async fn handle_write_xml(

@@ -97,34 +97,50 @@ Stage approved changes with `update_tracks`.
 
 These tracks need per-track reasoning — do not batch-approve them. Use subagents to parallelize the work.
 
-#### 4.1 Group by artist
+#### 4.1 Get dispatch roster
 
-From the compact roster, group low/insufficient tracks by artist:
+Use `format="dispatch"` to get low/insufficient tracks grouped by artist:
 
-- Artists with 5+ tracks → dedicated subagent
-- Remaining artists → batch into subagents of ~15–20 tracks
+```
+classify_tracks(max_tracks=200, format="dispatch", genre_overrides=[...])
+```
+
+Paginate with `offset` until all tracks are covered. Also dispatch unknown-genre tracks from Step 1:
+
+```
+classify_tracks(track_ids=[...unknown IDs...], format="dispatch", genre_overrides=[...])
+```
+
+The dispatch format returns artists sorted by track count descending. Partition into subagent batches:
+
+- Artists with 10+ tracks → dedicated subagent
+- Remaining artists → batch into subagents of ~40–50 tracks
 
 #### 4.2 Dispatch review subagents
 
-Launch subagents in parallel (3–4 at a time). Each subagent receives:
+Launch as many subagents in parallel as possible. Each subagent receives:
 
-- A list of tracks: `(track_id, artist, title, suggested_genre, confidence)`
+- A list of tracks from the dispatch roster
 - The review prompt below
 
 **Review subagent prompt:**
 
-> You are classifying genres for tracks in a Rekordbox library. For each track, produce a genre recommendation with reasoning.
+> You are classifying genres for tracks in a Rekordbox library. For each track, produce a genre recommendation and stage it.
 >
 > **Tools available:**
+> - `get_genre_taxonomy()` — canonical genre list and BPM ranges
 > - `resolve_tracks_data(track_ids=[...], format="classification")` — full classification evidence
 > - `search_tracks(artist="...", has_genre=true)` — artist's other genred tracks in the library
 > - `get_track(track_id="...")` — single track detail
+> - `update_tracks(changes=[...])` — stage genre changes
 >
-> **For each track:**
-> 1. Call `resolve_tracks_data` to get full evidence (Discogs, Beatport, label, audio)
-> 2. Check if the artist has other genred tracks in the library — what genres are they?
-> 3. Consider artist reputation, label identity, and track title
-> 4. Recommend a canonical genre with one-sentence reasoning
+> **Workflow:**
+> 1. Call `get_genre_taxonomy()` to load the canonical genre list — only recommend genres from this list
+> 2. Call `resolve_tracks_data` to get full evidence (Discogs, Beatport, label, audio)
+> 3. Check if the artist has other genred tracks in the library — what genres are they?
+> 4. Consider artist reputation, label identity, and track title
+> 5. Recommend a canonical genre with one-sentence reasoning
+> 6. After classifying all tracks, stage your recommendations via `update_tracks`
 >
 > **Output format:**
 > ```
@@ -137,20 +153,24 @@ Launch subagents in parallel (3–4 at a time). Each subagent receives:
 > **Tracks to classify:**
 > [track list here]
 
-#### 4.3 Present recommendations
+#### 4.3 Verify staged results
 
-As each subagent completes, present its recommendations to the user in the `#N Artist — Title / Evidence / Library / Recommend` format.
+Once all subagents have completed, verify the aggregate results:
 
-Ask: **"Approve all, or reject/change specific numbers."**
+```
+preview_changes(format="summary")
+```
 
-Stage approved changes. Repeat until all subagents have reported.
+Compare the staged track count against `dispatch_stats.total_tracks` from Step 4.1 (plus any tracks staged in Step 3). If the staged count is lower than expected, identify which artist batches may have failed and report them to the user.
 
-Report cumulative progress: `"Review complete: N classified, M changes staged, K remaining."`
+Present the summary to the user. Report: `"Review complete: N tracks staged across M genres."`
+
+Ask: **"Any genres or artists you want to review before export?"**
 
 ### 5. Export
 
 ```
-preview_changes()
+preview_changes(format="summary")
 ```
 
 Ask user: "Export these changes to XML?"

@@ -144,6 +144,14 @@ pub(super) fn handle_classify_tracks(
                 "by_genre": by_genre,
             })
         }
+        ClassifyFormat::Dispatch => {
+            let (artists, dispatch_stats) = build_dispatch_groups(&results);
+            serde_json::json!({
+                "summary": summary,
+                "artists": artists,
+                "dispatch_stats": dispatch_stats,
+            })
+        }
     };
 
     if !staging_info.is_null() {
@@ -331,6 +339,62 @@ pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serd
             })
         })
         .collect()
+}
+
+/// Build artist-grouped roster of low/insufficient confidence tracks for subagent dispatch.
+fn build_dispatch_groups(
+    results: &[ClassificationResult],
+) -> (serde_json::Value, serde_json::Value) {
+    let mut artist_map: HashMap<&str, Vec<serde_json::Value>> = HashMap::new();
+
+    let mut tracks_without_suggestion: usize = 0;
+
+    for r in results {
+        if matches!(r.action, ClassificationAction::Confirm) {
+            continue;
+        }
+        let conf = match r.confidence {
+            ClassificationConfidence::Low => "low",
+            ClassificationConfidence::Insufficient => "insufficient",
+            ClassificationConfidence::High | ClassificationConfidence::Medium => continue,
+        };
+        if r.genre.is_none() {
+            tracks_without_suggestion += 1;
+        }
+        artist_map.entry(&r.artist).or_default().push(serde_json::json!({
+            "track_id": r.track_id,
+            "title": r.title,
+            "suggested_genre": r.genre,
+            "confidence": conf,
+        }));
+    }
+
+    let total_tracks: usize = artist_map.values().map(|v| v.len()).sum();
+    let total_artists = artist_map.len();
+
+    let mut artists: Vec<_> = artist_map.into_iter().collect();
+    artists.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    let artists: Vec<serde_json::Value> = artists
+        .into_iter()
+        .map(|(artist, tracks)| {
+            serde_json::json!({
+                "artist": artist,
+                "track_count": tracks.len(),
+                "tracks": tracks,
+            })
+        })
+        .collect();
+
+    let mut stats = serde_json::json!({
+        "total_tracks": total_tracks,
+        "total_artists": total_artists,
+    });
+    if tracks_without_suggestion > 0 {
+        stats["tracks_without_suggestion"] = serde_json::json!(tracks_without_suggestion);
+    }
+
+    (serde_json::Value::Array(artists), stats)
 }
 
 fn classify_batch(

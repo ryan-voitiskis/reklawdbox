@@ -168,10 +168,23 @@ pub struct WriteXmlParams {
     pub skip_label_gate: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewFormat {
+    #[default]
+    Full,
+    Summary,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PreviewChangesParams {
     #[schemars(description = "Filter to specific track IDs (if empty, shows all staged changes)")]
     pub track_ids: Option<Vec<String>>,
+    #[schemars(
+        description = "Response format: 'full' (default) returns per-track diffs. 'summary' returns aggregate counts by field and genre — use for verification before write_xml."
+    )]
+    pub format: Option<PreviewFormat>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -336,7 +349,7 @@ pub struct ClassifyTracksParams {
     )]
     pub genre_overrides: Option<Vec<GenreOverrideInput>>,
     #[schemars(
-        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents. 'summary' returns only confidence distribution and genre-grouped counts with no per-track results — use to get the lay of the land before deciding what to stage."
+        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents. 'summary' returns only confidence distribution and genre-grouped counts without per-track results — use to get the lay of the land before deciding what to stage. 'dispatch' returns only low/insufficient confidence tracks grouped by artist (sorted by track count descending) — use to build subagent batches for Step 4 review."
     )]
     pub format: Option<ClassifyFormat>,
     #[schemars(
@@ -353,6 +366,7 @@ pub enum ClassifyFormat {
     Full,
     Compact,
     Summary,
+    Dispatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
