@@ -197,11 +197,14 @@ This creates a managed Python venv at `~/.local/share/reklawdbox/essentia-venv` 
 
 Starter set for consistency (not a closed list — arbitrary genres are accepted):
 
-Acid, Afro House, Ambient, Ambient Techno, Bassline, Breakbeat, Broken Beat,
-Dancehall, Deep House, Deep Techno, Disco, Downtempo, Drum & Bass, Dub,
-Dub Techno, Dubstep, Electro, Experimental, Garage, Grime, Hard Techno,
-Hip Hop, House, IDM, Jungle, Minimal, Psytrance, R&B, Reggae, Speed Garage,
-Synth-pop, Tech House, Techno, Trance, UK Bass
+2-Step Garage, Acid, Afro House, Ambient, Ambient Techno, Bassline, Breakbeat,
+Broken Beat, Dancehall, Deep House, Deep Techno, Disco, Downtempo, Drone Techno,
+Drum & Bass, Dub, Dub Reggae, Dub Techno, Dubstep, EBM, Electro, Experimental,
+Footwork, Future Garage, Gabber, Garage, Gospel House, Grime, Happy Hardcore,
+Hard Techno, Hard Trance, Hardcore, Hardstyle, Highlife, Hip Hop, House, IDM,
+Italo Disco, Jazz, Jungle, Minimal, Pop, Progressive House, Psytrance, R&B,
+Reggae, Rock, Speed Garage, Synth-pop, Tech House, Techno, Trance, Trip-Hop,
+UK Funky
 
 ## Workflow
 

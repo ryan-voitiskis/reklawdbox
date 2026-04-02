@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 /// The starter genre taxonomy. Not a closed list — arbitrary genres are accepted.
 /// This list serves as a reference for consistency and auto-complete suggestions.
 pub const GENRES: &[&str] = &[
+    "2-Step Garage",
     "Acid",
     "Afro House",
     "Ambient",
@@ -22,8 +23,11 @@ pub const GENRES: &[&str] = &[
     "Dub Reggae",
     "Dub Techno",
     "Dubstep",
+    "EBM",
     "Electro",
     "Experimental",
+    "Footwork",
+    "Future Garage",
     "Gabber",
     "Garage",
     "Gospel House",
@@ -37,6 +41,7 @@ pub const GENRES: &[&str] = &[
     "Hip Hop",
     "House",
     "IDM",
+    "Italo Disco",
     "Jazz",
     "Jungle",
     "Minimal",
@@ -51,7 +56,8 @@ pub const GENRES: &[&str] = &[
     "Tech House",
     "Techno",
     "Trance",
-    "UK Bass",
+    "Trip-Hop",
+    "UK Funky",
 ];
 
 pub fn canonical_genre_name(genre: &str) -> Option<&'static str> {
@@ -75,11 +81,15 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("dance / electro pop", "Synth-pop"),
     ("dance-pop", "Synth-pop"),
     ("dnb", "Drum & Bass"),
+    ("electronic body music", "EBM"),
     ("garage house", "House"),
     ("glitch", "IDM"),
     ("hip-hop", "Hip Hop"),
     ("industrial hardcore", "Hardcore"),
-    ("italodance", "Disco"),
+    ("italo", "Italo Disco"),
+    ("italodance", "Italo Disco"),
+    ("juke", "Footwork"),
+    ("juke/footwork", "Footwork"),
     ("loop (hip-hop)", "Hip Hop"),
     ("loop (trance)", "Trance"),
     ("mainstage", "Trance"),
@@ -87,6 +97,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("melodic house & techno", "Deep Techno"),
     ("minimal / deep tech", "Minimal"),
     ("minimal techno", "Minimal"),
+    ("post-dubstep", "Future Garage"),
     ("r & b", "R&B"),
     ("tech trance", "Trance"),
     ("techno (peak time / driving)", "Techno"),
@@ -95,6 +106,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("trance (main floor)", "Trance"),
     ("trance (raw / deep / hypnotic)", "Trance"),
     ("uk / happy hardcore", "Happy Hardcore"),
+    ("uk bass", "Future Garage"),
     ("uk garage", "Garage"),
     ("uk hardcore", "Happy Hardcore"),
     ("uptempo", "Hardcore"),
@@ -134,10 +146,10 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("ghost orchid", "Ambient"),
     ("good looking", "Drum & Bass"),
     ("hardgroove", "Hard Techno"),
-    ("hessle audio", "UK Bass"),
+    ("hessle audio", "Techno"),
     ("hospital", "Drum & Bass"),
-    ("hotflush", "UK Bass"),
-    ("hyperdub", "UK Bass"),
+    ("hotflush", "Dubstep"),
+    ("hyperdub", "Future Garage"),
     ("ilian tape", "Techno"),
     ("industrial strength", "Gabber"),
     ("klockworks", "Techno"),
@@ -178,11 +190,12 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("stroboscopic artefacts", "Techno"),
     ("suara", "Tech House"),
     ("subtle audio", "Drum & Bass"),
-    ("swamp 81", "UK Bass"),
-    ("tectonic", "UK Bass"),
+    ("swamp 81", "Dubstep"),
+    ("tectonic", "Dubstep"),
+    ("teklife", "Footwork"),
     ("tempa", "Dubstep"),
     ("thunderdome", "Hardcore"),
-    ("timedance", "UK Bass"),
+    ("timedance", "Techno"),
     ("toolroom", "Tech House"),
     ("tracid traxxx", "Hard Trance"),
     ("traxtorm", "Hardcore"),
@@ -191,6 +204,7 @@ pub const LABEL_GENRES: &[(&str, &str)] = &[
     ("type", "Ambient"),
     ("upsammy", "Experimental"),
     ("visionquest", "Deep House"),
+    ("wax trax", "EBM"),
 ];
 
 fn build_alias_map(aliases: &[(&str, &'static str)]) -> HashMap<String, &'static str> {
@@ -289,7 +303,7 @@ const GENRE_TOKENS: &[(&str, &[&str])] = &[
     // Single-word (checked via word splitting)
     ("acid", &["Acid"]),
     ("ambient", &["Ambient"]),
-    ("bass", &["Dubstep", "Drum & Bass", "Breakbeat", "UK Bass"]),
+    ("bass", &["Dubstep", "Drum & Bass", "Breakbeat"]),
     ("breakbeat", &["Breakbeat"]),
     ("breaks", &["Breakbeat"]),
     ("chill", &["Downtempo"]),
@@ -298,8 +312,10 @@ const GENRE_TOKENS: &[(&str, &[&str])] = &[
     ("downtempo", &["Downtempo"]),
     ("drone", &["Drone Techno", "Ambient"]),
     ("dubstep", &["Dubstep"]),
+    ("ebm", &["EBM"]),
     ("electro", &["Electro"]),
     ("experimental", &["Experimental"]),
+    ("footwork", &["Footwork"]),
     ("gabber", &["Gabber"]),
     ("garage", &["Garage"]),
     ("grime", &["Grime"]),
@@ -307,7 +323,8 @@ const GENRE_TOKENS: &[(&str, &[&str])] = &[
     ("highlife", &["Highlife"]),
     ("house", &["House"]),
     ("idm", &["IDM"]),
-    ("industrial", &["Hard Techno"]),
+    ("industrial", &["Hard Techno", "EBM"]),
+    ("italo", &["Italo Disco"]),
     ("jazz", &["Jazz"]),
     ("jungle", &["Jungle"]),
     ("lounge", &["Downtempo"]),
@@ -322,7 +339,7 @@ const GENRE_TOKENS: &[(&str, &[&str])] = &[
     ("soul", &["R&B"]),
     ("techno", &["Techno"]),
     ("trance", &["Trance"]),
-    ("trip-hop", &["Downtempo"]),
+    ("trip-hop", &["Trip-Hop"]),
 ];
 
 fn genre_token_map() -> &'static HashMap<&'static str, &'static [&'static str]> {
@@ -442,6 +459,7 @@ impl BpmRange {
 /// Returns `None` for genres where BPM spread is too wide to be useful (e.g. IDM, Jazz, Experimental).
 pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
     match canonical {
+        "2-Step Garage" => Some(BpmRange::new(128.0, 135.0)),
         "Acid" => Some(BpmRange::new(120.0, 145.0)),
         "Afro House" => Some(BpmRange::new(118.0, 128.0)),
         "Ambient Techno" => Some(BpmRange::new(110.0, 130.0)),
@@ -457,6 +475,9 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Dub Reggae" => Some(BpmRange::new(60.0, 90.0)),
         "Dub Techno" => Some(BpmRange::new(118.0, 132.0)),
         "Dubstep" => Some(BpmRange::new(136.0, 144.0)),
+        "EBM" => Some(BpmRange::new(110.0, 140.0)),
+        "Footwork" => Some(BpmRange::new(155.0, 165.0)),
+        "Future Garage" => Some(BpmRange::new(125.0, 138.0)),
         "Gabber" => Some(BpmRange::new(160.0, 190.0)),
         "Garage" => Some(BpmRange::new(130.0, 138.0)),
         "Gospel House" => Some(BpmRange::new(120.0, 128.0)),
@@ -467,6 +488,7 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Hardcore" => Some(BpmRange::new(160.0, 180.0)),
         "Hardstyle" => Some(BpmRange::new(148.0, 160.0)),
         "House" => Some(BpmRange::new(120.0, 130.0)),
+        "Italo Disco" => Some(BpmRange::new(118.0, 135.0)),
         "Jungle" => Some(BpmRange::new(160.0, 175.0)),
         "Minimal" => Some(BpmRange::new(120.0, 132.0)),
         "Progressive House" => Some(BpmRange::new(122.0, 132.0)),
@@ -475,7 +497,8 @@ pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
         "Tech House" => Some(BpmRange::new(124.0, 132.0)),
         "Techno" => Some(BpmRange::new(128.0, 140.0)),
         "Trance" => Some(BpmRange::new(136.0, 145.0)),
-        "UK Bass" => Some(BpmRange::new(130.0, 145.0)),
+        "Trip-Hop" => Some(BpmRange::new(80.0, 100.0)),
+        "UK Funky" => Some(BpmRange::new(125.0, 135.0)),
         _ => None,
     }
 }
@@ -501,8 +524,8 @@ pub enum GenreFamily {
 pub fn genre_depth(canonical: &str) -> u8 {
     match canonical {
         // House family — 1 = most energetic/driving, 5 = deepest/darkest
-        "Disco" | "Speed Garage" => 1,
-        "Gospel House" | "Garage" | "Afro House" => 2,
+        "Disco" | "Speed Garage" | "Italo Disco" => 1,
+        "Gospel House" | "Garage" | "Afro House" | "2-Step Garage" | "UK Funky" => 2,
         "House" | "Tech House" => 3,
         "Progressive House" => 4,
         "Deep House" => 5,
@@ -516,7 +539,7 @@ pub fn genre_depth(canonical: &str) -> u8 {
 
         // Techno family
         "Hard Techno" | "Psytrance" => 1,
-        "Acid" | "Electro" | "Trance" => 2,
+        "Acid" | "EBM" | "Electro" | "Trance" => 2,
         "Techno" => 3,
         "Minimal" => 4,
         "Deep Techno" => 5,
@@ -526,14 +549,14 @@ pub fn genre_depth(canonical: &str) -> u8 {
 
         // Bass family
         "Grime" | "Bassline" => 1,
-        "Drum & Bass" => 2,
+        "Drum & Bass" | "Footwork" => 2,
         "Jungle" | "Breakbeat" => 3,
-        "Dubstep" | "UK Bass" => 4,
-        "Broken Beat" => 5,
+        "Dubstep" => 4,
+        "Future Garage" | "Broken Beat" => 5,
 
         // Downtempo family
         "IDM" | "Experimental" => 2,
-        "Downtempo" => 3,
+        "Downtempo" | "Trip-Hop" => 3,
         "Dub" | "Dub Reggae" => 4,
         "Ambient" => 5,
 
@@ -546,21 +569,23 @@ pub fn genre_depth(canonical: &str) -> u8 {
 pub fn genre_family(canonical: &str) -> GenreFamily {
     match canonical {
         "House" | "Deep House" | "Tech House" | "Afro House" | "Gospel House"
-        | "Progressive House" | "Garage" | "Speed Garage" | "Disco" => GenreFamily::House,
+        | "Progressive House" | "Garage" | "Speed Garage" | "Disco" | "Italo Disco"
+        | "2-Step Garage" | "UK Funky" => GenreFamily::House,
 
         "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno" | "Hard Techno"
-        | "Drone Techno" | "Acid" | "Electro" | "Trance" | "Psytrance" => GenreFamily::Techno,
+        | "Drone Techno" | "Acid" | "EBM" | "Electro" | "Trance" | "Psytrance" => {
+            GenreFamily::Techno
+        }
 
         "Hardcore" | "Gabber" | "Hardstyle" | "Happy Hardcore" | "Hard Trance" => {
             GenreFamily::Hardcore
         }
 
-        "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "UK Bass" | "Grime" | "Bassline"
-        | "Broken Beat" => GenreFamily::Bass,
+        "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "Footwork" | "Future Garage"
+        | "Grime" | "Bassline" | "Broken Beat" => GenreFamily::Bass,
 
-        "Ambient" | "Downtempo" | "Dub" | "Dub Reggae" | "IDM" | "Experimental" => {
-            GenreFamily::Downtempo
-        }
+        "Ambient" | "Downtempo" | "Trip-Hop" | "Dub" | "Dub Reggae" | "IDM"
+        | "Experimental" => GenreFamily::Downtempo,
 
         _ => GenreFamily::Other,
     }
@@ -609,7 +634,7 @@ mod tests {
         assert!(is_known_genre("deep house"));
         assert!(is_known_genre("Deep House"));
         assert!(is_known_genre("TECHNO"));
-        assert!(is_known_genre("uk bass"));
+        assert!(is_known_genre("uk funky"));
         assert!(is_known_genre("R&B"));
         assert!(!is_known_genre("Polka"));
     }
@@ -802,7 +827,8 @@ mod tests {
         tokens.sort();
         assert!(tokens.contains(&"Downtempo"));
         assert!(tokens.contains(&"Electro"));
-        assert_eq!(tokens.len(), 2);
+        assert!(tokens.contains(&"Trip-Hop"));
+        assert_eq!(tokens.len(), 3);
     }
 
     #[test]
@@ -922,7 +948,7 @@ mod tests {
     #[test]
     fn label_genre_case_insensitive() {
         assert_eq!(label_genre("MORD"), Some("Hard Techno"));
-        assert_eq!(label_genre("Hyperdub"), Some("UK Bass"));
+        assert_eq!(label_genre("Hyperdub"), Some("Future Garage"));
         assert_eq!(label_genre("TRESOR"), Some("Techno"));
     }
 
