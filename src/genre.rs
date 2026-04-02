@@ -225,11 +225,169 @@ pub fn genre_alias_map() -> &'static HashMap<String, &'static str> {
     MAP.get_or_init(|| build_alias_map(ALIASES))
 }
 
+static OVERRIDES: OnceLock<HashMap<String, &'static str>> = OnceLock::new();
+
+/// Load user-defined genre overrides from config. Must be called from main()
+/// before classification runs. Validates that all targets are canonical genres;
+/// invalid entries are logged and skipped. Overrides take priority over compiled aliases.
+pub fn init_overrides(raw: HashMap<String, String>) {
+    let mut map = HashMap::with_capacity(raw.len());
+    for (alias, target) in raw {
+        let key = alias.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        if let Some(canonical) = canonical_genre_name(&target) {
+            map.insert(key, canonical);
+        } else {
+            tracing::warn!(
+                alias = alias.as_str(),
+                target = target.as_str(),
+                "Genre override target is not a canonical genre, ignoring"
+            );
+        }
+    }
+    OVERRIDES
+        .set(map)
+        .expect("BUG: init_overrides() must only be called once");
+}
+
 /// Returns the canonical genre if the input is a known alias, `None` if already canonical or unknown.
+/// Checks user overrides (from config) first, then compiled aliases.
 pub fn canonical_genre_from_alias(genre: &str) -> Option<&'static str> {
-    genre_alias_map()
-        .get(&genre.trim().to_ascii_lowercase())
-        .copied()
+    let key = genre.trim().to_ascii_lowercase();
+    if let Some(overrides) = OVERRIDES.get() {
+        if let Some(&canonical) = overrides.get(&key) {
+            return Some(canonical);
+        }
+    }
+    genre_alias_map().get(&key).copied()
+}
+
+/// Extracts the base genre from a parenthetical pattern like "Techno (Peak Time / Driving)"
+/// and resolves it through canonical/alias lookup. Returns None if the string has no
+/// parenthetical, or if the base doesn't resolve.
+pub fn extract_parenthetical_base(raw: &str) -> Option<&'static str> {
+    let trimmed = raw.trim();
+    let paren_idx = trimmed.find('(')?;
+    let base = trimmed[..paren_idx].trim();
+    if base.is_empty() {
+        return None;
+    }
+    canonical_genre_name(base).or_else(|| canonical_genre_from_alias(base))
+}
+
+/// Token-to-genre map for extracting genre signals from non-canonical genre strings.
+/// Used as low-weight classification evidence, not for normalization.
+/// Multi-word entries are checked first against slash/comma-delimited parts.
+/// Single-word entries are checked against individual words.
+/// Vague terms ("electronic", "electronica", "music", "dance") are intentionally omitted.
+const GENRE_TOKENS: &[(&str, &[&str])] = &[
+    // Multi-word (checked against slash/comma-delimited parts before word splitting)
+    ("hard dance", &["Hard Techno", "Hardstyle"]),
+    ("hip hop", &["Hip Hop"]),
+    // Single-word (checked via word splitting)
+    ("acid", &["Acid"]),
+    ("ambient", &["Ambient"]),
+    ("bass", &["Dubstep", "Drum & Bass", "Breakbeat", "UK Bass"]),
+    ("breakbeat", &["Breakbeat"]),
+    ("breaks", &["Breakbeat"]),
+    ("chill", &["Downtempo"]),
+    ("dancehall", &["Dancehall"]),
+    ("disco", &["Disco"]),
+    ("downtempo", &["Downtempo"]),
+    ("drone", &["Drone Techno", "Ambient"]),
+    ("dubstep", &["Dubstep"]),
+    ("electro", &["Electro"]),
+    ("experimental", &["Experimental"]),
+    ("gabber", &["Gabber"]),
+    ("garage", &["Garage"]),
+    ("grime", &["Grime"]),
+    ("hardcore", &["Hardcore"]),
+    ("highlife", &["Highlife"]),
+    ("house", &["House"]),
+    ("idm", &["IDM"]),
+    ("industrial", &["Hard Techno"]),
+    ("jazz", &["Jazz"]),
+    ("jungle", &["Jungle"]),
+    ("lounge", &["Downtempo"]),
+    ("minimal", &["Minimal"]),
+    ("pop", &["Pop"]),
+    ("psytrance", &["Psytrance"]),
+    ("r&b", &["R&B"]),
+    ("rap", &["Hip Hop"]),
+    ("reggae", &["Reggae"]),
+    ("rnb", &["R&B"]),
+    ("rock", &["Rock"]),
+    ("soul", &["R&B"]),
+    ("techno", &["Techno"]),
+    ("trance", &["Trance"]),
+    ("trip-hop", &["Downtempo"]),
+];
+
+fn genre_token_map() -> &'static HashMap<&'static str, &'static [&'static str]> {
+    static MAP: OnceLock<HashMap<&'static str, &'static [&'static str]>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        GENRE_TOKENS
+            .iter()
+            .filter(|(token, _)| !token.contains(' '))
+            .map(|&(token, genres)| (token, genres))
+            .collect()
+    })
+}
+
+/// Extract genre candidates from a non-canonical genre string by tokenizing
+/// and matching against known genre keywords. Returns canonical genre names.
+/// Only fires for non-canonical, non-alias strings (avoids circular evidence).
+pub fn extract_genre_tokens(genre_str: &str) -> Vec<&'static str> {
+    if genre_str.is_empty()
+        || is_known_genre(genre_str)
+        || canonical_genre_from_alias(genre_str).is_some()
+    {
+        return vec![];
+    }
+
+    let lower = genre_str.trim().to_ascii_lowercase();
+    let mut matched: Vec<&'static str> = Vec::new();
+
+    let mut push_unique = |genres: &[&str]| {
+        for &g in genres {
+            if let Some(c) = canonical_genre_name(g) {
+                if !matched.contains(&c) {
+                    matched.push(c);
+                }
+            }
+        }
+    };
+
+    // Split on / , ( ) to get parts
+    let parts: Vec<&str> = lower
+        .split(['/', ',', '(', ')'])
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Multi-word tokens: check against each part
+    for &(token, genres) in GENRE_TOKENS {
+        if !token.contains(' ') {
+            continue;
+        }
+        if parts.iter().any(|part| part.contains(token)) {
+            push_unique(genres);
+        }
+    }
+
+    // Single-word tokens
+    let map = genre_token_map();
+    for part in &parts {
+        for word in part.split_whitespace() {
+            if let Some(genres) = map.get(word) {
+                push_unique(genres);
+            }
+        }
+    }
+
+    matched
 }
 
 pub fn label_genre_map() -> &'static HashMap<String, &'static str> {
@@ -413,6 +571,18 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn all_genre_token_targets_are_canonical() {
+        for &(token, genres) in GENRE_TOKENS {
+            for &g in genres {
+                assert!(
+                    canonical_genre_name(g).is_some(),
+                    "GENRE_TOKENS entry '{token}' references non-canonical genre '{g}'"
+                );
+            }
+        }
+    }
 
     #[test]
     fn taxonomy_sorted() {
@@ -618,6 +788,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn token_extraction_specific_match() {
+        let tokens = extract_genre_tokens("Electronic Techno");
+        assert_eq!(tokens, vec!["Techno"]);
+    }
+
+    #[test]
+    fn token_extraction_compound_string() {
+        let mut tokens = extract_genre_tokens("Electro Chill Out/Trip-Hop/Lounge");
+        tokens.sort();
+        assert!(tokens.contains(&"Downtempo"));
+        assert!(tokens.contains(&"Electro"));
+        assert_eq!(tokens.len(), 2);
+    }
+
+    #[test]
+    fn token_extraction_multi_word() {
+        let tokens = extract_genre_tokens("Dance/Rap/Hip Hop");
+        assert_eq!(tokens, vec!["Hip Hop"]);
+    }
+
+    #[test]
+    fn token_extraction_vague_returns_empty() {
+        assert!(extract_genre_tokens("Electronica").is_empty());
+        assert!(extract_genre_tokens("Electronic").is_empty());
+        assert!(extract_genre_tokens("Anti-music").is_empty());
+        assert!(extract_genre_tokens("").is_empty());
+    }
+
+    #[test]
+    fn token_extraction_skips_canonical() {
+        assert!(extract_genre_tokens("Techno").is_empty());
+        assert!(extract_genre_tokens("Deep House").is_empty());
+    }
+
+    #[test]
+    fn token_extraction_skips_aliases() {
+        assert!(extract_genre_tokens("Hip-Hop").is_empty());
+        assert!(extract_genre_tokens("DnB").is_empty());
+    }
+
+    #[test]
+    fn parenthetical_extracts_base_genre() {
+        assert_eq!(
+            extract_parenthetical_base("Techno (Peak Time / Driving)"),
+            Some("Techno")
+        );
+        assert_eq!(
+            extract_parenthetical_base("House (Progressive)"),
+            Some("House")
+        );
+        // Base resolves through alias
+        assert_eq!(
+            extract_parenthetical_base("DnB (Liquid)"),
+            Some("Drum & Bass")
+        );
+    }
+
+    #[test]
+    fn parenthetical_returns_none_for_non_matching() {
+        assert_eq!(extract_parenthetical_base("Techno"), None);
+        assert_eq!(extract_parenthetical_base(""), None);
+        assert_eq!(extract_parenthetical_base("(nothing before paren)"), None);
+        assert_eq!(extract_parenthetical_base("Polka (Fast)"), None);
     }
 
     #[test]

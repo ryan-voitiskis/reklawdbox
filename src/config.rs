@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 const CONFIG_FILENAME: &str = "config.toml";
@@ -7,6 +8,10 @@ const CONFIG_FILENAME: &str = "config.toml";
 pub struct Config {
     #[serde(default)]
     pub discogs: DiscogsConfig,
+    /// Maps non-canonical genre strings (case-insensitive) to canonical genres.
+    /// Supplements the built-in alias map; file entries take priority on conflict.
+    #[serde(default)]
+    pub genre_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -54,14 +59,13 @@ pub fn load() -> Config {
 }
 
 /// SAFETY: must be called from main() before any threads are spawned.
-pub unsafe fn load_into_env() {
-    let cfg = load();
-    if let Some(url) = cfg.discogs.broker.url
+pub unsafe fn apply_env(cfg: &Config) {
+    if let Some(ref url) = cfg.discogs.broker.url
         && std::env::var_os(crate::discogs::BROKER_URL_ENV).is_none()
     {
         unsafe { std::env::set_var(crate::discogs::BROKER_URL_ENV, url) };
     }
-    if let Some(token) = cfg.discogs.broker.token
+    if let Some(ref token) = cfg.discogs.broker.token
         && std::env::var_os(crate::discogs::BROKER_TOKEN_ENV).is_none()
     {
         unsafe { std::env::set_var(crate::discogs::BROKER_TOKEN_ENV, token) };
@@ -120,6 +124,20 @@ token = "abc123"
         let cfg: Config = toml::from_str("").unwrap();
         assert!(cfg.discogs.broker.url.is_none());
         assert!(cfg.discogs.broker.token.is_none());
+        assert!(cfg.genre_overrides.is_empty());
+    }
+
+    #[test]
+    fn parses_genre_overrides() {
+        let toml_str = r#"
+[genre_overrides]
+"Electronica" = "IDM"
+"Bass" = "Breakbeat"
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.genre_overrides.len(), 2);
+        assert_eq!(cfg.genre_overrides.get("Electronica").unwrap(), "IDM");
+        assert_eq!(cfg.genre_overrides.get("Bass").unwrap(), "Breakbeat");
     }
 
     #[test]

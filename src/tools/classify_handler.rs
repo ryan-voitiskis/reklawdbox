@@ -581,7 +581,7 @@ fn extract_discogs_genres(
             }
         }
         let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-        if (mapping_type == "exact" || mapping_type == "alias")
+        if mapping_type != "unknown"
             && let Some(genre_name) = maps_to
             && let Some(canonical) = genre::canonical_genre_name(&genre_name)
         {
@@ -621,7 +621,7 @@ fn extract_beatport_genre(
     }
 
     let (maps_to, mapping_type) = map_genre_through_taxonomy(raw);
-    let canonical = if (mapping_type == "exact" || mapping_type == "alias") && maps_to.is_some() {
+    let canonical = if mapping_type != "unknown" && maps_to.is_some() {
         maps_to.and_then(|g| genre::canonical_genre_name(&g))
     } else {
         None

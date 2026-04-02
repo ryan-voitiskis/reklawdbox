@@ -619,7 +619,7 @@ fn resolve_single_track_compact(
         {
             for style in styles.iter().filter_map(|s| s.as_str()) {
                 let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-                if (mapping_type == "exact" || mapping_type == "alias")
+                if mapping_type != "unknown"
                     && let Some(genre_name) = maps_to
                 {
                     *genre_counts.entry(genre_name).or_insert(0) += 1;
@@ -660,7 +660,7 @@ fn resolve_single_track_compact(
 
     let bp_canonical = bp_raw_str.and_then(|bp_genre| {
         let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);
-        if mapping_type == "exact" || mapping_type == "alias" {
+        if mapping_type != "unknown" {
             maps_to
         } else {
             None

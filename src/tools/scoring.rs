@@ -2442,6 +2442,8 @@ pub(super) fn map_genre_through_taxonomy(style: &str) -> (Option<String>, &'stat
         (Some(canonical.to_string()), "exact")
     } else if let Some(canonical) = genre::canonical_genre_from_alias(style) {
         (Some(canonical.to_string()), "alias")
+    } else if let Some(canonical) = genre::extract_parenthetical_base(style) {
+        (Some(canonical.to_string()), "parenthetical")
     } else {
         (None, "unknown")
     }

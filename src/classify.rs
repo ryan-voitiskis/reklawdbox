@@ -451,21 +451,35 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
         });
     }
 
-    // Discogs: weight proportional to style_count, halved if BPM-implausible
+    // Discogs: proportional to style_count with steeper decay for diverse releases.
+    // Album-level data is less informative per-genre when spread across many genres.
+    // Also discounted when track-level sources (Beatport) exist (confirmatory role).
     let total_styles: usize = evidence.discogs_mapped.iter().map(|m| m.style_count).sum();
+    let n_mapped_genres = evidence.discogs_mapped.len();
+    let diversity_decay = if n_mapped_genres <= 1 {
+        1.0_f32
+    } else {
+        1.0 / (n_mapped_genres as f32).powf(0.4)
+    };
+    let confirmatory = if evidence.beatport_genre.is_some() {
+        0.75_f32
+    } else {
+        1.0
+    };
     for mg in &evidence.discogs_mapped {
-        let base_weight = if total_styles > 0 {
+        let proportion = if total_styles > 0 {
             (mg.style_count as f32 / total_styles as f32).min(1.0)
         } else {
             0.5
         };
+        let base_weight = proportion * 0.9 * diversity_decay * confirmatory;
         let plausible = bpm_plausible(mg.genre, effective_bpm);
         votes.push(GenreVote {
             genre: mg.genre,
             weight: if plausible {
-                base_weight * 0.9
+                base_weight
             } else {
-                base_weight * 0.45
+                base_weight * 0.5
             },
             source: "discogs",
             bpm_plausible: plausible,
@@ -483,6 +497,28 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
             source: "label",
             bpm_plausible: plausible,
         });
+    }
+
+    // Current genre string: low-weight token-based evidence for non-canonical genres.
+    // Weight is inversely proportional to the number of candidate genres matched,
+    // capped at 0.5 total. Vague strings produce no votes.
+    let tokens = genre::extract_genre_tokens(&evidence.current_genre);
+    if !tokens.is_empty() {
+        let n = tokens.len();
+        let weight_per = (0.5 / n as f32).min(0.5);
+        for g in tokens {
+            let plausible = bpm_plausible(g, effective_bpm);
+            votes.push(GenreVote {
+                genre: g,
+                weight: if plausible {
+                    weight_per
+                } else {
+                    weight_per * 0.5
+                },
+                source: "current-genre",
+                bpm_plausible: plausible,
+            });
+        }
     }
 
     votes
@@ -595,6 +631,18 @@ fn find_consensus(
             )
         };
         ev.push(audio_str);
+    }
+
+    // Log current-genre token evidence
+    {
+        let tokens = genre::extract_genre_tokens(&evidence.current_genre);
+        if !tokens.is_empty() {
+            ev.push(format!(
+                "current-genre: \"{}\" → {}",
+                evidence.current_genre,
+                tokens.join(", ")
+            ));
+        }
     }
 
     let mut confidence = if ranked.len() == 1 && top_score >= 1.0 {
@@ -2122,19 +2170,14 @@ mod tests {
         assert_eq!(
             result.genre,
             Some("Techno"),
-            "Audio tiebreaker should resolve cross-family conflict in favor of Techno"
+            "Beatport (track-level) should win over Discogs (album-level) for Techno"
         );
+        // With confirmatory discount, Discogs weight is reduced when Beatport
+        // exists, so the margin exceeds the 15% tight-race threshold → Medium.
         assert_eq!(
             result.confidence,
-            ClassificationConfidence::Low,
-            "Cross-family tiebreak via audio should yield Low confidence"
-        );
-        assert!(
-            result
-                .flags
-                .contains(&"audio-assisted-tiebreak".to_string()),
-            "Should flag that audio assisted the tiebreak, flags: {:?}",
-            result.flags
+            ClassificationConfidence::Medium,
+            "Track-level source should produce Medium confidence, not a tight race"
         );
     }
 }

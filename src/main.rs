@@ -118,11 +118,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Both functions only set vars not already present, so call order
     // determines priority: shell env > .mcp.json > config.toml.
     load_env_from_mcp_json();
+    let cfg = config::load();
     // SAFETY: same context as load_env_from_mcp_json above.
-    unsafe { config::load_into_env() };
+    unsafe { config::apply_env(&cfg) };
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    genre::init_overrides(cfg.genre_overrides);
     if should_run_cli(std::env::args()) || std::io::stdin().is_terminal() {
         cli::main().await
     } else {
