@@ -28,12 +28,18 @@ pub(crate) struct SetupArgs {
 pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     install_essentia()?;
 
+    let mcp_ok = super::mcp_config::configure_mcp_hosts();
+
     if args.broker {
         configure_broker(args.yes)?;
     }
 
     println!();
-    println!("Setup complete.");
+    if mcp_ok {
+        println!("Setup complete.");
+    } else {
+        println!("Setup complete (MCP configuration had errors — see above).");
+    }
     Ok(())
 }
 

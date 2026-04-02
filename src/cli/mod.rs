@@ -1,5 +1,6 @@
 mod analyze;
 mod hydrate;
+mod mcp_config;
 mod setup;
 mod tags;
 

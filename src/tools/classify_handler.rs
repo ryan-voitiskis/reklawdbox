@@ -361,12 +361,15 @@ fn build_dispatch_groups(
         if r.genre.is_none() {
             tracks_without_suggestion += 1;
         }
-        artist_map.entry(&r.artist).or_default().push(serde_json::json!({
-            "track_id": r.track_id,
-            "title": r.title,
-            "suggested_genre": r.genre,
-            "confidence": conf,
-        }));
+        artist_map
+            .entry(&r.artist)
+            .or_default()
+            .push(serde_json::json!({
+                "track_id": r.track_id,
+                "title": r.title,
+                "suggested_genre": r.genre,
+                "confidence": conf,
+            }));
     }
 
     let total_tracks: usize = artist_map.values().map(|v| v.len()).sum();

@@ -25,9 +25,10 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
     The binary is installed to `/opt/homebrew/bin/reklawdbox`.
   </TabItem>
   <TabItem label="Build from source">
-    Requires the [Rust toolchain](https://rustup.rs/).
+    Requires the [Rust toolchain](https://rustup.rs/) and Xcode Command Line Tools:
 
     ```bash
+    xcode-select --install  # if not already installed
     git clone https://github.com/ryan-voitiskis/reklawdbox.git
     cd reklawdbox
     cargo build --release
@@ -45,7 +46,7 @@ Essentia provides danceability, energy, loudness, and spectral features used by 
 reklawdbox setup
 ```
 
-This finds Python 3.9+, creates a managed venv, and installs Essentia via pip. The venv is auto-detected at `~/.local/share/reklawdbox/essentia-venv` — no env vars needed.
+This finds Python 3.9+, creates a managed venv, and installs Essentia via pip. It also auto-configures any detected MCP hosts (Claude Code, Claude Desktop). The venv is auto-detected at `~/.local/share/reklawdbox/essentia-venv` — no env vars needed.
 
 <Aside type="note">
   Requires Python 3.9 or later. If you don't have Python installed, get it from [python.org](https://www.python.org/downloads/) or via `brew install python`.
@@ -53,15 +54,17 @@ This finds Python 3.9+, creates a managed venv, and installs Essentia via pip. T
 
 ## MCP host configuration
 
+If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify). Otherwise, configure manually:
+
 <Tabs>
   <TabItem label="Claude Code">
-    Add directly from the CLI:
+    Add for all projects:
 
     ```bash
-    claude mcp add reklawdbox -- /opt/homebrew/bin/reklawdbox
+    claude mcp add -s user reklawdbox -- /opt/homebrew/bin/reklawdbox
     ```
 
-    Or add an `.mcp.json` file in the project root:
+    Or register for a single project by adding `.mcp.json` to its root:
 
     ```json
     {
@@ -103,9 +106,19 @@ This finds Python 3.9+, creates a managed venv, and installs Essentia via pip. T
   The Rekordbox database is auto-detected at `~/Library/Pioneer/rekordbox/master.db`. Set `REKORDBOX_DB_PATH` only for non-standard locations.
 </Aside>
 
+<Aside type="caution">
+  After configuring your MCP host, reload it to pick up the changes. In Claude Code, run `/mcp` or start a new conversation. In Claude Desktop, quit and reopen the app.
+</Aside>
+
 ## Verify
 
-Ask your agent to call `read_library`. It should return track count, playlist count, and genre distribution. If it fails, check [Troubleshooting](/troubleshooting/).
+Start a new conversation and paste this:
+
+```text
+Show me a summary of my Rekordbox library.
+```
+
+It should return your track count, playlist count, and genre distribution. If it fails, check [Troubleshooting](/troubleshooting/).
 
 ## Discogs authorization
 
@@ -120,6 +133,8 @@ Discogs enrichment provides labels, catalog numbers, and release metadata used b
 </Steps>
 
 ## Next steps
+
+Ask your agent: `What workflows are available?` — it will show a menu of step-by-step guides covering genre classification, set building, library cleanup, and more.
 
 - [Library Cleanup](/workflows/library-cleanup/) — recommended starting point for organizing a new collection
 - [Genre Classification](/workflows/genre-classification/) — most common workflow

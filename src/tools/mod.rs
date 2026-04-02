@@ -297,7 +297,9 @@ impl ReklawdboxServer {
         handle_suggest_normalizations(self.rekordbox_conn()?, &self.state.changes, params.0)
     }
 
-    #[tool(description = "Preview all staged changes, showing what will differ from current state. Use format=\"summary\" to get aggregate counts by field and genre instead of full per-track diffs.")]
+    #[tool(
+        description = "Preview all staged changes, showing what will differ from current state. Use format=\"summary\" to get aggregate counts by field and genre instead of full per-track diffs."
+    )]
     async fn preview_changes(
         &self,
         params: Parameters<PreviewChangesParams>,
