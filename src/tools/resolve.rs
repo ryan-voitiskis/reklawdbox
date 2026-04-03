@@ -4,6 +4,7 @@ use rmcp::ErrorData as McpError;
 
 use super::*;
 use crate::db;
+use crate::genre;
 
 pub(super) struct ResolveTracksOpts {
     /// Default max_tracks when track_ids are absent and max_tracks param is None.
@@ -46,6 +47,7 @@ pub(super) fn resolve_tracks(
         }),
     };
 
+    let has_unknown_genre = filters.has_unknown_genre;
     let bounded = opts.max_tracks_cap.is_some();
 
     let tracks = if let Some(ids) = track_ids {
@@ -81,6 +83,14 @@ pub(super) fn resolve_tracks(
     } else {
         tracks
     };
+
+    if has_unknown_genre == Some(true) {
+        tracks.retain(|t| {
+            !t.genre.is_empty()
+                && !genre::is_known_genre(&t.genre)
+                && genre::canonical_genre_from_alias(&t.genre).is_none()
+        });
+    }
 
     if let Some(max) = effective_max {
         tracks.truncate(max);
@@ -122,6 +132,9 @@ pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String
     }
     if let Some(has_label) = params.filters.has_label {
         filters.push(format!("has_label = {has_label}"));
+    }
+    if let Some(has_unknown_genre) = params.filters.has_unknown_genre {
+        filters.push(format!("has_unknown_genre = {has_unknown_genre}"));
     }
     if let Some(year_zero) = params.filters.year_zero {
         filters.push(format!("year_zero = {year_zero}"));

@@ -733,13 +733,21 @@ fn find_consensus(
             final_genre, effective_bpm as i32, alt_genre
         ));
         flags.push("bpm-override".into());
+        let same_family = genre::genre_family(final_genre) == genre::genre_family(alt_genre)
+            && genre::genre_family(final_genre) != GenreFamily::Other;
         final_genre = alt_genre;
-        // Downgrade: runner-up was elevated by BPM elimination, not evidence weight
+        // Downgrade: runner-up was elevated by BPM elimination, not evidence weight.
+        // Same-family swaps floor at Medium — the family evidence is intact.
+        // Note: High + BPM override is rare for same-family because BPM-implausible
+        // votes prevent High assignment in the consensus scoring above.
         confidence = match confidence {
             ClassificationConfidence::High => ClassificationConfidence::Medium,
-            ClassificationConfidence::Medium => ClassificationConfidence::Low,
+            ClassificationConfidence::Medium if !same_family => ClassificationConfidence::Low,
             other => other,
         };
+        if same_family {
+            flags.push("bpm-override-same-family".into());
+        }
     }
 
     // HighEnergy always demotes deep variants (e.g. Deep Techno → Techno).
@@ -2178,6 +2186,105 @@ mod tests {
             result.confidence,
             ClassificationConfidence::Medium,
             "Track-level source should produce Medium confidence, not a tight race"
+        );
+    }
+
+    // BPM override within the same genre family should floor confidence at Medium,
+    // not downgrade Medium → Low.
+    #[test]
+    fn bpm_override_same_family_floors_at_medium() {
+        // Beatport + Discogs both say "Deep Techno" (strong signal), BPM is 145 —
+        // outside Deep Techno range (120-132+5). Label says "Techno" which IS
+        // plausible at 145 BPM (128-140+5). Audio is dancefloor + atmospheric so
+        // depth resolution prefers deeper (Deep Techno), then BPM override swaps
+        // to Techno. Same Techno family → confidence floors at Medium.
+        let ev = TrackEvidence {
+            track_id: "test-bpm-same-family".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 145.0,
+            discogs_mapped: vec![MappedGenre {
+                genre: "Deep Techno",
+                style_count: 2,
+            }],
+            beatport_genre: Some("Deep Techno"),
+            beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
+            label: Some("Test Label".into()),
+            label_genre: Some("Techno"),
+            audio: Some(AudioFeatures {
+                rekordbox_bpm: 145.0,
+                stratum_bpm: Some(145.0),
+                bpm_agreement: Some(true),
+                danceability: Some(1.6),
+                dynamic_complexity: Some(6.0), // atmospheric
+                rhythm_regularity: Some(0.92),
+                spectral_centroid_mean: Some(800.0),
+            }),
+            has_discogs: true,
+            has_beatport: true,
+            has_audio: true,
+        };
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+        assert!(
+            result.flags.contains(&"bpm-override".to_string()),
+            "Expected bpm-override flag, got: {:?}",
+            result.flags
+        );
+        assert!(
+            result.flags.contains(&"bpm-override-same-family".to_string()),
+            "Expected bpm-override-same-family flag, got: {:?}",
+            result.flags
+        );
+    }
+
+    // BPM override across genre families should still downgrade Medium → Low.
+    #[test]
+    fn bpm_override_cross_family_downgrades_to_low() {
+        // Beatport + Discogs both say "House" (strong signal), BPM is 170 —
+        // outside House range (120-130+5). Label says "Drum & Bass" which IS
+        // plausible at 170 BPM (168-180). Different families (House vs Bass) →
+        // confidence downgrades Medium → Low.
+        let ev = TrackEvidence {
+            track_id: "test-bpm-cross-family".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 170.0,
+            discogs_mapped: vec![MappedGenre {
+                genre: "House",
+                style_count: 2,
+            }],
+            beatport_genre: Some("House"),
+            beatport_raw: Some("House".into()),
+            label: Some("Test Label".into()),
+            label_genre: Some("Drum & Bass"),
+            audio: Some(AudioFeatures {
+                rekordbox_bpm: 170.0,
+                stratum_bpm: Some(170.0),
+                bpm_agreement: Some(true),
+                danceability: Some(2.0),
+                dynamic_complexity: Some(3.0),
+                rhythm_regularity: Some(0.85),
+                spectral_centroid_mean: Some(2000.0),
+            }),
+            has_discogs: true,
+            has_beatport: true,
+            has_audio: true,
+        };
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Drum & Bass"));
+        assert_eq!(result.confidence, ClassificationConfidence::Low);
+        assert!(
+            result.flags.contains(&"bpm-override".to_string()),
+            "Expected bpm-override flag, got: {:?}",
+            result.flags
+        );
+        assert!(
+            !result.flags.contains(&"bpm-override-same-family".to_string()),
+            "Should NOT have same-family flag for cross-family override"
         );
     }
 }

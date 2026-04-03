@@ -27,6 +27,10 @@ pub struct SearchFilterParams {
     #[schemars(description = "Filter by whether track has a label set")]
     pub has_label: Option<bool>,
     #[schemars(
+        description = "Filter to tracks with a non-canonical genre (not in taxonomy and no known alias). Tracks with empty genre are excluded. Only true is meaningful; false or omitted means no filtering."
+    )]
+    pub has_unknown_genre: Option<bool>,
+    #[schemars(
         description = "Filter to tracks with year = 0 (unset). Useful for targeting year-zero tracks for enrichment."
     )]
     pub year_zero: Option<bool>,

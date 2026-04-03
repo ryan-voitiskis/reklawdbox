@@ -30,12 +30,19 @@ pub(super) fn handle_classify_tracks(
         ));
     }
 
-    // Force has_genre=false when using filter-based selection. When track_ids
-    // are provided, the caller has explicitly selected tracks — respect that
-    // selection (e.g. unknown-genre tracks from suggest_normalizations).
+    // Force genre-presence filter for filter-based selection:
+    // - has_unknown_genre=true → has_genre=true (those tracks DO have a genre,
+    //   just a non-canonical one; the post-filter in resolve_tracks narrows further)
+    // - otherwise → has_genre=false (default: target ungenred tracks)
+    // When track_ids are provided, the caller has explicitly selected tracks —
+    // respect that selection.
     let mut filters = params.filters;
     if params.track_ids.is_none() {
-        filters.has_genre = Some(false);
+        if filters.has_unknown_genre == Some(true) {
+            filters.has_genre = Some(true);
+        } else {
+            filters.has_genre = Some(false);
+        }
     }
 
     let tracks = {
@@ -368,6 +375,8 @@ fn build_dispatch_groups(
                 "title": r.title,
                 "suggested_genre": r.genre,
                 "confidence": conf,
+                "evidence": r.evidence,
+                "flags": r.flags,
             }));
     }
 
