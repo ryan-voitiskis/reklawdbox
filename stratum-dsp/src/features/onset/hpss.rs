@@ -195,7 +195,7 @@ fn apply_horizontal_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Ve
             let median = if window.is_empty() {
                 0.0
             } else if window.len().is_multiple_of(2) {
-                (window[window.len() / 2 - 1] + window[window.len() / 2]) * 0.5
+                window[window.len() / 2 - 1].midpoint(window[window.len() / 2])
             } else {
                 window[window.len() / 2]
             };
@@ -227,7 +227,7 @@ fn apply_vertical_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Vec<
             let median = if window.is_empty() {
                 0.0
             } else if window.len().is_multiple_of(2) {
-                (window[window.len() / 2 - 1] + window[window.len() / 2]) * 0.5
+                window[window.len() / 2 - 1].midpoint(window[window.len() / 2])
             } else {
                 window[window.len() / 2]
             };

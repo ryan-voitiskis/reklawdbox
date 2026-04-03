@@ -13,8 +13,7 @@ fn file_mtime_secs(metadata: &std::fs::Metadata) -> i64 {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 pub(super) async fn handle_analyze_track_audio(
@@ -61,7 +60,7 @@ pub(super) async fn handle_analyze_track_audio(
             serde_json::to_string(&val).map_err(|e| mcp_internal_error(format!("{e}")))?;
         let metadata = tokio::fs::metadata(&file_path)
             .await
-            .map_err(|e| mcp_internal_error(format!("Cannot stat file '{}': {e}", file_path)))?;
+            .map_err(|e| mcp_internal_error(format!("Cannot stat file '{file_path}': {e}")))?;
         let store = server.cache_store_conn()?;
         store::set_audio_analysis(
             &store,

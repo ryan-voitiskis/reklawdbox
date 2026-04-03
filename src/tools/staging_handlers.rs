@@ -67,9 +67,7 @@ async fn run_pre_op_backup_if_configured() -> Result<(), String> {
                 "pre-op backup failed with exit status {}: {}",
                 backup_output
                     .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "signal".to_string()),
+                    .code().map_or_else(|| "signal".to_string(), |code| code.to_string()),
                 details
             ))
         }
@@ -122,7 +120,7 @@ pub(super) fn handle_update_tracks(
         if let Some(ref g) = c.genre
             && !genre::is_known_genre(g)
         {
-            warnings.push(format!("'{}' is not in the genre taxonomy", g));
+            warnings.push(format!("'{g}' is not in the genre taxonomy"));
         }
     }
 
@@ -269,7 +267,7 @@ pub(super) fn handle_preview_changes(
     }
 
     if let Some(ref filter_ids) = params.track_ids {
-        let filter_set: HashSet<&str> = filter_ids.iter().map(|s| s.as_str()).collect();
+        let filter_set: HashSet<&str> = filter_ids.iter().map(std::string::String::as_str).collect();
         ids.retain(|id| filter_set.contains(id.as_str()));
         if ids.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -356,13 +354,12 @@ pub(super) async fn handle_write_xml(
         .load(std::sync::atomic::Ordering::Relaxed);
     if gate_count > 0 && !params.skip_label_gate.unwrap_or(false) {
         return Err(mcp_internal_error(format!(
-            "Label research gate: backfill_labels found {} unlabeled tracks that need research. \
+            "Label research gate: backfill_labels found {gate_count} unlabeled tracks that need research. \
              Complete step 3 of the metadata backfill SOP (research remaining label gaps) before \
              exporting. Use search_tracks(has_label=false) to find them, then research labels \
              via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp.\n\n\
              Once label research is complete and remaining gaps are genuinely unresolvable, \
-             call write_xml(skip_label_gate=true) to proceed.",
-            gate_count
+             call write_xml(skip_label_gate=true) to proceed."
         )));
     }
 
@@ -441,12 +438,12 @@ pub(super) async fn handle_write_xml(
         .collect();
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_path = params.output_path.map(PathBuf::from).unwrap_or_else(|| {
+    let output_path = params.output_path.map_or_else(|| {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("reklawdbox-exports")
             .join(format!("reklawdbox-{timestamp}.xml"))
-    });
+    }, PathBuf::from);
 
     if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
         server.state.changes.restore(snapshot);

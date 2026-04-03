@@ -324,7 +324,7 @@ pub fn merge_bpm_candidates(
                 // Both methods agree: use average of total confidence and max confidence
                 // This prevents low-quality candidates from dominating
                 let avg_conf = total_conf / method_count as f32;
-                ((avg_conf + max_conf) / 2.0 * 1.2).min(1.0)
+                (avg_conf.midpoint(max_conf) * 1.2).min(1.0)
             } else {
                 // Single method: use original confidence
                 total_conf.min(1.0)

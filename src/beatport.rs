@@ -199,7 +199,7 @@ fn parse_beatport_html(
 
                 let bpm = track
                     .get("bpm")
-                    .and_then(|v| v.as_i64())
+                    .and_then(serde_json::Value::as_i64)
                     .and_then(|v| i32::try_from(v).ok());
 
                 let key = track
@@ -212,14 +212,14 @@ fn parse_beatport_html(
                     .get("publish_date")
                     .or_else(|| track.get("release_date"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
 
                 let label = track
                     .get("label")
                     .and_then(|v| v.get("label_name"))
                     .and_then(|v| v.as_str())
                     .filter(|l| !l.is_empty())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
 
                 let fuzzy_match = !track_name.eq_ignore_ascii_case(title.trim());
                 return Ok(Some(BeatportResult {
@@ -273,7 +273,7 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
     // but Beatport returns separate artist objects.
     let search_parts: Vec<&str> = norm_artist
         .split(',')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -312,8 +312,7 @@ mod tests {
             }
         });
         format!(
-            r#"<html><head><script id="__NEXT_DATA__" type="application/json">{}</script></head><body></body></html>"#,
-            next_data
+            r#"<html><head><script id="__NEXT_DATA__" type="application/json">{next_data}</script></head><body></body></html>"#
         )
     }
 

@@ -844,7 +844,7 @@ pub(super) async fn handle_enrich_tracks(
     let total_tracks = tracks.len();
     let total = total_tracks.saturating_mul(providers.len());
 
-    let concurrency = params.concurrency.map(|n| n.clamp(1, 8)).unwrap_or(4) as usize;
+    let concurrency = params.concurrency.map_or(4, |n| n.clamp(1, 8)) as usize;
 
     let store_path = server.cache_store_path();
 

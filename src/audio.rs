@@ -325,8 +325,7 @@ pub async fn run_essentia(
         .await
         .map_err(|_| {
             AudioError::Subprocess(format!(
-                "Essentia analysis timed out after {}s for '{}'",
-                ESSENTIA_TIMEOUT_SECS, audio_path
+                "Essentia analysis timed out after {ESSENTIA_TIMEOUT_SECS}s for '{audio_path}'"
             ))
         })?
         .map_err(|e| AudioError::Subprocess(format!("Failed to start Essentia subprocess: {e}")))?;
@@ -339,8 +338,7 @@ pub async fn run_essentia(
             stderr
         };
         return Err(AudioError::Subprocess(format!(
-            "Essentia subprocess failed for '{}': {}",
-            audio_path, stderr
+            "Essentia subprocess failed for '{audio_path}': {stderr}"
         )));
     }
 
@@ -1113,8 +1111,7 @@ def column_stack(cols):
                     || percent_encoding::percent_decode_str(path)
                         .decode_utf8()
                         .ok()
-                        .map(|d| std::fs::metadata(d.as_ref()).is_ok())
-                        .unwrap_or(false)
+                        .is_some_and(|d| std::fs::metadata(d.as_ref()).is_ok())
             })
             .expect("no track with accessible audio file found");
 
@@ -1137,10 +1134,9 @@ def column_stack(cols):
 
         assert!(
             !samples.is_empty(),
-            "decoded zero samples from {}",
-            file_path
+            "decoded zero samples from {file_path}"
         );
-        assert!(sample_rate > 0, "invalid sample rate from {}", file_path);
+        assert!(sample_rate > 0, "invalid sample rate from {file_path}");
         eprintln!(
             "[integration] Decoded: {} samples at {} Hz ({:.1}s)",
             samples.len(),
@@ -1224,8 +1220,7 @@ def column_stack(cols):
                     || percent_encoding::percent_decode_str(path)
                         .decode_utf8()
                         .ok()
-                        .map(|d| std::fs::metadata(d.as_ref()).is_ok())
-                        .unwrap_or(false)
+                        .is_some_and(|d| std::fs::metadata(d.as_ref()).is_ok())
             })
             .expect("no track with accessible audio file found");
 
@@ -1252,8 +1247,7 @@ def column_stack(cols):
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         crate::store::set_audio_analysis(
             &store_conn,

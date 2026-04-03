@@ -50,7 +50,7 @@ pub async fn lookup(
 ) -> Result<Option<MusicBrainzResult>, MusicBrainzError> {
     wait_for_rate_limit().await;
 
-    let query = format!("artist:\"{}\" AND recording:\"{}\"", artist, title);
+    let query = format!("artist:\"{artist}\" AND recording:\"{title}\"");
     let url = format!(
         "https://musicbrainz.org/ws/2/recording/?query={}&fmt=json&limit=5",
         urlencoding(&query)
@@ -69,7 +69,7 @@ pub async fn lookup(
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         let body = resp.text().await.unwrap_or_default();
         return Err(MusicBrainzError::Http {
             status,
@@ -104,7 +104,7 @@ pub async fn lookup(
 
     let best = recordings.iter().find(|r| {
         r.get("score")
-            .and_then(|s| s.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .is_some_and(|s| s >= 90)
     });
 
@@ -112,7 +112,7 @@ pub async fn lookup(
         return Ok(None);
     };
 
-    let score = recording.get("score").and_then(|s| s.as_i64()).unwrap_or(0) as i32;
+    let score = recording.get("score").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
 
     let recording_title = recording
         .get("title")
@@ -132,7 +132,7 @@ pub async fn lookup(
     let first_release_date = recording
         .get("first-release-date")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let releases = recording.get("releases").and_then(|v| v.as_array());
 
@@ -143,7 +143,7 @@ pub async fn lookup(
         scored
             .first()
             .and_then(|(r, _)| r.get("id").and_then(|v| v.as_str()))
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     });
 
     let label = if let Some(ref release_id) = best_release_id {
@@ -176,8 +176,7 @@ async fn lookup_release_label(
     release_id: &str,
 ) -> Result<Option<String>, MusicBrainzError> {
     let url = format!(
-        "https://musicbrainz.org/ws/2/release/{}?inc=labels&fmt=json",
-        release_id
+        "https://musicbrainz.org/ws/2/release/{release_id}?inc=labels&fmt=json"
     );
 
     let resp = client
@@ -193,7 +192,7 @@ async fn lookup_release_label(
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         let body = resp.text().await.unwrap_or_default();
         return Err(MusicBrainzError::Http {
             status,
@@ -213,7 +212,7 @@ async fn lookup_release_label(
         .and_then(|li| li.get("label"))
         .and_then(|l| l.get("name"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let label = label.filter(|l| l != "[no label]" && !l.is_empty());
 
@@ -383,7 +382,7 @@ mod tests {
         let recordings = json.get("recordings").unwrap().as_array().unwrap();
         let best = recordings.iter().find(|r| {
             r.get("score")
-                .and_then(|s| s.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .is_some_and(|s| s >= 90)
         });
 
@@ -420,7 +419,7 @@ mod tests {
         let recordings = json.get("recordings").unwrap().as_array().unwrap();
         let best = recordings.iter().find(|r| {
             r.get("score")
-                .and_then(|s| s.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .is_some_and(|s| s >= 90)
         });
 
@@ -440,7 +439,7 @@ mod tests {
             let year = recording
                 .get("first-release-date")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
             assert_eq!(year.as_deref(), Some(expected));
         }
     }

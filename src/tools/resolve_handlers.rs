@@ -452,7 +452,7 @@ pub(crate) fn resolve_single_track(
         .and_then(|e| serde_json::to_value(e).ok());
 
     let (bpm_agreement, key_agreement) = if let Some(ref sj) = stratum_json {
-        let stratum_bpm = sj.get("bpm").and_then(|v| v.as_f64());
+        let stratum_bpm = sj.get("bpm").and_then(serde_json::Value::as_f64);
         let stratum_key = sj.get("key").and_then(|v| v.as_str());
 
         let bpm_agree = stratum_bpm.map(|sb| (sb - track.bpm).abs() <= 2.0);
@@ -593,8 +593,7 @@ fn resolve_single_track_compact(
 ) -> serde_json::Value {
     let bpm_range_json = |genre: &str| -> serde_json::Value {
         genre::genre_bpm_range(genre)
-            .map(|r| serde_json::json!([r.typical_min, r.typical_max]))
-            .unwrap_or(serde_json::Value::Null)
+            .map_or(serde_json::Value::Null, |r| serde_json::json!([r.typical_min, r.typical_max]))
     };
 
     let (current_genre_canonical, current_genre_bpm_range) = if track.genre.is_empty() {
@@ -667,8 +666,7 @@ fn resolve_single_track_compact(
         .filter(|g| !g.is_empty());
 
     let beatport_genre_raw = bp_raw_str
-        .map(|s| serde_json::json!(s))
-        .unwrap_or(serde_json::Value::Null);
+        .map_or(serde_json::Value::Null, |s| serde_json::json!(s));
 
     let bp_canonical = bp_raw_str.and_then(|bp_genre| {
         let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);
@@ -681,12 +679,10 @@ fn resolve_single_track_compact(
 
     let beatport_mapped_genre = bp_canonical
         .as_deref()
-        .map(|g| serde_json::json!(g))
-        .unwrap_or(serde_json::Value::Null);
+        .map_or(serde_json::Value::Null, |g| serde_json::json!(g));
     let beatport_mapped_genre_bpm_range = bp_canonical
         .as_deref()
-        .map(bpm_range_json)
-        .unwrap_or(serde_json::Value::Null);
+        .map_or(serde_json::Value::Null, bpm_range_json);
 
     let stratum_json = stratum_cache
         .and_then(|sc| serde_json::from_str::<serde_json::Value>(&sc.features_json).ok());
@@ -694,12 +690,12 @@ fn resolve_single_track_compact(
     let stratum_bpm = stratum_json
         .as_ref()
         .and_then(|sj| sj.get("bpm"))
-        .and_then(|v| v.as_f64());
+        .and_then(serde_json::Value::as_f64);
     let stratum_key = stratum_json
         .as_ref()
         .and_then(|sj| sj.get("key"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let key_agreement = stratum_key
         .as_deref()

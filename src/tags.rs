@@ -331,8 +331,8 @@ fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
     }
 
     match field {
-        "year" => tag.get_string(ItemKey::Year).map(|s| s.to_string()),
-        "bpm" => tag.get_string(ItemKey::Bpm).map(|s| s.to_string()),
+        "year" => tag.get_string(ItemKey::Year).map(std::string::ToString::to_string),
+        "bpm" => tag.get_string(ItemKey::Bpm).map(std::string::ToString::to_string),
         _ => None,
     }
 }
@@ -374,7 +374,7 @@ fn read_cover_art_meta(tag: &Tag) -> Option<CoverArtMeta> {
 
 fn resolve_fields(filter: Option<&[String]>) -> Vec<&str> {
     match filter {
-        Some(f) => f.iter().map(|s| s.as_str()).collect(),
+        Some(f) => f.iter().map(std::string::String::as_str).collect(),
         None => ALL_FIELDS.to_vec(),
     }
 }
@@ -586,10 +586,10 @@ fn read_wav_tags(
         .iter()
         .filter(|&&field| {
             is_riff_info_field(field)
-                && id3v2.get(field).is_some_and(|v| v.is_some())
-                && riff_info.get(field).is_some_and(|v| v.is_none())
+                && id3v2.get(field).is_some_and(std::option::Option::is_some)
+                && riff_info.get(field).is_some_and(std::option::Option::is_none)
         })
-        .map(|f| f.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     let cover_art = if include_cover_art {
@@ -860,7 +860,7 @@ fn write_tag_layer(
             continue;
         };
 
-        let should_delete = value.as_ref().is_none_or(|v| v.is_empty());
+        let should_delete = value.as_ref().is_none_or(std::string::String::is_empty);
         let current_value = get_field_from_tag(tag, field);
 
         if should_delete {

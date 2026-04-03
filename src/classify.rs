@@ -438,7 +438,7 @@ fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'
 
 fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) -> Vec<GenreVote> {
     let mut votes = Vec::new();
-    let effective_bpm = audio_profile.map(|p| p.bpm).unwrap_or(evidence.bpm);
+    let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
 
     // Beatport: weight 1.0, halved if BPM-implausible
     if let Some(bp) = evidence.beatport_genre {
@@ -590,15 +590,15 @@ fn find_consensus(
             ""
         };
         if raw != bp {
-            ev.push(format!("beatport: {} (raw: {}){}", bp, raw, bpm_note));
+            ev.push(format!("beatport: {bp} (raw: {raw}){bpm_note}"));
         } else {
-            ev.push(format!("beatport: {}{}", bp, bpm_note));
+            ev.push(format!("beatport: {bp}{bpm_note}"));
         }
     }
 
     if let Some(lg) = evidence.label_genre {
         let label_name = evidence.label.as_deref().unwrap_or("?");
-        ev.push(format!("label: {} → {}", label_name, lg));
+        ev.push(format!("label: {label_name} → {lg}"));
     }
 
     if let Some(profile) = audio_profile.as_ref() {
@@ -721,7 +721,7 @@ fn find_consensus(
     let mut final_genre = top_genre;
 
     // Swap to a BPM-plausible alternative if the winner is implausible
-    let effective_bpm = audio_profile.map(|p| p.bpm).unwrap_or(evidence.bpm);
+    let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
     if !bpm_plausible(final_genre, effective_bpm)
         && let Some((alt_genre, _)) = ranked
             .iter()
@@ -790,7 +790,7 @@ fn find_consensus(
     if let Some(bp) = evidence.beatport_genre
         && genre::genre_family(bp) != primary_family
     {
-        ev.push(format!("influence: {} (beatport)", bp));
+        ev.push(format!("influence: {bp} (beatport)"));
     }
 
     (Some(final_genre), confidence, ev, flags)
@@ -807,7 +807,7 @@ fn resolve_same_family_specificity(
     let second_depth = genre::genre_depth(second);
 
     if top_depth == second_depth {
-        evidence.push(format!("same-family same-depth: {} vs {}", top, second));
+        evidence.push(format!("same-family same-depth: {top} vs {second}"));
         return top;
     }
 
@@ -820,14 +820,12 @@ fn resolve_same_family_specificity(
     if let Some(profile) = audio_profile {
         if has_flag(profile, CharFlag::Atmospheric) || profile.bucket == EnergyBucket::LowEnergy {
             evidence.push(format!(
-                "depth: audio atmospheric/low-energy → {} over {}",
-                deeper, shallower
+                "depth: audio atmospheric/low-energy → {deeper} over {shallower}"
             ));
             deeper
         } else if profile.bucket == EnergyBucket::HighEnergy {
             evidence.push(format!(
-                "depth: audio high-energy → {} over {}",
-                shallower, deeper
+                "depth: audio high-energy → {shallower} over {deeper}"
             ));
             shallower
         } else {
@@ -841,7 +839,7 @@ fn resolve_same_family_specificity(
             top
         }
     } else {
-        evidence.push(format!("depth: {} vs {}, no audio to resolve", top, second));
+        evidence.push(format!("depth: {top} vs {second}, no audio to resolve"));
         top
     }
 }
@@ -1077,7 +1075,7 @@ fn audio_only_inference(
                 centroid_hint, candidates[0], first_before
             ));
         } else {
-            ev.push(format!("D.3: {} (confirms D.2 order)", centroid_hint));
+            ev.push(format!("D.3: {centroid_hint} (confirms D.2 order)"));
         }
     }
 

@@ -1205,7 +1205,7 @@ pub fn delete_missing_audit_files(
         let to_delete: Vec<&str> = batch_paths
             .iter()
             .filter(|p| !existing_paths.contains(p.as_str()))
-            .map(|p| p.as_str())
+            .map(std::string::String::as_str)
             .collect();
 
         if !to_delete.is_empty() {
@@ -2115,7 +2115,7 @@ mod tests {
             set_audio_analysis(&conn, p, "stratum-dsp", 100, 1000, "1.0", "{}").unwrap();
         }
 
-        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        let path_refs: Vec<&str> = paths.iter().map(std::string::String::as_str).collect();
         let result = batch_audio_analysis_existence(&conn, &path_refs).unwrap();
         assert_eq!(result.len(), 1000);
         for p in &paths {
@@ -2140,7 +2140,7 @@ mod tests {
             .unwrap();
         }
 
-        let artist_refs: Vec<&str> = artists.iter().map(|s| s.as_str()).collect();
+        let artist_refs: Vec<&str> = artists.iter().map(std::string::String::as_str).collect();
         let result = batch_enrichment_existence(&conn, "discogs", &artist_refs).unwrap();
         assert_eq!(result.len(), 1000);
         for a in &artists {

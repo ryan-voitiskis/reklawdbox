@@ -136,9 +136,7 @@ impl ReklawdboxServer {
         let result = self.state.internal_db.get_or_init(|| {
             let path = match self.state.store_path {
                 Some(ref p) => std::path::PathBuf::from(p),
-                None => std::env::var("CRATE_DIG_STORE_PATH")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| store::default_path()),
+                None => std::env::var("CRATE_DIG_STORE_PATH").map_or_else(|_| store::default_path(), std::path::PathBuf::from),
             };
             let path_str = path.to_string_lossy().to_string();
             match store::open(&path_str) {

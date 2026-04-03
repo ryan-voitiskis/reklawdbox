@@ -157,7 +157,7 @@ pub fn detect_key_changes(
         // Key change if keys differ
         if prev_key != curr_key {
             // Confidence of key change: average of both segment confidences
-            let change_confidence = (*prev_conf + *curr_conf) / 2.0;
+            let change_confidence = prev_conf.midpoint(*curr_conf);
 
             // Only report if confidence is reasonable
             if change_confidence > 0.2 {

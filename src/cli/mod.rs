@@ -174,8 +174,7 @@ fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 fn is_cache_fresh(cached: Option<&store::CachedAudioAnalysis>, schema_version: &str) -> bool {
@@ -291,7 +290,7 @@ fn collect_audio_files(dir: &Path, recursive: bool, result: &mut Vec<PathBuf>) {
         Ok(entries) => {
             let mut files = Vec::new();
             let mut subdirs = Vec::new();
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(std::result::Result::ok) {
                 let is_symlink = entry.file_type().is_ok_and(|ft| ft.is_symlink());
                 let path = entry.path();
                 if path.is_file() && is_audio_file(&path) {

@@ -49,7 +49,7 @@ pub fn adaptive_threshold_median_mad(values: &[f32], k: f32) -> Result<f32, Anal
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let median = if sorted.len().is_multiple_of(2) {
-        (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) * 0.5
+        sorted[sorted.len() / 2 - 1].midpoint(sorted[sorted.len() / 2])
     } else {
         sorted[sorted.len() / 2]
     };
@@ -60,7 +60,7 @@ pub fn adaptive_threshold_median_mad(values: &[f32], k: f32) -> Result<f32, Anal
     deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let mad = if deviations.len().is_multiple_of(2) {
-        (deviations[deviations.len() / 2 - 1] + deviations[deviations.len() / 2]) * 0.5
+        deviations[deviations.len() / 2 - 1].midpoint(deviations[deviations.len() / 2])
     } else {
         deviations[deviations.len() / 2]
     };

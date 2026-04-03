@@ -38,7 +38,7 @@ fn configure_claude_code(binary_path: &str) -> HostResult {
         None => return HostResult::Failed("cannot determine home directory".to_string()),
     };
 
-    if !mcp_path.parent().is_some_and(|p| p.exists()) {
+    if !mcp_path.parent().is_some_and(std::path::Path::exists) {
         return HostResult::Failed(format!(
             "{} does not exist — create it or add reklawdbox to a project .mcp.json manually.\n\
              See https://reklawdbox.com/getting-started/",
@@ -66,15 +66,14 @@ fn configure_claude_code(binary_path: &str) -> HostResult {
     // If reklawdbox is already configured, don't touch it — user may have custom
     // args or env vars we shouldn't destroy. Warn if the command path differs.
     if let Some(existing) = root.get("mcpServers").and_then(|s| s.get("reklawdbox")) {
-        if let Some(existing_cmd) = existing.get("command").and_then(|c| c.as_str()) {
-            if existing_cmd != binary_path {
+        if let Some(existing_cmd) = existing.get("command").and_then(|c| c.as_str())
+            && existing_cmd != binary_path {
                 eprintln!(
                     "    Note: ~/Music/.mcp.json points to {existing_cmd},\n    \
                      but this binary is {binary_path}.\n    \
                      Edit ~/Music/.mcp.json to update it."
                 );
             }
-        }
         return HostResult::AlreadyConfigured;
     }
 
@@ -136,7 +135,7 @@ fn configure_claude_desktop(binary_path: &str) -> HostResult {
         None => return HostResult::NotDetected,
     };
 
-    if !config_path.parent().is_some_and(|p| p.exists()) {
+    if !config_path.parent().is_some_and(std::path::Path::exists) {
         return HostResult::NotDetected;
     }
 

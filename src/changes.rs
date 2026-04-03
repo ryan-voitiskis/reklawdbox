@@ -68,7 +68,7 @@ impl ChangeManager {
     pub fn get(&self, track_id: &str) -> Option<TrackChange> {
         self.changes
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(track_id)
             .cloned()
     }

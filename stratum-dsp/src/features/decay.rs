@@ -249,7 +249,7 @@ fn make_band_decay(taus: &mut [f32], r2s: &mut [f32]) -> Option<BandDecay> {
 
     let n = taus.len();
     let tau_median = if n.is_multiple_of(2) {
-        (taus[n / 2 - 1] + taus[n / 2]) / 2.0
+        taus[n / 2 - 1].midpoint(taus[n / 2])
     } else {
         taus[n / 2]
     };
@@ -259,7 +259,7 @@ fn make_band_decay(taus: &mut [f32], r2s: &mut [f32]) -> Option<BandDecay> {
     let tau_iqr = taus[q3_idx.min(n - 1)] - taus[q1_idx.min(n - 1)];
 
     let r2_median = if n.is_multiple_of(2) {
-        (r2s[n / 2 - 1] + r2s[n / 2]) / 2.0
+        r2s[n / 2 - 1].midpoint(r2s[n / 2])
     } else {
         r2s[n / 2]
     };

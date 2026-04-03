@@ -718,8 +718,7 @@ fn build_addition_rationale(result: &CandidatePoolScore) -> serde_json::Value {
                 .partial_cmp(&b.composite)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(id, _)| id.as_str())
-        .unwrap_or("");
+        .map_or("", |(id, _)| id.as_str());
 
     let mut axis_sums: std::collections::HashMap<&str, (f64, u32)> =
         std::collections::HashMap::new();
@@ -757,8 +756,7 @@ fn build_addition_rationale(result: &CandidatePoolScore) -> serde_json::Value {
         .collect();
     let weakest = axis_means
         .last()
-        .map(|(name, _)| *name)
-        .unwrap_or("unknown");
+        .map_or("unknown", |(name, _)| *name);
 
     serde_json::json!({
         "strongest_axes": strongest,

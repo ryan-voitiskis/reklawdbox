@@ -136,7 +136,7 @@ pub(super) fn handle_classify_tracks(
             let compact: Vec<_> = results
                 .iter()
                 .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
-                .map(|r| r.to_compact())
+                .map(super::super::classify::ClassificationResult::to_compact)
                 .collect();
             serde_json::json!({
                 "summary": summary,
@@ -300,7 +300,7 @@ pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serd
     let mut genres: Vec<_> = genre_map
         .into_iter()
         .map(|(genre, conf_map)| {
-            let total: usize = conf_map.values().map(|v| v.len()).sum();
+            let total: usize = conf_map.values().map(std::vec::Vec::len).sum();
             (genre, conf_map, total)
         })
         .collect();
@@ -380,7 +380,7 @@ fn build_dispatch_groups(
             }));
     }
 
-    let total_tracks: usize = artist_map.values().map(|v| v.len()).sum();
+    let total_tracks: usize = artist_map.values().map(std::vec::Vec::len).sum();
     let total_artists = artist_map.len();
 
     let mut artists: Vec<_> = artist_map.into_iter().collect();
@@ -493,7 +493,7 @@ fn build_track_evidence(
             .and_then(|v| v.get("label"))
             .and_then(|v| v.as_str())
             .filter(|l| !l.is_empty())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     };
     let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
@@ -660,7 +660,7 @@ fn extract_audio_features(
     let stratum_bpm = stratum_json
         .as_ref()
         .and_then(|sj| sj.get("bpm"))
-        .and_then(|v| v.as_f64());
+        .and_then(serde_json::Value::as_f64);
     let bpm_agreement = stratum_bpm.map(|sb| (sb - track.bpm).abs() <= 2.0);
 
     Some(AudioFeatures {

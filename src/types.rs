@@ -198,7 +198,7 @@ impl EditableField {
     pub fn all_names_csv() -> String {
         Self::ALL
             .iter()
-            .map(|f| f.as_str())
+            .map(EditableField::as_str)
             .collect::<Vec<_>>()
             .join(", ")
     }

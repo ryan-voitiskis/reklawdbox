@@ -194,8 +194,7 @@ fn write_test_audio_file(path: &std::path::Path, size: usize) -> (i64, i64) {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
     (file_size, file_mtime)
 }
 
@@ -898,8 +897,7 @@ async fn analyze_track_audio_reports_essentia_unavailable_when_probe_is_none() {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
 
     let db_conn = create_single_track_test_db("essentia-missing-1", &audio_path_str);
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
@@ -2055,8 +2053,7 @@ async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
 
     let decoded_path_str = decoded_path.to_string_lossy().to_string();
     let raw_path = decoded_path_str
@@ -4093,14 +4090,12 @@ async fn score_transition_returns_expected_axis_scores() {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
     let to_file_mtime = to_metadata
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
 
     let db_conn = create_single_track_test_db("from-track", &from_path_str);
     db_conn

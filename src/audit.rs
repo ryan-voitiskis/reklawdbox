@@ -329,7 +329,7 @@ fn detect_album_dirs(paths: &[std::path::PathBuf]) -> HashSet<std::path::PathBuf
     // loose tracks AND artist subdirs) from being classified as album dirs.
     let child_parents: HashSet<std::path::PathBuf> = counts
         .keys()
-        .filter_map(|dir| dir.parent().map(|p| p.to_path_buf()))
+        .filter_map(|dir| dir.parent().map(std::path::Path::to_path_buf))
         .collect();
     counts.retain(|dir, _| !child_parents.contains(dir));
 
@@ -611,8 +611,8 @@ pub struct DetectedIssue {
 /// Get a field value from the primary tag layer in a FileReadResult (WAV uses ID3v2).
 fn get_tag_value(result: &FileReadResult, field: &str) -> Option<String> {
     match result {
-        FileReadResult::Single { tags, .. } => tags.get(field).and_then(|v| v.clone()),
-        FileReadResult::Wav { id3v2, .. } => id3v2.get(field).and_then(|v| v.clone()),
+        FileReadResult::Single { tags, .. } => tags.get(field).and_then(std::clone::Clone::clone),
+        FileReadResult::Wav { id3v2, .. } => id3v2.get(field).and_then(std::clone::Clone::clone),
         FileReadResult::Error { .. } => None,
     }
 }
@@ -753,11 +753,11 @@ pub fn check_tags(
                 let id3v2_value = id3v2
                     .get(*field)
                     .and_then(|v| v.as_deref())
-                    .map(|s| s.trim());
+                    .map(str::trim);
                 let riff_info_value = riff_info
                     .get(*field)
                     .and_then(|v| v.as_deref())
-                    .map(|s| s.trim());
+                    .map(str::trim);
                 if let (Some(v2_val), Some(ri_val)) = (id3v2_value, riff_info_value)
                     && v2_val != ri_val
                 {
@@ -1322,7 +1322,7 @@ pub fn scan(
 
     let counts = aggregate_status_counts(&summary);
 
-    let skipped_names: Vec<String> = skip_issue_types.iter().map(|t| t.to_string()).collect();
+    let skipped_names: Vec<String> = skip_issue_types.iter().map(std::string::ToString::to_string).collect();
 
     Ok(ScanSummary {
         files_in_scope,

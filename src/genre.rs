@@ -213,22 +213,19 @@ fn build_alias_map(aliases: &[(&str, &'static str)]) -> HashMap<String, &'static
         assert_eq!(
             alias,
             alias.trim(),
-            "alias '{}' has leading/trailing whitespace",
-            alias
+            "alias '{alias}' has leading/trailing whitespace"
         );
-        assert!(alias.is_ascii(), "alias '{}' must be ASCII", alias);
+        assert!(alias.is_ascii(), "alias '{alias}' must be ASCII");
         assert_eq!(
             alias,
             alias.to_ascii_lowercase(),
-            "alias '{}' must be lowercase ASCII",
-            alias
+            "alias '{alias}' must be lowercase ASCII"
         );
         let key = alias.to_string();
         let previous = map.insert(key.clone(), canonical);
         assert!(
             previous.is_none(),
-            "duplicate alias key '{}' (case-insensitive)",
-            key
+            "duplicate alias key '{key}' (case-insensitive)"
         );
     }
     map
@@ -270,11 +267,10 @@ pub fn init_overrides(raw: HashMap<String, String>) {
 /// Checks user overrides (from config) first, then compiled aliases.
 pub fn canonical_genre_from_alias(genre: &str) -> Option<&'static str> {
     let key = genre.trim().to_ascii_lowercase();
-    if let Some(overrides) = OVERRIDES.get() {
-        if let Some(&canonical) = overrides.get(&key) {
+    if let Some(overrides) = OVERRIDES.get()
+        && let Some(&canonical) = overrides.get(&key) {
             return Some(canonical);
         }
-    }
     genre_alias_map().get(&key).copied()
 }
 
@@ -369,18 +365,17 @@ pub fn extract_genre_tokens(genre_str: &str) -> Vec<&'static str> {
 
     let mut push_unique = |genres: &[&str]| {
         for &g in genres {
-            if let Some(c) = canonical_genre_name(g) {
-                if !matched.contains(&c) {
+            if let Some(c) = canonical_genre_name(g)
+                && !matched.contains(&c) {
                     matched.push(c);
                 }
-            }
         }
     };
 
     // Split on / , ( ) to get parts
     let parts: Vec<&str> = lower
         .split(['/', ',', '(', ')'])
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -722,18 +717,16 @@ mod tests {
     fn aliases_are_lowercase_and_casefold_unique() {
         let mut seen = HashSet::new();
         for &(alias, _) in ALIASES {
-            assert!(alias.is_ascii(), "alias '{}' must be ASCII", alias);
+            assert!(alias.is_ascii(), "alias '{alias}' must be ASCII");
             assert_eq!(
                 alias,
                 alias.to_ascii_lowercase(),
-                "alias '{}' must be lowercase ASCII",
-                alias
+                "alias '{alias}' must be lowercase ASCII"
             );
             let inserted = seen.insert(alias.to_ascii_lowercase());
             assert!(
                 inserted,
-                "duplicate alias key '{}' (case-insensitive)",
-                alias
+                "duplicate alias key '{alias}' (case-insensitive)"
             );
         }
     }
@@ -751,9 +744,7 @@ mod tests {
         for &(alias, canonical) in ALIASES {
             assert!(
                 is_known_genre(canonical),
-                "alias '{}' maps to '{}' which is not in taxonomy",
-                alias,
-                canonical
+                "alias '{alias}' maps to '{canonical}' which is not in taxonomy"
             );
         }
     }
@@ -763,9 +754,7 @@ mod tests {
         for &(alias, target) in ALIASES {
             assert!(
                 !is_known_genre(alias),
-                "alias '{}' (-> '{}') shadows a canonical genre — remove it",
-                alias,
-                target
+                "alias '{alias}' (-> '{target}') shadows a canonical genre — remove it"
             );
         }
     }
@@ -897,12 +886,11 @@ mod tests {
     #[test]
     fn label_genres_are_lowercase() {
         for &(label, _) in LABEL_GENRES {
-            assert!(label.is_ascii(), "label '{}' must be ASCII", label);
+            assert!(label.is_ascii(), "label '{label}' must be ASCII");
             assert_eq!(
                 label,
                 label.to_ascii_lowercase(),
-                "label '{}' must be lowercase ASCII",
-                label
+                "label '{label}' must be lowercase ASCII"
             );
         }
     }
@@ -912,9 +900,7 @@ mod tests {
         for &(label, canonical) in LABEL_GENRES {
             assert!(
                 is_known_genre(canonical),
-                "label '{}' maps to '{}' which is not in taxonomy",
-                label,
-                canonical
+                "label '{label}' maps to '{canonical}' which is not in taxonomy"
             );
         }
     }
@@ -925,8 +911,7 @@ mod tests {
         for &(label, _) in LABEL_GENRES {
             assert!(
                 !alias_map.contains_key(label),
-                "label '{}' shadows an alias key",
-                label
+                "label '{label}' shadows an alias key"
             );
         }
     }
@@ -962,8 +947,7 @@ mod tests {
                 {
                     assert_eq!(
                         genre, prefix_genre,
-                        "label '{}' maps to '{}' but prefix '{}' maps to '{}'",
-                        label, genre, prefix, prefix_genre
+                        "label '{label}' maps to '{genre}' but prefix '{prefix}' maps to '{prefix_genre}'"
                     );
                 }
             }
@@ -985,9 +969,7 @@ mod tests {
             if family != GenreFamily::Other {
                 assert!(
                     depth > 0,
-                    "genre '{}' (family {:?}) has depth 0 — add it to genre_depth()",
-                    g,
-                    family,
+                    "genre '{g}' (family {family:?}) has depth 0 — add it to genre_depth()",
                 );
             }
         }

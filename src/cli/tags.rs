@@ -114,7 +114,7 @@ fn print_tags_human(result: &tags::FileReadResult) {
             cover_art,
         } => {
             tracing::info!("=== {} ({}) ===", path, format.to_uppercase());
-            println!("{}:", tag_type);
+            println!("{tag_type}:");
             print_tag_map(tags, 2);
             if let Some(art) = cover_art {
                 println!("  Cover Art    {} ({} bytes)", art.format, art.size_bytes);
@@ -403,7 +403,7 @@ pub(crate) fn run_embed_art(args: EmbedArtArgs) -> Result<(), Box<dyn std::error
         } else {
             match &result {
                 tags::FileEmbedResult::Ok { path, .. } => {
-                    println!("Embedded cover art into {}", path);
+                    println!("Embedded cover art into {path}");
                 }
                 tags::FileEmbedResult::Error { path, error, .. } => {
                     tracing::error!("Error ({}): {}", path, error);

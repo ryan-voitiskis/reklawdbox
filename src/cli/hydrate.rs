@@ -298,7 +298,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
 
     // 4. Startup summary
-    println!("Found {} tracks matching filters.", total_tracks);
+    println!("Found {total_tracks} tracks matching filters.");
     println!(
         "  {}",
         super::cpu_preset_summary(cpu_preset, analysis_concurrency)
@@ -308,9 +308,9 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
     if want_discogs {
         let retry_note = if discogs_errors > 0 && retry_errors {
-            format!(", {} errors to retry", discogs_errors)
+            format!(", {discogs_errors} errors to retry")
         } else if discogs_errors > 0 {
-            format!(", {} errors (skipped)", discogs_errors)
+            format!(", {discogs_errors} errors (skipped)")
         } else {
             String::new()
         };
@@ -323,9 +323,9 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
     if want_beatport {
         let retry_note = if beatport_errors > 0 && retry_errors {
-            format!(", {} errors to retry", beatport_errors)
+            format!(", {beatport_errors} errors to retry")
         } else if beatport_errors > 0 {
-            format!(", {} errors (skipped)", beatport_errors)
+            format!(", {beatport_errors} errors (skipped)")
         } else {
             String::new()
         };
@@ -376,9 +376,9 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let hours = estimated_secs / 3600;
         let mins = (estimated_secs % 3600) / 60;
         if hours > 0 {
-            println!("\nEstimated time: ~{}h{:02}m", hours, mins);
+            println!("\nEstimated time: ~{hours}h{mins:02}m");
         } else {
-            println!("\nEstimated time: ~{}m", mins);
+            println!("\nEstimated time: ~{mins}m");
         }
     }
 

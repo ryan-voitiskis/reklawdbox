@@ -115,7 +115,7 @@ impl fmt::Display for LookupError {
                 }
             }
             Self::Http { status, body, .. } => write!(f, "broker proxy HTTP {status}: {body}"),
-            Self::Message(msg) => write!(f, "{}", msg),
+            Self::Message(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -222,11 +222,10 @@ pub async fn device_session_start(
         if status == reqwest::StatusCode::UNAUTHORIZED && cfg.broker_token.is_none() {
             return Err(format!(
                 "Broker returned 401 Unauthorized and no broker token is configured. \
-                 Set {} to authenticate with your custom broker.",
-                BROKER_TOKEN_ENV
+                 Set {BROKER_TOKEN_ENV} to authenticate with your custom broker."
             ));
         }
-        return Err(format!("broker start HTTP {}: {}", status, body));
+        return Err(format!("broker start HTTP {status}: {body}"));
     }
 
     let payload: DeviceSessionStartResponse = response
@@ -267,7 +266,7 @@ pub async fn device_session_status(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("broker status HTTP {}: {}", status, body));
+        return Err(format!("broker status HTTP {status}: {body}"));
     }
 
     let payload: DeviceSessionStatusResponse = response
@@ -303,7 +302,7 @@ pub async fn device_session_finalize(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("broker finalize HTTP {}: {}", status, body));
+        return Err(format!("broker finalize HTTP {status}: {body}"));
     }
 
     let payload: DeviceSessionFinalizeResponse = response

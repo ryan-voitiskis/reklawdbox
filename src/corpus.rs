@@ -14,7 +14,7 @@ static REKORDBOX_INDEX: OnceLock<CorpusIndex> = OnceLock::new();
 #[derive(Debug)]
 pub enum CorpusError {
     Io(std::io::Error),
-    Yaml(serde_yaml::Error),
+    Yaml(serde_yaml_ng::Error),
     InvalidManifest(String),
 }
 
@@ -36,8 +36,8 @@ impl From<std::io::Error> for CorpusError {
     }
 }
 
-impl From<serde_yaml::Error> for CorpusError {
-    fn from(value: serde_yaml::Error) -> Self {
+impl From<serde_yaml_ng::Error> for CorpusError {
+    fn from(value: serde_yaml_ng::Error) -> Self {
         Self::Yaml(value)
     }
 }
@@ -171,7 +171,7 @@ impl CorpusIndex {
     }
 
     pub fn from_manifest_str(raw: &str) -> Result<Self, CorpusError> {
-        let manifest: CorpusManifest = serde_yaml::from_str(raw)?;
+        let manifest: CorpusManifest = serde_yaml_ng::from_str(raw)?;
         Self::from_manifest(manifest)
     }
 
@@ -314,7 +314,7 @@ fn normalize_optional_filter(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
 }
 
 fn to_repo_relative_doc_path(path: &str) -> Option<String> {

@@ -249,9 +249,7 @@ mod tests {
         for (idx, result) in results.iter().enumerate() {
             let top = result
                 .top_hit
-                .as_ref()
-                .map(|(id, path, score)| format!("{id}:{score}@{path}"))
-                .unwrap_or_else(|| "<none>".to_string());
+                .as_ref().map_or_else(|| "<none>".to_string(), |(id, path, score)| format!("{id}:{score}@{path}"));
 
             lines.push(format!(
                 "case {}: top1_match={} score_ok={} expected={}:{} top={} prompt=\"{}\" candidates=[{}]",

@@ -254,8 +254,7 @@ pub(super) fn build_candidate_plan(
     let mut genre_run_length: u32 = 0;
     let start_bpm = profiles_by_id
         .get(start_track_id)
-        .map(|p| p.bpm)
-        .unwrap_or(0.0);
+        .map_or(0.0, |p| p.bpm);
 
     while ordered_ids.len() < target_tracks && !remaining.is_empty() {
         let Some(from_track_id) = ordered_ids.last() else {
@@ -315,8 +314,7 @@ pub(super) fn build_candidate_plan(
                             delta: scores.composite - composite_without,
                             composite_without,
                             reason: format!(
-                                "BPM drift {:.1} exceeds budget {:.1} at position {} — 0.7x penalty",
-                                drift, budget_bpm, position,
+                                "BPM drift {drift:.1} exceeds budget {budget_bpm:.1} at position {position} — 0.7x penalty",
                             ),
                         });
                     }
@@ -414,8 +412,7 @@ pub(super) fn build_candidate_plan_beam(
 
     let start_bpm = profiles_by_id
         .get(start_track_id)
-        .map(|p| p.bpm)
-        .unwrap_or(0.0);
+        .map_or(0.0, |p| p.bpm);
 
     let initial = BeamState {
         ordered_ids: vec![start_track_id.to_string()],
@@ -487,8 +484,7 @@ pub(super) fn build_candidate_plan_beam(
                             delta: scores.composite - composite_without,
                             composite_without,
                             reason: format!(
-                                "BPM drift {:.1} exceeds budget {:.1} at step {} — 0.7x penalty",
-                                drift, budget_bpm, step,
+                                "BPM drift {drift:.1} exceeds budget {budget_bpm:.1} at step {step} — 0.7x penalty",
                             ),
                         });
                     }
@@ -655,12 +651,10 @@ pub(super) fn build_track_profile(
         .and_then(parse_camelot_key)
         .or_else(|| key_to_camelot(&track.key));
 
-    let key_display = camelot_key
-        .map(format_camelot)
-        .unwrap_or_else(|| match track.key.trim() {
+    let key_display = camelot_key.map_or_else(|| match track.key.trim() {
             "" => "Unknown".to_string(),
             _ => track.key.clone(),
-        });
+        }, format_camelot);
 
     let energy = compute_track_energy(essentia_data.as_ref(), bpm);
     let brightness = essentia_data
@@ -671,8 +665,7 @@ pub(super) fn build_track_profile(
     let canonical_genre = canonicalize_genre(&track.genre);
     let genre_family = canonical_genre
         .as_deref()
-        .map(genre_family_for)
-        .unwrap_or(GenreFamily::Other);
+        .map_or(GenreFamily::Other, genre_family_for);
 
     let timbral = essentia_data.as_ref().and_then(|e| {
         Some(TimbralFeatures {
@@ -1034,7 +1027,7 @@ pub(super) fn score_bpm_axis(from_bpm: f64, to_bpm: f64) -> AxisScore {
     };
     AxisScore {
         value,
-        label: format!("{label_category} ({:.1}%, {:.1} BPM)", pct, delta),
+        label: format!("{label_category} ({pct:.1}%, {delta:.1} BPM)"),
     }
 }
 
@@ -1190,22 +1183,22 @@ fn score_brightness_axis(from_centroid: Option<f64>, to_centroid: Option<f64>) -
     if delta < BRIGHTNESS_SIMILAR_HZ {
         AxisScore {
             value: 1.0,
-            label: format!("Similar timbre (delta {:.0} Hz)", delta),
+            label: format!("Similar timbre (delta {delta:.0} Hz)"),
         }
     } else if delta < BRIGHTNESS_SHIFT_HZ {
         AxisScore {
             value: 0.7,
-            label: format!("Noticeable brightness shift (delta {:.0} Hz)", delta),
+            label: format!("Noticeable brightness shift (delta {delta:.0} Hz)"),
         }
     } else if delta < BRIGHTNESS_JUMP_HZ {
         AxisScore {
             value: 0.4,
-            label: format!("Large timbral jump (delta {:.0} Hz)", delta),
+            label: format!("Large timbral jump (delta {delta:.0} Hz)"),
         }
     } else {
         AxisScore {
             value: 0.2,
-            label: format!("Jarring brightness jump (delta {:.0} Hz)", delta),
+            label: format!("Jarring brightness jump (delta {delta:.0} Hz)"),
         }
     }
 }
@@ -1228,22 +1221,22 @@ fn score_rhythm_axis(from_regularity: Option<f64>, to_regularity: Option<f64>) -
     if delta < RHYTHM_MATCHED_DELTA {
         AxisScore {
             value: 1.0,
-            label: format!("Matching groove (delta {:.2})", delta),
+            label: format!("Matching groove (delta {delta:.2})"),
         }
     } else if delta < RHYTHM_MANAGEABLE_DELTA {
         AxisScore {
             value: 0.7,
-            label: format!("Manageable groove shift (delta {:.2})", delta),
+            label: format!("Manageable groove shift (delta {delta:.2})"),
         }
     } else if delta < RHYTHM_CHALLENGING_DELTA {
         AxisScore {
             value: 0.4,
-            label: format!("Challenging groove shift (delta {:.2})", delta),
+            label: format!("Challenging groove shift (delta {delta:.2})"),
         }
     } else {
         AxisScore {
             value: 0.2,
-            label: format!("Groove clash (delta {:.2})", delta),
+            label: format!("Groove clash (delta {delta:.2})"),
         }
     }
 }
@@ -1277,7 +1270,7 @@ pub(super) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
     };
     AxisScore {
         value,
-        label: format!("{label_category} ({:.1}%, {:.1} BPM)", pct, delta),
+        label: format!("{label_category} ({pct:.1}%, {delta:.1} BPM)"),
     }
 }
 
@@ -1893,7 +1886,7 @@ pub(super) fn score_key_with_pitch_shifts(
     let to_cents = (to_shift - to_shift.round()).abs() * 100.0;
     let max_cents = from_cents.max(to_cents);
     let label = if max_cents > 10.0 {
-        format!("{best_label} (~{:.0}\u{00a2} detuned)", max_cents)
+        format!("{best_label} (~{max_cents:.0}\u{00a2} detuned)")
     } else {
         best_label
     };
@@ -2293,9 +2286,9 @@ pub(super) fn discover_pools(
         if selected.len() >= max_pools {
             break;
         }
-        let set: HashSet<&str> = pool.track_ids.iter().map(|s| s.as_str()).collect();
+        let set: HashSet<&str> = pool.track_ids.iter().map(std::string::String::as_str).collect();
         let is_subset = selected.iter().any(|s| {
-            let ss: HashSet<&str> = s.track_ids.iter().map(|s| s.as_str()).collect();
+            let ss: HashSet<&str> = s.track_ids.iter().map(std::string::String::as_str).collect();
             set.is_subset(&ss)
         });
         if !is_subset {
@@ -2332,8 +2325,7 @@ fn build_discovered_pool(
 
     let median_mean = member_means
         .get((member_means.len().saturating_sub(1)) / 2)
-        .map(|m| m.1)
-        .unwrap_or(0.0);
+        .map_or(0.0, |m| m.1);
 
     DiscoveredPool {
         track_ids: clique

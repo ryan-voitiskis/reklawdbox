@@ -233,15 +233,14 @@ fn scan_albums(
                 }
             }
 
-            if source.is_none() {
-                if let Some(album) = extract_album(dc_entry) {
+            if source.is_none()
+                && let Some(album) = extract_album(dc_entry) {
                     if !is_noise_album(&album, &track.title, &track.artist) {
                         source = Some(("discogs", album));
                     } else {
                         r.skipped_noise += 1;
                     }
                 }
-            }
 
             if source.is_none() && bc_entry.is_none() {
                 r.no_bandcamp += 1;
