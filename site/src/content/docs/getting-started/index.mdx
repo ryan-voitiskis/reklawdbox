@@ -72,7 +72,15 @@ Reklawdbox tools load automatically because setup placed `.mcp.json` there. In a
 
 ### Adding to other directories
 
-To make reklawdbox available in additional directories, copy or create `.mcp.json` there:
+To make reklawdbox available in additional directories, copy `~/Music/.mcp.json` to the target directory:
+
+```bash
+cp ~/Music/.mcp.json /path/to/directory/
+```
+
+If you built from source, check that the `command` path inside the copied file points to your binary.
+
+Or create a new `.mcp.json` there with the following content:
 
 ```json
 {
@@ -84,7 +92,11 @@ To make reklawdbox available in additional directories, copy or create `.mcp.jso
 }
 ```
 
-If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the directory containing `.mcp.json`, not the repo.
+If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`).
+
+<Aside type="caution">
+  If you previously registered reklawdbox at user scope (e.g., via `claude mcp add`), that entry in `~/.claude.json` overrides any project `.mcp.json`. Remove it first: `claude mcp remove -s user reklawdbox`. See [Troubleshooting](/troubleshooting/#tools-appearing-in-every-project).
+</Aside>
 
 ## Manual MCP host configuration
 
@@ -104,9 +116,7 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
     }
     ```
 
-    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the directory containing `.mcp.json`, not the repo.
-
-    Then start Claude Code from `~/Music`:
+    If you built from source, use the full absolute path to the binary instead. Then start Claude Code from `~/Music`:
 
     ```bash
     cd ~/Music && claude
@@ -125,7 +135,7 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
     }
     ```
 
-    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the config file's directory, not the repo.
+    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`).
   </TabItem>
   <TabItem label="Codex">
     ```bash
