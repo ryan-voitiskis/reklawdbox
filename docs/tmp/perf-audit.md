@@ -28,8 +28,8 @@ tracks, this blocks the worker for the duration of all tag reads.
 ## High — N+1 Query Patterns
 
 All of these hit the cache store `Mutex<Connection>` once per iteration, executing
-individual `prepare()` + `execute()` calls per track with no batching. Batch query
-functions exist in `store.rs` (`batch_enrichment_existence`,
+individual `prepare_cached()` + `execute()` calls per track with no batching. Batch
+query functions exist in `store.rs` (`batch_enrichment_existence`,
 `batch_enrichment_with_results`, etc.) and are used by `handle_cache_coverage`, but
 not by these paths.
 
@@ -118,13 +118,6 @@ allocates even when no trimming occurs. Called ~600× per 200-track classify bat
 
 **Location:** `src/normalize.rs:9-19`
 
-### M4: `decode_to_samples` starts with `Vec::new()` — no capacity pre-allocation
-
-A 6-min 44.1kHz track = ~63 MB of f32. Multiple realloc+copy cycles as the Vec grows.
-symphonia's `codec_params.n_frames` could provide a capacity hint.
-
-**Location:** `src/audio.rs:411-454`
-
 ### M5: No upper bound on PCM accumulation in MCP tool path
 
 CLI has a dual `cpu_sem` + `mem_sem` memory budget. MCP `handle_analyze_track_audio`
@@ -140,28 +133,7 @@ unconditionally (even when no trimming occurs). 10 fields per row.
 
 **Location:** `src/db.rs:88-107`
 
-### M7: Double serialization of audio analysis
-
-`serde_json::to_string` for cache + `serde_json::to_value` for response — two full
-serialization passes of the same struct. Serialize once and derive the other.
-
-**Location:** `src/tools/audio_handlers.rs:243-245`
-
 ## Medium — Database & Caching
-
-### M8: No `prepare_cached()` anywhere
-
-Every query uses `conn.prepare()`. `prepare_cached()` avoids re-parsing for repeated
-queries on the same connection.
-
-**Location:** All of `src/db.rs`, `src/store.rs`
-
-### M9: `resolve_audit_issues` — N auto-commit UPDATEs without transaction
-
-Loop of `conn.execute` without explicit transaction. Each UPDATE auto-commits and
-fsyncs independently.
-
-**Location:** `src/store.rs:925-943`
 
 ### M10: `batch_enrichment_with_label` forces `json_extract` on every row
 
@@ -179,13 +151,6 @@ cached in-memory in `ServerState` after first validation.
 **Location:** `src/tools/discogs_auth.rs:200-207`
 
 ## Medium — Network
-
-### M12: CLI hydrate uses `reqwest::Client::new()` with no timeouts
-
-Default client with no connect/read timeout. A hung connection deadlocks a semaphore
-slot permanently. The MCP server correctly configures 10s connect + 30s total.
-
-**Location:** `src/cli/hydrate.rs:156`
 
 ### M13: MCP lookup handlers have no retry logic
 
@@ -210,12 +175,6 @@ Intentional pattern to preserve caller-specified order and deduplicate across ch
 IN queries. Load-bearing — no simpler correct alternative when chunking is required.
 
 **Location:** `src/db.rs:675-708`
-
-### L3: `apply_search_filters` uses `format!()` + `push_str()`
-
-Intermediate String per filter. `write!(&mut sql, ...)` avoids this. Negligible cost.
-
-**Location:** `src/db.rs:191-306`
 
 ### L4: `get_playlists` uses correlated subquery per row
 
@@ -245,12 +204,18 @@ dominates timing.
   `spawn_blocking` writer, read-only parallel connections, concurrency semaphore.
 - **`enrich_tracks`** — semaphore-bounded concurrency with `tokio::spawn` per track,
   auth-failure watch channel, channel-backed cache writer.
-- **Single `reqwest::Client`** with connection pooling shared across all MCP tool calls.
+- **Single `reqwest::Client`** with connection pooling and timeouts on both MCP server
+  and CLI hydrate paths.
 - **Audio analysis caching** with schema versioning — stale cache auto-evicts on
   analyzer version bump.
 - **XML generation** with `String::with_capacity(tracks.len() * 512)`.
 - **`spawn_blocking`** correctly used for symphonia decode, lofty tag reads (in
   file_tag_handlers read path), filesystem scans, SHA-256 hashing, and audit scans.
+- **`prepare_cached`** used for all static SQL queries; dynamic queries correctly use
+  `prepare`.
+- **Decode buffer pre-allocated** using symphonia `n_frames` hint.
+- **Audio analysis serialized once** — `to_value` then `to_string(&val)` for cache.
+- **`resolve_audit_issues`** wrapped in transaction for atomic batch updates.
 
 ## Recommended Priority
 
@@ -258,4 +223,3 @@ dominates timing.
 2. **Parallelize backfill auto-enrich** (H5-H7) — adopt the `enrich_tracks` pattern.
 3. **Beam search data structures** (M1-M2) — bitset + `Cow<'static, str>`.
 4. **Wrap blocking calls in `spawn_blocking`** (C1-C2).
-5. **Switch to `prepare_cached`** (M8).

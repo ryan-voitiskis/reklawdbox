@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OpenFlags, ffi, params};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::db::escape_like;
@@ -346,6 +346,71 @@ pub fn batch_enrichment_with_label(
     )
 }
 
+/// Batch-load full enrichment cache entries for a set of exact primary-key tuples.
+///
+/// Keys are `(provider, query_artist, query_title, query_album)`. Entries with
+/// `match_quality = 'error'` are excluded, matching `get_enrichment` semantics.
+pub fn batch_get_enrichment(
+    conn: &Connection,
+    keys: &[(&str, &str, &str, &str)],
+) -> Result<HashMap<(String, String, String, String), EnrichmentCacheEntry>, rusqlite::Error> {
+    if keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // 4 bind vars per key; 200 × 4 = 800, well under SQLite's 999 limit.
+    const CHUNK_KEYS: usize = 200;
+    let mut result = HashMap::with_capacity(keys.len());
+    for chunk in keys.chunks(CHUNK_KEYS) {
+        use std::fmt::Write as _;
+        let mut sql = String::from(
+            "SELECT provider, query_artist, query_title, query_album, \
+                    match_quality, response_json, created_at \
+             FROM enrichment_cache \
+             WHERE (provider, query_artist, query_title, query_album) IN (VALUES ",
+        );
+        for (i, _) in chunk.iter().enumerate() {
+            if i > 0 {
+                sql.push(',');
+            }
+            let b = i * 4 + 1;
+            write!(sql, "(?{},?{},?{},?{})", b, b + 1, b + 2, b + 3).unwrap();
+        }
+        sql.push_str(") AND COALESCE(match_quality, '') != 'error'");
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> =
+            Vec::with_capacity(chunk.len() * 4);
+        for key in chunk {
+            bind_values.push(&key.0);
+            bind_values.push(&key.1);
+            bind_values.push(&key.2);
+            bind_values.push(&key.3);
+        }
+        let rows = stmt.query_map(bind_values.as_slice(), |row| {
+            Ok(EnrichmentCacheEntry {
+                provider: row.get(0)?,
+                query_artist: row.get(1)?,
+                query_title: row.get(2)?,
+                query_album: row.get(3)?,
+                match_quality: row.get(4)?,
+                response_json: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        for row in rows {
+            let entry = row?;
+            let key = (
+                entry.provider.clone(),
+                entry.query_artist.clone(),
+                entry.query_title.clone(),
+                entry.query_album.clone(),
+            );
+            result.insert(key, entry);
+        }
+    }
+    Ok(result)
+}
+
 pub fn set_enrichment(
     conn: &Connection,
     provider: &str,
@@ -438,6 +503,66 @@ pub fn batch_audio_analysis_existence(
         })?;
         for row in rows {
             result.insert(row?);
+        }
+    }
+    Ok(result)
+}
+
+/// Batch-load full audio analysis cache entries for a set of file paths,
+/// filtered to a single analyzer and schema version.
+pub fn batch_get_audio_analysis(
+    conn: &Connection,
+    file_paths: &[&str],
+    analyzer: &str,
+    analysis_version: &str,
+) -> Result<HashMap<String, CachedAudioAnalysis>, rusqlite::Error> {
+    if file_paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // 1 bind var per path + 2 for analyzer and version; 896 + 2 = 898, under 999.
+    const MAX_PATHS: usize = 896;
+    let mut result = HashMap::with_capacity(file_paths.len());
+    for chunk in file_paths.chunks(MAX_PATHS) {
+        use std::fmt::Write as _;
+        let mut placeholders = String::new();
+        for i in 0..chunk.len() {
+            if i > 0 {
+                placeholders.push(',');
+            }
+            write!(placeholders, "?{}", i + 1).unwrap();
+        }
+        let analyzer_pos = chunk.len() + 1;
+        let version_pos = chunk.len() + 2;
+        let sql = format!(
+            "SELECT file_path, analyzer, file_size, file_mtime, \
+                    analysis_version, features_json, created_at \
+             FROM audio_analysis_cache \
+             WHERE file_path IN ({placeholders}) \
+               AND analyzer = ?{analyzer_pos} \
+               AND analysis_version = ?{version_pos}"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> =
+            Vec::with_capacity(chunk.len() + 2);
+        for path in chunk {
+            bind_values.push(path);
+        }
+        bind_values.push(&analyzer);
+        bind_values.push(&analysis_version);
+        let rows = stmt.query_map(bind_values.as_slice(), |row| {
+            Ok(CachedAudioAnalysis {
+                file_path: row.get(0)?,
+                analyzer: row.get(1)?,
+                file_size: row.get(2)?,
+                file_mtime: row.get(3)?,
+                analysis_version: row.get(4)?,
+                features_json: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        for row in rows {
+            let entry = row?;
+            result.insert(entry.file_path.clone(), entry);
         }
     }
     Ok(result)

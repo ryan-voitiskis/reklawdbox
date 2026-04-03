@@ -33,31 +33,13 @@ fn normalize_label(label: &str) -> Option<String> {
 
 use super::enrichment_cache::cache_lookup_result;
 
-fn label_from_cache(
-    store_conn: &rusqlite::Connection,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    norm_album: Option<&str>,
-) -> (bool, Option<String>) {
-    let cache = store::get_enrichment(store_conn, provider, norm_artist, norm_title, norm_album)
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                provider,
-                artist = norm_artist,
-                title = norm_title,
-                "cache lookup failed: {e}"
-            );
-            None
-        });
-    let has_cache = cache.is_some();
-    let label = classify_handler::parse_response_json(cache.as_ref())
+fn extract_label(entry: Option<&store::EnrichmentCacheEntry>) -> Option<String> {
+    classify_handler::parse_response_json(entry)
         .as_ref()
         .and_then(|v| v.get("label"))
         .and_then(|v| v.as_str())
         .filter(|l| !l.is_empty())
-        .and_then(normalize_label);
-    (has_cache, label)
+        .and_then(normalize_label)
 }
 
 #[derive(Default)]
@@ -81,46 +63,73 @@ fn scan_labels(
 ) -> BackfillLabelsScanResult {
     let mut result = BackfillLabelsScanResult::default();
 
-    for track in tracks {
-        let norm_artist = normalize::normalize_for_matching(&track.artist);
-        let norm_title = normalize::normalize_for_matching(&track.title);
-        let norm_album = normalize::normalize_for_matching(&track.album);
-        let norm_album = (!norm_album.is_empty()).then_some(norm_album);
+    // Pre-compute normalized keys for all tracks.
+    let norm_keys: Vec<(String, String, Option<String>)> = tracks
+        .iter()
+        .map(|t| {
+            let a = normalize::normalize_for_matching(&t.artist);
+            let ti = normalize::normalize_for_matching(&t.title);
+            let al = normalize::normalize_for_matching(&t.album);
+            (a, ti, (!al.is_empty()).then_some(al))
+        })
+        .collect();
 
-        let (has_discogs, discogs_label) = label_from_cache(
-            store_conn,
-            "discogs",
-            &norm_artist,
-            &norm_title,
-            norm_album.as_deref(),
-        );
-        let (has_mb, mb_label) =
-            label_from_cache(store_conn, "musicbrainz", &norm_artist, &norm_title, None);
-        let (has_bc, bc_label) =
-            label_from_cache(store_conn, "bandcamp", &norm_artist, &norm_title, None);
-        let (has_bp, bp_label) =
-            label_from_cache(store_conn, "beatport", &norm_artist, &norm_title, None);
+    // Build batch keys for all 4 providers × all tracks.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
+        Vec::with_capacity(tracks.len() * 4);
+    for (a, t, al) in &norm_keys {
+        let album = al.as_deref().unwrap_or("");
+        enrich_keys.push(("discogs", a, t, album));
+        enrich_keys.push(("musicbrainz", a, t, ""));
+        enrich_keys.push(("bandcamp", a, t, ""));
+        enrich_keys.push(("beatport", a, t, ""));
+    }
+
+    // Single batch load — replaces 4N individual queries.
+    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys)
+        .unwrap_or_else(|e| {
+            tracing::warn!("batch enrichment load failed: {e}");
+            std::collections::HashMap::new()
+        });
+
+    for (track, (norm_artist, norm_title, norm_album)) in tracks.iter().zip(&norm_keys) {
+        let album = norm_album.as_deref().unwrap_or("");
+
+        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+        let mb_key = ("musicbrainz".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+        let bc_key = ("bandcamp".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+        let bp_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+
+        let discogs_entry = cache_map.get(&discogs_key);
+        let mb_entry = cache_map.get(&mb_key);
+        let bc_entry = cache_map.get(&bc_key);
+        let bp_entry = cache_map.get(&bp_key);
+
+        let discogs_label = extract_label(discogs_entry);
+        let mb_label = extract_label(mb_entry);
+        let bc_label = extract_label(bc_entry);
+        let bp_label = extract_label(bp_entry);
 
         let enrichment_label = discogs_label.or(mb_label).or(bc_label).or(bp_label);
 
         let Some(enrich_label) = enrichment_label else {
             result.no_enrichment += 1;
-            if !has_discogs {
+            if discogs_entry.is_none() {
                 result.no_discogs += 1;
             }
-            if !has_mb {
+            if mb_entry.is_none() {
                 result.no_musicbrainz += 1;
             }
-            if !has_bc {
+            if bc_entry.is_none() {
                 result.no_bandcamp += 1;
                 result.uncached_bandcamp.push((
-                    norm_artist,
-                    norm_title,
+                    norm_artist.clone(),
+                    norm_title.clone(),
                     track.artist.clone(),
                     track.title.clone(),
                 ));
             }
-            if !has_bp {
+            if bp_entry.is_none() {
                 result.no_beatport += 1;
             }
             continue;

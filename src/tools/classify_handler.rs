@@ -4,7 +4,6 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use tracing::warn;
 
-use super::analysis::get_fresh_analysis_entry;
 use super::resolve::*;
 use super::scoring::map_genre_through_taxonomy;
 use super::{ReklawdboxServer, mcp_internal_error};
@@ -405,90 +404,76 @@ fn classify_batch(
     tracks: &[crate::types::Track],
     overrides: &[(String, String)],
 ) -> Result<(Vec<ClassificationResult>, u32), McpError> {
-    let mut results = Vec::with_capacity(tracks.len());
-    let mut cache_errors = 0u32;
+    // Pre-compute normalized keys and resolved audio paths.
+    let norm_keys: Vec<(String, String, Option<String>, String)> = tracks
+        .iter()
+        .map(|t| {
+            let a = normalize::normalize_for_matching(&t.artist);
+            let ti = normalize::normalize_for_matching(&t.title);
+            let al = normalize::normalize_for_matching(&t.album);
+            let audio_key = super::analysis::resolved_audio_cache_key(&t.file_path);
+            (a, ti, (!al.is_empty()).then_some(al), audio_key)
+        })
+        .collect();
 
-    for track in tracks {
-        let evidence = build_track_evidence(server, track, overrides, &mut cache_errors)?;
+    // Build batch keys.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
+        Vec::with_capacity(tracks.len() * 2);
+    let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
+    for (a, t, al, audio_key) in &norm_keys {
+        let album = al.as_deref().unwrap_or("");
+        enrich_keys.push(("discogs", a, t, album));
+        enrich_keys.push(("beatport", a, t, ""));
+        audio_paths.push(audio_key);
+    }
+
+    // Batch load — 3 queries total instead of 4N.
+    let (enrich_map, stratum_map, essentia_map) = {
+        let store_conn = server.cache_store_conn()?;
+        let enrich_map = store::batch_get_enrichment(&store_conn, &enrich_keys)
+            .map_err(super::cache_error)?;
+        let stratum_map = store::batch_get_audio_analysis(
+            &store_conn, &audio_paths, audio::ANALYZER_STRATUM, audio::STRATUM_SCHEMA_VERSION,
+        ).map_err(super::cache_error)?;
+        let essentia_map = store::batch_get_audio_analysis(
+            &store_conn, &audio_paths, audio::ANALYZER_ESSENTIA, audio::ESSENTIA_SCHEMA_VERSION,
+        ).map_err(super::cache_error)?;
+        (enrich_map, stratum_map, essentia_map)
+    };
+
+    let mut results = Vec::with_capacity(tracks.len());
+
+    for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
+        let album = norm_album.as_deref().unwrap_or("");
+        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+        let beatport_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+
+        let discogs_cache = enrich_map.get(&discogs_key);
+        let beatport_cache = enrich_map.get(&beatport_key);
+        let stratum_cache = stratum_map.get(audio_key);
+        let essentia_cache = essentia_map.get(audio_key);
+
+        let evidence = build_track_evidence(
+            track, discogs_cache, beatport_cache, stratum_cache, essentia_cache, overrides,
+        );
         results.push(classify_track(&evidence));
     }
 
-    Ok((results, cache_errors))
+    Ok((results, 0))
 }
 
 fn build_track_evidence(
-    server: &ReklawdboxServer,
     track: &crate::types::Track,
+    discogs_cache: Option<&store::EnrichmentCacheEntry>,
+    beatport_cache: Option<&store::EnrichmentCacheEntry>,
+    stratum_cache: Option<&store::CachedAudioAnalysis>,
+    essentia_cache: Option<&store::CachedAudioAnalysis>,
     overrides: &[(String, String)],
-    cache_errors: &mut u32,
-) -> Result<TrackEvidence, McpError> {
-    let norm_artist = normalize::normalize_for_matching(&track.artist);
-    let norm_title = normalize::normalize_for_matching(&track.title);
-    let norm_album = normalize::normalize_for_matching(&track.album);
-    let norm_album = (!norm_album.is_empty()).then_some(norm_album);
-
-    let (discogs_cache, beatport_cache, stratum_cache, essentia_cache) = {
-        let store_conn = server.cache_store_conn()?;
-        let discogs = store::get_enrichment(
-            &store_conn,
-            "discogs",
-            &norm_artist,
-            &norm_title,
-            norm_album.as_deref(),
-        )
-        .unwrap_or_else(|e| {
-            warn!(
-                track_id = track.id.as_str(),
-                "Cache read error (discogs): {e}"
-            );
-            *cache_errors += 1;
-            None
-        });
-        let beatport =
-            store::get_enrichment(&store_conn, "beatport", &norm_artist, &norm_title, None)
-                .unwrap_or_else(|e| {
-                    warn!(
-                        track_id = track.id.as_str(),
-                        "Cache read error (beatport): {e}"
-                    );
-                    *cache_errors += 1;
-                    None
-                });
-        let stratum = get_fresh_analysis_entry(
-            &store_conn,
-            &track.file_path,
-            audio::ANALYZER_STRATUM,
-            audio::STRATUM_SCHEMA_VERSION,
-        )
-        .unwrap_or_else(|e| {
-            warn!(
-                track_id = track.id.as_str(),
-                "Analysis cache error (stratum): {e}"
-            );
-            *cache_errors += 1;
-            None
-        });
-        let essentia = get_fresh_analysis_entry(
-            &store_conn,
-            &track.file_path,
-            audio::ANALYZER_ESSENTIA,
-            audio::ESSENTIA_SCHEMA_VERSION,
-        )
-        .unwrap_or_else(|e| {
-            warn!(
-                track_id = track.id.as_str(),
-                "Analysis cache error (essentia): {e}"
-            );
-            *cache_errors += 1;
-            None
-        });
-        (discogs, beatport, stratum, essentia)
-    };
-
-    let discogs_val = parse_response_json(discogs_cache.as_ref());
+) -> TrackEvidence {
+    let discogs_val = parse_response_json(discogs_cache);
     let discogs_mapped = extract_discogs_genres(discogs_val.as_ref(), overrides);
 
-    let beatport_val = parse_response_json(beatport_cache.as_ref());
+    let beatport_val = parse_response_json(beatport_cache);
     let (beatport_genre, beatport_raw) = extract_beatport_genre(beatport_val.as_ref(), overrides);
 
     let effective_label = if !track.label.is_empty() {
@@ -503,11 +488,10 @@ fn build_track_evidence(
     };
     let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
-    // has_audio reflects whether features actually parsed, not just cache presence
-    let audio = extract_audio_features(track, stratum_cache.as_ref(), essentia_cache.as_ref());
+    let audio = extract_audio_features(track, stratum_cache, essentia_cache);
     let has_audio = audio.is_some();
 
-    Ok(TrackEvidence {
+    TrackEvidence {
         track_id: track.id.clone(),
         artist: track.artist.clone(),
         title: track.title.clone(),
@@ -522,7 +506,7 @@ fn build_track_evidence(
         has_discogs: discogs_cache.is_some(),
         has_beatport: beatport_cache.is_some(),
         has_audio,
-    })
+    }
 }
 
 pub(super) fn parse_response_json(

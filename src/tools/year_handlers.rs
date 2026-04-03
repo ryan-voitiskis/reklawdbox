@@ -96,6 +96,42 @@ struct BackfillYearsScanResult {
     uncached_musicbrainz: Vec<(String, String, String, String)>,
 }
 
+/// Extract year from a Discogs enrichment cache entry.
+fn extract_discogs_year(entry: Option<&store::EnrichmentCacheEntry>) -> Option<i32> {
+    let val = classify_handler::parse_response_json(entry)?;
+    val.get("year")
+        .and_then(|v| match v {
+            serde_json::Value::Number(n) => n.as_i64().map(|n| n.to_string()),
+            serde_json::Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .and_then(|s| parse_year_str(&s))
+}
+
+/// Extract year from a Beatport enrichment cache entry.
+fn extract_beatport_year(entry: Option<&store::EnrichmentCacheEntry>) -> Option<i32> {
+    let val = classify_handler::parse_response_json(entry)?;
+    val.get("release_date")
+        .and_then(|v| v.as_str())
+        .and_then(parse_year_str)
+}
+
+/// Extract year from a MusicBrainz enrichment cache entry.
+fn extract_musicbrainz_year(entry: Option<&store::EnrichmentCacheEntry>) -> Option<i32> {
+    let val = classify_handler::parse_response_json(entry)?;
+    val.get("first_release_date")
+        .and_then(|v| v.as_str())
+        .and_then(parse_year_str)
+}
+
+/// Extract year from a Bandcamp enrichment cache entry.
+fn extract_bandcamp_year(entry: Option<&store::EnrichmentCacheEntry>) -> Option<i32> {
+    let val = classify_handler::parse_response_json(entry)?;
+    val.get("release_date")
+        .and_then(|v| v.as_str())
+        .and_then(parse_year_str)
+}
+
 fn scan_years(
     store_conn: &rusqlite::Connection,
     tracks: &[crate::types::Track],
@@ -113,7 +149,38 @@ fn scan_years(
         album: None,
     };
 
-    for track in tracks {
+    // Pre-compute normalized keys for all tracks.
+    let norm_keys: Vec<(String, String, Option<String>)> = tracks
+        .iter()
+        .map(|t| {
+            let a = normalize::normalize_for_matching(&t.artist);
+            let ti = normalize::normalize_for_matching(&t.title);
+            let al = normalize::normalize_for_matching(&t.album);
+            (a, ti, (!al.is_empty()).then_some(al))
+        })
+        .collect();
+
+    // Build batch keys for all 4 providers × all tracks.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
+        Vec::with_capacity(tracks.len() * 4);
+    for (a, t, al) in &norm_keys {
+        let album = al.as_deref().unwrap_or("");
+        enrich_keys.push(("discogs", a, t, album));
+        enrich_keys.push(("beatport", a, t, ""));
+        enrich_keys.push(("musicbrainz", a, t, ""));
+        enrich_keys.push(("bandcamp", a, t, ""));
+    }
+
+    // Single batch load — replaces up to 8N individual queries.
+    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys)
+        .unwrap_or_else(|e| {
+            tracing::warn!("batch enrichment load failed: {e}");
+            std::collections::HashMap::new()
+        });
+
+    for (track, (norm_artist, norm_title, norm_album)) in tracks.iter().zip(&norm_keys) {
+        let album = norm_album.as_deref().unwrap_or("");
+
         if track.year == 0 {
             // Priority cascade: file tags → folder path → Discogs → Beatport → MusicBrainz → Bandcamp.
             if let Some(year) = year_from_file_tags(&track.file_path) {
@@ -126,53 +193,46 @@ fn scan_years(
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
-            if let Some(year) = discogs_year_for_track(store_conn, track) {
+
+            let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+            let bp_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+            let mb_key = ("musicbrainz".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+            let bc_key = ("bandcamp".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+
+            let discogs_entry = cache_map.get(&discogs_key);
+            let bp_entry = cache_map.get(&bp_key);
+            let mb_entry = cache_map.get(&mb_key);
+            let bc_entry = cache_map.get(&bc_key);
+
+            if let Some(year) = extract_discogs_year(discogs_entry) {
                 r.filled_discogs += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
-            if let Some(year) = beatport_year_for_track(store_conn, track) {
+            if let Some(year) = extract_beatport_year(bp_entry) {
                 r.filled_beatport += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
-            if let Some(year) = musicbrainz_year_for_track(store_conn, track) {
+            if let Some(year) = extract_musicbrainz_year(mb_entry) {
                 r.filled_musicbrainz += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
-            if let Some(year) = bandcamp_year_for_track(store_conn, track) {
+            if let Some(year) = extract_bandcamp_year(bc_entry) {
                 r.filled_bandcamp += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
 
-            // Track provider cache gaps for remaining year-zero tracks.
-            let norm_artist = normalize::normalize_for_matching(&track.artist);
-            let norm_title = normalize::normalize_for_matching(&track.title);
-            let has_discogs =
-                store::get_enrichment(store_conn, "discogs", &norm_artist, &norm_title, None)
-                    .unwrap_or(None)
-                    .is_some();
-            let has_beatport =
-                store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
-                    .unwrap_or(None)
-                    .is_some();
-            let has_musicbrainz =
-                store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-                    .unwrap_or(None)
-                    .is_some();
-            let has_bandcamp =
-                store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
-                    .unwrap_or(None)
-                    .is_some();
-            if !has_discogs {
+            // Cache-gap tracking — presence in the map means cached (no second query needed).
+            if discogs_entry.is_none() {
                 r.remaining_no_discogs += 1;
             }
-            if !has_beatport {
+            if bp_entry.is_none() {
                 r.remaining_no_beatport += 1;
             }
-            if !has_musicbrainz {
+            if mb_entry.is_none() {
                 r.remaining_no_musicbrainz += 1;
                 r.uncached_musicbrainz.push((
                     norm_artist.clone(),
@@ -181,7 +241,7 @@ fn scan_years(
                     track.title.clone(),
                 ));
             }
-            if !has_bandcamp {
+            if bc_entry.is_none() {
                 r.remaining_no_bandcamp += 1;
                 r.uncached_bandcamp.push((
                     norm_artist.clone(),
@@ -197,7 +257,8 @@ fn scan_years(
                 "title": track.title,
             }));
         } else {
-            let discogs_year = discogs_year_for_track(store_conn, track);
+            let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+            let discogs_year = extract_discogs_year(cache_map.get(&discogs_key));
             if let Some(enrich_year) = discogs_year {
                 if track.year == enrich_year {
                     r.already_set += 1;
@@ -355,117 +416,6 @@ pub(super) async fn handle_backfill_years(
 
     let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
-}
-
-/// Look up the Discogs enrichment year for a track. Returns `None` if no
-/// enrichment is cached or the cached entry has no valid year.
-fn discogs_year_for_track(
-    store_conn: &rusqlite::Connection,
-    track: &crate::types::Track,
-) -> Option<i32> {
-    let norm_artist = normalize::normalize_for_matching(&track.artist);
-    let norm_title = normalize::normalize_for_matching(&track.title);
-    let norm_album = normalize::normalize_for_matching(&track.album);
-    let norm_album = (!norm_album.is_empty()).then_some(norm_album);
-
-    let discogs_cache = store::get_enrichment(
-        store_conn,
-        "discogs",
-        &norm_artist,
-        &norm_title,
-        norm_album.as_deref(),
-    )
-    .unwrap_or_else(|e| {
-        tracing::warn!(provider = "discogs", artist = %norm_artist, title = %norm_title,
-            "get_enrichment failed: {e}");
-        None
-    })?;
-
-    let discogs_val = classify_handler::parse_response_json(Some(&discogs_cache));
-    discogs_val
-        .as_ref()
-        .and_then(|v| v.get("year"))
-        .and_then(|v| match v {
-            serde_json::Value::Number(n) => n.as_i64().map(|n| n.to_string()),
-            serde_json::Value::String(s) => Some(s.clone()),
-            _ => None,
-        })
-        .and_then(|s| parse_year_str(&s))
-}
-
-/// Look up the Beatport enrichment year for a track. Returns `None` if no
-/// enrichment is cached or the cached entry has no release date.
-/// Beatport stores `release_date` as `"YYYY-MM-DDT00:00:00"`.
-fn beatport_year_for_track(
-    store_conn: &rusqlite::Connection,
-    track: &crate::types::Track,
-) -> Option<i32> {
-    let norm_artist = normalize::normalize_for_matching(&track.artist);
-    let norm_title = normalize::normalize_for_matching(&track.title);
-
-    let beatport_cache =
-        store::get_enrichment(store_conn, "beatport", &norm_artist, &norm_title, None)
-            .unwrap_or_else(|e| {
-                tracing::warn!(provider = "beatport", artist = %norm_artist, title = %norm_title,
-                "get_enrichment failed: {e}");
-                None
-            })?;
-
-    let beatport_val = classify_handler::parse_response_json(Some(&beatport_cache));
-    beatport_val
-        .as_ref()
-        .and_then(|v| v.get("release_date"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_year_str)
-}
-
-/// Look up the Bandcamp enrichment year for a track. Returns `None` if no
-/// enrichment is cached or the cached entry has no release date.
-fn bandcamp_year_for_track(
-    store_conn: &rusqlite::Connection,
-    track: &crate::types::Track,
-) -> Option<i32> {
-    let norm_artist = normalize::normalize_for_matching(&track.artist);
-    let norm_title = normalize::normalize_for_matching(&track.title);
-
-    let bc_cache = store::get_enrichment(store_conn, "bandcamp", &norm_artist, &norm_title, None)
-        .unwrap_or_else(|e| {
-        tracing::warn!(provider = "bandcamp", artist = %norm_artist, title = %norm_title,
-                "get_enrichment failed: {e}");
-        None
-    })?;
-
-    let bc_val = classify_handler::parse_response_json(Some(&bc_cache));
-    bc_val
-        .as_ref()
-        .and_then(|v| v.get("release_date"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_year_str)
-}
-
-/// Look up the MusicBrainz enrichment year for a track. Returns `None` if no
-/// enrichment is cached or the cached entry has no first-release-date.
-fn musicbrainz_year_for_track(
-    store_conn: &rusqlite::Connection,
-    track: &crate::types::Track,
-) -> Option<i32> {
-    let norm_artist = normalize::normalize_for_matching(&track.artist);
-    let norm_title = normalize::normalize_for_matching(&track.title);
-
-    let mb_cache =
-        store::get_enrichment(store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-            .unwrap_or_else(|e| {
-                tracing::warn!(provider = "musicbrainz", artist = %norm_artist, title = %norm_title,
-                "get_enrichment failed: {e}");
-                None
-            })?;
-
-    let mb_val = classify_handler::parse_response_json(Some(&mb_cache));
-    mb_val
-        .as_ref()
-        .and_then(|v| v.get("first_release_date"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_year_str)
 }
 
 #[cfg(test)]

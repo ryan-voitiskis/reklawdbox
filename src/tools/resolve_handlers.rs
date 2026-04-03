@@ -96,62 +96,74 @@ pub(super) fn handle_resolve_tracks_data(
 
     let params_format = params.format.unwrap_or_default();
     let essentia_installed = server.essentia_python_path().is_some();
-    let mut results = Vec::with_capacity(tracks.len());
-    for track in &tracks {
-        let norm_artist = crate::normalize::normalize_for_matching(&track.artist);
-        let norm_title = crate::normalize::normalize_for_matching(&track.title);
-        let norm_album = crate::normalize::normalize_for_matching(&track.album);
-        let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
-        let (discogs_cache, beatport_cache, stratum_cache, essentia_cache) = {
-            let store = server.cache_store_conn()?;
-            let discogs_cache = store::get_enrichment(
-                &store,
-                "discogs",
-                &norm_artist,
-                &norm_title,
-                norm_album.as_deref(),
-            )
+    // Pre-compute normalized keys and resolved audio paths.
+    let norm_keys: Vec<(String, String, Option<String>, String)> = tracks
+        .iter()
+        .map(|t| {
+            let a = crate::normalize::normalize_for_matching(&t.artist);
+            let ti = crate::normalize::normalize_for_matching(&t.title);
+            let al = crate::normalize::normalize_for_matching(&t.album);
+            let audio_key = super::analysis::resolved_audio_cache_key(&t.file_path);
+            (a, ti, (!al.is_empty()).then_some(al), audio_key)
+        })
+        .collect();
+
+    // Build batch keys.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
+        Vec::with_capacity(tracks.len() * 2);
+    let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
+    for (a, t, al, audio_key) in &norm_keys {
+        let album = al.as_deref().unwrap_or("");
+        enrich_keys.push(("discogs", a, t, album));
+        enrich_keys.push(("beatport", a, t, ""));
+        audio_paths.push(audio_key);
+    }
+
+    // Batch load — 3 queries total instead of 4N.
+    let (enrich_map, stratum_map, essentia_map) = {
+        let store = server.cache_store_conn()?;
+        let enrich_map = store::batch_get_enrichment(&store, &enrich_keys)
             .map_err(cache_error)?;
-            let beatport_cache =
-                store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
-                    .map_err(cache_error)?;
-            let stratum_cache = get_fresh_analysis_entry(
-                &store,
-                &track.file_path,
-                audio::ANALYZER_STRATUM,
-                audio::STRATUM_SCHEMA_VERSION,
-            )
-            .map_err(mcp_internal_error)?;
-            let essentia_cache = get_fresh_analysis_entry(
-                &store,
-                &track.file_path,
-                audio::ANALYZER_ESSENTIA,
-                audio::ESSENTIA_SCHEMA_VERSION,
-            )
-            .map_err(mcp_internal_error)?;
-            (discogs_cache, beatport_cache, stratum_cache, essentia_cache)
-        };
+        let stratum_map = store::batch_get_audio_analysis(
+            &store, &audio_paths, audio::ANALYZER_STRATUM, audio::STRATUM_SCHEMA_VERSION,
+        ).map_err(cache_error)?;
+        let essentia_map = store::batch_get_audio_analysis(
+            &store, &audio_paths, audio::ANALYZER_ESSENTIA, audio::ESSENTIA_SCHEMA_VERSION,
+        ).map_err(cache_error)?;
+        (enrich_map, stratum_map, essentia_map)
+    };
+
+    let mut results = Vec::with_capacity(tracks.len());
+    for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
+        let album = norm_album.as_deref().unwrap_or("");
+        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+        let beatport_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+
+        let discogs_cache = enrich_map.get(&discogs_key);
+        let beatport_cache = enrich_map.get(&beatport_key);
+        let stratum_cache = stratum_map.get(audio_key);
+        let essentia_cache = essentia_map.get(audio_key);
 
         let result = match params_format {
             ResolveFormat::Full => {
                 let staged = server.state.changes.get(&track.id);
                 resolve_single_track(
                     track,
-                    discogs_cache.as_ref(),
-                    beatport_cache.as_ref(),
-                    stratum_cache.as_ref(),
-                    essentia_cache.as_ref(),
+                    discogs_cache,
+                    beatport_cache,
+                    stratum_cache,
+                    essentia_cache,
                     essentia_installed,
                     staged.as_ref(),
                 )
             }
             ResolveFormat::Classification => resolve_single_track_compact(
                 track,
-                discogs_cache.as_ref(),
-                beatport_cache.as_ref(),
-                stratum_cache.as_ref(),
-                essentia_cache.as_ref(),
+                discogs_cache,
+                beatport_cache,
+                stratum_cache,
+                essentia_cache,
             ),
         };
         results.push(result);
