@@ -403,12 +403,14 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), AudioError> {
         .codec_params
         .sample_rate
         .ok_or_else(|| AudioError::Decode("Audio track has no sample rate".to_string()))?;
+    let n_frames_hint = track.codec_params.n_frames;
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::Decode(format!("Failed to create decoder: {e}")))?;
 
-    let mut all_samples: Vec<f32> = Vec::new();
+    let mut all_samples: Vec<f32> =
+        Vec::with_capacity(n_frames_hint.unwrap_or(0) as usize);
     let mut decode_warning_count: u64 = 0;
 
     loop {

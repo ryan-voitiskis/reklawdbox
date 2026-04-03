@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use rusqlite::{Connection, OpenFlags, params};
 
@@ -190,30 +191,30 @@ fn apply_search_filters(
 ) {
     if let Some(ref query_text) = params.query {
         let bind_index = bind_values.len() + 1;
-        sql.push_str(&format!(
+        write!(sql,
             " AND (c.Title LIKE ?{bind_index} ESCAPE '\\' OR a.Name LIKE ?{bind_index} ESCAPE '\\')"
-        ));
+        ).unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(query_text))));
     }
 
     if let Some(ref artist) = params.artist {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND a.Name LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND a.Name LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(artist))));
     }
 
     if let Some(ref genre) = params.genre {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND g.Name LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND g.Name LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(genre))));
     }
 
     if let Some(rating_min) = params.rating_min {
         let idx_encoded = bind_values.len() + 1;
         let idx_star_scale = idx_encoded + 1;
-        sql.push_str(&format!(
+        write!(sql,
             " AND (c.Rating >= ?{idx_encoded} OR (c.Rating BETWEEN 0 AND 5 AND c.Rating >= ?{idx_star_scale}))"
-        ));
+        ).unwrap();
         let min_rating = crate::types::stars_to_rating(rating_min) as i32;
         bind_values.push(Box::new(min_rating));
         bind_values.push(Box::new(rating_min as i32));
@@ -221,19 +222,19 @@ fn apply_search_filters(
 
     if let Some(bpm_min) = params.bpm_min {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.BPM >= ?{idx}"));
+        write!(sql, " AND c.BPM >= ?{idx}").unwrap();
         bind_values.push(Box::new((bpm_min * 100.0) as i32));
     }
 
     if let Some(bpm_max) = params.bpm_max {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.BPM <= ?{idx}"));
+        write!(sql, " AND c.BPM <= ?{idx}").unwrap();
         bind_values.push(Box::new((bpm_max * 100.0) as i32));
     }
 
     if let Some(ref key) = params.key {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND k.ScaleName = ?{idx}"));
+        write!(sql, " AND k.ScaleName = ?{idx}").unwrap();
         bind_values.push(Box::new(key.clone()));
     }
 
@@ -263,45 +264,45 @@ fn apply_search_filters(
 
     if let Some(ref label) = params.label {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND l.Name LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND l.Name LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(label))));
     }
 
     if let Some(ref path) = params.path {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(path))));
     }
 
     if let Some(ref prefix) = params.path_prefix {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
     }
 
     if let Some(ref added_after) = params.added_after {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.created_at >= ?{idx}"));
+        write!(sql, " AND c.created_at >= ?{idx}").unwrap();
         bind_values.push(Box::new(added_after.clone()));
     }
 
     if let Some(ref added_before) = params.added_before {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.created_at <= ?{idx}"));
+        write!(sql, " AND c.created_at <= ?{idx}").unwrap();
         bind_values.push(Box::new(added_before.clone()));
     }
 
     if params.exclude_samples {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.FolderPath NOT LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND c.FolderPath NOT LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(sampler_path_like_pattern()));
     }
 
     if let Some(ref playlist_id) = params.playlist {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(
+        write!(sql,
             " AND c.ID IN (SELECT sp.ContentID FROM djmdSongPlaylist sp WHERE sp.PlaylistID = ?{idx})"
-        ));
+        ).unwrap();
         bind_values.push(Box::new(playlist_id.clone()));
     }
 }
@@ -321,14 +322,14 @@ fn search_tracks_with_limit_policy(
         if let Some(max_limit) = max_limit {
             limit = limit.min(max_limit);
         }
-        sql.push_str(&format!(" LIMIT {limit}"));
+        write!(sql, " LIMIT {limit}").unwrap();
     }
     if let Some(offset) = params.offset {
         // SQLite requires LIMIT before OFFSET — use LIMIT -1 (unlimited) if needed
         if !sql.contains("LIMIT") {
             sql.push_str(" LIMIT -1");
         }
-        sql.push_str(&format!(" OFFSET {offset}"));
+        write!(sql, " OFFSET {offset}").unwrap();
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -391,7 +392,7 @@ fn get_playlist_tracks_with_limit_policy(
          ORDER BY sp.TrackNo"
     );
     if let Some(limit) = resolved_limit {
-        sql.push_str(&format!(" LIMIT {limit}"));
+        write!(sql, " LIMIT {limit}").unwrap();
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -427,7 +428,7 @@ pub fn get_playlists(conn: &Connection) -> Result<Vec<Playlist>, rusqlite::Error
         WHERE p.rb_local_deleted = 0 AND p.ID != '200000'
         ORDER BY p.Seq
     ";
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map([], |row| {
         let playlist_attribute: i32 = row.get("Attribute")?;
         Ok(Playlist {
@@ -729,11 +730,11 @@ pub fn get_sessions(
 
     if let Some(after_date) = after {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND h.DateCreated >= ?{idx}"));
+        write!(sql, " AND h.DateCreated >= ?{idx}").unwrap();
         bind_values.push(Box::new(after_date.to_string()));
     }
 
-    sql.push_str(&format!(" ORDER BY h.DateCreated DESC LIMIT {limit}"));
+    write!(sql, " ORDER BY h.DateCreated DESC LIMIT {limit}").unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
     let bind_params: Vec<&dyn rusqlite::types::ToSql> =
@@ -860,9 +861,9 @@ pub fn get_play_stats(
     );
     let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
     apply_search_filters(&mut sql, search, &mut bind_values);
-    sql.push_str(&format!(
+    write!(sql,
         " GROUP BY c.ID ORDER BY PlayCount DESC, LastPlayed DESC LIMIT {limit}"
-    ));
+    ).unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
     let bind_params: Vec<&dyn rusqlite::types::ToSql> =
@@ -906,7 +907,7 @@ pub fn get_play_stats(
         let mut unplayed_bind: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
         apply_search_filters(&mut unplayed_sql, search, &mut unplayed_bind);
         let unplayed_limit = limit.saturating_sub(results.len() as u32);
-        unplayed_sql.push_str(&format!(" ORDER BY c.Title LIMIT {unplayed_limit}"));
+        write!(unplayed_sql, " ORDER BY c.Title LIMIT {unplayed_limit}").unwrap();
 
         let mut stmt = conn.prepare(&unplayed_sql)?;
         let bind_params: Vec<&dyn rusqlite::types::ToSql> =
@@ -944,7 +945,7 @@ pub fn paths_imported_in_scope(
     conn: &Connection,
     scope: &str,
 ) -> Result<HashSet<String>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT FolderPath FROM djmdContent \
          WHERE rb_local_deleted = 0 AND FolderPath LIKE ?1 ESCAPE '\\'",
     )?;
@@ -1032,9 +1033,9 @@ pub(crate) fn tracks_not_in_any_playlist(
     apply_search_filters(&mut sql, search, &mut track_bind);
     sql.push_str(" ORDER BY c.Title");
     let limit = search.limit.unwrap_or(200).min(500);
-    sql.push_str(&format!(" LIMIT {limit}"));
+    write!(sql, " LIMIT {limit}").unwrap();
     if let Some(offset) = search.offset {
-        sql.push_str(&format!(" OFFSET {offset}"));
+        write!(sql, " OFFSET {offset}").unwrap();
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -1072,7 +1073,7 @@ pub(crate) fn find_metadata_duplicates(
 
     if let Some(prefix) = path_prefix {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
     }
 
@@ -1080,7 +1081,7 @@ pub(crate) fn find_metadata_duplicates(
         " GROUP BY LOWER(TRIM(COALESCE(a.Name, ''))), LOWER(TRIM(COALESCE(c.Title, ''))) \
          HAVING COUNT(*) > 1 AND LOWER(TRIM(COALESCE(c.Title, ''))) != ''",
     );
-    sql.push_str(&format!(" ORDER BY COUNT(*) DESC LIMIT {limit}"));
+    write!(sql, " ORDER BY COUNT(*) DESC LIMIT {limit}").unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
     let bind_params: Vec<&dyn rusqlite::types::ToSql> =
@@ -1125,7 +1126,7 @@ pub(crate) fn all_track_paths(
 
     if let Some(prefix) = path_prefix {
         let idx = bind_values.len() + 1;
-        sql.push_str(&format!(" AND c.FolderPath LIKE ?{idx} ESCAPE '\\'"));
+        write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
     }
 

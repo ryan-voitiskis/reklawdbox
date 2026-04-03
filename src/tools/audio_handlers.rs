@@ -55,8 +55,10 @@ pub(super) async fn handle_analyze_track_audio(
         let analysis = analyze_stratum(&file_path)
             .await
             .map_err(mcp_internal_error)?;
+        let val =
+            serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
         let features_json =
-            serde_json::to_string(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            serde_json::to_string(&val).map_err(|e| mcp_internal_error(format!("{e}")))?;
         let metadata = tokio::fs::metadata(&file_path)
             .await
             .map_err(|e| mcp_internal_error(format!("Cannot stat file '{}': {e}", file_path)))?;
@@ -71,10 +73,7 @@ pub(super) async fn handle_analyze_track_audio(
             &features_json,
         )
         .map_err(cache_error)?;
-        (
-            serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?,
-            false,
-        )
+        (val, false)
     };
 
     let essentia_python = server.essentia_python_path();
@@ -109,7 +108,9 @@ pub(super) async fn handle_analyze_track_audio(
                 .map_err(|e| e.to_string())
             {
                 Ok(features) => {
-                    let features_json = serde_json::to_string(&features)
+                    let val = serde_json::to_value(&features)
+                        .map_err(|e| mcp_internal_error(format!("{e}")))?;
+                    let features_json = serde_json::to_string(&val)
                         .map_err(|e| mcp_internal_error(format!("{e}")))?;
                     let metadata = tokio::fs::metadata(&file_path)
                         .await
@@ -125,10 +126,7 @@ pub(super) async fn handle_analyze_track_audio(
                         &features_json,
                     )
                     .map_err(cache_error)?;
-                    essentia = Some(
-                        serde_json::to_value(&features)
-                            .map_err(|e| mcp_internal_error(format!("{e}")))?,
-                    );
+                    essentia = Some(val);
                     essentia_cache_hit = Some(false);
                 }
                 Err(e) => essentia_error = Some(e),
@@ -240,9 +238,9 @@ async fn analyze_single_track(
             return Ok::<(serde_json::Value, bool), String>((val, true));
         }
         let analysis = analyze_stratum(&file_path).await?;
-        let features_json =
-            serde_json::to_string(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
         let val = serde_json::to_value(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
+        let features_json =
+            serde_json::to_string(&val).map_err(|e| format!("Serialize error: {e}"))?;
         let metadata = tokio::fs::metadata(&file_path)
             .await
             .map_err(|e| format!("Cannot stat file: {e}"))?;
@@ -279,12 +277,12 @@ async fn analyze_single_track(
             .map_err(|e| e.to_string())
         {
             Ok(features) => {
-                let features_json = match serde_json::to_string(&features) {
-                    Ok(j) => j,
-                    Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
-                };
                 let val = match serde_json::to_value(&features) {
                     Ok(v) => v,
+                    Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
+                };
+                let features_json = match serde_json::to_string(&val) {
+                    Ok(j) => j,
                     Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
                 };
                 let metadata = match tokio::fs::metadata(&file_path_clone).await {

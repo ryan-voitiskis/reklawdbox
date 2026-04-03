@@ -153,7 +153,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         .ok_or("Invalid store path encoding")?
         .to_string();
     let store_conn = store::open(&store_path_str)?;
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent("Reklawdbox/0.1")
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("failed to build HTTP client");
 
     let essentia_python = if want_analysis {
         tools::probe_essentia_python_path()

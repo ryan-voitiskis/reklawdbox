@@ -204,7 +204,7 @@ pub fn get_enrichment(
     album: Option<&str>,
 ) -> Result<Option<EnrichmentCacheEntry>, rusqlite::Error> {
     let album = album.unwrap_or("");
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
          FROM enrichment_cache
          WHERE provider = ?1
@@ -241,7 +241,7 @@ pub fn get_enrichment_any(
     album: Option<&str>,
 ) -> Result<Option<EnrichmentCacheEntry>, rusqlite::Error> {
     let album = album.unwrap_or("");
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
          FROM enrichment_cache
          WHERE provider = ?1
@@ -389,7 +389,7 @@ pub fn get_audio_analysis(
     file_path: &str,
     analyzer: &str,
 ) -> Result<Option<CachedAudioAnalysis>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT file_path, analyzer, file_size, file_mtime, analysis_version, features_json, created_at
          FROM audio_analysis_cache
          WHERE file_path = ?1 AND analyzer = ?2",
@@ -474,7 +474,7 @@ pub struct TimbralNormStats {
 pub fn get_timbral_norm_stats(
     conn: &Connection,
 ) -> Result<Option<TimbralNormStats>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT dimension_index, mean, stddev, sample_count
          FROM timbral_norm_stats
          ORDER BY dimension_index",
@@ -501,7 +501,7 @@ pub fn save_timbral_norm_stats(
 ) -> Result<(), rusqlite::Error> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM timbral_norm_stats", [])?;
-    let mut stmt = tx.prepare(
+    let mut stmt = tx.prepare_cached(
         "INSERT INTO timbral_norm_stats (dimension_index, mean, stddev, sample_count)
          VALUES (?1, ?2, ?3, ?4)",
     )?;
@@ -544,7 +544,7 @@ pub fn list_weight_presets(
     scorer_type: Option<&str>,
 ) -> Result<Vec<WeightPresetEntry>, rusqlite::Error> {
     if let Some(st) = scorer_type {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT name, scorer_type, weights_json FROM weight_presets
              WHERE scorer_type = ?1 ORDER BY name",
         )?;
@@ -559,7 +559,7 @@ pub fn list_weight_presets(
             .collect::<Result<_, _>>()?;
         Ok(rows)
     } else {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT name, scorer_type, weights_json FROM weight_presets ORDER BY scorer_type, name",
         )?;
         let rows = stmt
@@ -580,7 +580,7 @@ pub fn get_weight_preset(
     name: &str,
     scorer_type: &str,
 ) -> Result<Option<String>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT weights_json FROM weight_presets
          WHERE name = ?1 AND scorer_type = ?2",
     )?;
@@ -617,7 +617,7 @@ pub fn get_broker_discogs_session(
     conn: &Connection,
     broker_url: &str,
 ) -> Result<Option<BrokerDiscogsSession>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT broker_url, session_token, expires_at, created_at, updated_at
          FROM broker_discogs_session
          WHERE broker_url = ?1",
@@ -776,7 +776,7 @@ pub fn get_audit_files_in_scope(
     scope: &str,
 ) -> Result<Vec<AuditFile>, rusqlite::Error> {
     let pattern = format!("{}%", escape_like(scope));
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT path, last_audited, file_mtime, file_size
          FROM audit_files WHERE path LIKE ?1 ESCAPE '\\'",
     )?;
@@ -793,7 +793,7 @@ pub fn get_audit_files_in_scope(
 
 #[cfg(test)]
 pub fn get_audit_file(conn: &Connection, path: &str) -> Result<Option<AuditFile>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT path, last_audited, file_mtime, file_size
          FROM audit_files WHERE path = ?1",
     )?;
@@ -910,7 +910,7 @@ pub fn get_audit_issue_by_id(
     conn: &Connection,
     id: i64,
 ) -> Result<Option<AuditIssue>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, path, issue_type, detail, status, resolution, note, created_at, resolved_at
          FROM audit_issues WHERE id = ?1",
     )?;
@@ -931,15 +931,17 @@ pub fn resolve_audit_issues(
 ) -> Result<usize, rusqlite::Error> {
     let status = resolution.status().as_str();
     let resolution_str = resolution.as_str();
+    let tx = conn.unchecked_transaction()?;
     let mut count = 0usize;
     for id in ids {
-        count += conn.execute(
+        count += tx.execute(
             "UPDATE audit_issues
              SET status = ?1, resolution = ?2, note = COALESCE(?3, note), resolved_at = ?4
              WHERE id = ?5 AND status IN ('open', 'deferred', 'accepted')",
             params![status, resolution_str, note, resolved_at, id],
         )?;
     }
+    tx.commit()?;
     Ok(count)
 }
 
@@ -983,7 +985,7 @@ pub fn mark_issues_resolved_for_path(
 
 pub fn get_audit_summary(conn: &Connection, scope: &str) -> Result<AuditSummary, rusqlite::Error> {
     let pattern = format!("{}%", escape_like(scope));
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT issue_type, status, COUNT(*) as cnt
          FROM audit_issues
          WHERE path LIKE ?1 ESCAPE '\\'
@@ -1059,7 +1061,7 @@ pub fn delete_missing_audit_files(
     let mut last_path = String::new();
 
     loop {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT path
              FROM audit_files
              WHERE path LIKE ?1 ESCAPE '\\' AND path > ?2
