@@ -110,12 +110,30 @@ File paths in the XML don't match disk locations. The Rekordbox DB paths are sta
 
 Wrong path or missing permissions. Verify the binary path and run `chmod +x ./target/release/reklawdbox`.
 
-### Tools not visible
+### Setup says ~/Music does not exist
 
-Remove and re-add: `claude mcp remove reklawdbox && claude mcp add reklawdbox -- ./target/release/reklawdbox`
+Create it with `mkdir ~/Music`, then re-run `reklawdbox setup`. Alternatively, create `.mcp.json` manually in whichever directory you prefer -- see [Adding to other directories](/getting-started/#adding-to-other-directories).
+
+### Tools not visible in Claude Code
+
+Reklawdbox tools are scoped to `~/Music` by default. Start Claude Code from that directory:
+
+```bash
+cd ~/Music && claude
+```
+
+If the tools still don't appear, check that `~/Music/.mcp.json` exists and contains a `reklawdbox` entry. Run `reklawdbox setup` to recreate it.
+
+### Tools appearing in every project
+
+A global registration in `~/.claude.json` overrides project scoping. This was the default before v0.20. Remove it:
+
+```bash
+claude mcp remove -s user reklawdbox
+```
 
 <Aside type="caution">
-  Check for duplicate registrations — Claude Code can have reklawdbox in both local (`~/.claude.json`) and project (`.mcp.json`) scope. Local overrides project. Use `claude mcp list` to check.
+  Check for duplicate registrations — Claude Code can have reklawdbox in both user scope (`~/.claude.json`) and project scope (`~/Music/.mcp.json`). User scope overrides project scope and loads everywhere. Use `claude mcp list` to check.
 </Aside>
 
 ### Slow tool responses

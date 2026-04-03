@@ -38,46 +38,79 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
   </TabItem>
 </Tabs>
 
-## Essentia setup
-
-Essentia provides danceability, energy, loudness, and spectral features used by genre classification, set building, and audio analysis. Install it before configuring your MCP host:
+## Setup
 
 ```bash
 reklawdbox setup
 ```
 
-This finds Python 3.9+, creates a managed venv, and installs Essentia via pip. It also auto-configures any detected MCP hosts (Claude Code, Claude Desktop). The venv is auto-detected at `~/.local/share/reklawdbox/essentia-venv` — no env vars needed.
+This command does three things:
 
-<Aside type="note">
-  Requires Python 3.9 or later. If you don't have Python installed, get it from [python.org](https://www.python.org/downloads/) or via `brew install python`.
+1. **Installs Essentia** — finds Python 3.9+, creates a managed venv at `~/.local/share/reklawdbox/essentia-venv`, and installs Essentia via pip. Provides danceability, energy, loudness, and spectral features used by genre classification, set building, and audio analysis.
+
+2. **Configures Claude Code** — writes `~/Music/.mcp.json` so reklawdbox tools are available when you start Claude Code from your Music directory. Tools do not load in other projects.
+
+3. **Configures Claude Desktop** — adds reklawdbox to the Claude Desktop config (loads globally, since Desktop has no project scoping).
+
+<Aside type="tip" title="Why ~/Music?">
+  Reklawdbox tools are scoped to `~/Music` to avoid polluting unrelated Claude Code sessions. When you start Claude Code from `~/Music`, the tools load automatically. When you're working in a code project, they stay out of the way. To add reklawdbox to other directories, see [Adding to other directories](#adding-to-other-directories).
 </Aside>
 
-## MCP host configuration
+<Aside type="note">
+  Essentia requires Python 3.9 or later. If you don't have Python installed, get it from [python.org](https://www.python.org/downloads/) or via `brew install python`.
+</Aside>
+
+## Using with Claude Code
+
+After running `reklawdbox setup`, start Claude Code from your Music directory:
+
+```bash
+cd ~/Music && claude
+```
+
+Reklawdbox tools load automatically because setup placed `.mcp.json` there. In any other directory, the tools stay out of the way.
+
+### Adding to other directories
+
+To make reklawdbox available in additional directories, copy or create `.mcp.json` there:
+
+```json
+{
+  "mcpServers": {
+    "reklawdbox": {
+      "command": "/opt/homebrew/bin/reklawdbox"
+    }
+  }
+}
+```
+
+If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the directory containing `.mcp.json`, not the repo.
+
+## Manual MCP host configuration
 
 If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify). Otherwise, configure manually:
 
 <Tabs>
   <TabItem label="Claude Code">
-    Add for all projects:
-
-    ```bash
-    claude mcp add -s user reklawdbox -- /opt/homebrew/bin/reklawdbox
-    ```
-
-    Or register for a single project by adding `.mcp.json` to its root:
+    Create `~/Music/.mcp.json`:
 
     ```json
     {
       "mcpServers": {
         "reklawdbox": {
-          "type": "stdio",
           "command": "/opt/homebrew/bin/reklawdbox"
         }
       }
     }
     ```
 
-    If you built from source, use `./target/release/reklawdbox` instead.
+    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the directory containing `.mcp.json`, not the repo.
+
+    Then start Claude Code from `~/Music`:
+
+    ```bash
+    cd ~/Music && claude
+    ```
   </TabItem>
   <TabItem label="Claude Desktop">
     Add the following to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -86,14 +119,13 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
     {
       "mcpServers": {
         "reklawdbox": {
-          "type": "stdio",
           "command": "/opt/homebrew/bin/reklawdbox"
         }
       }
     }
     ```
 
-    If you built from source, use `./target/release/reklawdbox` instead.
+    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`). Relative paths resolve from the config file's directory, not the repo.
   </TabItem>
   <TabItem label="Codex">
     ```bash

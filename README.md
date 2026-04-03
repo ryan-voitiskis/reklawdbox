@@ -138,15 +138,21 @@ WAV files support dual-layer tagging (ID3v2 + RIFF INFO). Use `--wav-targets` to
 which layers are written. See [`site/src/content/docs/reference/tools.mdx`](site/src/content/docs/reference/tools.mdx)
 for full tool parameter reference.
 
-### Essentia Setup (Recommended)
+### Setup (Recommended)
 
-Install Essentia for advanced audio features (danceability, energy, spectral analysis):
+Install Essentia and configure MCP hosts:
 
 ```bash
 reklawdbox setup
 ```
 
-This creates a managed Python venv at `~/.local/share/reklawdbox/essentia-venv` which is auto-detected — no env vars needed.
+This creates a managed Python venv at `~/.local/share/reklawdbox/essentia-venv` (auto-detected, no env vars needed), writes `~/Music/.mcp.json` for Claude Code (scoped to music sessions only), and configures Claude Desktop if installed.
+
+Start Claude Code from `~/Music` to access reklawdbox tools:
+
+```bash
+cd ~/Music && claude
+```
 
 ## Discogs Auth Flow
 
