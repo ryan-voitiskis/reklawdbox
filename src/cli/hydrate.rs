@@ -156,7 +156,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let client = reqwest::Client::builder()
         .user_agent("Reklawdbox/0.1")
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .expect("failed to build HTTP client");
 
@@ -349,9 +349,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         );
     }
 
-    let enrich_concurrency_est = args.concurrency.unwrap_or(4).clamp(1, 16) as u64;
     let beatport_secs = beatport_pending.len() as u64; // ~1 req/s rate limit
-    let discogs_secs = discogs_pending.len() as u64 / enrich_concurrency_est;
+    let discogs_secs = discogs_pending.len() as u64; // ~1 req/1.1s rate limit (serialized by client)
     // stratum-dsp ≈ 18s/track, essentia subprocess adds ≈ 30s/track
     let secs_per_analysis: u64 = if essentia_python.is_some() { 48 } else { 18 };
     // Effective concurrency is min(CPU semaphore, memory semaphore). The memory
@@ -1077,6 +1076,11 @@ async fn cli_discogs_lookup_with_retry(
             status, ref body, ..
         }) if (500..=599).contains(&status) => {
             tracing::warn!(status, "Discogs broker {status}, retrying: {body}");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
+        }
+        Err(discogs::LookupError::Message(ref msg)) => {
+            tracing::warn!("Discogs broker transport error, retrying: {msg}");
             tokio::time::sleep(Duration::from_secs(5)).await;
             discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
         }

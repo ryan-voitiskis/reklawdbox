@@ -1,9 +1,20 @@
+use std::fmt;
+use std::sync::OnceLock;
+
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use tokio::sync::Mutex as TokioMutex;
+use tokio::time::Instant;
 
 pub const BROKER_URL_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_URL";
 pub const BROKER_TOKEN_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_TOKEN";
+
+static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
+
+async fn wait_for_rate_limit() {
+    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
+    crate::rate_limit::wait(last, "REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS", 1100).await;
+}
 
 pub const DEFAULT_BROKER_URL: &str = "https://reklawdbox-discogs-broker.ryanvoitiskis.workers.dev";
 
@@ -314,6 +325,8 @@ pub async fn lookup_via_broker(
     title: &str,
     album: Option<&str>,
 ) -> Result<Option<DiscogsResult>, LookupError> {
+    wait_for_rate_limit().await;
+
     let payload = serde_json::json!({
         "artist": artist,
         "title": title,
@@ -388,7 +401,58 @@ pub(crate) fn urlencoding(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
     use super::*;
+
+    #[tokio::test]
+    async fn rate_limiter_enforces_minimum_spacing() {
+        // SAFETY: test runs sequentially (no other threads reading this env var).
+        unsafe { std::env::set_var("REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS", "50") };
+
+        let n = 4;
+        let start = Instant::now();
+
+        for _ in 0..n {
+            wait_for_rate_limit().await;
+        }
+
+        let elapsed = start.elapsed();
+        let min_expected = Duration::from_millis(50 * (n - 1));
+        assert!(
+            elapsed >= min_expected,
+            "expected >= {min_expected:?}, got {elapsed:?}"
+        );
+
+        *RATE_LIMITER.get().unwrap().lock().await = None;
+
+        // SAFETY: cleaning up test-only env var.
+        unsafe { std::env::remove_var("REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS") };
+    }
+
+    #[test]
+    fn lookup_error_message_displays_and_has_no_auth_remediation() {
+        let err = LookupError::message("broker proxy request failed: connection reset");
+        assert_eq!(
+            err.to_string(),
+            "broker proxy request failed: connection reset"
+        );
+        assert!(err.auth_remediation().is_none());
+    }
+
+    #[test]
+    fn lookup_error_http_5xx_displays_status_and_body() {
+        let err = LookupError::Http {
+            status: 502,
+            retry_after: None,
+            body: "bad gateway".to_string(),
+        };
+        assert!(err.to_string().contains("502"));
+        assert!(err.to_string().contains("bad gateway"));
+        assert!(err.auth_remediation().is_none());
+    }
 
     #[test]
     fn parse_broker_payload_with_wrapped_result() {
