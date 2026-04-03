@@ -110,37 +110,6 @@ fn album_from_file_tags(file_path: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn album_from_cache(
-    store_conn: &rusqlite::Connection,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    norm_album: Option<&str>,
-) -> (bool, Option<String>) {
-    let cache = store::get_enrichment(store_conn, provider, norm_artist, norm_title, norm_album)
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                provider,
-                artist = norm_artist,
-                title = norm_title,
-                "album cache lookup failed: {e}"
-            );
-            None
-        });
-    let has_cache = cache.is_some();
-    let album = classify_handler::parse_response_json(cache.as_ref())
-        .as_ref()
-        .and_then(|v| {
-            // Bandcamp: "album" field; Discogs: "title" field (release name)
-            v.get("album")
-                .or_else(|| v.get("title"))
-                .and_then(|v| v.as_str())
-        })
-        .filter(|a| !a.is_empty())
-        .map(|a| a.trim().to_string());
-    (has_cache, album)
-}
-
 fn is_noise_album(candidate: &str, track_title: &str, artist: &str) -> bool {
     let norm_candidate = normalize::normalize_for_matching(candidate);
     let norm_title = normalize::normalize_for_matching(track_title);
@@ -148,8 +117,6 @@ fn is_noise_album(candidate: &str, track_title: &str, artist: &str) -> bool {
 
     norm_candidate == norm_title || norm_candidate == norm_artist
 }
-
-use super::enrichment_cache::cache_lookup_result;
 
 #[derive(Default)]
 struct BackfillAlbumsScanResult {
@@ -172,20 +139,69 @@ struct FilledBySource {
     discogs: usize,
 }
 
+fn extract_album(entry: Option<&store::EnrichmentCacheEntry>) -> Option<String> {
+    classify_handler::parse_response_json(entry)
+        .as_ref()
+        .and_then(|v| {
+            // Bandcamp: "album" field; Discogs: "title" field (release name)
+            v.get("album")
+                .or_else(|| v.get("title"))
+                .and_then(|v| v.as_str())
+        })
+        .filter(|a| !a.is_empty())
+        .map(|a| a.trim().to_string())
+}
+
 fn scan_albums(
     store_conn: &rusqlite::Connection,
     tracks: &[crate::types::Track],
 ) -> BackfillAlbumsScanResult {
     let mut r = BackfillAlbumsScanResult::default();
 
-    for track in tracks {
+    // Pre-compute normalized keys for all tracks.
+    let norm_keys: Vec<(String, String)> = tracks
+        .iter()
+        .map(|t| {
+            let a = normalize::normalize_for_matching(&t.artist);
+            let ti = normalize::normalize_for_matching(&t.title);
+            (a, ti)
+        })
+        .collect();
+
+    // Build batch keys for both providers × all tracks.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
+    for (a, t) in &norm_keys {
+        enrich_keys.push(("bandcamp", a, t, ""));
+        enrich_keys.push(("discogs", a, t, ""));
+    }
+
+    // Single batch load — replaces 2N individual queries.
+    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys).unwrap_or_else(|e| {
+        tracing::warn!("batch enrichment load failed: {e}");
+        std::collections::HashMap::new()
+    });
+
+    for (track, (norm_artist, norm_title)) in tracks.iter().zip(&norm_keys) {
         if !track.album.is_empty() {
             r.already_set += 1;
             continue;
         }
 
-        let norm_artist = normalize::normalize_for_matching(&track.artist);
-        let norm_title = normalize::normalize_for_matching(&track.title);
+        let bc_key = (
+            "bandcamp".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
+        let dc_key = (
+            "discogs".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
+
+        let bc_entry = cache_map.get(&bc_key);
+        let dc_entry = cache_map.get(&dc_key);
 
         // Source cascade: file tags → folder path → bandcamp → discogs
         let mut source = None;
@@ -209,9 +225,7 @@ fn scan_albums(
         }
 
         if source.is_none() {
-            let (has_bc, bc_album) =
-                album_from_cache(store_conn, "bandcamp", &norm_artist, &norm_title, None);
-            if let Some(album) = bc_album {
+            if let Some(album) = extract_album(bc_entry) {
                 if !is_noise_album(&album, &track.title, &track.artist) {
                     source = Some(("bandcamp", album));
                 } else {
@@ -220,14 +234,7 @@ fn scan_albums(
             }
 
             if source.is_none() {
-                let (_has_dc, dc_album) = album_from_cache(
-                    store_conn,
-                    "discogs",
-                    &norm_artist,
-                    &norm_title,
-                    None, // album is always empty here (non-empty albums already continued above)
-                );
-                if let Some(album) = dc_album {
+                if let Some(album) = extract_album(dc_entry) {
                     if !is_noise_album(&album, &track.title, &track.artist) {
                         source = Some(("discogs", album));
                     } else {
@@ -236,11 +243,11 @@ fn scan_albums(
                 }
             }
 
-            if source.is_none() && !has_bc {
+            if source.is_none() && bc_entry.is_none() {
                 r.no_bandcamp += 1;
                 r.uncached_bandcamp.push((
-                    norm_artist,
-                    norm_title,
+                    norm_artist.clone(),
+                    norm_title.clone(),
                     track.artist.clone(),
                     track.title.clone(),
                 ));
@@ -309,24 +316,97 @@ pub(super) async fn handle_backfill_albums(
             "auto_enrich: fetching Bandcamp for uncached album tracks"
         );
 
-        for (norm_artist, norm_title, raw_artist, raw_title) in &to_enrich {
-            match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
-                Ok(result) => {
-                    auto_enriched += cache_lookup_result(
-                        server,
-                        "bandcamp",
-                        norm_artist,
-                        norm_title,
-                        result.as_ref(),
-                    )?;
-                }
+        use super::enrichment_cache::HasScore;
+
+        let store_path = server.cache_store_path();
+
+        // Ensure the DB exists and is migrated before spawning the writer.
+        {
+            let _conn = server.cache_store_conn()?;
+        }
+
+        let (cache_tx, mut cache_rx) =
+            tokio::sync::mpsc::channel::<(String, String, Option<String>, Option<String>)>(16);
+        let writer_store_path = store_path.clone();
+        let writer_handle = tokio::task::spawn_blocking(move || {
+            let conn = match store::open(&writer_store_path) {
+                Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!(
-                        artist = raw_artist.as_str(),
-                        "Bandcamp auto-enrich failed: {e}"
+                    tracing::error!("album auto-enrich writer: failed to open store: {e}");
+                    return;
+                }
+            };
+            while let Some((norm_artist, norm_title, quality, json)) = cache_rx.blocking_recv() {
+                if let Err(e) = store::set_enrichment(
+                    &conn,
+                    "bandcamp",
+                    &norm_artist,
+                    &norm_title,
+                    None,
+                    quality.as_deref(),
+                    json.as_deref(),
+                ) {
+                    tracing::error!(
+                        "album auto-enrich writer: failed to write bandcamp for {norm_artist}/{norm_title}: {e}"
                     );
                 }
             }
+        });
+
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+        let mut handles = Vec::with_capacity(total);
+
+        for (norm_artist, norm_title, raw_artist, raw_title) in to_enrich {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
+
+            let server = server.clone();
+            let cache_tx = cache_tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                let enriched: usize;
+                match crate::bandcamp::lookup(&server.state.http, &raw_artist, &raw_title).await {
+                    Ok(result) => {
+                        let (quality, json) = match &result {
+                            Some(r) => {
+                                let q = if r.score() >= 90 { "exact" } else { "fuzzy" };
+                                let j = serde_json::to_string(r).ok();
+                                (Some(q.to_string()), j)
+                            }
+                            None => (Some("none".to_string()), None),
+                        };
+                        enriched = if result.is_some() { 1 } else { 0 };
+                        let _ = cache_tx
+                            .send((norm_artist, norm_title, quality, json))
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            artist = raw_artist.as_str(),
+                            "Bandcamp auto-enrich failed: {e}"
+                        );
+                        enriched = 0;
+                    }
+                }
+                enriched
+            }));
+        }
+
+        drop(cache_tx);
+
+        for handle in handles {
+            match handle.await {
+                Ok(n) => auto_enriched += n,
+                Err(e) => tracing::warn!("album auto-enrich task panicked: {e}"),
+            }
+        }
+
+        if let Err(e) = writer_handle.await {
+            tracing::warn!("album backfill cache writer task failed: {e}");
         }
 
         let store_conn = server.cache_store_conn()?;

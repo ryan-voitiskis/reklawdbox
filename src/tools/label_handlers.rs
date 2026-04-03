@@ -31,8 +31,6 @@ fn normalize_label(label: &str) -> Option<String> {
     Some(label.to_string())
 }
 
-use super::enrichment_cache::cache_lookup_result;
-
 fn extract_label(entry: Option<&store::EnrichmentCacheEntry>) -> Option<String> {
     classify_handler::parse_response_json(entry)
         .as_ref()
@@ -196,24 +194,122 @@ pub(super) async fn handle_backfill_labels(
             "auto_enrich: fetching Bandcamp for uncached label tracks"
         );
 
-        for (norm_artist, norm_title, raw_artist, raw_title) in &to_enrich {
-            match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
-                Ok(result) => {
-                    auto_enriched += cache_lookup_result(
-                        server,
-                        "bandcamp",
-                        norm_artist,
-                        norm_title,
-                        result.as_ref(),
-                    )?;
-                }
+        let concurrency = 4usize;
+        let store_path = server.cache_store_path();
+
+        // Ensure DB exists and is migrated before spawning the writer.
+        {
+            let _conn = server.cache_store_conn()?;
+        }
+
+        let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<(
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )>(concurrency * 4);
+
+        let writer_store_path = store_path.clone();
+        let writer_handle = tokio::task::spawn_blocking(move || {
+            let conn = match store::open(&writer_store_path) {
+                Ok(c) => c,
                 Err(e) => {
+                    tracing::warn!("label backfill cache writer: failed to open store: {e}");
+                    return;
+                }
+            };
+            while let Some((norm_artist, norm_title, match_quality, response_json)) =
+                cache_rx.blocking_recv()
+            {
+                if let Err(e) = store::set_enrichment(
+                    &conn,
+                    "bandcamp",
+                    &norm_artist,
+                    &norm_title,
+                    None,
+                    match_quality.as_deref(),
+                    response_json.as_deref(),
+                ) {
                     tracing::warn!(
-                        artist = raw_artist.as_str(),
-                        "Bandcamp auto-enrich failed: {e}"
+                        artist = norm_artist.as_str(),
+                        title = norm_title.as_str(),
+                        "label backfill cache write failed: {e}"
                     );
                 }
             }
+        });
+
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut handles = Vec::with_capacity(to_enrich.len());
+
+        for (norm_artist, norm_title, raw_artist, raw_title) in to_enrich {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
+            let server = server.clone();
+            let cache_tx = cache_tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                let result =
+                    lookup_bandcamp_remote(&server, &raw_artist, &raw_title).await;
+                let hit = match result {
+                    Ok(ref r) => {
+                        let (quality, json) = match r {
+                            Some(br) => {
+                                let json_str = match serde_json::to_string(br) {
+                                    Ok(j) => j,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            artist = norm_artist.as_str(),
+                                            "serialization failed: {e}"
+                                        );
+                                        drop(permit);
+                                        return 1usize;
+                                    }
+                                };
+                                let q = if br.score >= 90 {
+                                    "exact".to_string()
+                                } else {
+                                    "fuzzy".to_string()
+                                };
+                                (Some(q), Some(json_str))
+                            }
+                            None => (Some("none".to_string()), None),
+                        };
+                        if let Err(e) =
+                            cache_tx.send((norm_artist, norm_title, quality, json)).await
+                        {
+                            tracing::warn!("label backfill cache channel send failed: {e}");
+                        }
+                        r.is_some() as usize
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            artist = raw_artist.as_str(),
+                            "Bandcamp auto-enrich failed: {e}"
+                        );
+                        0
+                    }
+                };
+                drop(permit);
+                hit
+            }));
+        }
+
+        for handle in handles {
+            match handle.await {
+                Ok(hit) => auto_enriched += hit,
+                Err(e) => {
+                    tracing::warn!("label backfill task panicked: {e}");
+                }
+            }
+        }
+
+        drop(cache_tx);
+        if let Err(e) = writer_handle.await {
+            tracing::warn!("label backfill cache writer task failed: {e}");
         }
 
         let store_conn = server.cache_store_conn()?;

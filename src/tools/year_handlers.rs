@@ -22,8 +22,6 @@ pub(super) struct BackfillYearsParams {
     pub auto_enrich: Option<bool>,
 }
 
-use super::enrichment_cache::cache_lookup_result;
-
 fn parse_year_str(s: &str) -> Option<i32> {
     // Accept "2019", "2019-01-15", etc. — take first 4 digits.
     let trimmed = s.trim();
@@ -307,6 +305,8 @@ pub(super) async fn handle_backfill_years(
 
     if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty())
     {
+        use super::enrichment_cache::HasScore;
+
         let bc_tracks: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
         let mb_tracks: Vec<_> = std::mem::take(&mut scan.uncached_musicbrainz);
         let total = bc_tracks.len() + mb_tracks.len();
@@ -316,44 +316,217 @@ pub(super) async fn handle_backfill_years(
             "auto_enrich: fetching for {total} uncached year-zero tracks"
         );
 
-        for (norm_artist, norm_title, raw_artist, raw_title) in &bc_tracks {
-            match lookup_bandcamp_remote(server, raw_artist, raw_title).await {
-                Ok(result) => {
-                    auto_enriched += cache_lookup_result(
-                        server,
-                        "bandcamp",
-                        norm_artist,
-                        norm_title,
-                        result.as_ref(),
-                    )?;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        artist = raw_artist.as_str(),
-                        "Bandcamp auto-enrich failed: {e}"
-                    );
-                }
-            }
-        }
+        // Shared channel + spawn_blocking writer for cache writes.
+        let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<(
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )>(32);
 
-        for (norm_artist, norm_title, raw_artist, raw_title) in &mb_tracks {
-            match lookup_musicbrainz_remote(server, raw_artist, raw_title).await {
-                Ok(result) => {
-                    auto_enriched += cache_lookup_result(
-                        server,
-                        "musicbrainz",
-                        norm_artist,
-                        norm_title,
-                        result.as_ref(),
-                    )?;
-                }
+        let writer_store_path = server.cache_store_path();
+        let writer_handle = tokio::task::spawn_blocking(move || {
+            let conn = match store::open(&writer_store_path) {
+                Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!(
-                        artist = raw_artist.as_str(),
-                        "MusicBrainz auto-enrich failed: {e}"
+                    tracing::error!("Year backfill cache writer: failed to open store: {e}");
+                    return;
+                }
+            };
+            while let Some((provider, norm_artist, norm_title, match_quality, response_json)) =
+                cache_rx.blocking_recv()
+            {
+                if let Err(e) = store::set_enrichment(
+                    &conn,
+                    &provider,
+                    &norm_artist,
+                    &norm_title,
+                    None,
+                    match_quality.as_deref(),
+                    response_json.as_deref(),
+                ) {
+                    tracing::error!(
+                        "Year backfill cache writer: failed to write {provider} for {norm_artist}/{norm_title}: {e}"
                     );
                 }
             }
+        });
+
+        // Two concurrent dispatch futures — one per provider.
+        let bc_future = {
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+            let mut handles = Vec::with_capacity(bc_tracks.len());
+
+            for (norm_artist, norm_title, raw_artist, raw_title) in bc_tracks {
+                let permit = sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
+                let server = server.clone();
+                let cache_tx = cache_tx.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let enriched = match lookup_bandcamp_remote(&server, &raw_artist, &raw_title)
+                        .await
+                    {
+                        Ok(Some(r)) => {
+                            let json_str = match serde_json::to_string(&r) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        provider = "bandcamp",
+                                        artist = norm_artist.as_str(),
+                                        "serialization failed: {e}"
+                                    );
+                                    drop(permit);
+                                    return 1usize;
+                                }
+                            };
+                            let quality = if r.score() >= 90 {
+                                "exact".to_string()
+                            } else {
+                                "fuzzy".to_string()
+                            };
+                            let _ = cache_tx
+                                .send((
+                                    "bandcamp".to_string(),
+                                    norm_artist,
+                                    norm_title,
+                                    Some(quality),
+                                    Some(json_str),
+                                ))
+                                .await;
+                            1usize
+                        }
+                        Ok(None) => {
+                            let _ = cache_tx
+                                .send((
+                                    "bandcamp".to_string(),
+                                    norm_artist,
+                                    norm_title,
+                                    Some("none".to_string()),
+                                    None,
+                                ))
+                                .await;
+                            0usize
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                artist = raw_artist.as_str(),
+                                "Bandcamp auto-enrich failed: {e}"
+                            );
+                            0usize
+                        }
+                    };
+                    drop(permit);
+                    enriched
+                }));
+            }
+
+            async move {
+                let mut sum = 0usize;
+                for handle in handles {
+                    match handle.await {
+                        Ok(n) => sum += n,
+                        Err(e) => tracing::warn!("Bandcamp task panicked: {e}"),
+                    }
+                }
+                sum
+            }
+        };
+
+        let mb_future = {
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+            let mut handles = Vec::with_capacity(mb_tracks.len());
+
+            for (norm_artist, norm_title, raw_artist, raw_title) in mb_tracks {
+                let permit = sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
+                let server = server.clone();
+                let cache_tx = cache_tx.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let enriched =
+                        match lookup_musicbrainz_remote(&server, &raw_artist, &raw_title).await {
+                            Ok(Some(r)) => {
+                                let json_str = match serde_json::to_string(&r) {
+                                    Ok(j) => j,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            provider = "musicbrainz",
+                                            artist = norm_artist.as_str(),
+                                            "serialization failed: {e}"
+                                        );
+                                        drop(permit);
+                                        return 1usize;
+                                    }
+                                };
+                                let quality = if r.score() >= 90 {
+                                    "exact".to_string()
+                                } else {
+                                    "fuzzy".to_string()
+                                };
+                                let _ = cache_tx
+                                    .send((
+                                        "musicbrainz".to_string(),
+                                        norm_artist,
+                                        norm_title,
+                                        Some(quality),
+                                        Some(json_str),
+                                    ))
+                                    .await;
+                                1usize
+                            }
+                            Ok(None) => {
+                                let _ = cache_tx
+                                    .send((
+                                        "musicbrainz".to_string(),
+                                        norm_artist,
+                                        norm_title,
+                                        Some("none".to_string()),
+                                        None,
+                                    ))
+                                    .await;
+                                0usize
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    artist = raw_artist.as_str(),
+                                    "MusicBrainz auto-enrich failed: {e}"
+                                );
+                                0usize
+                            }
+                        };
+                    drop(permit);
+                    enriched
+                }));
+            }
+
+            async move {
+                let mut sum = 0usize;
+                for handle in handles {
+                    match handle.await {
+                        Ok(n) => sum += n,
+                        Err(e) => tracing::warn!("MusicBrainz task panicked: {e}"),
+                    }
+                }
+                sum
+            }
+        };
+
+        // Run both provider dispatches concurrently.
+        let (bc_enriched, mb_enriched) = tokio::join!(bc_future, mb_future);
+        auto_enriched = bc_enriched + mb_enriched;
+
+        // Close channel so writer drains and exits.
+        drop(cache_tx);
+        if let Err(e) = writer_handle.await {
+            tracing::error!("Year backfill cache writer task failed: {e}");
         }
 
         // Re-scan with updated cache

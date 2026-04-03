@@ -152,21 +152,37 @@ pub(super) async fn handle_write_file_tags(
         .collect();
 
     if dry_run {
-        let mut results = Vec::with_capacity(entries.len());
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+        let mut handles = Vec::with_capacity(entries.len());
+
         for entry in entries {
-            let result = tokio::task::spawn_blocking(move || tags::write_file_tags_dry_run(&entry))
-                .await
-                .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
-            results.push(result);
+            let sem = semaphore.clone();
+            let path_display = entry.path.display().to_string();
+            handles.push(tokio::task::spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore is never closed");
+                tokio::task::spawn_blocking(move || tags::write_file_tags_dry_run(&entry))
+                    .await
+                    .unwrap_or_else(|e| tags::FileDryRunResult::Error {
+                        path: path_display,
+                        status: "error".to_string(),
+                        error: format!("task join error: {e}"),
+                    })
+            }));
         }
 
+        let mut results = Vec::with_capacity(handles.len());
         let mut previewed: usize = 0;
         let mut failed: usize = 0;
-        for r in &results {
-            match r {
+
+        for handle in handles {
+            let result = handle
+                .await
+                .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
+            match &result {
                 tags::FileDryRunResult::Preview { .. } => previewed += 1,
                 tags::FileDryRunResult::Error { .. } => failed += 1,
             }
+            results.push(result);
         }
 
         let output = serde_json::json!({
@@ -182,16 +198,33 @@ pub(super) async fn handle_write_file_tags(
             serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     } else {
-        let mut results = Vec::with_capacity(entries.len());
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+        let mut handles = Vec::with_capacity(entries.len());
+
+        for entry in entries {
+            let sem = semaphore.clone();
+            let path_display = entry.path.display().to_string();
+            handles.push(tokio::task::spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore is never closed");
+                tokio::task::spawn_blocking(move || tags::write_file_tags(&entry))
+                    .await
+                    .unwrap_or_else(|e| tags::FileWriteResult::Error {
+                        path: path_display,
+                        status: "error".to_string(),
+                        error: format!("task join error: {e}"),
+                    })
+            }));
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
         let mut files_written: usize = 0;
         let mut files_failed: usize = 0;
         let mut total_fields_written: usize = 0;
 
-        for entry in entries {
-            let result = tokio::task::spawn_blocking(move || tags::write_file_tags(&entry))
+        for handle in handles {
+            let result = handle
                 .await
                 .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
-
             match &result {
                 tags::FileWriteResult::Ok { fields_written, .. } => {
                     files_written += 1;
@@ -266,18 +299,35 @@ pub(super) async fn handle_embed_cover_art(
         }
     };
 
-    let mut results = Vec::with_capacity(params.target_audio_files.len());
-    let mut files_embedded: usize = 0;
-    let mut files_failed: usize = 0;
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let mut handles = Vec::with_capacity(params.target_audio_files.len());
 
     for target in params.target_audio_files {
+        let sem = semaphore.clone();
         let img = image_path.clone();
         let tgt = PathBuf::from(&target);
         let pt = picture_type.clone();
-        let result = tokio::task::spawn_blocking(move || tags::embed_cover_art(&img, &tgt, &pt))
+        let target_display = target.clone();
+        handles.push(tokio::task::spawn(async move {
+            let _permit = sem.acquire().await.expect("semaphore is never closed");
+            tokio::task::spawn_blocking(move || tags::embed_cover_art(&img, &tgt, &pt))
+                .await
+                .unwrap_or_else(|e| tags::FileEmbedResult::Error {
+                    path: target_display,
+                    status: "error".to_string(),
+                    error: format!("task join error: {e}"),
+                })
+        }));
+    }
+
+    let mut results = Vec::with_capacity(handles.len());
+    let mut files_embedded: usize = 0;
+    let mut files_failed: usize = 0;
+
+    for handle in handles {
+        let result = handle
             .await
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
-
         match &result {
             tags::FileEmbedResult::Ok { .. } => files_embedded += 1,
             tags::FileEmbedResult::Error { .. } => files_failed += 1,
