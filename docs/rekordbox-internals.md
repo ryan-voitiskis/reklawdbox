@@ -2,7 +2,7 @@
 
 > Reference document for reklawdbox development. Covers Rekordbox file structure,
 > database encryption, XML format, analysis files, and ecosystem tools.
-> Last updated: 2026-02-15
+> Last updated: 2026-04-05
 
 ---
 
@@ -227,7 +227,7 @@ The encrypted `master.db` contains **34 tables**. All IDs are `VARCHAR(255)` str
 | `Tag` | VARCHAR(255) | Tag field |
 | `ImagePath` | VARCHAR(255) | Album art path |
 | `AnalysisDataPath` | VARCHAR(255) | Path to ANLZ files |
-| `Analysed` | Integer | 0=none, 105=standard, 121=advanced, 233=locked |
+| `Analysed` | Integer | Bitmask: 105=standard, 121=advanced (+16), 233=locked (+128). Community-guessed values, not official |
 | `DJPlayCount` | VARCHAR(255) | Play count |
 | `TrackNo` | Integer | Track number on album |
 | `DiscNo` | Integer | Disc number |
@@ -261,7 +261,7 @@ The encrypted `master.db` contains **34 tables**. All IDs are `VARCHAR(255)` str
 | `ContentID` | VARCHAR(255) FK | Track reference |
 | `InMsec` | Integer | Cue position in milliseconds |
 | `OutMsec` | Integer | Loop end in milliseconds |
-| `Kind` | Integer | 0=memory cue, 3=load point, 4=loop |
+| `Kind` | Integer | 0=memory cue/fade, 3=load point, 4=loop; hot cues use 1-8 as their number |
 | `Color` | Integer | Color (-1 = no color) |
 | `Comment` | VARCHAR(255) | Cue label |
 
@@ -415,13 +415,13 @@ reklawdbox does not depend on pyrekordbox (different language), but pyrekordbox 
 |------|----------|-------------|-----|
 | **pyrekordbox** | Python | Full RB data access (DB, XML, ANLZ) | [GitHub](https://github.com/dylanljones/pyrekordbox) |
 | **rekordbox-connect** | Node.js | Reads encrypted master.db directly, emits change events | [GitHub](https://github.com/chrisle/rekordbox-connect) |
-| **rbx-gen** | TypeScript | Generates Rekordbox XML from playlists | [GitHub](https://github.com/FunctionDJ/rbx-gen) |
+| **rbx-gen** _(archived)_ | TypeScript | Converts VirtualDJ playlists to Rekordbox XML | [GitHub](https://github.com/FunctionDJ/rbx-gen) |
 | **rekordbox-library-fixer** | Node.js | XML manipulation tools for library fixes | [GitHub](https://github.com/koraysels/rekordbox-library-fixer) |
 | **prolink-connect** | TypeScript | Pioneer DJ Link protocol (CDJ communication) | [GitHub](https://github.com/evanpurkhiser/prolink-connect) |
 | **crate-digger** | Java | Parses RB export data (USB drives), Kaitai Struct defs | [GitHub](https://github.com/Deep-Symmetry/crate-digger) |
 | **dj-data-converter** | Clojure | Converts between RB/Traktor/Serato XML | [GitHub](https://github.com/digital-dj-tools/dj-data-converter) |
-| **DJ-Tools (djtools)** | Python | Tag-based playlist automation from Genre/Comments fields | [GitHub](https://github.com/a-rich/DJ-Tools) |
-| **Rekord Buddy** | C++ | Cross-platform library converter (open source) | [GitHub](https://github.com/gadgetmies/RekordBuddy) |
+| **DJ-Tools (djtools)** | Python | Downloading, processing, sharing music/rekordbox data; tag-based playlist generation | [GitHub](https://github.com/a-rich/DJ-Tools) |
+| **Rekord Buddy** | C++ | Library converter (open-source fork of discontinued commercial app) | [GitHub](https://github.com/gadgetmies/RekordBuddy) |
 | **CueGen** | C# | Creates RB cue points from Mixed in Key | [GitHub](https://github.com/mganss/CueGen) |
 | **Automark** | Python | Auto-generates cue points for RB | [GitHub](https://github.com/MichelleAppel/Automark-for-Rekordbox) |
 
@@ -529,10 +529,10 @@ these risks.
 
 ### Implementation
 
-- **Language**: Rust (single static binary, ~8.5 MB arm64, zero runtime dependencies)
+- **Language**: Rust (single static binary, ~20 MB arm64, zero runtime dependencies)
 - **DB access**: rusqlite with bundled-sqlcipher feature, read-only connection
 - **Writes**: Template-string XML generation (no XML library dependency)
-- **State**: In-memory change staging via Arc<Mutex<HashMap>>
+- **State**: In-memory change staging via `Arc<ServerState>` containing `ChangeManager(Mutex<HashMap>)`
 
 ---
 
