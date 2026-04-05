@@ -1053,39 +1053,70 @@ async fn cli_discogs_lookup_with_retry(
     title: &str,
     album: Option<&str>,
 ) -> Result<Option<discogs::DiscogsResult>, discogs::LookupError> {
-    match discogs::lookup_via_broker(client, cfg, token, artist, title, album).await {
-        Ok(result) => Ok(result),
-        // Defence-in-depth: the broker handles Discogs 429s internally, but
-        // platform-level rate limits (Cloudflare) or custom brokers may 429.
-        Err(discogs::LookupError::Http {
-            status: 429,
-            ref retry_after,
-            ref body,
-            ..
-        }) => {
-            let wait = retry_after
-                .as_deref()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(5)
-                .min(120);
-            tracing::warn!(status = 429, wait, "Discogs broker 429, retrying: {body}");
-            tokio::time::sleep(Duration::from_secs(wait)).await;
-            discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
+    const MAX_ATTEMPTS: u32 = 4;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        match discogs::lookup_via_broker(client, cfg, token, artist, title, album).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                // Defence-in-depth: the broker handles Discogs 429s internally,
+                // but platform-level rate limits (Cloudflare) or custom brokers
+                // may 429.
+                let backoff = match &e {
+                    discogs::LookupError::Http {
+                        status: 429,
+                        retry_after,
+                        body,
+                        ..
+                    } => {
+                        let wait = retry_after
+                            .as_deref()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(5)
+                            .min(120);
+                        tracing::warn!(
+                            status = 429,
+                            attempt,
+                            wait,
+                            "Discogs broker 429: {body}"
+                        );
+                        Some(wait)
+                    }
+                    discogs::LookupError::Http { status, body, .. }
+                        if (500..=599).contains(status) =>
+                    {
+                        let wait = 5 * 2u64.pow(attempt);
+                        tracing::warn!(
+                            status,
+                            attempt,
+                            wait,
+                            "Discogs broker {status}: {body}"
+                        );
+                        Some(wait)
+                    }
+                    discogs::LookupError::Message(msg) => {
+                        let wait = 5 * 2u64.pow(attempt);
+                        tracing::warn!(
+                            attempt,
+                            wait,
+                            "Discogs broker transport error: {msg}"
+                        );
+                        Some(wait)
+                    }
+                    _ => None,
+                };
+
+                match backoff {
+                    Some(secs) if attempt < MAX_ATTEMPTS - 1 => {
+                        tokio::time::sleep(Duration::from_secs(secs)).await;
+                    }
+                    _ => return Err(e),
+                }
+            }
         }
-        Err(discogs::LookupError::Http {
-            status, ref body, ..
-        }) if (500..=599).contains(&status) => {
-            tracing::warn!(status, "Discogs broker {status}, retrying: {body}");
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
-        }
-        Err(discogs::LookupError::Message(ref msg)) => {
-            tracing::warn!("Discogs broker transport error, retrying: {msg}");
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            discogs::lookup_via_broker(client, cfg, token, artist, title, album).await
-        }
-        Err(e) => Err(e),
     }
+
+    unreachable!("loop always exits via return")
 }
 
 async fn cli_beatport_lookup_with_retry(
@@ -1093,36 +1124,45 @@ async fn cli_beatport_lookup_with_retry(
     artist: &str,
     title: &str,
 ) -> Result<Option<beatport::BeatportResult>, String> {
-    match beatport::lookup(client, artist, title).await {
-        Ok(result) => Ok(result),
-        Err(beatport::BeatportError::Http {
-            status,
-            retry_after,
-            ..
-        }) if status.as_u16() == 429 => {
-            let wait = retry_after
-                .as_deref()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(5);
-            tokio::time::sleep(Duration::from_secs(wait)).await;
-            beatport::lookup(client, artist, title)
-                .await
-                .map_err(|e| e.to_string())
+    const MAX_ATTEMPTS: u32 = 4;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        match beatport::lookup(client, artist, title).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                let backoff = match &e {
+                    beatport::BeatportError::Http {
+                        status,
+                        retry_after,
+                        ..
+                    } if status.as_u16() == 429 => {
+                        let wait = retry_after
+                            .as_deref()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(5)
+                            .min(120);
+                        Some(wait)
+                    }
+                    beatport::BeatportError::Http { status, .. }
+                        if status.is_server_error() =>
+                    {
+                        Some(5 * 2u64.pow(attempt))
+                    }
+                    beatport::BeatportError::Request(_) => Some(5 * 2u64.pow(attempt)),
+                    _ => None,
+                };
+
+                match backoff {
+                    Some(secs) if attempt < MAX_ATTEMPTS - 1 => {
+                        tokio::time::sleep(Duration::from_secs(secs)).await;
+                    }
+                    _ => return Err(e.to_string()),
+                }
+            }
         }
-        Err(beatport::BeatportError::Http { status, .. }) if status.is_server_error() => {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            beatport::lookup(client, artist, title)
-                .await
-                .map_err(|e| e.to_string())
-        }
-        Err(beatport::BeatportError::Request(_)) => {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            beatport::lookup(client, artist, title)
-                .await
-                .map_err(|e| e.to_string())
-        }
-        Err(e) => Err(e.to_string()),
     }
+
+    unreachable!("loop always exits via return")
 }
 
 async fn cli_analyze_for_hydrate(

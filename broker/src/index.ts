@@ -97,6 +97,7 @@ const DISCOGS_UPSTREAM_INVALID_RESPONSE_MESSAGE =
 const BROKER_USER_AGENT = 'reklawdbox-broker/0.1'
 const MAX_RETRY_AFTER_SECONDS = 60
 const MAX_RATE_LIMIT_CAS_RETRIES = 20
+const DISCOGS_FETCH_TIMEOUT_MS = 20_000
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:'
 
 type SecretReadResult = {
@@ -901,6 +902,7 @@ async function lookupDiscogsViaApi(
             Authorization: oauthHeader(oauthParams),
             'User-Agent': BROKER_USER_AGENT,
           },
+          signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
         },
       )
     } catch (err) {
@@ -1128,6 +1130,7 @@ async function requestDiscogsRequestToken(
       Authorization: oauthHeader(oauthParams),
       'User-Agent': BROKER_USER_AGENT,
     },
+    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
   }).catch((err) => {
     console.error('discogs request_token call failed', err)
     throw new BrokerHttpError(
@@ -1195,6 +1198,7 @@ async function requestDiscogsAccessToken(
       Authorization: oauthHeader(oauthParams),
       'User-Agent': BROKER_USER_AGENT,
     },
+    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
   }).catch((err) => {
     console.error('discogs access_token call failed', err)
     throw new BrokerHttpError(
@@ -1332,6 +1336,11 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
   )
 
   for (let attempt = 0; attempt < MAX_RATE_LIMIT_CAS_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Jittered backoff to reduce D1 contention under concurrent load
+      await delay(Math.floor(Math.random() * 50 * (attempt + 1)))
+    }
+
     const nowMs = Date.now()
     const row = await env.DB.prepare(
       `SELECT last_request_at_ms
