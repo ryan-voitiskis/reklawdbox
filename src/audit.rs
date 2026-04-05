@@ -801,9 +801,9 @@ pub fn check_filename(
         None => return issues,
     };
 
-    // ORIGINAL_MIX_SUFFIX (case-insensitive)
+    // ORIGINAL_MIX_SUFFIX (case-insensitive) — matches (Original), (Original Mix), (Original Version)
     static ORIGINAL_MIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\s*\(Original Mix\)").expect("ORIGINAL_MIX_RE must compile")
+        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)").expect("ORIGINAL_MIX_RE must compile")
     });
     if !skip.contains(&IssueType::OriginalMixSuffix) && ORIGINAL_MIX_RE.is_match(filename) {
         let new_name = ORIGINAL_MIX_RE.replace_all(filename, "");
@@ -1877,6 +1877,57 @@ mod tests {
     }
 
     #[test]
+    fn check_filename_original_bare() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect bare (Original)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_version() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Version).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect (Original Version)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_club_mix_not_detected() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Club Mix).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should NOT detect (Original Club Mix)"
+        );
+    }
+
+    #[test]
     fn check_filename_tech_specs() {
         let result = make_single(&[("artist", "A"), ("title", "T")]);
         let issues = check_filename(
@@ -2589,6 +2640,40 @@ mod tests {
                 .iter()
                 .any(|i| i.issue_type == IssueType::FilenameTagDrift),
             "case-insensitive (original mix) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_bare_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_version_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original Version)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original Version) in tag only should not trigger drift"
         );
     }
 

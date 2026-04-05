@@ -79,6 +79,8 @@ audit_state(scan, scope="/path/")
 
 Never manually resolve with `resolution="fixed"` — that's reserved for the scan engine.
 
+**WAV_TAG_DRIFT and Original suffixes:** When the drift is caused by one tag layer having an `(Original)`, `(Original Mix)`, or `(Original Version)` suffix that the other lacks, strip the suffix from both layers rather than syncing it. These are store-generated filler — the shorter title is correct. More specific Original variants like `(Original Club Mix)` or `(Original Demo Version)` should be kept as-is.
+
 ### 4. Review-tier issues
 
 Present each issue type in batches.
@@ -149,11 +151,11 @@ Present: scope, files scanned, pass rate, fixes by type, deferred items, next st
 | `MISSING_YEAR` | Review | `year` field empty/null | Enrichment lookup |
 | `ARTIST_IN_TITLE` | Safe | `title` starts with `{artist} - ` | Strip prefix |
 | `WAV_TAG3_MISSING` | Safe | WAV file with `tag3_missing` non-empty | Copy from tag 2 |
-| `WAV_TAG_DRIFT` | Safe | WAV `id3v2` and `riff_info` values differ | Sync to tag 2 |
+| `WAV_TAG_DRIFT` | Safe | WAV `id3v2` and `riff_info` values differ | Sync to tag 2 (but see Original-suffix note in Step 3) |
 | `GENRE_SET` | Review | `genre` field non-empty | User decides keep/clear/migrate |
 | `NO_TAGS` | Review | All 14 tag fields empty/null | Infer from filename/dir |
 | `BAD_FILENAME` | Review | Filename doesn't match canonical | User review |
-| `ORIGINAL_MIX_SUFFIX` | Rename-safe | Filename contains `(Original Mix)` | Strip suffix (if not imported) |
+| `ORIGINAL_MIX_SUFFIX` | Rename-safe | Filename contains `(Original)`, `(Original Mix)`, or `(Original Version)` | Strip suffix from filename and tags (defer rename if imported) |
 | `TECH_SPECS_IN_DIR` | Rename-safe | Directory contains `[FLAC]`, `[WAV]`, etc. | Strip from dir name |
 | `MISSING_YEAR_IN_DIR` | Review | Album directory missing `(YYYY)` suffix | Enrichment lookup |
 | `FILENAME_TAG_DRIFT` | Review | Filename artist/title disagrees with tags | Rename to match tag (defer if imported) |

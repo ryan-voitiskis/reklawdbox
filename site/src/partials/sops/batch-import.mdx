@@ -283,12 +283,12 @@ For audio files at the root of the batch directory.
 
 ### Step 1: Clean filenames
 
-Remove `(Original Mix)` suffix. Keep other parenthetical info (`(Remix)`, `(Edit)`, etc.):
+Strip store-generated `(Original)`, `(Original Mix)`, and `(Original Version)` suffixes. Keep other parenthetical info (`(Remix)`, `(Edit)`, `(Original Club Mix)`, etc.):
 
 ```sh
 cd "/path/to/batch"
-find . -maxdepth 1 -type f -name "* (Original Mix).*" -print0 | while IFS= read -r -d '' f; do
-    new_name="${f/ (Original Mix)/}"
+find . -maxdepth 1 -type f \( -name "* (Original Mix).*" -o -name "* (Original Version).*" -o -name "* (Original).*" \) -print0 | while IFS= read -r -d '' f; do
+    new_name="$(echo "$f" | sed -E 's/ \(Original( (Mix|Version))?\)//')"
     mv -n "$f" "$new_name"
 done
 ```
@@ -406,5 +406,5 @@ Summarize: albums processed (single artist vs VA), loose tracks processed, any u
 | `Artist - Title.wav` | Correct |
 | `Artist - Title (Remix Info).wav` | Correct |
 | `Artist, Artist B - Title.wav` | Correct |
-| `Artist - Title (Original Mix).wav` | Remove "(Original Mix)" |
+| `Artist - Title (Original Mix).wav` | Remove `(Original)` / `(Original Mix)` / `(Original Version)` suffix |
 | `Title.wav` | Missing artist — ask user |

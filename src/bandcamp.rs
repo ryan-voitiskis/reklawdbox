@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use regex::Regex;
 use reqwest::Client;
@@ -218,10 +218,10 @@ fn strip_title_noise(title: &str) -> String {
         }
     }
 
-    let lower = s.to_lowercase();
-    if lower.ends_with("(original mix)") {
-        s.truncate(s.len() - "(original mix)".len());
-    }
+    static ORIGINAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)$").expect("ORIGINAL_RE must compile")
+    });
+    s = ORIGINAL_RE.replace(&s, "").into_owned();
 
     s.trim().to_string()
 }
@@ -557,6 +557,27 @@ mod tests {
         assert_eq!(
             strip_title_noise("Energy Soul (Original Mix)"),
             "Energy Soul"
+        );
+    }
+
+    #[test]
+    fn strip_original_bare() {
+        assert_eq!(strip_title_noise("Energy Soul (Original)"), "Energy Soul");
+    }
+
+    #[test]
+    fn strip_original_version() {
+        assert_eq!(
+            strip_title_noise("Energy Soul (Original Version)"),
+            "Energy Soul"
+        );
+    }
+
+    #[test]
+    fn no_strip_original_club_mix() {
+        assert_eq!(
+            strip_title_noise("Track (Original Club Mix)"),
+            "Track (Original Club Mix)"
         );
     }
 
