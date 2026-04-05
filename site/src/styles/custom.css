@@ -214,9 +214,13 @@ dialog {
 }
 
 /* Hero layout */
+.hero {
+	padding-bottom: 0.5rem;
+}
 @media (min-width: 50rem) {
 	.hero {
 		grid-template-columns: 3fr 2fr;
+		padding-block: clamp(1.25rem, calc(0.5rem + 5vmin), 5rem);
 	}
 	.hero img {
 		width: min(100%, 30rem);
