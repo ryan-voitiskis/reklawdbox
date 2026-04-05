@@ -109,6 +109,13 @@ cp mcp-config.example.json .mcp.json
 The binary runs MCP server mode by default. Subcommands are available for local workflows
 outside your MCP host.
 
+### Batch Enrichment + Analysis
+
+```bash
+./target/release/reklawdbox hydrate --max-tracks 200
+./target/release/reklawdbox hydrate --providers discogs,beatport,analysis --playlist <playlist_id> --cpu overnight -y
+```
+
 ### Batch Audio Analysis
 
 ```bash
@@ -154,6 +161,14 @@ Start Claude Code from `~/Music` to access reklawdbox tools:
 cd ~/Music && claude
 ```
 
+### Disconnect Broker
+
+Clear the stored Discogs broker session (forces re-auth on next lookup):
+
+```bash
+reklawdbox disconnect-broker
+```
+
 ## Discogs Auth Flow
 
 1. Call `lookup_discogs` for any track. The built-in broker is preconfigured — no env vars needed.
@@ -166,32 +181,62 @@ cd ~/Music && claude
 <!-- dprint-ignore -->
 | Tool | Description |
 |------|-------------|
+| **Library & Data** | |
 | `read_library` | Get library summary: track count, genre distribution, stats |
 | `search_tracks` | Search and filter tracks in the Rekordbox library |
 | `get_track` | Get full details for a specific track by ID |
 | `get_playlists` | List all playlists with track counts |
 | `get_playlist_tracks` | List tracks in a specific playlist |
+| `get_sessions` | List recent DJ sessions from Rekordbox play history |
+| `get_session_tracks` | Get the ordered track list for a specific DJ session |
+| `get_play_stats` | Get per-track play statistics scoped by search filters |
 | `get_genre_taxonomy` | Get the configured genre taxonomy |
-| `update_tracks` | Stage changes to track metadata (genre, comments, rating, color) |
-| `preview_changes` | Preview all staged changes, showing what will differ from current state |
-| `write_xml` | Write staged changes to a Rekordbox-compatible XML file |
-| `clear_changes` | Clear staged changes for specific tracks or all |
-| `suggest_normalizations` | Analyze genres and suggest normalizations to canonical taxonomy |
+| `resolve_track_data` | Return all cached + staged data for one track (cache-only) |
+| `resolve_tracks_data` | Batched `resolve_track_data` over IDs, playlist, or search scope |
+| `cache_coverage` | Report enrichment/audio cache completeness for a selected track scope |
+| **Enrichment & Analysis** | |
 | `lookup_discogs` | Look up a track on Discogs for genre/style enrichment |
 | `lookup_beatport` | Look up a track on Beatport for genre/BPM/key enrichment |
-| `enrich_tracks` | Batch enrich tracks via Discogs/Beatport using IDs, playlist, or filters |
+| `lookup_musicbrainz` | Look up a track on MusicBrainz for year/label data |
+| `lookup_bandcamp` | Look up a track on Bandcamp for year/label/tags data |
+| `enrich_tracks` | Batch enrich tracks via Discogs/Beatport/Bandcamp using IDs, playlist, or filters |
 | `analyze_track_audio` | Analyze one track with stratum-dsp and optional Essentia (cached) |
 | `analyze_audio_batch` | Batch audio analysis with stratum-dsp and optional Essentia (cached) |
 | `setup_essentia` | Install/validate Essentia in a local venv and activate it for the running server |
+| **Classification & Staging** | |
+| `suggest_normalizations` | Analyze genres and suggest normalizations to canonical taxonomy |
+| `classify_tracks` | Apply genre decision tree to ungenred tracks with confidence levels |
+| `audit_genres` | Verify existing genre tags against enrichment and audio evidence |
+| `backfill_labels` | Auto-fill empty labels from enrichment caches |
+| `backfill_years` | Auto-fill missing years from file tags, folder paths, and enrichment cache |
+| `backfill_albums` | Auto-fill empty album names from file tags, folder paths, and enrichment cache |
+| `update_tracks` | Stage changes to track metadata (genre, comments, rating, color, label, year, album) |
+| `preview_changes` | Preview all staged changes, showing what will differ from current state |
+| `write_xml` | Write staged changes to a Rekordbox-compatible XML file |
+| `clear_changes` | Clear staged changes for specific tracks or all |
+| **Mixing & Sequencing** | |
 | `score_transition` | Score a single transition between two tracks (key/BPM/energy/genre/rhythm) |
-| `build_set` | Generate 2-3 candidate set orderings from a track pool |
-| `resolve_track_data` | Return all cached + staged data for one track without external calls |
-| `resolve_tracks_data` | Batched `resolve_track_data` over IDs, playlist, or search scope |
-| `cache_coverage` | Report enrichment/audio cache completeness for a selected track scope |
+| `query_transition_candidates` | Rank pool tracks as transition candidates from a reference track |
+| `build_set` | Generate candidate set orderings from a track pool using beam search |
+| `score_pool_compatibility` | Score pairwise, one-vs-pool, or cohesion compatibility between tracks |
+| `expand_pool` | Expand a track pool by finding compatible additions from the library |
+| `describe_pool` | Analyze a pool's compatibility, coverage, energy/BPM/key stats |
+| `discover_pools` | Discover natural track pools via compatibility graph clique enumeration |
+| `save_weight_preset` | Save a custom weight preset for reuse across sessions |
+| `list_weight_presets` | List available weight presets (built-in and custom) |
+| `delete_weight_preset` | Delete a custom saved weight preset |
+| **Files & System** | |
 | `read_file_tags` | Read metadata tags from audio files (FLAC, MP3, WAV, M4A, AAC, AIFF) |
 | `write_file_tags` | Write/delete metadata tags on audio files with optional dry-run preview |
 | `extract_cover_art` | Extract embedded cover art from an audio file to disk |
 | `embed_cover_art` | Embed cover art into one or more audio files |
+| `scan_broken_links` | Scan for tracks with missing audio files on disk |
+| `scan_orphan_files` | Find audio files on disk not imported into Rekordbox |
+| `scan_playlist_coverage` | Find tracks not assigned to any playlist |
+| `scan_duplicates` | Detect duplicate tracks by metadata or exact file hash |
+| `audit_state` | Collection audit engine: scan, query, resolve issues, get summary |
+| `clear_caches` | Clear all caches and staged changes |
+| `help` | Get step-by-step workflow SOPs |
 
 ## Response Contract Notes
 

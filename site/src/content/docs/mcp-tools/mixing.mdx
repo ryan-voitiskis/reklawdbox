@@ -59,7 +59,7 @@ Generate candidate DJ set sequences from a track pool using beam search with ene
 | `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
 | `energy_curve` | string or array | | Preset name or custom phase array (default: `"warmup_build_peak_release"`) |
 | `start_track_id` | string | | Force a specific opening track |
-| `beam_width` | integer | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`) |
+| `beam_width` | integer | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`). Supersedes the deprecated `candidates` parameter. |
 | `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
 | `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
 | `bpm_drift_pct` | number | | Max BPM drift from start track as % (default: `6.0`) |
