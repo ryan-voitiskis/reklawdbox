@@ -9,7 +9,7 @@ Essentia, multi-provider enrichment (Discogs, Beatport, Bandcamp, MusicBrainz),
 genre classification, transition scoring, and greedy set sequencing with
 energy-curve shaping.
 
-- Workspace: Rust 2024, two crates — `reklawdbox` (MCP server + CLI) and `stratum-dsp` (audio DSP).
+- Workspace: two crates — `reklawdbox` (MCP server + CLI, edition 2024) and `stratum-dsp` (audio DSP, edition 2021).
 - Key deps: `rmcp`, `tokio`, `rusqlite` + bundled SQLCipher/OpenSSL, `reqwest` + `rustls`, `symphonia`, `serde`/`schemars`.
 - Rekordbox access: encrypted `master.db` opened read-only via SQLCipher. No write path exists.
 - Write path: in-memory staged changes exported as Rekordbox-compatible XML for manual reimport.
@@ -17,7 +17,7 @@ energy-curve shaping.
 - Enrichment: Discogs via broker API (`broker/` — Cloudflare Workers + D1); Beatport, Bandcamp, MusicBrainz via direct HTTP.
 - Audio analysis: `symphonia` decode → `stratum-dsp` (BPM, key); optional Essentia via Python subprocess (energy, timbre, rhythm).
 
-Use Conventional Commits.
+Use Conventional Commits. Pre-commit hook enforces `cargo fmt --check`, `clippy -D warnings`, and `dprint check`.
 
 ## MCP Development Loop
 

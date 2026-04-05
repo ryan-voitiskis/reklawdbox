@@ -9,14 +9,14 @@ Essentia, multi-provider enrichment (Discogs, Beatport, Bandcamp, MusicBrainz),
 genre classification, transition scoring, and greedy set sequencing with
 energy-curve shaping.
 
-- Workspace: Rust 2024, two crates — `reklawdbox` (MCP server + CLI) and `stratum-dsp` (audio DSP).
+- Workspace: two crates — `reklawdbox` (MCP server + CLI, edition 2024) and `stratum-dsp` (audio DSP, edition 2021).
 - Key deps: `rmcp`, `tokio`, `rusqlite` + bundled SQLCipher/OpenSSL, `reqwest` + `rustls`, `symphonia`, `serde`/`schemars`.
 - Rekordbox access: encrypted `master.db` opened read-only via SQLCipher. No write path exists.
 - Write path: in-memory staged changes exported as Rekordbox-compatible XML for manual reimport.
 - Local persistence: SQLite (WAL) for enrichment cache and audio-analysis cache. Broker session tokens are in macOS Keychain.
 - Enrichment: Discogs via broker API (`broker/` — Cloudflare Workers + D1); Beatport, Bandcamp, MusicBrainz via direct HTTP.
 - Audio analysis: `symphonia` decode → `stratum-dsp` (BPM, key); optional Essentia via Python subprocess (energy, timbre, rhythm).
-- SOPs: `site/src/partials/sops/*.mdx` are `include_str!`'d into the binary via `help_handler.rs`. SOP changes require a release to take effect.
+- SOPs: workflow `.mdx` files from `site/src/partials/sops/` are `include_str!`'d into the binary via `help_handler.rs` (not all files in that directory are embedded). SOP changes require a release to take effect.
 - Pre-commit hook: `cargo fmt --check`, `clippy -D warnings`, `dprint check`. Run `cargo fmt && dprint fmt` before committing.
 
 ## MCP Development Loop
