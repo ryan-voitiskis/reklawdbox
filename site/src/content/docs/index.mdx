@@ -41,8 +41,10 @@ import { Card, CardGrid, LinkCard, Aside, Steps } from '@astrojs/starlight/compo
 3. **Start a conversation**
 
    ```bash
-   cd ~/Music && claude
+   cd ~/Music && claude --dangerously-skip-permissions
    ```
+
+   The `--dangerously-skip-permissions` flag is needed for multi-step workflows. [Why this is safe →](/getting-started/#start-a-conversation)
 
 </Steps>
 
@@ -56,7 +58,7 @@ It's the foundation for everything else — enrichment data powers genre classif
 
 <LinkCard title="Library Cleanup" href="/workflows/library-cleanup/" description="Five sessions that build on each other — the recommended starting point for every new user." />
 
-## Then the fun stuff
+## Creative tools
 
 Once your library is clean and enriched:
 
@@ -69,7 +71,7 @@ Once your library is clean and enriched:
     Discover compatible track pools for live improvisation. Symmetric scoring finds tracks that mix well in any direction.
     [Build a pool](/workflows/pool-building/)
   </Card>
-  <Card title="Gig Prep" icon="rocket">
+  <Card title="Gig Prep" icon="download">
     Describe your gig — venue, time slot, vibe — and the agent translates context into curated pools and sequences.
     [Prep for a gig](/workflows/dj-prompts/)
   </Card>
