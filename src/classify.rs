@@ -1108,8 +1108,7 @@ fn resolve_current_canonical(current_genre: &str) -> Option<&'static str> {
     if current_genre.is_empty() {
         return None;
     }
-    genre::canonical_genre_name(current_genre)
-        .or_else(|| genre::canonical_genre_from_alias(current_genre))
+    genre::resolve_genre(current_genre)
 }
 
 fn compare_to_current(

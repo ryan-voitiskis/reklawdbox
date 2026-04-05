@@ -57,6 +57,7 @@ pub(super) async fn handle_lookup_discogs(
             &norm_artist,
             &norm_title,
             norm_album.as_deref(),
+            false,
         )
         .map_err(cache_error)?
         {
@@ -140,9 +141,15 @@ pub(super) async fn handle_lookup_beatport(
 
     if !force_refresh {
         let store_conn = server.cache_store_conn()?;
-        if let Some(cached) =
-            store::get_enrichment(&store_conn, "beatport", &norm_artist, &norm_title, None)
-                .map_err(cache_error)?
+        if let Some(cached) = store::get_enrichment(
+            &store_conn,
+            "beatport",
+            &norm_artist,
+            &norm_title,
+            None,
+            false,
+        )
+        .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -221,9 +228,15 @@ pub(super) async fn handle_lookup_musicbrainz(
 
     if !force_refresh {
         let store_conn = server.cache_store_conn()?;
-        if let Some(cached) =
-            store::get_enrichment(&store_conn, "musicbrainz", &norm_artist, &norm_title, None)
-                .map_err(cache_error)?
+        if let Some(cached) = store::get_enrichment(
+            &store_conn,
+            "musicbrainz",
+            &norm_artist,
+            &norm_title,
+            None,
+            false,
+        )
+        .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -302,9 +315,15 @@ pub(super) async fn handle_lookup_bandcamp(
 
     if !force_refresh {
         let store_conn = server.cache_store_conn()?;
-        if let Some(cached) =
-            store::get_enrichment(&store_conn, "bandcamp", &norm_artist, &norm_title, None)
-                .map_err(cache_error)?
+        if let Some(cached) = store::get_enrichment(
+            &store_conn,
+            "bandcamp",
+            &norm_artist,
+            &norm_title,
+            None,
+            false,
+        )
+        .map_err(cache_error)?
         {
             let result = match &cached.response_json {
                 Some(json_str) => serde_json::from_str::<serde_json::Value>(json_str)
@@ -437,6 +456,7 @@ async fn enrich_single_track(
                 &norm_artist,
                 &norm_title,
                 norm_album.as_deref(),
+                false,
             )
         {
             result.cached += 1;
@@ -444,14 +464,14 @@ async fn enrich_single_track(
         }
         if want_beatport
             && let Ok(Some(_)) =
-                store::get_enrichment(conn, "beatport", &norm_artist, &norm_title, None)
+                store::get_enrichment(conn, "beatport", &norm_artist, &norm_title, None, false)
         {
             result.cached += 1;
             beatport_cached = true;
         }
         if want_bandcamp
             && let Ok(Some(_)) =
-                store::get_enrichment(conn, "bandcamp", &norm_artist, &norm_title, None)
+                store::get_enrichment(conn, "bandcamp", &norm_artist, &norm_title, None, false)
         {
             result.cached += 1;
             bandcamp_cached = true;

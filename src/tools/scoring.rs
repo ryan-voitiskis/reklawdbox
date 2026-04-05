@@ -1680,13 +1680,7 @@ fn canonicalize_genre(raw_genre: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(canonical) = genre::canonical_genre_name(trimmed) {
-        return Some(canonical.to_string());
-    }
-    if let Some(alias_target) = genre::canonical_genre_from_alias(trimmed) {
-        return Some(alias_target.to_string());
-    }
-    None
+    genre::resolve_genre(trimmed).map(|s| s.to_string())
 }
 
 pub(super) fn genre_family_for(canonical_genre: &str) -> GenreFamily {

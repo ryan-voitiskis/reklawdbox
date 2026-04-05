@@ -68,6 +68,12 @@ pub fn canonical_genre_name(genre: &str) -> Option<&'static str> {
         .copied()
 }
 
+/// Resolve a genre string to its canonical form by trying exact match first,
+/// then alias lookup. Returns None if the genre is not recognized.
+pub fn resolve_genre(genre: &str) -> Option<&'static str> {
+    canonical_genre_name(genre).or_else(|| canonical_genre_from_alias(genre))
+}
+
 pub fn is_known_genre(genre: &str) -> bool {
     canonical_genre_name(genre).is_some()
 }
@@ -285,7 +291,7 @@ pub fn extract_parenthetical_base(raw: &str) -> Option<&'static str> {
     if base.is_empty() {
         return None;
     }
-    canonical_genre_name(base).or_else(|| canonical_genre_from_alias(base))
+    resolve_genre(base)
 }
 
 /// Token-to-genre map for extracting genre signals from non-canonical genre strings.
@@ -452,54 +458,6 @@ impl BpmRange {
     }
 }
 
-/// Returns the typical BPM range for a canonical genre, if BPM is diagnostic for that genre.
-/// Returns `None` for genres where BPM spread is too wide to be useful (e.g. IDM, Jazz, Experimental).
-pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
-    match canonical {
-        "2-Step Garage" => Some(BpmRange::new(128.0, 135.0)),
-        "Acid" => Some(BpmRange::new(120.0, 145.0)),
-        "Afro House" => Some(BpmRange::new(118.0, 128.0)),
-        "Ambient Techno" => Some(BpmRange::new(110.0, 130.0)),
-        "Bassline" => Some(BpmRange::new(130.0, 142.0)),
-        "Dancehall" => Some(BpmRange::new(85.0, 108.0)),
-        "Deep House" => Some(BpmRange::new(118.0, 126.0)),
-        "Deep Techno" => Some(BpmRange::new(120.0, 132.0)),
-        "Disco" => Some(BpmRange::new(110.0, 130.0)),
-        "Downtempo" => Some(BpmRange::new(80.0, 115.0)),
-        "Drone Techno" => Some(BpmRange::new(115.0, 135.0)),
-        "Drum & Bass" => Some(BpmRange::new(168.0, 180.0)),
-        "Dub" => Some(BpmRange::new(60.0, 90.0)),
-        "Dub Reggae" => Some(BpmRange::new(60.0, 90.0)),
-        "Dub Techno" => Some(BpmRange::new(118.0, 132.0)),
-        "Dubstep" => Some(BpmRange::new(136.0, 144.0)),
-        "EBM" => Some(BpmRange::new(110.0, 140.0)),
-        "Footwork" => Some(BpmRange::new(155.0, 165.0)),
-        "Future Garage" => Some(BpmRange::new(125.0, 138.0)),
-        "Gabber" => Some(BpmRange::new(160.0, 190.0)),
-        "Garage" => Some(BpmRange::new(130.0, 138.0)),
-        "Gospel House" => Some(BpmRange::new(120.0, 128.0)),
-        "Grime" => Some(BpmRange::new(138.0, 145.0)),
-        "Happy Hardcore" => Some(BpmRange::new(165.0, 180.0)),
-        "Hard Techno" => Some(BpmRange::new(145.0, 160.0)),
-        "Hard Trance" => Some(BpmRange::new(138.0, 150.0)),
-        "Hardcore" => Some(BpmRange::new(160.0, 180.0)),
-        "Hardstyle" => Some(BpmRange::new(148.0, 160.0)),
-        "House" => Some(BpmRange::new(120.0, 130.0)),
-        "Italo Disco" => Some(BpmRange::new(118.0, 135.0)),
-        "Jungle" => Some(BpmRange::new(160.0, 175.0)),
-        "Minimal" => Some(BpmRange::new(120.0, 132.0)),
-        "Progressive House" => Some(BpmRange::new(122.0, 132.0)),
-        "Psytrance" => Some(BpmRange::new(138.0, 148.0)),
-        "Speed Garage" => Some(BpmRange::new(130.0, 140.0)),
-        "Tech House" => Some(BpmRange::new(124.0, 132.0)),
-        "Techno" => Some(BpmRange::new(128.0, 140.0)),
-        "Trance" => Some(BpmRange::new(136.0, 145.0)),
-        "Trip-Hop" => Some(BpmRange::new(80.0, 100.0)),
-        "UK Funky" => Some(BpmRange::new(125.0, 135.0)),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GenreFamily {
     House,
@@ -508,6 +466,421 @@ pub enum GenreFamily {
     Hardcore,
     Downtempo,
     Other,
+}
+
+/// Combined genre metadata: family classification, depth within family, and
+/// optional BPM range. Consolidates what was previously three parallel match
+/// trees (`genre_family`, `genre_depth`, `genre_bpm_range`).
+struct GenreMeta {
+    family: GenreFamily,
+    depth: u8,
+    bpm: Option<BpmRange>,
+}
+
+/// Genres not in this table default to `GenreFamily::Other`, depth 0, no BPM range.
+const GENRE_META: &[(&str, GenreMeta)] = &[
+    // ── House family (depth: 1 = most energetic/driving, 5 = deepest/darkest) ──
+    (
+        "Disco",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 1,
+            bpm: Some(BpmRange::new(110.0, 130.0)),
+        },
+    ),
+    (
+        "Speed Garage",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 1,
+            bpm: Some(BpmRange::new(130.0, 140.0)),
+        },
+    ),
+    (
+        "Italo Disco",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 1,
+            bpm: Some(BpmRange::new(118.0, 135.0)),
+        },
+    ),
+    (
+        "Gospel House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 2,
+            bpm: Some(BpmRange::new(120.0, 128.0)),
+        },
+    ),
+    (
+        "Garage",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 2,
+            bpm: Some(BpmRange::new(130.0, 138.0)),
+        },
+    ),
+    (
+        "Afro House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 2,
+            bpm: Some(BpmRange::new(118.0, 128.0)),
+        },
+    ),
+    (
+        "2-Step Garage",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 2,
+            bpm: Some(BpmRange::new(128.0, 135.0)),
+        },
+    ),
+    (
+        "UK Funky",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 2,
+            bpm: Some(BpmRange::new(125.0, 135.0)),
+        },
+    ),
+    (
+        "House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 3,
+            bpm: Some(BpmRange::new(120.0, 130.0)),
+        },
+    ),
+    (
+        "Tech House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 3,
+            bpm: Some(BpmRange::new(124.0, 132.0)),
+        },
+    ),
+    (
+        "Progressive House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 4,
+            bpm: Some(BpmRange::new(122.0, 132.0)),
+        },
+    ),
+    (
+        "Deep House",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 5,
+            bpm: Some(BpmRange::new(118.0, 126.0)),
+        },
+    ),
+    // ── Techno family ──
+    (
+        "Hard Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 1,
+            bpm: Some(BpmRange::new(145.0, 160.0)),
+        },
+    ),
+    (
+        "Psytrance",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 1,
+            bpm: Some(BpmRange::new(138.0, 148.0)),
+        },
+    ),
+    (
+        "Acid",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 2,
+            bpm: Some(BpmRange::new(120.0, 145.0)),
+        },
+    ),
+    (
+        "EBM",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 2,
+            bpm: Some(BpmRange::new(110.0, 140.0)),
+        },
+    ),
+    (
+        "Electro",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 2,
+            bpm: None,
+        },
+    ),
+    (
+        "Trance",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 2,
+            bpm: Some(BpmRange::new(136.0, 145.0)),
+        },
+    ),
+    (
+        "Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 3,
+            bpm: Some(BpmRange::new(128.0, 140.0)),
+        },
+    ),
+    (
+        "Minimal",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 4,
+            bpm: Some(BpmRange::new(120.0, 132.0)),
+        },
+    ),
+    (
+        "Deep Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 5,
+            bpm: Some(BpmRange::new(120.0, 132.0)),
+        },
+    ),
+    (
+        "Dub Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 6,
+            bpm: Some(BpmRange::new(118.0, 132.0)),
+        },
+    ),
+    (
+        "Ambient Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 7,
+            bpm: Some(BpmRange::new(110.0, 130.0)),
+        },
+    ),
+    (
+        "Drone Techno",
+        GenreMeta {
+            family: GenreFamily::Techno,
+            depth: 8,
+            bpm: Some(BpmRange::new(115.0, 135.0)),
+        },
+    ),
+    // ── Hardcore family (1 = most commercial/euphoric, 5 = most raw/aggressive) ──
+    (
+        "Hardstyle",
+        GenreMeta {
+            family: GenreFamily::Hardcore,
+            depth: 1,
+            bpm: Some(BpmRange::new(148.0, 160.0)),
+        },
+    ),
+    (
+        "Happy Hardcore",
+        GenreMeta {
+            family: GenreFamily::Hardcore,
+            depth: 2,
+            bpm: Some(BpmRange::new(165.0, 180.0)),
+        },
+    ),
+    (
+        "Hard Trance",
+        GenreMeta {
+            family: GenreFamily::Hardcore,
+            depth: 3,
+            bpm: Some(BpmRange::new(138.0, 150.0)),
+        },
+    ),
+    (
+        "Hardcore",
+        GenreMeta {
+            family: GenreFamily::Hardcore,
+            depth: 4,
+            bpm: Some(BpmRange::new(160.0, 180.0)),
+        },
+    ),
+    (
+        "Gabber",
+        GenreMeta {
+            family: GenreFamily::Hardcore,
+            depth: 5,
+            bpm: Some(BpmRange::new(160.0, 190.0)),
+        },
+    ),
+    // ── Bass family ──
+    (
+        "Grime",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 1,
+            bpm: Some(BpmRange::new(138.0, 145.0)),
+        },
+    ),
+    (
+        "Bassline",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 1,
+            bpm: Some(BpmRange::new(130.0, 142.0)),
+        },
+    ),
+    (
+        "Drum & Bass",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 2,
+            bpm: Some(BpmRange::new(168.0, 180.0)),
+        },
+    ),
+    (
+        "Footwork",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 2,
+            bpm: Some(BpmRange::new(155.0, 165.0)),
+        },
+    ),
+    (
+        "Jungle",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 3,
+            bpm: Some(BpmRange::new(160.0, 175.0)),
+        },
+    ),
+    (
+        "Breakbeat",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 3,
+            bpm: None,
+        },
+    ),
+    (
+        "Dubstep",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 4,
+            bpm: Some(BpmRange::new(136.0, 144.0)),
+        },
+    ),
+    (
+        "Future Garage",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 5,
+            bpm: Some(BpmRange::new(125.0, 138.0)),
+        },
+    ),
+    (
+        "Broken Beat",
+        GenreMeta {
+            family: GenreFamily::Bass,
+            depth: 5,
+            bpm: None,
+        },
+    ),
+    // ── Downtempo family ──
+    (
+        "IDM",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 2,
+            bpm: None,
+        },
+    ),
+    (
+        "Experimental",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 2,
+            bpm: None,
+        },
+    ),
+    (
+        "Downtempo",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 3,
+            bpm: Some(BpmRange::new(80.0, 115.0)),
+        },
+    ),
+    (
+        "Trip-Hop",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 3,
+            bpm: Some(BpmRange::new(80.0, 100.0)),
+        },
+    ),
+    (
+        "Dub",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 4,
+            bpm: Some(BpmRange::new(60.0, 90.0)),
+        },
+    ),
+    (
+        "Dub Reggae",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 4,
+            bpm: Some(BpmRange::new(60.0, 90.0)),
+        },
+    ),
+    (
+        "Ambient",
+        GenreMeta {
+            family: GenreFamily::Downtempo,
+            depth: 5,
+            bpm: None,
+        },
+    ),
+    // ── Other (has BPM range but no family/depth) ──
+    (
+        "Dancehall",
+        GenreMeta {
+            family: GenreFamily::Other,
+            depth: 0,
+            bpm: Some(BpmRange::new(85.0, 108.0)),
+        },
+    ),
+];
+
+fn genre_meta_map() -> &'static HashMap<&'static str, GenreMeta> {
+    static MAP: OnceLock<HashMap<&'static str, GenreMeta>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map = HashMap::with_capacity(GENRE_META.len());
+        for &(genre, ref meta) in GENRE_META {
+            let previous = map.insert(
+                genre,
+                GenreMeta {
+                    family: meta.family,
+                    depth: meta.depth,
+                    bpm: meta.bpm,
+                },
+            );
+            assert!(
+                previous.is_none(),
+                "duplicate GENRE_META entry for '{genre}'"
+            );
+        }
+        map
+    })
+}
+
+/// Returns the typical BPM range for a canonical genre, if BPM is diagnostic for that genre.
+/// Returns `None` for genres where BPM spread is too wide to be useful (e.g. IDM, Jazz, Experimental).
+pub fn genre_bpm_range(canonical: &str) -> Option<BpmRange> {
+    genre_meta_map().get(canonical).and_then(|m| m.bpm)
 }
 
 /// Depth score within a genre's family. Higher = deeper/darker/more atmospheric.
@@ -519,74 +892,18 @@ pub enum GenreFamily {
 /// Audio profile validates specificity claims: e.g. if enrichment says "Deep Techno"
 /// but audio is high_energy (not atmospheric), the server prefers "Techno" instead.
 pub fn genre_depth(canonical: &str) -> u8 {
-    match canonical {
-        // House family — 1 = most energetic/driving, 5 = deepest/darkest
-        "Disco" | "Speed Garage" | "Italo Disco" => 1,
-        "Gospel House" | "Garage" | "Afro House" | "2-Step Garage" | "UK Funky" => 2,
-        "House" | "Tech House" => 3,
-        "Progressive House" => 4,
-        "Deep House" => 5,
-
-        // Hardcore family — 1 = most commercial/euphoric, 5 = most raw/aggressive
-        "Hardstyle" => 1,
-        "Happy Hardcore" => 2,
-        "Hard Trance" => 3,
-        "Hardcore" => 4,
-        "Gabber" => 5,
-
-        // Techno family
-        "Hard Techno" | "Psytrance" => 1,
-        "Acid" | "EBM" | "Electro" | "Trance" => 2,
-        "Techno" => 3,
-        "Minimal" => 4,
-        "Deep Techno" => 5,
-        "Dub Techno" => 6,
-        "Ambient Techno" => 7,
-        "Drone Techno" => 8,
-
-        // Bass family
-        "Grime" | "Bassline" => 1,
-        "Drum & Bass" | "Footwork" => 2,
-        "Jungle" | "Breakbeat" => 3,
-        "Dubstep" => 4,
-        "Future Garage" | "Broken Beat" => 5,
-
-        // Downtempo family
-        "IDM" | "Experimental" => 2,
-        "Downtempo" | "Trip-Hop" => 3,
-        "Dub" | "Dub Reggae" => 4,
-        "Ambient" => 5,
-
-        // Other / unknown — no depth comparison possible
-        _ => 0,
-    }
+    genre_meta_map()
+        .get(canonical)
+        .map(|m| m.depth)
+        .unwrap_or(0)
 }
 
 /// Non-canonical names fall through to `Other`.
 pub fn genre_family(canonical: &str) -> GenreFamily {
-    match canonical {
-        "House" | "Deep House" | "Tech House" | "Afro House" | "Gospel House"
-        | "Progressive House" | "Garage" | "Speed Garage" | "Disco" | "Italo Disco"
-        | "2-Step Garage" | "UK Funky" => GenreFamily::House,
-
-        "Techno" | "Deep Techno" | "Minimal" | "Dub Techno" | "Ambient Techno" | "Hard Techno"
-        | "Drone Techno" | "Acid" | "EBM" | "Electro" | "Trance" | "Psytrance" => {
-            GenreFamily::Techno
-        }
-
-        "Hardcore" | "Gabber" | "Hardstyle" | "Happy Hardcore" | "Hard Trance" => {
-            GenreFamily::Hardcore
-        }
-
-        "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "Footwork" | "Future Garage"
-        | "Grime" | "Bassline" | "Broken Beat" => GenreFamily::Bass,
-
-        "Ambient" | "Downtempo" | "Trip-Hop" | "Dub" | "Dub Reggae" | "IDM" | "Experimental" => {
-            GenreFamily::Downtempo
-        }
-
-        _ => GenreFamily::Other,
-    }
+    genre_meta_map()
+        .get(canonical)
+        .map(|m| m.family)
+        .unwrap_or(GenreFamily::Other)
 }
 
 #[cfg(test)]

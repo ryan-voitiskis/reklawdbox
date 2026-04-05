@@ -1715,7 +1715,7 @@ async fn lookup_discogs_no_match_payload_is_consistent_across_live_and_cache_pat
         let store = server
             .cache_store_conn()
             .expect("internal store should be available");
-        store::get_enrichment(&store, "discogs", &norm_artist, &norm_title, None)
+        store::get_enrichment(&store, "discogs", &norm_artist, &norm_title, None, false)
             .expect("cache read should succeed")
             .expect("discogs no-match lookup should create cache entry")
     };
@@ -1789,7 +1789,7 @@ async fn lookup_beatport_no_match_payload_is_consistent_across_live_and_cache_pa
         let store = server
             .cache_store_conn()
             .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
             .expect("cache read should succeed")
             .expect("beatport no-match lookup should create cache entry")
     };
@@ -1951,6 +1951,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         &norm_artist,
         &norm_title_one,
         Some(&norm_album),
+        false,
     )
     .expect("cache read should succeed")
     .expect("first cache entry should still exist");
@@ -1960,6 +1961,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         &norm_artist,
         &norm_title_two,
         Some(&norm_album),
+        false,
     )
     .expect("cache read should succeed")
     .expect("second cache entry should still exist");
@@ -2460,7 +2462,7 @@ async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
         let store = server
             .cache_store_conn()
             .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
             .expect("cache read should succeed")
             .expect("individual lookup should have created cache entry")
     };
@@ -2523,7 +2525,7 @@ async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
         let store = server
             .cache_store_conn()
             .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
             .expect("cache read should succeed")
             .expect("batch enrich should have created beatport cache entry")
     };

@@ -220,12 +220,13 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
         if want_discogs {
-            match store::get_enrichment_any(
+            match store::get_enrichment(
                 &store_conn,
                 "discogs",
                 &norm_artist,
                 &norm_title,
                 norm_album.as_deref(),
+                true,
             )? {
                 Some(entry) => {
                     if entry.match_quality.as_deref() == Some("error") {
@@ -244,12 +245,13 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
 
         if want_beatport {
-            match store::get_enrichment_any(
+            match store::get_enrichment(
                 &store_conn,
                 "beatport",
                 &norm_artist,
                 &norm_title,
                 None,
+                true,
             )? {
                 Some(entry) => {
                     if entry.match_quality.as_deref() == Some("error") {

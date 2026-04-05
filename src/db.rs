@@ -26,8 +26,10 @@ pub fn open_test() -> Connection {
     Connection::open_in_memory().unwrap()
 }
 
-/// Base SELECT for track queries — joins all lookup tables.
-pub(crate) const TRACK_SELECT: &str = "
+/// Column list for track queries (SELECT clause without FROM).
+macro_rules! track_columns {
+    () => {
+        "\
 SELECT
     c.ID,
     COALESCE(c.Title, '') AS Title,
@@ -49,7 +51,14 @@ SELECT
     COALESCE(c.BitRate, 0) AS BitRate,
     COALESCE(c.SampleRate, 0) AS SampleRate,
     COALESCE(c.FileType, 0) AS FileType,
-    COALESCE(c.created_at, '') AS DateAdded
+    COALESCE(c.created_at, '') AS DateAdded"
+    };
+}
+
+/// FROM + JOIN clause for track queries.
+macro_rules! track_joins {
+    () => {
+        "\
 FROM djmdContent c
 LEFT JOIN djmdArtist a ON c.ArtistID = a.ID
 LEFT JOIN djmdAlbum al ON c.AlbumID = al.ID
@@ -57,8 +66,15 @@ LEFT JOIN djmdGenre g ON c.GenreID = g.ID
 LEFT JOIN djmdKey k ON c.KeyID = k.ID
 LEFT JOIN djmdLabel l ON c.LabelID = l.ID
 LEFT JOIN djmdColor col ON c.ColorID = col.ID
-LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID
-";
+LEFT JOIN djmdArtist ra ON c.RemixerID = ra.ID"
+    };
+}
+
+pub(crate) const TRACK_COLUMNS: &str = track_columns!();
+pub(crate) const TRACK_JOINS: &str = track_joins!();
+
+/// Base SELECT for track queries — joins all lookup tables.
+pub(crate) const TRACK_SELECT: &str = concat!(track_columns!(), "\n", track_joins!(), "\n");
 
 pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error> {
     let bpm_raw: i32 = row.get("BPM")?;
@@ -379,21 +395,13 @@ fn get_playlist_tracks_with_limit_policy(
         }
     });
 
-    // Insert sp.TrackNo column before the FROM clause in TRACK_SELECT
-    let base_sql = TRACK_SELECT.replace(
-        "\nFROM djmdContent c",
-        ",\n    sp.TrackNo AS Position\nFROM djmdContent c",
-    );
-    if base_sql == TRACK_SELECT {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "TRACK_SELECT layout changed — Position column injection failed".into(),
-        ));
-    }
     let mut sql = format!(
-        "{base_sql}
-         INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
-         WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0
-         ORDER BY sp.TrackNo"
+        "{TRACK_COLUMNS},
+    sp.TrackNo AS Position
+{TRACK_JOINS}
+INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
+WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0
+ORDER BY sp.TrackNo"
     );
     if let Some(limit) = resolved_limit {
         write!(sql, " LIMIT {limit}").unwrap();
@@ -814,20 +822,14 @@ pub fn get_session_tracks(
     conn: &Connection,
     session_id: &str,
 ) -> Result<Vec<Track>, rusqlite::Error> {
-    let base_sql = TRACK_SELECT.replace(
-        "\nFROM djmdContent c",
-        ",\n    sh.TrackNo AS Position,\n    sh.created_at AS PlayedAt\nFROM djmdContent c",
-    );
-    if base_sql == TRACK_SELECT {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "TRACK_SELECT layout changed — Position/PlayedAt column injection failed".into(),
-        ));
-    }
     let sql = format!(
-        "{base_sql}
-         INNER JOIN djmdSongHistory sh ON sh.ContentID = c.ID
-         WHERE sh.HistoryID = ?1 AND c.rb_local_deleted = 0 AND sh.rb_local_deleted = 0
-         ORDER BY sh.TrackNo"
+        "{TRACK_COLUMNS},
+    sh.TrackNo AS Position,
+    sh.created_at AS PlayedAt
+{TRACK_JOINS}
+INNER JOIN djmdSongHistory sh ON sh.ContentID = c.ID
+WHERE sh.HistoryID = ?1 AND c.rb_local_deleted = 0 AND sh.rb_local_deleted = 0
+ORDER BY sh.TrackNo"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![session_id], |row| {

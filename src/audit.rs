@@ -506,6 +506,29 @@ fn parse_album_filename(stem: &str) -> ParsedFilename {
     }
 }
 
+fn strip_track_separator(rest: &str) -> Option<&str> {
+    if let Some(title) = rest.strip_prefix(" - ") {
+        return Some(title);
+    }
+    if let Some(title) = rest.strip_prefix(' ') {
+        return Some(title);
+    }
+    if rest.starts_with("- ") {
+        return Some(rest.trim_start_matches(['-', ' ']));
+    }
+    if let Some(title) = rest.strip_prefix(". ") {
+        return Some(title);
+    }
+    if let Some(title) = rest.strip_prefix('.') {
+        return Some(title);
+    }
+    // dash without space: only if NOT followed by a digit
+    if rest.len() >= 2 && rest.as_bytes()[0] == b'-' && !rest.as_bytes()[1].is_ascii_digit() {
+        return Some(&rest[1..]);
+    }
+    None
+}
+
 fn try_parse_track_number<'a>(first_two: &str, stem: &'a str) -> (Option<String>, &'a str) {
     let bytes = stem.as_bytes();
     if first_two.chars().all(|c| c.is_ascii_digit()) {
@@ -515,54 +538,18 @@ fn try_parse_track_number<'a>(first_two: &str, stem: &'a str) -> (Option<String>
         {
             let num = stem[..3].to_string();
             let rest = &stem[3..];
-            let remainder = if let Some(stripped) = rest.strip_prefix(" - ") {
-                stripped
-            } else if let Some(stripped) = rest.strip_prefix(' ') {
-                stripped
-            } else if rest.starts_with("- ") {
-                rest.trim_start_matches(['-', ' '])
-            } else if let Some(stripped) = rest.strip_prefix(". ") {
-                stripped
-            } else if let Some(stripped) = rest.strip_prefix('.') {
-                stripped
-            } else if rest.len() >= 2
-                && rest.as_bytes()[0] == b'-'
-                && !rest.as_bytes()[1].is_ascii_digit()
-            {
-                &rest[1..]
-            } else {
-                return (None, stem);
+            return match strip_track_separator(rest) {
+                Some(remainder) => (Some(num), remainder),
+                None => (None, stem),
             };
-            return (Some(num), remainder);
         }
 
         let num = first_two.to_string();
         let rest = &stem[2..];
-        let remainder = if let Some(stripped) = rest.strip_prefix(" - ") {
-            // "NN - Title" alternate format
-            stripped
-        } else if let Some(stripped) = rest.strip_prefix(' ') {
-            // "NN Artist - Title" canonical format (skip the space)
-            stripped
-        } else if rest.starts_with("- ") {
-            rest.trim_start_matches(['-', ' '])
-        } else if let Some(stripped) = rest.strip_prefix(". ") {
-            // "NN. Title" alternate format — strip dot+space prefix
-            stripped
-        } else if let Some(stripped) = rest.strip_prefix('.') {
-            // "NN.Title" alternate format — strip dot prefix
-            stripped
-        } else if rest.len() >= 2
-            && rest.as_bytes()[0] == b'-'
-            && !rest.as_bytes()[1].is_ascii_digit()
-        {
-            // "NN-Title" format (dash directly into title, no space)
-            &rest[1..]
-        } else {
-            // No valid separator after track number — not a valid track-numbered filename
-            return (None, stem);
-        };
-        (Some(num), remainder)
+        match strip_track_separator(rest) {
+            Some(remainder) => (Some(num), remainder),
+            None => (None, stem),
+        }
     } else {
         (None, stem)
     }

@@ -24,7 +24,7 @@ pub(super) fn resolve_tracks(
     conn: &Connection,
     track_ids: Option<&[String]>,
     playlist_id: Option<&str>,
-    filters: SearchFilterParams,
+    mut filters: SearchFilterParams,
     max_tracks_param: Option<u32>,
     offset: Option<u32>,
     opts: &ResolveTracksOpts,
@@ -46,6 +46,10 @@ pub(super) fn resolve_tracks(
             }
         }),
     };
+
+    if filters.has_unknown_genre == Some(true) && filters.has_genre.is_none() {
+        filters.has_genre = Some(true);
+    }
 
     let has_unknown_genre = filters.has_unknown_genre;
     let bounded = opts.max_tracks_cap.is_some();

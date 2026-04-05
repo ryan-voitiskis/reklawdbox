@@ -35,10 +35,11 @@ pub(super) fn handle_resolve_track_data(
             &norm_artist,
             &norm_title,
             norm_album.as_deref(),
+            false,
         )
         .map_err(cache_error)?;
         let beatport_cache =
-            store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None)
+            store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
                 .map_err(cache_error)?;
         let stratum_cache = get_fresh_analysis_entry(
             &store,

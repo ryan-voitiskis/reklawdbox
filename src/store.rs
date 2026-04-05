@@ -187,7 +187,6 @@ fn table_has_column(
     Ok(false)
 }
 
-#[allow(dead_code)]
 pub struct EnrichmentCacheEntry {
     pub provider: String,
     pub query_artist: String,
@@ -204,49 +203,26 @@ pub fn get_enrichment(
     artist: &str,
     title: &str,
     album: Option<&str>,
+    include_errors: bool,
 ) -> Result<Option<EnrichmentCacheEntry>, rusqlite::Error> {
     let album = album.unwrap_or("");
-    let mut stmt = conn.prepare_cached(
+    let sql = if include_errors {
+        "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
+         FROM enrichment_cache
+         WHERE provider = ?1
+           AND query_artist = ?2
+           AND query_title = ?3
+           AND query_album = ?4"
+    } else {
         "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
          FROM enrichment_cache
          WHERE provider = ?1
            AND query_artist = ?2
            AND query_title = ?3
            AND query_album = ?4
-           AND COALESCE(match_quality, '') != 'error'",
-    )?;
-    let mut rows = stmt.query_map(params![provider, artist, title, album], |row| {
-        Ok(EnrichmentCacheEntry {
-            provider: row.get(0)?,
-            query_artist: row.get(1)?,
-            query_title: row.get(2)?,
-            query_album: row.get(3)?,
-            match_quality: row.get(4)?,
-            response_json: row.get(5)?,
-            created_at: row.get(6)?,
-        })
-    })?;
-    rows.next().transpose()
-}
-
-/// Like `get_enrichment` but includes error entries. Used by the hydrate CLI
-/// to detect previously-failed lookups for `--no-retry-errors`.
-pub fn get_enrichment_any(
-    conn: &Connection,
-    provider: &str,
-    artist: &str,
-    title: &str,
-    album: Option<&str>,
-) -> Result<Option<EnrichmentCacheEntry>, rusqlite::Error> {
-    let album = album.unwrap_or("");
-    let mut stmt = conn.prepare_cached(
-        "SELECT provider, query_artist, query_title, query_album, match_quality, response_json, created_at
-         FROM enrichment_cache
-         WHERE provider = ?1
-           AND query_artist = ?2
-           AND query_title = ?3
-           AND query_album = ?4",
-    )?;
+           AND COALESCE(match_quality, '') != 'error'"
+    };
+    let mut stmt = conn.prepare_cached(sql)?;
     let mut rows = stmt.query_map(params![provider, artist, title, album], |row| {
         Ok(EnrichmentCacheEntry {
             provider: row.get(0)?,
@@ -431,14 +407,17 @@ pub fn set_enrichment(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub struct CachedAudioAnalysis {
     pub file_path: String,
+    #[allow(dead_code)]
     pub analyzer: String,
+    #[allow(dead_code)]
     pub file_size: i64,
+    #[allow(dead_code)]
     pub file_mtime: i64,
     pub analysis_version: String,
     pub features_json: String,
+    #[allow(dead_code)]
     pub created_at: String,
 }
 
@@ -713,12 +692,14 @@ pub fn delete_weight_preset(
     Ok(deleted > 0)
 }
 
-#[allow(dead_code)]
 pub struct BrokerDiscogsSession {
+    #[allow(dead_code)]
     pub broker_url: String,
     pub session_token: String,
     pub expires_at: i64,
+    #[allow(dead_code)]
     pub created_at: String,
+    #[allow(dead_code)]
     pub updated_at: String,
 }
 
@@ -839,9 +820,9 @@ pub fn clear_broker_discogs_session(
 // Audit state
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub struct AuditFile {
     pub path: String,
+    #[allow(dead_code)]
     pub last_audited: String,
     pub file_mtime: String,
     pub file_size: i64,
@@ -1341,9 +1322,16 @@ mod tests {
         )
         .unwrap();
 
-        let entry = get_enrichment(&conn, "discogs", "burial", "archangel", Some("untrue"))
-            .unwrap()
-            .expect("should find cached entry");
+        let entry = get_enrichment(
+            &conn,
+            "discogs",
+            "burial",
+            "archangel",
+            Some("untrue"),
+            false,
+        )
+        .unwrap()
+        .expect("should find cached entry");
         assert_eq!(entry.provider, "discogs");
         assert_eq!(entry.query_artist, "burial");
         assert_eq!(entry.query_title, "archangel");
@@ -1356,7 +1344,7 @@ mod tests {
     #[test]
     fn test_enrichment_cache_miss() {
         let (_dir, conn) = open_temp_store();
-        let entry = get_enrichment(&conn, "discogs", "nobody", "nothing", None).unwrap();
+        let entry = get_enrichment(&conn, "discogs", "nobody", "nothing", None, false).unwrap();
         assert!(entry.is_none());
     }
 
@@ -1385,7 +1373,7 @@ mod tests {
         )
         .unwrap();
 
-        let entry = get_enrichment(&conn, "discogs", "burial", "archangel", None)
+        let entry = get_enrichment(&conn, "discogs", "burial", "archangel", None, false)
             .unwrap()
             .unwrap();
         assert_eq!(entry.match_quality.as_deref(), Some("exact"));
@@ -1407,7 +1395,7 @@ mod tests {
         )
         .unwrap();
 
-        let entry = get_enrichment(&conn, "discogs", "nobody", "nothing", None)
+        let entry = get_enrichment(&conn, "discogs", "nobody", "nothing", None, false)
             .unwrap()
             .unwrap();
         assert_eq!(entry.match_quality.as_deref(), Some("none"));
