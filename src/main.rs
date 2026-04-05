@@ -104,6 +104,7 @@ where
                 | "extract-art"
                 | "embed-art"
                 | "setup"
+                | "disconnect-broker"
                 | "--help"
                 | "-h"
                 | "help"

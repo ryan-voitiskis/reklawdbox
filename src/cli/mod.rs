@@ -150,6 +150,8 @@ enum Cli {
     EmbedArt(tags::EmbedArtArgs),
     /// Install Essentia and configure reklawdbox
     Setup(setup::SetupArgs),
+    /// Clear the stored Discogs broker session (forces re-auth on next lookup)
+    DisconnectBroker,
 }
 
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -166,6 +168,20 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cli::ExtractArt(args) => tags::run_extract_art(args),
         Cli::EmbedArt(args) => tags::run_embed_art(args),
         Cli::Setup(args) => setup::run_setup(args),
+        Cli::DisconnectBroker => {
+            let cfg = match crate::discogs::BrokerConfig::from_env() {
+                crate::discogs::BrokerConfigStatus::Ok(cfg) => cfg,
+                crate::discogs::BrokerConfigStatus::InvalidUrl(url) => {
+                    eprintln!("invalid broker URL: {url}");
+                    return Ok(());
+                }
+            };
+            let store_path = store::default_path();
+            let conn = store::open(store_path.to_str().unwrap_or("internal.sqlite3"))?;
+            store::clear_broker_discogs_session(&conn, &cfg.base_url)?;
+            eprintln!("broker session cleared for {}", cfg.base_url);
+            Ok(())
+        }
     }
 }
 
