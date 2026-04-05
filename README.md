@@ -73,17 +73,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for expectations and workflow.
 
 Agent-specific notes: [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md).
 
-## Project structure
-
-```
-src/           Rust MCP server + CLI
-stratum-dsp/   Audio analysis library (workspace member)
-broker/        Discogs OAuth broker (TypeScript, Cloudflare Workers)
-site/          Documentation site (Astro Starlight)
-scripts/       Release and backup scripts
-docs/          Internal reference (Rekordbox internals, conventions)
-```
-
 ## Releasing
 
 ```bash
