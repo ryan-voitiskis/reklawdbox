@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
 use crate::config;
+use crate::db;
 use crate::discogs;
 use crate::tools::essentia::{essentia_venv_dir, validate_essentia_python};
 
@@ -33,6 +34,8 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
     if args.broker {
         configure_broker(args.yes)?;
     }
+
+    verify_rekordbox_db();
 
     println!();
     if mcp_ok {
@@ -176,6 +179,35 @@ fn run_cmd(program: &str, args: &[&str], context: &str) -> Result<(), Box<dyn st
         eprintln!("{}", stderr.trim());
     }
     Ok(())
+}
+
+fn verify_rekordbox_db() {
+    println!();
+    let path = match db::resolve_db_path() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "Warning: Rekordbox database not found. \
+                 Set REKORDBOX_DB_PATH if your database is in a non-standard location."
+            );
+            return;
+        }
+    };
+    match db::open(&path) {
+        Ok(conn) => {
+            let count: i32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM djmdContent WHERE rb_local_deleted = 0",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            println!("Rekordbox database: {count} tracks ({path})");
+        }
+        Err(e) => {
+            eprintln!("Warning: Found {path} but could not open it: {e}");
+        }
+    }
 }
 
 fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Error>> {

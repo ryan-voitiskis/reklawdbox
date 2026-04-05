@@ -1,17 +1,118 @@
 # reklawdbox
 
-MCP server for Rekordbox 7.x library management. Reads directly from the
-encrypted `master.db`, stages metadata changes in memory, and writes
-Rekordbox-compatible XML for safe reimport -- never writes to the database.
+MCP server for [Rekordbox](https://rekordbox.com/) 7.x library management.
+Gives an AI agent full read access to your encrypted Rekordbox database, stages
+metadata edits in memory, and exports Rekordbox-compatible XML for safe
+reimport. The database is never written to directly.
 
-Built as a single Rust binary with 48 MCP tools covering library search, audio
-analysis, Discogs/Beatport enrichment, genre classification, transition scoring,
-and set sequencing.
+**Docs, workflows, and tool reference: [reklawdbox.com](https://reklawdbox.com)**
 
-**For installation, usage guides, tool reference, and workflows, see
-[reklawdbox.com](https://reklawdbox.com).**
+## How it works
+
+You have a conversation with Claude. Claude calls reklawdbox tools to search
+your library, analyze audio, look up metadata from external sources, classify
+genres, score transitions, and build DJ sets. When changes are proposed, they're
+held in memory until you explicitly export them as an XML file. You then import
+that file into Rekordbox yourself.
+
+The result is an AI-assisted curation workflow where the agent handles the
+tedious work (metadata lookups, genre classification, harmonic analysis,
+set sequencing) while you retain full control over what actually changes in your
+library.
+
+### Workflows
+
+The server includes step-by-step SOPs (standard operating procedures) compiled
+into the binary. Call `help()` in conversation to see the workflow menu.
+
+| Workflow             | What it does                                                  |
+| -------------------- | ------------------------------------------------------------- |
+| Collection Audit     | Fix naming, tagging, and convention violations                |
+| Metadata Backfill    | Fill missing labels, years, albums from enrichment            |
+| Genre Classification | Classify ungenred tracks using enrichment + audio evidence    |
+| Genre Audit          | Verify existing genre tags against evidence                   |
+| Library Health       | Scan for broken links, orphans, duplicates, coverage gaps     |
+| Set Building         | Sequence DJ sets with transition scoring and energy shaping   |
+| Pool Building        | Discover clusters of compatible tracks for live improvisation |
+| Chapter Set Planning | Plan multi-chapter sets with bridge tracks                    |
+| Batch Import         | Tag, rename, and embed cover art for new music                |
+
+## Architecture
+
+```mermaid
+flowchart TB
+    claude(["Claude Code / Claude Desktop"])
+    claude <-->|"MCP (stdio)"| router
+
+    subgraph binary["reklawdbox (single Rust binary)"]
+        router["Tool Router"]
+
+        subgraph acquire["Acquire"]
+            library["Library Search"]
+            analysis["Audio Analysis<br/>stratum-dsp + Essentia"]
+            enrich["Enrichment<br/>Discogs · Beatport<br/>Bandcamp · MusicBrainz"]
+        end
+
+        subgraph reason["Reason"]
+            classify["Genre Classifier<br/>multi-evidence decision tree"]
+            scoring["Transition & Pool Scoring<br/>multi-axis weighted"]
+            sets["Set Sequencer<br/>beam search"]
+        end
+
+        subgraph stage["Stage & Export"]
+            changes["Change Manager<br/>(in-memory)"]
+            xml["XML Export"]
+        end
+
+        router --> acquire
+        router --> reason
+        router --> changes
+        changes --> xml
+    end
+
+    library -.->|"read-only"| db[("Rekordbox master.db<br/>(SQLCipher)")]
+    analysis --> files["Audio Files"]
+    enrich <--> cache[("Cache Store<br/>(SQLite)")]
+    analysis --> cache
+    enrich --> broker["Discogs Broker<br/>Cloudflare Workers + D1"]
+    enrich --> apis["beatport.com<br/>bandcamp.com<br/>musicbrainz.org"]
+
+    xml -->|".xml"| rb(["Rekordbox<br/>File → Import Collection"])
+    rb -.->|"applies changes"| db
+```
+
+### Key design decisions
+
+- **Read-only database access.** The Rekordbox `master.db` is opened via
+  SQLCipher with `SQLITE_OPEN_READ_ONLY`. No write path exists in the codebase.
+
+- **Staged mutations.** All proposed changes live in an in-memory `ChangeManager`
+  until explicitly exported. You can preview, modify, or discard staged changes
+  before anything touches disk.
+
+- **XML as the write path.** Rekordbox has no scripting API. The only safe
+  programmatic write path is XML import. The server generates
+  Rekordbox-compatible XML that you import yourself via File → Import Collection.
+
+- **Separate cache store.** Enrichment results and audio analysis are cached in a
+  local SQLite database (WAL mode), separate from Rekordbox. Cache entries are
+  keyed by schema version and auto-evicted when the analysis pipeline changes.
+
+- **Two-tier audio analysis.** [stratum-dsp](https://github.com/ryan-voitiskis/stratum-dsp)
+  (Rust, always available) handles BPM and key detection. [Essentia](https://essentia.upf.edu/)
+  (Python, optional) adds energy, timbre, rhythm, and spectral features. All
+  scoring axes degrade gracefully when Essentia is absent.
+
+- **Broker-mediated enrichment.** Discogs API access is proxied through a
+  [Cloudflare Workers service](broker/) that handles OAuth, rate limiting, and
+  response caching. The Rust binary never holds Discogs consumer secrets.
+
+- **SOPs compiled in.** Workflow procedures are embedded in the binary via
+  `include_str!` so documentation can't drift from the release.
 
 ## Install
+
+Requires macOS on Apple Silicon (M1 or later) and Rekordbox 7.x.
 
 ```bash
 brew tap ryan-voitiskis/reklawdbox
