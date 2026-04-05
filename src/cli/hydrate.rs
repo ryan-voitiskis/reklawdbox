@@ -51,7 +51,7 @@ pub(crate) struct HydrateArgs {
     /// Providers to run (comma-separated: discogs,beatport,analysis)
     #[arg(long, default_value = "discogs,beatport,analysis", value_parser = parse_providers)]
     providers: Providers,
-    /// Filter by playlist name
+    /// Filter by playlist ID
     #[arg(long)]
     playlist: Option<String>,
     /// Filter by artist name (partial match)

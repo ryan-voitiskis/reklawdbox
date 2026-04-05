@@ -193,7 +193,9 @@ pub struct PreviewChangesParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ClearChangesParams {
-    #[schemars(description = "Track IDs to clear (if empty, clears all)")]
+    #[schemars(
+        description = "Track IDs to clear (if omitted, clears all; an empty array clears nothing)"
+    )]
     pub track_ids: Option<Vec<String>>,
     #[schemars(
         description = "Specific fields to unstage: \"genre\", \"comments\", \"rating\", \"color\", \"label\", \"year\", \"album\". If omitted, clears all fields (removes entire entries)."
