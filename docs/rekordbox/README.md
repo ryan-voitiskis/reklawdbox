@@ -143,5 +143,4 @@ Use a manifest-first discovery flow:
 ## Notes
 
 - Manual page overlap warnings at section boundaries are intentional (pages 60, 140, 200, 242).
-- Frontmatter taxonomy uses controlled vocab from `ORCHESTRATION-PLAN.md`.
 - Run `bash docs/rekordbox/validate-corpus.sh` after bulk edits.

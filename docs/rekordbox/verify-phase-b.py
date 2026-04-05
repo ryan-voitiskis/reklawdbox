@@ -252,8 +252,12 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Apply frontmatter verification updates")
     args = parser.parse_args()
 
-    faq_source = (BASE_DIR / "rekordbox7-faq.md").read_text(encoding="utf-8")
-    faq_titles = {normalize_text(m.group(1)) for m in re.finditer(r"^###\s+(.+?)\s*$", faq_source, re.M)}
+    faq_path = BASE_DIR / "rekordbox7-faq.md"
+    if faq_path.exists():
+        faq_source = faq_path.read_text(encoding="utf-8")
+        faq_titles = {normalize_text(m.group(1)) for m in re.finditer(r"^###\s+(.+?)\s*$", faq_source, re.M)}
+    else:
+        faq_titles = set()
 
     results: List[VerificationResult] = []
     updatable_docs: List[Tuple[Path, Dict, str]] = []

@@ -29,7 +29,7 @@ ALLOWED_CONFIDENCE=(
   high
 )
 
-# Controlled vocabulary from ORCHESTRATION-PLAN.md
+# Controlled vocabulary for frontmatter topics
 ALLOWED_TOPICS=(
   analysis
   backup
