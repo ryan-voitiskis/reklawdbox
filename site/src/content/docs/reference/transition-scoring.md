@@ -118,13 +118,13 @@ Genres are grouped into families. Compatibility depends on whether two genres sh
 
 ### Genre families
 
-| Family    | Genres                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------------- |
+| Family    | Genres                                                                                                                                        |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco, Italo Disco, 2-Step Garage, UK Funky |
-| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, EBM, Electro, Trance, Psytrance |
-| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, Footwork, Future Garage, Grime, Bassline, Broken Beat          |
-| Downtempo | Ambient, Downtempo, Trip-Hop, Dub, Dub Reggae, IDM, Experimental                                        |
-| Other     | Hip Hop, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                                   |
+| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, EBM, Electro, Trance, Psytrance                    |
+| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, Footwork, Future Garage, Grime, Bassline, Broken Beat                                                |
+| Downtempo | Ambient, Downtempo, Trip-Hop, Dub, Dub Reggae, IDM, Experimental                                                                              |
+| Other     | Hip Hop, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                                                                         |
 
 Genres within the "Other" family do **not** receive the 0.7 related-genre bonus with each other. They score 0.3 against all other genres, including other "Other" entries.
 

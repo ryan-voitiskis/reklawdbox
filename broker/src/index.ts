@@ -920,7 +920,9 @@ async function lookupDiscogsViaApi(
     const retryAfterSeconds = parseRetryAfterSeconds(
       response.headers.get('Retry-After'),
     )
-    await delay(Math.min(retryAfterSeconds ?? 30, MAX_RETRY_AFTER_SECONDS) * 1000)
+    await delay(
+      Math.min(retryAfterSeconds ?? 30, MAX_RETRY_AFTER_SECONDS) * 1000,
+    )
     response = await doRequest()
   }
 
