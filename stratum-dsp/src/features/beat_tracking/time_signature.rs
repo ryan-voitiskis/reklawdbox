@@ -136,10 +136,15 @@ pub fn detect_time_signature(
     let score_68 = score_time_signature(&intervals, 6, mean_interval);
     scores.push((TimeSignature::SixEight, score_68));
 
-    // Find best match
+    // Find best match; on tied scores prefer shorter period (3/4 over 6/8)
+    // since a period-N signal always also matches period-2N.
     let (best_sig, best_score) = scores
         .iter()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(sig_a, a), (sig_b, b)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| sig_b.beats_per_bar().cmp(&sig_a.beats_per_bar()))
+        })
         .unwrap();
 
     // Normalize confidence to [0, 1]
@@ -204,43 +209,50 @@ mod tests {
 
     #[test]
     fn test_time_signature_four_four() {
-        // Perfect 4/4 pattern: 4 beats per bar
-        let beat_interval = 60.0 / 120.0; // 0.5s
+        // 4/4 pattern with strong/weak/weak/weak accent (longer downbeat interval)
+        let strong = 0.55_f32;
+        let weak = (4.0 * 0.5 - strong) / 3.0;
         let mut beats = Vec::new();
-        let mut time = 0.0;
-        for _ in 0..16 {
-            // 4 bars of 4 beats each
+        let mut time = 0.0_f32;
+        for _ in 0..8 {
             beats.push(time);
-            time += beat_interval;
+            time += strong;
+            beats.push(time);
+            time += weak;
+            beats.push(time);
+            time += weak;
+            beats.push(time);
+            time += weak;
         }
+        beats.push(time);
 
         let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
 
-        // Should return a valid time signature with valid confidence
         assert!((0.0..=1.0).contains(&confidence));
-        // Time signature should be one of the valid options
-        assert!(matches!(
-            time_sig,
-            TimeSignature::FourFour | TimeSignature::ThreeFour | TimeSignature::SixEight
-        ));
+        assert_eq!(time_sig, TimeSignature::FourFour);
     }
 
     #[test]
     fn test_time_signature_three_four() {
-        // 3/4 pattern: 3 beats per bar
-        let beat_interval = 60.0 / 120.0; // 0.5s
+        // 3/4 pattern with strong/weak/weak accent (longer downbeat interval)
+        let strong = 0.56_f32;
+        let weak = (3.0 * 0.5 - strong) / 2.0;
         let mut beats = Vec::new();
-        let mut time = 0.0;
+        let mut time = 0.0_f32;
         for _ in 0..12 {
-            // 4 bars of 3 beats each
             beats.push(time);
-            time += beat_interval;
+            time += strong;
+            beats.push(time);
+            time += weak;
+            beats.push(time);
+            time += weak;
         }
+        beats.push(time);
 
-        let (_time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
+        let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
 
-        // May detect 3/4 or default to 4/4 depending on pattern
         assert!((0.0..=1.0).contains(&confidence));
+        assert_eq!(time_sig, TimeSignature::ThreeFour);
     }
 
     #[test]

@@ -1229,18 +1229,18 @@ mod tests {
     fn validate_year_valid() {
         let mut tags = HashMap::new();
         tags.insert("year".to_string(), Some("2024".to_string()));
-        assert!(validate_write_tags(&tags).is_ok());
+        validate_write_tags(&tags).unwrap();
     }
 
     #[test]
     fn validate_year_delete() {
         let mut tags = HashMap::new();
         tags.insert("year".to_string(), None);
-        assert!(validate_write_tags(&tags).is_ok());
+        validate_write_tags(&tags).unwrap();
 
         let mut tags2 = HashMap::new();
         tags2.insert("year".to_string(), Some("".to_string()));
-        assert!(validate_write_tags(&tags2).is_ok());
+        validate_write_tags(&tags2).unwrap();
     }
 
     #[test]
@@ -1262,11 +1262,11 @@ mod tests {
     fn validate_track_valid() {
         let mut tags = HashMap::new();
         tags.insert("track".to_string(), Some("1".to_string()));
-        assert!(validate_write_tags(&tags).is_ok());
+        validate_write_tags(&tags).unwrap();
 
         let mut tags2 = HashMap::new();
         tags2.insert("track".to_string(), Some("99".to_string()));
-        assert!(validate_write_tags(&tags2).is_ok());
+        validate_write_tags(&tags2).unwrap();
     }
 
     #[test]
@@ -1288,7 +1288,7 @@ mod tests {
     fn validate_disc_valid() {
         let mut tags = HashMap::new();
         tags.insert("disc".to_string(), Some("1".to_string()));
-        assert!(validate_write_tags(&tags).is_ok());
+        validate_write_tags(&tags).unwrap();
     }
 
     #[test]
@@ -1319,7 +1319,7 @@ mod tests {
         tags.insert("title".to_string(), Some("Archangel".to_string()));
         tags.insert("bpm".to_string(), Some("130".to_string()));
         tags.insert("key".to_string(), Some("Am".to_string()));
-        assert!(validate_write_tags(&tags).is_ok());
+        validate_write_tags(&tags).unwrap();
     }
 
     #[test]

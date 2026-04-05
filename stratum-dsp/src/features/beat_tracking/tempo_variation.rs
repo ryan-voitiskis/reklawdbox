@@ -245,21 +245,30 @@ mod tests {
 
     #[test]
     fn test_detect_tempo_variations_variable() {
-        // Variable tempo: starts at 120 BPM, speeds up to 140 BPM
+        // Variable tempo: alternating blocks of 120 BPM and 200 BPM
         let mut beats = Vec::new();
         let mut time = 0.0;
-        for i in 0..20 {
-            let bpm = 120.0 + (i as f32 * 1.0); // Gradually increases
-            let interval = 60.0 / bpm;
-            time += interval;
+        for _ in 0..10 {
             beats.push(time);
+            time += 60.0 / 120.0;
+        }
+        for _ in 0..10 {
+            beats.push(time);
+            time += 60.0 / 200.0;
+        }
+        for _ in 0..10 {
+            beats.push(time);
+            time += 60.0 / 120.0;
+        }
+        for _ in 0..10 {
+            beats.push(time);
+            time += 60.0 / 200.0;
         }
 
         let segments = detect_tempo_variations(&beats, 120.0).unwrap();
 
         assert!(!segments.is_empty());
-        // Variable tempo should be detected
-        // Note: May not always detect if variation is gradual
+        assert!(has_tempo_variation(&segments));
     }
 
     #[test]

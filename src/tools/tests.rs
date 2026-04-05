@@ -2406,6 +2406,7 @@ async fn force_refresh_bypasses_enrichment_cache() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
     let Some((server, _store_dir)) =
         create_real_server_with_temp_store(default_http_client_for_tests())

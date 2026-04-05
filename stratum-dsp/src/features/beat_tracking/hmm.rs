@@ -57,6 +57,14 @@ const TIMING_TOLERANCE_S: f32 = 0.05;
 /// Standard deviation for Gaussian emission probability (σ = tolerance / 2)
 const EMISSION_SIGMA: f32 = TIMING_TOLERANCE_S / 2.0;
 
+/// Floor for emission probability (exp(-10) ≈ 4.5e-5). Applied to out-of-range
+/// frames so they get a low but non-zero value in log-space Viterbi.
+const EMISSION_FLOOR: f32 = 4.539_993e-5; // (-10.0_f32).exp()
+
+/// Minimum emission probability to consider a frame as a beat during extraction.
+/// Must be strictly greater than EMISSION_FLOOR.
+const EMISSION_THRESHOLD: f32 = 0.1;
+
 /// HMM beat tracker
 #[derive(Debug)]
 pub struct HmmBeatTracker {
@@ -240,9 +248,10 @@ impl HmmBeatTracker {
         let end_time = self.onsets[self.onsets.len() - 1];
 
         // Create time frames: one frame per expected beat interval
-        // Use nominal BPM to determine frame spacing
-        let beat_interval = 60.0 / self.bpm_estimate;
-        let num_frames = ((end_time - start_time) / beat_interval).ceil() as usize + 1;
+        // Use nominal BPM to determine frame spacing (for indexing only)
+        let nominal_beat_interval = 60.0 / self.bpm_estimate;
+        let num_frames =
+            ((end_time - start_time) / nominal_beat_interval).ceil() as usize + 1;
 
         if num_frames == 0 {
             return Err(AnalysisError::ProcessingError(
@@ -250,21 +259,32 @@ impl HmmBeatTracker {
             ));
         }
 
-        let mut emission_matrix = vec![vec![0.0; NUM_STATES]; num_frames];
+        let sigma_sq = EMISSION_SIGMA * EMISSION_SIGMA;
+        if sigma_sq <= EPSILON {
+            return Err(AnalysisError::NumericalError(
+                "Emission sigma too small".to_string(),
+            ));
+        }
+
+        // Use a small floor so that out-of-range frames get a low but non-zero
+        // emission rather than 0, avoiding log(0) in the log-space Viterbi.
+        let mut emission_matrix = vec![vec![EMISSION_FLOOR; NUM_STATES]; num_frames];
 
         // For each time frame
         #[allow(clippy::needless_range_loop)]
         for t in 0..num_frames {
-            let frame_time = start_time + (t as f32 * beat_interval);
-
-            // For each state
+            // For each state, compute expected beat time using that state's BPM.
+            // Slow states may project past end_time for high frame indices, and
+            // fast states may not cover the full range — the emission_floor
+            // ensures these out-of-range frames don't dominate or vanish.
             for s in 0..NUM_STATES {
-                let state_bpm = state_bpms[s];
-                let _state_beat_interval = 60.0 / state_bpm;
+                let state_beat_interval = 60.0 / state_bpms[s];
+                let expected_beat_time = start_time + (t as f32 * state_beat_interval);
 
-                // Find nearest onset to expected beat time
-                // Expected beat time: frame_time (assuming first onset is beat 0)
-                let expected_beat_time = frame_time;
+                // Skip frames that project well beyond the observable onset range
+                if expected_beat_time > end_time + state_beat_interval {
+                    continue; // keeps EMISSION_FLOOR
+                }
 
                 // Find distance to nearest onset
                 let mut min_distance = f32::INFINITY;
@@ -278,15 +298,7 @@ impl HmmBeatTracker {
                 // Compute emission probability using Gaussian decay
                 // emission = exp(-distance² / (2 * σ²))
                 let distance_sq = min_distance * min_distance;
-                let sigma_sq = EMISSION_SIGMA * EMISSION_SIGMA;
-
-                if sigma_sq <= EPSILON {
-                    return Err(AnalysisError::NumericalError(
-                        "Emission sigma too small".to_string(),
-                    ));
-                }
-
-                let emission = (-distance_sq / (2.0 * sigma_sq)).exp();
+                let emission = (-distance_sq / (2.0 * sigma_sq)).exp().max(EMISSION_FLOOR);
                 emission_matrix[t][s] = emission;
             }
         }
@@ -315,54 +327,60 @@ impl HmmBeatTracker {
             ));
         }
 
-        // Initialize: viterbi[t][s] = probability of best path ending at state s at time t
-        let mut viterbi = vec![vec![0.0; NUM_STATES]; num_frames];
+        // Work in log-space to avoid probability underflow on long sequences.
+        let mut log_viterbi = vec![vec![f32::NEG_INFINITY; NUM_STATES]; num_frames];
         let mut backpointer = vec![vec![0; NUM_STATES]; num_frames];
 
-        // Initialization: first frame
-        // Assume uniform prior over states
-        let initial_prob = 1.0 / NUM_STATES as f32;
+        // Pre-compute log transition probabilities (0 entries -> NEG_INFINITY)
+        let log_transition: Vec<Vec<f32>> = transition_matrix
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|&p| if p > EPSILON { p.ln() } else { f32::NEG_INFINITY })
+                    .collect()
+            })
+            .collect();
+
+        // Initialization: uniform prior
+        let log_initial = (1.0 / NUM_STATES as f32).ln();
         for s in 0..NUM_STATES {
-            viterbi[0][s] = initial_prob * emission_matrix[0][s];
+            log_viterbi[0][s] = log_initial + emission_matrix[0][s].max(EPSILON).ln();
         }
 
-        // Forward pass: for each time frame t > 0
+        // Forward pass in log-space: log(a*b) = log(a) + log(b)
         for t in 1..num_frames {
             for s in 0..NUM_STATES {
-                // Find best previous state
-                let mut best_prob = 0.0;
+                let mut best_log_prob = f32::NEG_INFINITY;
                 let mut best_prev_state = 0;
 
                 for prev_s in 0..NUM_STATES {
-                    let prob = viterbi[t - 1][prev_s] * transition_matrix[prev_s][s];
-                    if prob > best_prob {
-                        best_prob = prob;
+                    let log_prob = log_viterbi[t - 1][prev_s] + log_transition[prev_s][s];
+                    if log_prob > best_log_prob {
+                        best_log_prob = log_prob;
                         best_prev_state = prev_s;
                     }
                 }
 
-                // Update viterbi and backpointer
-                viterbi[t][s] = best_prob * emission_matrix[t][s];
+                log_viterbi[t][s] =
+                    best_log_prob + emission_matrix[t][s].max(EPSILON).ln();
                 backpointer[t][s] = best_prev_state;
             }
         }
 
-        // Backtracking: find best path
-        // Start from final frame: find state with highest probability
+        // Backtracking: find best final state
         let mut best_path = vec![0; num_frames];
-        let mut best_final_prob = 0.0;
+        let mut best_final_log_prob = f32::NEG_INFINITY;
         let mut best_final_state = 0;
 
-        for (s, &prob) in viterbi[num_frames - 1].iter().enumerate() {
-            if prob > best_final_prob {
-                best_final_prob = prob;
+        for (s, &log_prob) in log_viterbi[num_frames - 1].iter().enumerate() {
+            if log_prob > best_final_log_prob {
+                best_final_log_prob = log_prob;
                 best_final_state = s;
             }
         }
 
         best_path[num_frames - 1] = best_final_state;
 
-        // Backtrack from final state
         for t in (0..num_frames - 1).rev() {
             best_path[t] = backpointer[t + 1][best_path[t + 1]];
         }
@@ -379,7 +397,7 @@ impl HmmBeatTracker {
     fn extract_beats_from_path(
         &self,
         best_path: &[usize],
-        _state_bpms: &[f32],
+        state_bpms: &[f32],
         emission_matrix: &[Vec<f32>],
     ) -> Result<Vec<BeatPosition>, AnalysisError> {
         if best_path.is_empty() || emission_matrix.is_empty() {
@@ -389,8 +407,6 @@ impl HmmBeatTracker {
         }
 
         let start_time = self.onsets[0];
-        let beat_interval = 60.0 / self.bpm_estimate;
-        let emission_threshold = 0.1; // Minimum emission probability to consider a beat
 
         let mut beats = Vec::new();
 
@@ -399,8 +415,10 @@ impl HmmBeatTracker {
             let emission_prob = emission_matrix[t][state];
 
             // Only add beat if emission probability is above threshold
-            if emission_prob > emission_threshold {
-                let beat_time = start_time + (t as f32 * beat_interval);
+            if emission_prob > EMISSION_THRESHOLD {
+                // Use the state's BPM to compute beat time, matching emission computation
+                let state_beat_interval = 60.0 / state_bpms[state];
+                let beat_time = start_time + (t as f32 * state_beat_interval);
 
                 // Find nearest onset to compute confidence
                 let mut min_distance = f32::INFINITY;
@@ -440,6 +458,14 @@ impl HmmBeatTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_emission_floor_below_threshold() {
+        assert!(
+            EMISSION_FLOOR < EMISSION_THRESHOLD,
+            "EMISSION_FLOOR ({EMISSION_FLOOR}) must be < EMISSION_THRESHOLD ({EMISSION_THRESHOLD})"
+        );
+    }
 
     #[test]
     fn test_hmm_tracker_creation() {
@@ -582,10 +608,9 @@ mod tests {
     #[test]
     fn test_track_beats_single_onset() {
         let tracker = HmmBeatTracker::new(120.0, vec![0.5], 44100);
-        // Should handle single onset (may produce few or no beats)
-        let result = tracker.track_beats();
-        // Either succeeds with few beats or fails gracefully
-        assert!(result.is_ok() || result.is_err());
+        // Single onset: should succeed with 0-1 beats (only one frame)
+        let beats = tracker.track_beats().unwrap();
+        assert!(beats.len() <= 1, "Single onset should produce at most 1 beat");
     }
 
     #[test]
@@ -632,5 +657,63 @@ mod tests {
         for i in 1..beats.len() {
             assert!(beats[i].time_seconds > beats[i - 1].time_seconds);
         }
+    }
+
+    #[test]
+    fn test_emissions_differentiate_states() {
+        // Onsets at 108 BPM (state 0 = 0.9 * 120). The slower state should
+        // align better with these onsets than the faster states.
+        let interval_108 = 60.0 / 108.0; // ~0.556s
+        let onsets: Vec<f32> = (0..10).map(|i| i as f32 * interval_108).collect();
+        let tracker = HmmBeatTracker::new(120.0, onsets, 44100);
+        let state_bpms = tracker.build_state_space();
+
+        let emissions = tracker.compute_emission_probabilities(&state_bpms).unwrap();
+
+        // Over many frames, state 0 (108 BPM) should accumulate higher total
+        // emission probability than state 4 (132 BPM) since the onsets were
+        // generated at 108 BPM.
+        let total_state_0: f32 = emissions.iter().map(|row| row[0]).sum();
+        let total_state_4: f32 = emissions.iter().map(|row| row[4]).sum();
+        assert!(
+            total_state_0 > total_state_4,
+            "State 0 (108 BPM) should score higher than state 4 (132 BPM) \
+             for 108 BPM onsets: {total_state_0:.3} vs {total_state_4:.3}"
+        );
+    }
+
+    #[test]
+    fn test_viterbi_favours_matching_state() {
+        // Onsets at 108 BPM (state 0 = 0.9 * 120). The Viterbi path should
+        // select state 0 or 1 as the dominant state. We allow state 1 (114 BPM)
+        // because the frame grid uses the nominal BPM for indexing, which causes
+        // slight misalignment for the slowest state at later frames.
+        let interval_108 = 60.0 / 108.0;
+        let onsets: Vec<f32> = (0..16).map(|i| i as f32 * interval_108).collect();
+        let tracker = HmmBeatTracker::new(120.0, onsets, 44100);
+
+        let state_bpms = tracker.build_state_space();
+        let transition_matrix = tracker.build_transition_matrix();
+        let emission_matrix = tracker.compute_emission_probabilities(&state_bpms).unwrap();
+        let best_path = tracker
+            .viterbi_forward_pass(&transition_matrix, &emission_matrix)
+            .unwrap();
+
+        // Find the most frequent state in the path
+        let mut counts = [0usize; NUM_STATES];
+        for &s in &best_path {
+            counts[s] += 1;
+        }
+        let dominant_state = counts
+            .iter()
+            .enumerate()
+            .max_by_key(|&(_, &c)| c)
+            .map(|(s, _)| s)
+            .unwrap();
+        assert!(
+            dominant_state <= 1,
+            "Dominant state should be 0 or 1 (slow) for 108 BPM onsets, \
+             got state {dominant_state}, counts={counts:?}, path={best_path:?}"
+        );
     }
 }

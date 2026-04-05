@@ -271,6 +271,109 @@ pub(super) async fn lookup_beatport_remote(
         .map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_session(token: &str, expires_at: i64) -> store::BrokerDiscogsSession {
+        store::BrokerDiscogsSession {
+            broker_url: "https://broker.example.com".to_string(),
+            session_token: token.to_string(),
+            expires_at,
+            created_at: "2024-01-01".to_string(),
+            updated_at: "2024-01-01".to_string(),
+        }
+    }
+
+    fn make_pending(expires_at: i64) -> discogs::PendingDeviceSession {
+        discogs::PendingDeviceSession {
+            device_id: "dev-123".to_string(),
+            pending_token: "pend-456".to_string(),
+            auth_url: "https://broker.example.com/auth".to_string(),
+            poll_interval_seconds: 5,
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn resolve_session_valid() {
+        let session = make_session("tok-abc", 2000);
+        let state = resolve_session_state(Some(&session), 1000);
+        assert!(matches!(state, SessionState::Valid(t) if t == "tok-abc"));
+    }
+
+    #[test]
+    fn resolve_session_expired() {
+        let session = make_session("tok-abc", 500);
+        let state = resolve_session_state(Some(&session), 1000);
+        assert!(matches!(state, SessionState::Expired));
+    }
+
+    #[test]
+    fn resolve_session_none() {
+        let state = resolve_session_state(None, 1000);
+        assert!(matches!(state, SessionState::None));
+    }
+
+    #[test]
+    fn resolve_pending_authorized() {
+        let pending = make_pending(2000);
+        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
+        assert!(matches!(state, PendingState::Authorized(_)));
+
+        // "finalized" also counts as authorized
+        let state = resolve_pending_state(Some(&pending), Some("finalized"), 1000);
+        assert!(matches!(state, PendingState::Authorized(_)));
+    }
+
+    #[test]
+    fn resolve_pending_waiting() {
+        let pending = make_pending(2000);
+        let state = resolve_pending_state(Some(&pending), Some("pending"), 1000);
+        assert!(matches!(state, PendingState::Waiting(_)));
+    }
+
+    #[test]
+    fn resolve_pending_expired_by_time() {
+        let pending = make_pending(500);
+        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
+        assert!(matches!(state, PendingState::Expired));
+    }
+
+    #[test]
+    fn resolve_pending_expired_by_unknown_status() {
+        let pending = make_pending(2000);
+        let state = resolve_pending_state(Some(&pending), Some("unknown"), 1000);
+        assert!(matches!(state, PendingState::Expired));
+
+        // None status on a non-expired pending also maps to Expired
+        let state = resolve_pending_state(Some(&pending), None, 1000);
+        assert!(matches!(state, PendingState::Expired));
+    }
+
+    #[test]
+    fn resolve_session_expired_at_boundary() {
+        // expires_at == now is expired (strict greater-than check)
+        let session = make_session("tok-abc", 1000);
+        let state = resolve_session_state(Some(&session), 1000);
+        assert!(matches!(state, SessionState::Expired));
+    }
+
+    #[test]
+    fn resolve_pending_expired_at_boundary() {
+        // expires_at == now is expired (strict greater-than check)
+        let pending = make_pending(1000);
+        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
+        assert!(matches!(state, PendingState::Expired));
+    }
+
+    #[test]
+    fn resolve_pending_none() {
+        let state = resolve_pending_state(None, None, 1000);
+        assert!(matches!(state, PendingState::None));
+    }
+}
+
 pub(super) async fn lookup_bandcamp_remote(
     server: &ReklawdboxServer,
     artist: &str,

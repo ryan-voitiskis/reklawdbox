@@ -1386,6 +1386,48 @@ mod tests {
     }
 
     #[test]
+    fn validate_iso_date_valid() {
+        assert!(validate_iso_date("2024-01-15", "date").is_ok());
+        assert!(validate_iso_date("2000-02-29", "date").is_ok()); // leap year
+        assert!(validate_iso_date("1999-12-31", "date").is_ok());
+    }
+
+    #[test]
+    fn validate_iso_date_invalid_dates() {
+        assert!(validate_iso_date("2024-02-30", "date").is_err());
+        assert!(validate_iso_date("2023-02-29", "date").is_err()); // non-leap
+        assert!(validate_iso_date("2024-13-01", "date").is_err());
+        assert!(validate_iso_date("2024-00-15", "date").is_err());
+        assert!(validate_iso_date("2024-01-00", "date").is_err());
+        assert!(validate_iso_date("2024-01-32", "date").is_err());
+    }
+
+    #[test]
+    fn validate_iso_date_bad_format() {
+        assert!(validate_iso_date("20240115", "date").is_err());
+        assert!(validate_iso_date("not-a-date", "date").is_err());
+        assert!(validate_iso_date("", "date").is_err());
+        assert!(validate_iso_date("2024/01/15", "date").is_err());
+    }
+
+    #[test]
+    fn validate_iso_date_century_leap() {
+        assert!(validate_iso_date("2000-02-29", "date").is_ok()); // divisible by 400
+        assert!(validate_iso_date("1900-02-29", "date").is_err()); // divisible by 100, not 400
+    }
+
+    #[test]
+    fn escape_like_special_chars() {
+        assert_eq!(escape_like("100%"), "100\\%");
+        assert_eq!(escape_like("under_score"), "under\\_score");
+        assert_eq!(escape_like("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_like("normal text"), "normal text");
+        // Combined: backslash must be escaped first so \% doesn't double-escape
+        assert_eq!(escape_like("\\%"), "\\\\\\%");
+        assert_eq!(escape_like("a\\b_c%d"), "a\\\\b\\_c\\%d");
+    }
+
+    #[test]
     fn test_search_all() {
         let conn = create_test_db();
         let params = SearchParams::default();
@@ -2407,5 +2449,52 @@ mod tests {
             alias_count > 100,
             "expected >100 alias-able tracks, got {alias_count}"
         );
+    }
+
+    // --- decode_rating_stars ---
+
+    #[test]
+    fn decode_rating_stars_passthrough_0_to_5() {
+        for star in 0..=5 {
+            assert_eq!(decode_rating_stars(star), star as u8, "star value {star}");
+        }
+    }
+
+    #[test]
+    fn decode_rating_stars_negative_maps_to_zero() {
+        assert_eq!(decode_rating_stars(-1), 0);
+        assert_eq!(decode_rating_stars(-100), 0);
+        assert_eq!(decode_rating_stars(i32::MIN), 0);
+    }
+
+    #[test]
+    fn decode_rating_stars_encoded_boundaries() {
+        // Values 6+ are decoded via rating_to_stars (0-255 encoded scale)
+        // 0..=25 -> 0 stars, but 0-5 are caught by passthrough, so 6..=25 -> 0
+        assert_eq!(decode_rating_stars(6), 0);
+        assert_eq!(decode_rating_stars(25), 0);
+        // 26..=76 -> 1 star
+        assert_eq!(decode_rating_stars(26), 1);
+        assert_eq!(decode_rating_stars(51), 1);
+        assert_eq!(decode_rating_stars(76), 1);
+        // 77..=127 -> 2 stars
+        assert_eq!(decode_rating_stars(77), 2);
+        assert_eq!(decode_rating_stars(127), 2);
+        // 128..=178 -> 3 stars
+        assert_eq!(decode_rating_stars(128), 3);
+        assert_eq!(decode_rating_stars(178), 3);
+        // 179..=229 -> 4 stars
+        assert_eq!(decode_rating_stars(179), 4);
+        assert_eq!(decode_rating_stars(229), 4);
+        // 230..=255 -> 5 stars
+        assert_eq!(decode_rating_stars(230), 5);
+        assert_eq!(decode_rating_stars(255), 5);
+    }
+
+    #[test]
+    fn decode_rating_stars_above_255_clamps_to_5() {
+        // rating_to_stars treats >255 as 5 stars (catch-all arm)
+        assert_eq!(decode_rating_stars(256), 5);
+        assert_eq!(decode_rating_stars(1000), 5);
     }
 }
