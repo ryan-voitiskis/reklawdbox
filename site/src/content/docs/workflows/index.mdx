@@ -5,11 +5,13 @@ sidebar:
   order: 0
 ---
 
-import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 Every workflow follows the same pattern: scope tracks, gather evidence, present recommendations by confidence, get human approval, stage and export. The agent does the tedious work; you make the final call.
 
 All workflows require cached data. Run `cache_coverage` first — if any provider is below 100%, hydrate with `analyze_audio_batch` and `enrich_tracks` before starting.
+
+<LinkCard title="Library Cleanup — start here" href="/workflows/library-cleanup/" description="Five sessions that build on each other — clean metadata, enrich, backfill labels, classify genres, and audit. The recommended path for organizing a messy library." />
 
 ## Workflows
 
@@ -68,7 +70,3 @@ All workflows require cached data. Run `cache_coverage` first — if any provide
 - **Broken links or orphan files?** [Library Health](/workflows/library-health/)
 - **Just acquired new music?** [Batch Import](/workflows/batch-import/)
 - **Prepping for a gig or exploring your library?** [DJ Prompts](/workflows/dj-prompts/)
-
-<Aside type="tip" title="Messy library?">
-  Workflows build on each other — clean metadata improves enrichment, enrichment improves classification. Follow the [Library Cleanup](/workflows/library-cleanup/) guide for the recommended session sequence.
-</Aside>

@@ -32,7 +32,7 @@ Changes to genre, comments, rating, color, label, year, or album are staged in m
 Nothing touches disk until you call `write_xml`. If the server restarts, staged changes are lost.
 
 <Aside type="tip">
-  Use `preview_changes` liberally — it shows exactly what will end up in the exported XML.
+  The agent calls `preview_changes` before every export so you can review exactly what will end up in the XML.
 </Aside>
 
 ## XML export (never direct DB writes)

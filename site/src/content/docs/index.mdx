@@ -20,12 +20,16 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
 
 Manage your Rekordbox library with AI through the
 [Model Context Protocol](https://modelcontextprotocol.io/).
 reklawdbox connects any MCP-compatible host — Claude Code, Claude Desktop,
 Codex — to your collection.
+
+<Aside type="tip" title="New to reklawdbox?">
+  The [Library Cleanup](/workflows/library-cleanup/) guide walks you through organizing your collection in five sessions — from fixing metadata to classifying genres.
+</Aside>
 
 <CardGrid>
   <LinkCard title="Getting Started" href="/getting-started/" description="Install, configure, and connect reklawdbox to your MCP host." />

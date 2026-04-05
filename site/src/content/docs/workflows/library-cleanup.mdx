@@ -5,7 +5,7 @@ sidebar:
   order: -1
 ---
 
-import { Steps, LinkCard, Aside, Badge } from '@astrojs/starlight/components';
+import { LinkCard, Aside, Badge } from '@astrojs/starlight/components';
 import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
 Five sessions, each with clear entry and exit criteria. Follow in order — later sessions depend on earlier ones.
@@ -15,7 +15,7 @@ Five sessions, each with clear entry and exit criteria. Follow in order — late
 </Aside>
 
 <Aside type="danger">
-  **Session 1 writes directly to files, while Sessions 3–5 stage changes as XML.** For XML sessions, the Rekordbox database only updates after you import the XML file. Each session reads from the database, so you **must** complete each checkpoint before starting the next session.
+  **Session 1 writes directly to files. Sessions 3–5 stage changes as XML** — the Rekordbox database only updates after you import the XML file. Each session reads from the database, so you **must** complete each checkpoint before starting the next session. Session 2 is a CLI command, not an agent session.
 </Aside>
 
 ## Why order matters
@@ -72,7 +72,7 @@ reklawdbox hydrate --cpu overnight -y
 
 ### Session 3: Metadata Backfill
 
-<Badge text="Entry" variant="note" /> 100% cache coverage for all providers.
+<Badge text="Entry" variant="note" /> All tracks enriched — Session 2 complete.
 
 **Paste into your agent to start this session:**
 
@@ -86,12 +86,7 @@ Labels are the strongest genre signal for electronic music, years provide era co
 
 #### CHECKPOINT
 
-```
-preview_changes()
-write_xml()
-```
-
-Import XML into Rekordbox:
+The agent will ask: **"Export these changes to XML?"** — approve, then import:
 
 <XmlImportSteps />
 
@@ -103,7 +98,7 @@ Import XML into Rekordbox:
 
 ### Session 4: Genre Classification
 
-<Badge text="Entry" variant="note" /> Labels verified, 100% cache coverage.
+<Badge text="Entry" variant="note" /> Labels backfilled — Session 3 XML imported.
 
 **Paste into your agent to start this session:**
 
@@ -111,36 +106,13 @@ Import XML into Rekordbox:
 Classify genres for my ungenred tracks.
 ```
 
-1. **Normalize aliases:**
-
-   ```
-   suggest_normalizations()
-   ```
-
-   Stage non-debatable fixes (e.g. `Hip-Hop` → `Hip Hop`, `DnB` → `Drum & Bass`):
-
-   ```
-   update_tracks(changes=[{"track_id": "...", "genre": "..."}])
-   ```
-
-2. **Classify ungenred tracks:**
-
-   ```
-   classify_tracks(max_tracks=50)
-   ```
-
-   Review results by confidence — High/Medium can be approved in bulk, Low/Insufficient need per-track review. Stage approved changes with `update_tracks`. Repeat with `offset` until all tracks are processed.
+The agent normalizes aliases first (e.g. `Hip-Hop` → `Hip Hop`), then classifies ungenred tracks in batches. You review results grouped by confidence level — high and medium can be approved in bulk, low and insufficient need per-track review.
 
 <LinkCard title="Genre Classification workflow" href="/workflows/genre-classification/" />
 
 #### CHECKPOINT
 
-```
-preview_changes()
-write_xml()
-```
-
-Import XML into Rekordbox:
+The agent will ask: **"Export these changes to XML?"** — approve, then import:
 
 <XmlImportSteps />
 
@@ -150,7 +122,7 @@ Verify genres, then start a fresh session for Session 5.
 
 ### Session 5: Genre Audit
 
-<Badge text="Entry" variant="note" /> Genres classified, XML imported into Rekordbox.
+<Badge text="Entry" variant="note" /> Genres classified — Session 4 XML imported.
 
 **Paste into your agent to start this session:**
 
@@ -158,24 +130,13 @@ Verify genres, then start a fresh session for Session 5.
 Audit my existing genre tags.
 ```
 
-1. **Audit existing genres:**
-
-   ```
-   audit_genres(max_tracks=50)
-   ```
-
-   Only conflicts and manual-review tracks appear. Review and approve/reject, then stage with `update_tracks`. Repeat with `offset` until done.
+The agent checks existing genre tags against enrichment and audio evidence. Only conflicts and manual-review tracks are surfaced — confirmed genres are skipped. Review and approve or reject in batches.
 
 <LinkCard title="Genre Audit workflow" href="/workflows/genre-audit/" />
 
 #### CHECKPOINT
 
-```
-preview_changes()
-write_xml()
-```
-
-Import XML into Rekordbox:
+The agent will ask: **"Export these changes to XML?"** — approve, then import:
 
 <XmlImportSteps />
 
@@ -186,7 +147,7 @@ Spot-check corrected genres.
 ## Skipping sessions
 
 - **Metadata already clean?** Start at Session 2.
-- **Already enriched?** `cache_coverage()` at 100% → jump to Session 3.
+- **Already enriched?** Re-run `reklawdbox hydrate` — if all providers are at 100%, jump to Session 3.
 - **Labels and years present?** Skip Session 3.
-- **No existing genre tags?** Skip Session 5.
 - **No ungenred tracks?** Skip Session 4.
+- **No existing genre tags?** Skip Session 5.
