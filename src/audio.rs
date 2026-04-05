@@ -97,10 +97,10 @@ features["danceability"] = first_scalar_or_none(es.Danceability()(audio))
 try:
     ebu = es.LoudnessEBUR128()(audio)
 except TypeError:
-    # Some Essentia builds require VECTOR_STEREOSAMPLE for EBU R128.
-    # For mono sources, duplicate channel data to synthesize stereo.
+    # LoudnessEBUR128 requires VECTOR_STEREOSAMPLE; MonoLoader produces VECTOR_REAL.
+    # StereoMuxer produces the correct native type from two mono channels.
     try:
-        stereo_audio = np.column_stack((audio, audio))
+        stereo_audio = es.StereoMuxer()(audio, audio)
         ebu = es.LoudnessEBUR128()(stereo_audio)
     except Exception:
         ebu = None
@@ -782,9 +782,13 @@ class Danceability:
 
 class LoudnessEBUR128:
     def __call__(self, audio):
-        if isinstance(audio, tuple) and len(audio) > 0 and audio[0] == "stereo":
+        if isinstance(audio, list) and len(audio) > 0 and isinstance(audio[0], tuple):
             return ([1.0, 2.0], [3.0], -14.5, 4.2)
         raise TypeError("Cannot convert data from type VECTOR_REAL to VECTOR_STEREOSAMPLE")
+
+class StereoMuxer:
+    def __call__(self, left, right):
+        return list(zip(left, right))
 
 class DynamicComplexity:
     def __call__(self, audio):
@@ -976,8 +980,6 @@ def percentile(arr, p):
     frac = k - lo
     return vals[lo] + frac * (vals[hi] - vals[lo])
 
-def column_stack(cols):
-    return ("stereo", cols)
 "#,
         )
         .expect("fake numpy module should be written");
