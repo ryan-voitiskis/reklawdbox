@@ -373,7 +373,7 @@ pub(super) async fn handle_analyze_audio_batch(
 
     let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<CacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path.clone();
-    let writer_handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let writer_handle = tokio::task::spawn_blocking(move || -> Result<usize, String> {
         let conn = match store::open(&writer_store_path) {
             Ok(c) => c,
             Err(e) => {
@@ -382,6 +382,7 @@ pub(super) async fn handle_analyze_audio_batch(
                 return Err(msg);
             }
         };
+        let mut write_failures = 0usize;
         while let Some(msg) = cache_rx.blocking_recv() {
             match msg {
                 CacheWriteMsg::Audio {
@@ -404,14 +405,12 @@ pub(super) async fn handle_analyze_audio_batch(
                         tracing::error!(
                             "Cache writer: failed to write {analyzer} for {file_path}: {e}"
                         );
-                        return Err(format!(
-                            "Cache writer failed to write {analyzer} for {file_path}: {e}"
-                        ));
+                        write_failures += 1;
                     }
                 }
             }
         }
-        Ok(())
+        Ok(write_failures)
     });
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
@@ -490,7 +489,11 @@ pub(super) async fn handle_analyze_audio_batch(
 
     drop(cache_tx);
     match writer_handle.await {
-        Ok(Ok(())) => {}
+        Ok(Ok(0)) => {}
+        Ok(Ok(n)) => progress.failures.push(serde_json::json!({
+            "analyzer": "cache_writer",
+            "error": format!("{n} cache write(s) failed (see server logs)"),
+        })),
         Ok(Err(err)) => progress
             .failures
             .push(serde_json::json!({ "analyzer": "cache_writer", "error": err })),

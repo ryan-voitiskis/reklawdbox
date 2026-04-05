@@ -219,7 +219,16 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), AudioError> {
             }
             Err(symphonia::core::errors::Error::ResetRequired) => {
                 decoder.reset();
-                continue;
+                match decoder.decode(&packet) {
+                    Ok(d) => d,
+                    Err(symphonia::core::errors::Error::DecodeError(_)) => {
+                        decode_warning_count += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(AudioError::Decode(format!("Decode error after reset: {e}")));
+                    }
+                }
             }
             Err(e) => return Err(AudioError::Decode(format!("Decode error: {e}"))),
         };

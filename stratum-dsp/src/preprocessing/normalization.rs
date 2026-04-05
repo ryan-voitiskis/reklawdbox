@@ -93,84 +93,123 @@ const LUFS_GATE_THRESHOLD: f32 = -70.0;
 /// We'll use a configurable block size based on sample rate
 const LUFS_BLOCK_DURATION_MS: f32 = 400.0;
 
-/// K-weighting filter for ITU-R BS.1770-4 loudness measurement
-///
-/// Implements the high-pass shelving filter component of the K-weighting filter
-/// as specified in ITU-R BS.1770-4 Annex 2. The filter models human perception
-/// of loudness by boosting frequencies around 1681.97 Hz.
-///
-/// # Reference
-///
-/// ITU-R BS.1770-4 (2015). Algorithms to measure audio programme loudness and true-peak audio level.
-/// International Telecommunication Union.
-///
-/// # Note
-///
-/// This implementation uses a single high-pass shelving filter. The full ITU-R BS.1770-4
-/// standard includes both high-shelf and low-shelf filters, but the high-pass component
-/// is the primary contributor to the K-weighting response.
-struct KWeightingFilter {
-    // High-pass filter state (shelving filter)
-    // Direct Form II transposed only needs x1 and x2
-    x1: f32,
-    x2: f32,
-    // Coefficients for 48kHz
+/// Second-order IIR filter (biquad) in Direct Form II transposed.
+struct Biquad {
     b0: f32,
     b1: f32,
     b2: f32,
     a1: f32,
     a2: f32,
+    x1: f32,
+    x2: f32,
 }
 
-impl KWeightingFilter {
-    /// Create a new K-weighting filter for the given sample rate
-    ///
-    /// The K-weighting filter consists of:
-    /// 1. High-pass filter (shelving filter) with specific frequency response
-    /// 2. Pre-filtering stage as per ITU-R BS.1770-4
-    fn new(sample_rate: f32) -> Self {
-        // K-weighting filter coefficients for ITU-R BS.1770-4
-        // These are standard coefficients for the high-pass shelving filter
-        // Reference: ITU-R BS.1770-4 Annex 2
-
-        // For 48kHz, the coefficients are:
-        let w0 = 2.0 * std::f32::consts::PI * 1681.9745 / sample_rate;
-        let cos_w0 = w0.cos();
-        let sin_w0 = w0.sin();
-        let alpha = sin_w0 / 2.0 * (1.0f32 / 0.707f32).sqrt(); // Q = 0.707
-
-        let b0 = (1.0 + cos_w0) / 2.0;
-        let b1 = -(1.0 + cos_w0);
-        let b2 = (1.0 + cos_w0) / 2.0;
-        let a0 = 1.0 + alpha;
-        let a1 = -2.0 * cos_w0;
-        let a2 = 1.0 - alpha;
-
-        Self {
-            x1: 0.0,
-            x2: 0.0,
-            b0: b0 / a0,
-            b1: b1 / a0,
-            b2: b2 / a0,
-            a1: a1 / a0,
-            a2: a2 / a0,
-        }
-    }
-
-    /// Process a single sample through the K-weighting filter
+impl Biquad {
     fn process(&mut self, sample: f32) -> f32 {
-        // Direct Form II transposed implementation
         let output = self.b0 * sample + self.x1;
         self.x1 = self.b1 * sample + self.x2 - self.a1 * output;
         self.x2 = self.b2 * sample - self.a2 * output;
         output
     }
+}
 
-    /// Reset filter state
-    #[allow(dead_code)] // Useful for testing and reuse
+/// K-weighting filter for ITU-R BS.1770-4 loudness measurement.
+///
+/// Two-stage cascade as specified in ITU-R BS.1770-4 Annex 2:
+/// - Stage 1: High-frequency shelving filter (+4 dB at ~1682 Hz) modelling the
+///   acoustic effect of the head.
+/// - Stage 2: High-pass filter (~38 Hz) removing subsonic content.
+///
+/// Coefficients are derived from the analog prototypes via bilinear transform,
+/// matching the reference 48 kHz values from the standard.
+struct KWeightingFilter {
+    stage1: Biquad,
+    stage2: Biquad,
+}
+
+impl KWeightingFilter {
+    /// Bilinear transform requires fs > 2 * F0 for the shelf stage (F0 ≈ 1682 Hz).
+    const MIN_SAMPLE_RATE: f32 = 3400.0;
+
+    fn new(sample_rate: f32) -> Self {
+        debug_assert!(
+            sample_rate >= Self::MIN_SAMPLE_RATE,
+            "K-weighting requires sample rate >= {} Hz, got {sample_rate}",
+            Self::MIN_SAMPLE_RATE,
+        );
+        let fs = (sample_rate as f64).max(Self::MIN_SAMPLE_RATE as f64);
+        Self {
+            stage1: Self::shelf_stage(fs),
+            stage2: Self::highpass_stage(fs),
+        }
+    }
+
+    /// Stage 1: Head-model high shelf.
+    /// Analog prototype parameters from ITU-R BS.1770-4 Annex 2.
+    fn shelf_stage(fs: f64) -> Biquad {
+        const DB: f64 = 3.999843853973347;
+        const F0: f64 = 1681.974450955533;
+        const Q: f64 = 0.7071752369554196;
+
+        let k = (std::f64::consts::PI * F0 / fs).tan();
+        let vh = 10.0_f64.powf(DB / 20.0);
+        let vb = vh.powf(0.4996);
+
+        let a0 = 1.0 + k / Q + k * k;
+        let b0 = (vh + vb * k / Q + k * k) / a0;
+        let b1 = 2.0 * (k * k - vh) / a0;
+        let b2 = (vh - vb * k / Q + k * k) / a0;
+        let a1 = 2.0 * (k * k - 1.0) / a0;
+        let a2 = (1.0 - k / Q + k * k) / a0;
+
+        Biquad {
+            b0: b0 as f32,
+            b1: b1 as f32,
+            b2: b2 as f32,
+            a1: a1 as f32,
+            a2: a2 as f32,
+            x1: 0.0,
+            x2: 0.0,
+        }
+    }
+
+    /// Stage 2: High-pass filter.
+    /// Analog prototype parameters from ITU-R BS.1770-4 Annex 2.
+    fn highpass_stage(fs: f64) -> Biquad {
+        const F0: f64 = 38.13547087602444;
+        const Q: f64 = 0.5003270373238773;
+
+        let k = (std::f64::consts::PI * F0 / fs).tan();
+        let a0 = 1.0 + k / Q + k * k;
+
+        let b0 = 1.0 / a0;
+        let b1 = -2.0 / a0;
+        let b2 = 1.0 / a0;
+        let a1 = 2.0 * (k * k - 1.0) / a0;
+        let a2 = (1.0 - k / Q + k * k) / a0;
+
+        Biquad {
+            b0: b0 as f32,
+            b1: b1 as f32,
+            b2: b2 as f32,
+            a1: a1 as f32,
+            a2: a2 as f32,
+            x1: 0.0,
+            x2: 0.0,
+        }
+    }
+
+    fn process(&mut self, sample: f32) -> f32 {
+        let after_shelf = self.stage1.process(sample);
+        self.stage2.process(after_shelf)
+    }
+
+    #[allow(dead_code)]
     fn reset(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
+        self.stage1.x1 = 0.0;
+        self.stage1.x2 = 0.0;
+        self.stage2.x1 = 0.0;
+        self.stage2.x2 = 0.0;
     }
 }
 

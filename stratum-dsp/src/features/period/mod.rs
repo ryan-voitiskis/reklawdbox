@@ -304,7 +304,7 @@ fn estimate_bpm_internal(
         for est in merged_vec.iter_mut() {
             let mul = g.mul_for(est.bpm);
             let before = est.confidence;
-            est.confidence *= mul;
+            est.confidence = (est.confidence * mul).clamp(0.0, 1.0);
             log::debug!(
                 "Legacy guardrail multiplier applied: {:.2} BPM (confidence {:.3} * {:.3} -> {:.3})",
                 est.bpm,

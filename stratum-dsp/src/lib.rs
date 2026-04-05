@@ -814,7 +814,7 @@ pub fn analyze_audio(
     let (bpm, bpm_confidence) = if config.force_legacy_bpm {
         legacy_estimate
             .as_ref()
-            .map(|e| (e.bpm, e.confidence))
+            .map(|e| (e.bpm, e.confidence.clamp(0.0, 1.0)))
             .unwrap_or((0.0, 0.0))
     } else if config.enable_bpm_fusion {
         // Fusion (safe validator mode):
@@ -834,7 +834,7 @@ pub fn analyze_audio(
         if t_bpm <= 0.0 {
             legacy_estimate
                 .as_ref()
-                .map(|e| (e.bpm, e.confidence))
+                .map(|e| (e.bpm, e.confidence.clamp(0.0, 1.0)))
                 .unwrap_or((0.0, 0.0))
         } else {
             let tol = 2.0f32;

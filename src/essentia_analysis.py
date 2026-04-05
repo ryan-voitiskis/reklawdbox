@@ -6,6 +6,7 @@ import numpy as np
 
 audio = es.MonoLoader(filename=sys.argv[1], sampleRate=44100)()
 features = {}
+features["analyzer_version"] = essentia.__version__
 
 def first_scalar_or_none(value):
     if value is None:
@@ -27,7 +28,10 @@ def first_scalar_or_none(value):
     except Exception:
         return None
 
-features["danceability"] = first_scalar_or_none(es.Danceability()(audio))
+try:
+    features["danceability"] = first_scalar_or_none(es.Danceability()(audio))
+except Exception:
+    features["danceability"] = None
 
 try:
     ebu = es.LoudnessEBUR128()(audio)
@@ -39,6 +43,8 @@ except TypeError:
         ebu = es.LoudnessEBUR128()(stereo_audio)
     except Exception:
         ebu = None
+except Exception:
+    ebu = None
 
 if ebu is not None:
     if isinstance(ebu, (tuple, list)):
@@ -68,33 +74,58 @@ else:
     features["loudness_integrated"] = None
     features["loudness_range"] = None
 
-features["dynamic_complexity"] = first_scalar_or_none(es.DynamicComplexity()(audio))
-features["average_loudness"] = first_scalar_or_none(es.Loudness()(audio))
+try:
+    features["dynamic_complexity"] = first_scalar_or_none(es.DynamicComplexity()(audio))
+except Exception:
+    features["dynamic_complexity"] = None
 
-rhythm = es.RhythmExtractor2013(method="multifeature")(audio)
-features["bpm_essentia"] = first_scalar_or_none(rhythm[0] if isinstance(rhythm, (tuple, list)) and len(rhythm) > 0 else rhythm)
-onset_result = es.OnsetRate()(audio)
-if isinstance(onset_result, (tuple, list)) and len(onset_result) >= 2:
-    features["onset_rate"] = first_scalar_or_none(onset_result[1])
-else:
-    features["onset_rate"] = first_scalar_or_none(onset_result)
+try:
+    features["average_loudness"] = first_scalar_or_none(es.Loudness()(audio))
+except Exception:
+    features["average_loudness"] = None
 
-beats = rhythm[1]
-if len(beats) > 4:
-    bl = es.BeatsLoudness(beats=beats)(audio)
-    band_ratios = bl[1]
-    if len(band_ratios) > 0:
-        downbeat_values = [band_ratios[i][0] for i in range(0, len(band_ratios), 4)]
-        all_values = [row[0] for row in band_ratios]
-        downbeat_energy = sum(downbeat_values) / max(len(downbeat_values), 1)
-        all_energy = sum(all_values) / max(len(all_values), 1)
-        features["rhythm_regularity"] = float(downbeat_energy / max(all_energy, 1e-6))
+try:
+    rhythm = es.RhythmExtractor2013(method="multifeature")(audio)
+    features["bpm_essentia"] = first_scalar_or_none(rhythm[0] if isinstance(rhythm, (tuple, list)) and len(rhythm) > 0 else rhythm)
+except Exception:
+    rhythm = None
+    features["bpm_essentia"] = None
+
+try:
+    onset_result = es.OnsetRate()(audio)
+    if isinstance(onset_result, (tuple, list)) and len(onset_result) >= 2:
+        features["onset_rate"] = first_scalar_or_none(onset_result[1])
     else:
+        features["onset_rate"] = first_scalar_or_none(onset_result)
+except Exception:
+    features["onset_rate"] = None
+
+if rhythm is not None and isinstance(rhythm, (tuple, list)) and len(rhythm) > 1:
+    beats = rhythm[1]
+else:
+    beats = []
+
+if len(beats) > 4:
+    try:
+        bl = es.BeatsLoudness(beats=beats)(audio)
+        band_ratios = bl[1]
+        if len(band_ratios) > 0:
+            downbeat_values = [band_ratios[i][0] for i in range(0, len(band_ratios), 4)]
+            all_values = [row[0] for row in band_ratios]
+            downbeat_energy = sum(downbeat_values) / max(len(downbeat_values), 1)
+            all_energy = sum(all_values) / max(len(all_values), 1)
+            features["rhythm_regularity"] = float(downbeat_energy / max(all_energy, 1e-6))
+        else:
+            features["rhythm_regularity"] = None
+    except Exception:
         features["rhythm_regularity"] = None
 else:
     features["rhythm_regularity"] = None
 
-features["spectral_centroid_mean"] = first_scalar_or_none(es.SpectralCentroidTime()(audio))
+try:
+    features["spectral_centroid_mean"] = first_scalar_or_none(es.SpectralCentroidTime()(audio))
+except Exception:
+    features["spectral_centroid_mean"] = None
 
 # --- Frame-based features (shared loop) ---
 frame_size = 2048
@@ -122,33 +153,51 @@ dissonance_accum = []
 intensity_values = []
 
 for frame in es.FrameGenerator(audio, frameSize=frame_size, hopSize=hop_size):
-    windowed = windowing(frame)
-    spec = spectrum_algo(windowed)
+    try:
+        windowed = windowing(frame)
+        spec = spectrum_algo(windowed)
+    except Exception:
+        continue
 
-    _, mfcc_coeffs = mfcc_algo(spec)
-    mfcc_accum.append(mfcc_coeffs)
+    try:
+        _, mfcc_coeffs = mfcc_algo(spec)
+        mfcc_accum.append(mfcc_coeffs)
+    except Exception:
+        pass
 
-    centroid_val = first_scalar_or_none(centroid_algo(spec))
-    if centroid_val is not None:
-        centroid_accum.append(centroid_val)
+    try:
+        centroid_val = first_scalar_or_none(centroid_algo(spec))
+        if centroid_val is not None:
+            centroid_accum.append(centroid_val)
+    except Exception:
+        pass
 
-    frame_energy = float(np.sum(np.asarray(spec) ** 2))
-    raw_flux = first_scalar_or_none(flux_algo(spec))
-    if raw_flux is not None and frame_energy > 1e-10:
-        flux_accum.append(raw_flux / frame_energy)
+    try:
+        frame_energy = float(np.sum(np.asarray(spec) ** 2))
+        raw_flux = first_scalar_or_none(flux_algo(spec))
+        if raw_flux is not None and frame_energy > 1e-10:
+            flux_accum.append(raw_flux / frame_energy)
+    except Exception:
+        pass
 
-    sc = contrast_algo(spec)
-    if isinstance(sc, (tuple, list)) and len(sc) >= 1:
-        coeffs = sc[0]
-        if hasattr(coeffs, '__len__') and len(coeffs) > 0:
-            contrast_accum.append([float(x) for x in coeffs])
+    try:
+        sc = contrast_algo(spec)
+        if isinstance(sc, (tuple, list)) and len(sc) >= 1:
+            coeffs = sc[0]
+            if hasattr(coeffs, '__len__') and len(coeffs) > 0:
+                contrast_accum.append([float(x) for x in coeffs])
+    except Exception:
+        pass
 
-    freqs, mags = peaks_algo(spec)
-    if len(freqs) > 1:
-        diss = dissonance_algo(freqs, mags)
-        diss_val = first_scalar_or_none(diss)
-        if diss_val is not None:
-            dissonance_accum.append(diss_val)
+    try:
+        freqs, mags = peaks_algo(spec)
+        if len(freqs) > 1:
+            diss = dissonance_algo(freqs, mags)
+            diss_val = first_scalar_or_none(diss)
+            if diss_val is not None:
+                dissonance_accum.append(diss_val)
+    except Exception:
+        pass
 
     if has_intensity:
         try:
@@ -207,7 +256,5 @@ if intensity_values:
 else:
     features["intensity_mean"] = None
     features["intensity_var"] = None
-
-features["analyzer_version"] = essentia.__version__
 
 json.dump(features, sys.stdout)
