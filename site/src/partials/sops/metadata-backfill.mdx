@@ -150,7 +150,7 @@ After steps 1a–1b, tracks may still lack labels. The `backfill_labels` output 
 Start by fetching the first batch of unlabeled tracks:
 
 ```
-search_tracks(has_label=false, max_tracks=50)
+search_tracks(has_label=false, limit=50)
 ```
 
 Then for each batch:

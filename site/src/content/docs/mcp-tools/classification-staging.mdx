@@ -24,6 +24,7 @@ Analyze genres in your library and suggest normalizations to the canonical taxon
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `min_count` | integer | | Only include genres with at least this many tracks (default: `1`) |
+| `stage_aliases` | boolean | | When `true`, auto-stage all alias normalizations in one call |
 
 Returns three sections:
 
@@ -44,6 +45,8 @@ Apply the genre decision tree to ungenred tracks using cached enrichment and aud
 | `max_tracks` | integer | | Max tracks (default: `50`, max: `200`) |
 | `offset` | integer | | Skip first N tracks for pagination |
 | `genre_overrides` | array | | Remap genre strings before scoring (e.g., `[{"from": "Melodic House & Techno", "to": "Deep Techno"}]`) |
+| `format` | string | | Output format: `"full"` (default), `"compact"`, `"summary"`, `"dispatch"` |
+| `auto_stage` | string[] | | Auto-stage results at these confidence levels: `"high"`, `"medium"`, `"low"`, `"insufficient"` |
 
 Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=false` when using filters (bypassed when `track_ids` are provided explicitly).
 
@@ -73,6 +76,7 @@ Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, B
 |-----------|------|:--------:|-------------|
 | `dry_run` | boolean | | Preview without staging (default: `false`) |
 | `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
+| `max_conflicts` | integer | | Cap on conflict entries in the response (default: `50`) |
 
 ---
 
@@ -140,6 +144,7 @@ Preview all staged changes, showing a diff from the current Rekordbox state.
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | | Filter to specific track IDs (omit to show all staged; an empty array matches nothing) |
+| `format` | string | | `"full"` (default) or `"summary"` (aggregate counts by field and genre) |
 
 ---
 

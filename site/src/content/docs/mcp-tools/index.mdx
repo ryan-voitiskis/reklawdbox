@@ -67,6 +67,7 @@ Many tools share a common set of **search filter parameters**. Used by `search_t
 | `path_prefix` | string | Filter to tracks whose file path starts with this prefix |
 | `added_after` | string | ISO date — only tracks added on or after |
 | `added_before` | string | ISO date — only tracks added on or before |
+| `has_unknown_genre` | boolean | Filter to tracks with a non-canonical genre (not in taxonomy and no known alias). Tracks with empty genre are excluded. Only `true` is meaningful |
 
 <Aside type="tip">
   Filters are combinable: `genre: "Techno"` + `bpm_min: 130` + `has_genre: true` scopes to up-tempo techno with genres assigned.

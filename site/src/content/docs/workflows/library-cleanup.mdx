@@ -64,7 +64,7 @@ No XML export — Collection Audit uses direct file operations. Spot-check corre
 reklawdbox hydrate --cpu overnight -y
 ```
 
-`--cpu overnight` uses max cores; `-y` skips confirmation. Use `--artist`, `--genre`, or `--added-after` to scope.
+`--cpu overnight` uses most cores (total - 2, capped at 16); `-y` skips confirmation. Use `--artist`, `--genre`, or `--added-after` to scope.
 
 **Exit:** Re-run `reklawdbox hydrate` — it reports remaining gaps. All providers must be at 100%.
 

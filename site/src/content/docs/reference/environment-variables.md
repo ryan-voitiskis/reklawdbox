@@ -37,7 +37,7 @@ Probe behavior:
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
 
-stratum-dsp always runs regardless of Essentia availability. It provides BPM, key, and energy. Essentia adds danceability, brightness, and additional spectral features. Run `reklawdbox setup` to install Essentia to the default venv path — no env var needed.
+stratum-dsp always runs regardless of Essentia availability. It provides BPM and key. Without Essentia, energy falls back to a BPM proxy. Essentia adds energy, danceability, brightness, and additional spectral features. Run `reklawdbox setup` to install Essentia to the default venv path — no env var needed.
 
 ## Backup
 
@@ -62,6 +62,7 @@ The cache database stores Discogs/Beatport enrichment results, audio analysis ou
 | `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`     | Minimum interval between Beatport requests (ms)    | `1000`                         |
 | `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`     | Minimum interval between Bandcamp requests (ms)    | `1500`                         |
 | `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS`  | Minimum interval between MusicBrainz requests (ms) | `1100`                         |
+| `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`      | Minimum interval between Discogs broker requests (ms) | `1100`                      |
 | `REKLAWDBOX_CORPUS_PATH`                  | Path to the Rekordbox knowledge corpus manifest    | `docs/rekordbox/manifest.yaml` |
 
 These are internal tuning knobs. The rate-limit intervals control minimum time between requests to each service — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
@@ -74,7 +75,6 @@ A complete `mcp_servers` config block with all commonly used variables:
 {
   "mcpServers": {
     "reklawdbox": {
-      "type": "stdio",
       "command": "/opt/homebrew/bin/reklawdbox"
     }
   }
