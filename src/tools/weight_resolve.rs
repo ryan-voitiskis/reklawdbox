@@ -63,60 +63,67 @@ fn resolve_transition_named(name: &str, store: &Connection) -> Result<PriorityWe
     Ok(w)
 }
 
-pub(super) fn apply_transition_overrides(
-    w: &mut PriorityWeights,
-    overrides: &TransitionWeightInput,
-) {
-    if let Some(v) = overrides.key {
-        w.key = v;
-    }
-    if let Some(v) = overrides.bpm {
-        w.bpm = v;
-    }
-    if let Some(v) = overrides.energy {
-        w.energy = v;
-    }
-    if let Some(v) = overrides.genre {
-        w.genre = v;
-    }
-    if let Some(v) = overrides.brightness {
-        w.brightness = v;
-    }
-    if let Some(v) = overrides.rhythm {
-        w.rhythm = v;
-    }
+macro_rules! impl_weight_ops {
+    (
+        apply_overrides: $apply_fn:ident,
+        input_to_weights: $itow_fn:ident,
+        renormalize: $renorm_fn:ident,
+        to_json: $json_fn:ident,
+        weights_ty: $weights_ty:ident,
+        input_ty: $input_ty:ident,
+        base_expr: $base_expr:expr,
+        fields: [$($field:ident),+]
+    ) => {
+        pub(super) fn $apply_fn(w: &mut $weights_ty, overrides: &$input_ty) {
+            $(if let Some(v) = overrides.$field { w.$field = v; })+
+        }
+
+        pub(super) fn $itow_fn(input: &$input_ty) -> $weights_ty {
+            let base = $base_expr;
+            $weights_ty { $($field: input.$field.unwrap_or(base.$field),)+ }
+        }
+
+        pub(super) fn $renorm_fn(w: &mut $weights_ty) -> Result<(), String> {
+            let fields = [$(w.$field),+];
+            if let Some(neg) = fields.iter().find(|&&v| v < 0.0) {
+                return Err(format!(
+                    "Negative weight ({neg}) \u{2014} all weights must be >= 0"
+                ));
+            }
+            let sum: f64 = fields.iter().sum();
+            if sum <= f64::EPSILON {
+                return Err("All weights are zero \u{2014} at least one must be positive".into());
+            }
+            $(w.$field /= sum;)+
+            Ok(())
+        }
+
+        pub(super) fn $json_fn(w: &$weights_ty) -> serde_json::Value {
+            serde_json::json!({ $(stringify!($field): w.$field),+ })
+        }
+    };
 }
 
-pub(super) fn transition_input_to_weights(input: &TransitionWeightInput) -> PriorityWeights {
-    let base = super::scoring::priority_weights(SequencingPriority::Balanced);
-    PriorityWeights {
-        key: input.key.unwrap_or(base.key),
-        bpm: input.bpm.unwrap_or(base.bpm),
-        energy: input.energy.unwrap_or(base.energy),
-        genre: input.genre.unwrap_or(base.genre),
-        brightness: input.brightness.unwrap_or(base.brightness),
-        rhythm: input.rhythm.unwrap_or(base.rhythm),
-    }
+impl_weight_ops! {
+    apply_overrides: apply_transition_overrides,
+    input_to_weights: transition_input_to_weights,
+    renormalize: renormalize_transition,
+    to_json: transition_weights_to_json,
+    weights_ty: PriorityWeights,
+    input_ty: TransitionWeightInput,
+    base_expr: super::scoring::priority_weights(SequencingPriority::Balanced),
+    fields: [key, bpm, energy, genre, brightness, rhythm]
 }
 
-pub(super) fn renormalize_transition(w: &mut PriorityWeights) -> Result<(), String> {
-    let fields = [w.key, w.bpm, w.energy, w.genre, w.brightness, w.rhythm];
-    if let Some(neg) = fields.iter().find(|&&v| v < 0.0) {
-        return Err(format!(
-            "Negative weight ({neg}) — all weights must be >= 0"
-        ));
-    }
-    let sum: f64 = fields.iter().sum();
-    if sum <= f64::EPSILON {
-        return Err("All weights are zero — at least one must be positive".into());
-    }
-    w.key /= sum;
-    w.bpm /= sum;
-    w.energy /= sum;
-    w.genre /= sum;
-    w.brightness /= sum;
-    w.rhythm /= sum;
-    Ok(())
+impl_weight_ops! {
+    apply_overrides: apply_pool_overrides,
+    input_to_weights: pool_input_to_weights,
+    renormalize: renormalize_pool,
+    to_json: pool_weights_to_json,
+    weights_ty: PoolWeights,
+    input_ty: PoolWeightInput,
+    base_expr: super::scoring::pool_weights(PoolPreset::Balanced),
+    fields: [bpm, energy, timbral, key, genre, brightness, rhythm]
 }
 
 pub(super) fn resolve_pool_weights(
@@ -161,86 +168,6 @@ fn resolve_pool_named(name: &str, store: &Connection) -> Result<PoolWeights, Str
     let mut w = pool_input_to_weights(&input);
     renormalize_pool(&mut w)?;
     Ok(w)
-}
-
-pub(super) fn apply_pool_overrides(w: &mut PoolWeights, overrides: &PoolWeightInput) {
-    if let Some(v) = overrides.bpm {
-        w.bpm = v;
-    }
-    if let Some(v) = overrides.energy {
-        w.energy = v;
-    }
-    if let Some(v) = overrides.timbral {
-        w.timbral = v;
-    }
-    if let Some(v) = overrides.key {
-        w.key = v;
-    }
-    if let Some(v) = overrides.genre {
-        w.genre = v;
-    }
-    if let Some(v) = overrides.brightness {
-        w.brightness = v;
-    }
-    if let Some(v) = overrides.rhythm {
-        w.rhythm = v;
-    }
-}
-
-pub(super) fn pool_input_to_weights(input: &PoolWeightInput) -> PoolWeights {
-    let base = super::scoring::pool_weights(PoolPreset::Balanced);
-    PoolWeights {
-        bpm: input.bpm.unwrap_or(base.bpm),
-        energy: input.energy.unwrap_or(base.energy),
-        timbral: input.timbral.unwrap_or(base.timbral),
-        key: input.key.unwrap_or(base.key),
-        genre: input.genre.unwrap_or(base.genre),
-        brightness: input.brightness.unwrap_or(base.brightness),
-        rhythm: input.rhythm.unwrap_or(base.rhythm),
-    }
-}
-
-pub(super) fn renormalize_pool(w: &mut PoolWeights) -> Result<(), String> {
-    let fields = [
-        w.bpm,
-        w.energy,
-        w.timbral,
-        w.key,
-        w.genre,
-        w.brightness,
-        w.rhythm,
-    ];
-    if let Some(neg) = fields.iter().find(|&&v| v < 0.0) {
-        return Err(format!(
-            "Negative weight ({neg}) — all weights must be >= 0"
-        ));
-    }
-    let sum: f64 = fields.iter().sum();
-    if sum <= f64::EPSILON {
-        return Err("All weights are zero — at least one must be positive".into());
-    }
-    w.bpm /= sum;
-    w.energy /= sum;
-    w.timbral /= sum;
-    w.key /= sum;
-    w.genre /= sum;
-    w.brightness /= sum;
-    w.rhythm /= sum;
-    Ok(())
-}
-
-pub(super) fn transition_weights_to_json(w: &PriorityWeights) -> serde_json::Value {
-    serde_json::json!({
-        "key": w.key, "bpm": w.bpm, "energy": w.energy,
-        "genre": w.genre, "brightness": w.brightness, "rhythm": w.rhythm,
-    })
-}
-
-pub(super) fn pool_weights_to_json(w: &PoolWeights) -> serde_json::Value {
-    serde_json::json!({
-        "bpm": w.bpm, "energy": w.energy, "timbral": w.timbral,
-        "key": w.key, "genre": w.genre, "brightness": w.brightness, "rhythm": w.rhythm,
-    })
 }
 
 #[cfg(test)]

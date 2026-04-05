@@ -87,74 +87,17 @@ impl ChangeManager {
 
             let mut field_diffs = Vec::new();
 
-            if let Some(ref new_genre) = change.genre
-                && *new_genre != track.genre
-            {
-                field_diffs.push(FieldDiff {
-                    field: "genre".to_string(),
-                    old_value: track.genre.clone(),
-                    new_value: new_genre.clone(),
-                });
-            }
-
-            if let Some(ref new_comments) = change.comments
-                && *new_comments != track.comments
-            {
-                field_diffs.push(FieldDiff {
-                    field: "comments".to_string(),
-                    old_value: track.comments.clone(),
-                    new_value: new_comments.clone(),
-                });
-            }
-
-            if let Some(new_rating) = change.rating
-                && new_rating != track.rating
-            {
-                field_diffs.push(FieldDiff {
-                    field: "rating".to_string(),
-                    old_value: track.rating.to_string(),
-                    new_value: new_rating.to_string(),
-                });
-            }
-
-            if let Some(ref new_color) = change.color
-                && *new_color != track.color
-            {
-                field_diffs.push(FieldDiff {
-                    field: "color".to_string(),
-                    old_value: track.color.clone(),
-                    new_value: new_color.clone(),
-                });
-            }
-
-            if let Some(ref new_label) = change.label
-                && *new_label != track.label
-            {
-                field_diffs.push(FieldDiff {
-                    field: "label".to_string(),
-                    old_value: track.label.clone(),
-                    new_value: new_label.clone(),
-                });
-            }
-
-            if let Some(new_year) = change.year
-                && new_year != track.year
-            {
-                field_diffs.push(FieldDiff {
-                    field: "year".to_string(),
-                    old_value: track.year.to_string(),
-                    new_value: new_year.to_string(),
-                });
-            }
-
-            if let Some(ref new_album) = change.album
-                && *new_album != track.album
-            {
-                field_diffs.push(FieldDiff {
-                    field: "album".to_string(),
-                    old_value: track.album.clone(),
-                    new_value: new_album.clone(),
-                });
+            for &f in EditableField::ALL {
+                if let Some(new_val) = change.field_value_str(f) {
+                    let old_val = track.editable_field_str(f);
+                    if new_val != old_val {
+                        field_diffs.push(FieldDiff {
+                            field: f.as_str().to_string(),
+                            old_value: old_val,
+                            new_value: new_val,
+                        });
+                    }
+                }
             }
 
             if !field_diffs.is_empty() {
@@ -278,7 +221,7 @@ impl ChangeManager {
             if let Some(entry) = map.get_mut(id) {
                 let mut field_touched = false;
                 for &ef in &parsed_fields {
-                    if clear_field(entry, ef) {
+                    if entry.clear_field(ef) {
                         field_touched = true;
                     }
                 }
@@ -324,37 +267,136 @@ impl ChangeManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TrackChange field-access helpers (driven by EditableField)
+// ---------------------------------------------------------------------------
+
+impl TrackChange {
+    /// Whether the given field has a staged value.
+    fn is_field_set(&self, field: EditableField) -> bool {
+        match field {
+            EditableField::Genre => self.genre.is_some(),
+            EditableField::Comments => self.comments.is_some(),
+            EditableField::Rating => self.rating.is_some(),
+            EditableField::Color => self.color.is_some(),
+            EditableField::Label => self.label.is_some(),
+            EditableField::Year => self.year.is_some(),
+            EditableField::Album => self.album.is_some(),
+        }
+    }
+
+    /// Copy a single field from `other` into `self`, overwriting any existing value.
+    fn merge_field_from(&mut self, other: &TrackChange, field: EditableField) {
+        match field {
+            EditableField::Genre => self.genre = other.genre.clone(),
+            EditableField::Comments => self.comments = other.comments.clone(),
+            EditableField::Rating => self.rating = other.rating,
+            EditableField::Color => self.color = other.color.clone(),
+            EditableField::Label => self.label = other.label.clone(),
+            EditableField::Year => self.year = other.year,
+            EditableField::Album => self.album = other.album.clone(),
+        }
+    }
+
+    /// Clear a single field to `None`. Returns `true` if the field was set.
+    fn clear_field(&mut self, field: EditableField) -> bool {
+        let was_set = self.is_field_set(field);
+        match field {
+            EditableField::Genre => self.genre = None,
+            EditableField::Comments => self.comments = None,
+            EditableField::Rating => self.rating = None,
+            EditableField::Color => self.color = None,
+            EditableField::Label => self.label = None,
+            EditableField::Year => self.year = None,
+            EditableField::Album => self.album = None,
+        }
+        was_set
+    }
+
+    /// Return the staged value for `field` as a display string, or `None` if unset.
+    fn field_value_str(&self, field: EditableField) -> Option<String> {
+        match field {
+            EditableField::Genre => self.genre.clone(),
+            EditableField::Comments => self.comments.clone(),
+            EditableField::Rating => self.rating.map(|v| v.to_string()),
+            EditableField::Color => self.color.clone(),
+            EditableField::Label => self.label.clone(),
+            EditableField::Year => self.year.map(|v| v.to_string()),
+            EditableField::Album => self.album.clone(),
+        }
+    }
+
+    /// Apply a single staged field to a `Track`, mutating it in place.
+    fn apply_field_to_track(&self, track: &mut Track, field: EditableField) {
+        match field {
+            EditableField::Genre => {
+                if let Some(ref v) = self.genre {
+                    track.genre = v.clone();
+                }
+            }
+            EditableField::Comments => {
+                if let Some(ref v) = self.comments {
+                    track.comments = v.clone();
+                }
+            }
+            EditableField::Rating => {
+                if let Some(v) = self.rating {
+                    track.rating = v;
+                }
+            }
+            EditableField::Color => {
+                if let Some(ref v) = self.color {
+                    track.color = v.clone();
+                    track.color_code = color::color_name_to_code(v).unwrap_or(0);
+                }
+            }
+            EditableField::Label => {
+                if let Some(ref v) = self.label {
+                    track.label = v.clone();
+                }
+            }
+            EditableField::Year => {
+                if let Some(v) = self.year {
+                    track.year = v;
+                }
+            }
+            EditableField::Album => {
+                if let Some(ref v) = self.album {
+                    track.album = v.clone();
+                }
+            }
+        }
+    }
+}
+
+impl Track {
+    /// Return the current value of an editable field as a display string.
+    fn editable_field_str(&self, field: EditableField) -> String {
+        match field {
+            EditableField::Genre => self.genre.clone(),
+            EditableField::Comments => self.comments.clone(),
+            EditableField::Rating => self.rating.to_string(),
+            EditableField::Color => self.color.clone(),
+            EditableField::Label => self.label.clone(),
+            EditableField::Year => self.year.to_string(),
+            EditableField::Album => self.album.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free functions that iterate via EditableField::ALL
+// ---------------------------------------------------------------------------
+
 fn has_any_staged_field(change: &TrackChange) -> bool {
-    change.genre.is_some()
-        || change.comments.is_some()
-        || change.rating.is_some()
-        || change.color.is_some()
-        || change.label.is_some()
-        || change.year.is_some()
-        || change.album.is_some()
+    EditableField::ALL.iter().any(|f| change.is_field_set(*f))
 }
 
 fn merge_track_change(existing: &mut TrackChange, incoming: &TrackChange) {
-    if incoming.genre.is_some() {
-        existing.genre = incoming.genre.clone();
-    }
-    if incoming.comments.is_some() {
-        existing.comments = incoming.comments.clone();
-    }
-    if incoming.rating.is_some() {
-        existing.rating = incoming.rating;
-    }
-    if incoming.color.is_some() {
-        existing.color = incoming.color.clone();
-    }
-    if incoming.label.is_some() {
-        existing.label = incoming.label.clone();
-    }
-    if incoming.year.is_some() {
-        existing.year = incoming.year;
-    }
-    if incoming.album.is_some() {
-        existing.album = incoming.album.clone();
+    for &f in EditableField::ALL {
+        if incoming.is_field_set(f) {
+            existing.merge_field_from(incoming, f);
+        }
     }
 }
 
@@ -365,26 +407,10 @@ fn merge_untouched_fields(
     incoming: &TrackChange,
     touched: &HashSet<EditableField>,
 ) {
-    if existing.genre.is_none() && !touched.contains(&EditableField::Genre) {
-        existing.genre = incoming.genre.clone();
-    }
-    if existing.comments.is_none() && !touched.contains(&EditableField::Comments) {
-        existing.comments = incoming.comments.clone();
-    }
-    if existing.rating.is_none() && !touched.contains(&EditableField::Rating) {
-        existing.rating = incoming.rating;
-    }
-    if existing.color.is_none() && !touched.contains(&EditableField::Color) {
-        existing.color = incoming.color.clone();
-    }
-    if existing.label.is_none() && !touched.contains(&EditableField::Label) {
-        existing.label = incoming.label.clone();
-    }
-    if existing.year.is_none() && !touched.contains(&EditableField::Year) {
-        existing.year = incoming.year;
-    }
-    if existing.album.is_none() && !touched.contains(&EditableField::Album) {
-        existing.album = incoming.album.clone();
+    for &f in EditableField::ALL {
+        if !existing.is_field_set(f) && !touched.contains(&f) {
+            existing.merge_field_from(incoming, f);
+        }
     }
 }
 
@@ -393,60 +419,10 @@ fn record_touched_fields(change: &TrackChange, touched: &mut TouchedFields) {
         return;
     }
     let set = touched.entry(change.track_id.clone()).or_default();
-    if change.genre.is_some() {
-        set.insert(EditableField::Genre);
-    }
-    if change.comments.is_some() {
-        set.insert(EditableField::Comments);
-    }
-    if change.rating.is_some() {
-        set.insert(EditableField::Rating);
-    }
-    if change.color.is_some() {
-        set.insert(EditableField::Color);
-    }
-    if change.label.is_some() {
-        set.insert(EditableField::Label);
-    }
-    if change.year.is_some() {
-        set.insert(EditableField::Year);
-    }
-    if change.album.is_some() {
-        set.insert(EditableField::Album);
-    }
-}
-
-fn clear_field(entry: &mut TrackChange, field: EditableField) -> bool {
-    match field {
-        EditableField::Genre if entry.genre.is_some() => {
-            entry.genre = None;
-            true
+    for &f in EditableField::ALL {
+        if change.is_field_set(f) {
+            set.insert(f);
         }
-        EditableField::Comments if entry.comments.is_some() => {
-            entry.comments = None;
-            true
-        }
-        EditableField::Rating if entry.rating.is_some() => {
-            entry.rating = None;
-            true
-        }
-        EditableField::Color if entry.color.is_some() => {
-            entry.color = None;
-            true
-        }
-        EditableField::Label if entry.label.is_some() => {
-            entry.label = None;
-            true
-        }
-        EditableField::Year if entry.year.is_some() => {
-            entry.year = None;
-            true
-        }
-        EditableField::Album if entry.album.is_some() => {
-            entry.album = None;
-            true
-        }
-        _ => false,
     }
 }
 
@@ -459,27 +435,8 @@ fn apply_changes_with_map(
         .map(|track| {
             if let Some(change) = changes_by_track_id.get(&track.id) {
                 let mut modified = track.clone();
-                if let Some(ref genre) = change.genre {
-                    modified.genre = genre.clone();
-                }
-                if let Some(ref comments) = change.comments {
-                    modified.comments = comments.clone();
-                }
-                if let Some(rating) = change.rating {
-                    modified.rating = rating;
-                }
-                if let Some(ref color) = change.color {
-                    modified.color = color.clone();
-                    modified.color_code = color::color_name_to_code(color).unwrap_or(0);
-                }
-                if let Some(ref label) = change.label {
-                    modified.label = label.clone();
-                }
-                if let Some(year) = change.year {
-                    modified.year = year;
-                }
-                if let Some(ref album) = change.album {
-                    modified.album = album.clone();
+                for &f in EditableField::ALL {
+                    change.apply_field_to_track(&mut modified, f);
                 }
                 modified
             } else {

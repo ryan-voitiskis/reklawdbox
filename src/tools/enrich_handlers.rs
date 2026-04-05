@@ -14,36 +14,51 @@ fn normalize_discogs_album_for_cache(album: Option<&str>) -> Option<String> {
         .filter(|album| !album.is_empty())
 }
 
-pub(super) async fn handle_lookup_discogs(
+/// Resolve track identity from either track_id (DB lookup) or explicit artist/title.
+fn resolve_lookup_identity(
     server: &ReklawdboxServer,
-    params: LookupDiscogsParams,
-) -> Result<CallToolResult, McpError> {
-    let force_refresh = params.force_refresh.unwrap_or(false);
-
-    let (artist, title, album) = if let Some(ref track_id) = params.track_id {
+    track_id: Option<&str>,
+    artist: Option<String>,
+    title: Option<String>,
+    album: Option<String>,
+) -> Result<(String, String, Option<String>), McpError> {
+    if let Some(track_id) = track_id {
         let conn = server.rekordbox_conn()?;
         let track = db::get_track(&conn, track_id)
             .map_err(db_error)?
             .ok_or_else(|| {
                 McpError::invalid_params(format!("Track '{track_id}' not found"), None)
             })?;
-        let album = params
-            .album
-            .or_else(|| (!track.album.is_empty()).then(|| track.album.clone()));
-        (
-            params.artist.unwrap_or(track.artist),
-            params.title.unwrap_or(track.title),
+        let album = album.or_else(|| (!track.album.is_empty()).then(|| track.album.clone()));
+        Ok((
+            artist.unwrap_or(track.artist),
+            title.unwrap_or(track.title),
             album,
-        )
+        ))
     } else {
-        let artist = params.artist.ok_or_else(|| {
+        let artist = artist.ok_or_else(|| {
             McpError::invalid_params("artist is required when track_id is not provided", None)
         })?;
-        let title = params.title.ok_or_else(|| {
+        let title = title.ok_or_else(|| {
             McpError::invalid_params("title is required when track_id is not provided", None)
         })?;
-        (artist, title, params.album)
-    };
+        Ok((artist, title, album))
+    }
+}
+
+pub(super) async fn handle_lookup_discogs(
+    server: &ReklawdboxServer,
+    params: LookupDiscogsParams,
+) -> Result<CallToolResult, McpError> {
+    let force_refresh = params.force_refresh.unwrap_or(false);
+
+    let (artist, title, album) = resolve_lookup_identity(
+        server,
+        params.track_id.as_deref(),
+        params.artist,
+        params.title,
+        params.album,
+    )?;
 
     let norm_artist = crate::normalize::normalize_for_matching(&artist);
     let norm_title = crate::normalize::normalize_for_matching(&title);
@@ -115,26 +130,13 @@ pub(super) async fn handle_lookup_beatport(
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
 
-    let (artist, title) = if let Some(ref track_id) = params.track_id {
-        let conn = server.rekordbox_conn()?;
-        let track = db::get_track(&conn, track_id)
-            .map_err(db_error)?
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Track '{track_id}' not found"), None)
-            })?;
-        (
-            params.artist.unwrap_or(track.artist),
-            params.title.unwrap_or(track.title),
-        )
-    } else {
-        let artist = params.artist.ok_or_else(|| {
-            McpError::invalid_params("artist is required when track_id is not provided", None)
-        })?;
-        let title = params.title.ok_or_else(|| {
-            McpError::invalid_params("title is required when track_id is not provided", None)
-        })?;
-        (artist, title)
-    };
+    let (artist, title, _) = resolve_lookup_identity(
+        server,
+        params.track_id.as_deref(),
+        params.artist,
+        params.title,
+        None,
+    )?;
 
     let norm_artist = crate::normalize::normalize_for_matching(&artist);
     let norm_title = crate::normalize::normalize_for_matching(&title);
@@ -202,26 +204,13 @@ pub(super) async fn handle_lookup_musicbrainz(
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
 
-    let (artist, title) = if let Some(ref track_id) = params.track_id {
-        let conn = server.rekordbox_conn()?;
-        let track = db::get_track(&conn, track_id)
-            .map_err(db_error)?
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Track '{track_id}' not found"), None)
-            })?;
-        (
-            params.artist.unwrap_or(track.artist),
-            params.title.unwrap_or(track.title),
-        )
-    } else {
-        let artist = params.artist.ok_or_else(|| {
-            McpError::invalid_params("artist is required when track_id is not provided", None)
-        })?;
-        let title = params.title.ok_or_else(|| {
-            McpError::invalid_params("title is required when track_id is not provided", None)
-        })?;
-        (artist, title)
-    };
+    let (artist, title, _) = resolve_lookup_identity(
+        server,
+        params.track_id.as_deref(),
+        params.artist,
+        params.title,
+        None,
+    )?;
 
     let norm_artist = crate::normalize::normalize_for_matching(&artist);
     let norm_title = crate::normalize::normalize_for_matching(&title);
@@ -289,26 +278,13 @@ pub(super) async fn handle_lookup_bandcamp(
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
 
-    let (artist, title) = if let Some(ref track_id) = params.track_id {
-        let conn = server.rekordbox_conn()?;
-        let track = db::get_track(&conn, track_id)
-            .map_err(db_error)?
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Track '{track_id}' not found"), None)
-            })?;
-        (
-            params.artist.unwrap_or(track.artist),
-            params.title.unwrap_or(track.title),
-        )
-    } else {
-        let artist = params.artist.ok_or_else(|| {
-            McpError::invalid_params("artist is required when track_id is not provided", None)
-        })?;
-        let title = params.title.ok_or_else(|| {
-            McpError::invalid_params("title is required when track_id is not provided", None)
-        })?;
-        (artist, title)
-    };
+    let (artist, title, _) = resolve_lookup_identity(
+        server,
+        params.track_id.as_deref(),
+        params.artist,
+        params.title,
+        None,
+    )?;
 
     let norm_artist = crate::normalize::normalize_for_matching(&artist);
     let norm_title = crate::normalize::normalize_for_matching(&title);
@@ -389,6 +365,112 @@ enum EnrichCacheWriteMsg {
         match_quality: Option<String>,
         response_json: Option<String>,
     },
+}
+
+/// Shared enrichment future for Beatport and Bandcamp: acquire semaphore, run
+/// lookup, determine match quality, send cache write, return (processed, skipped,
+/// failures).  Discogs has distinct auth/broadcast logic and stays separate.
+#[allow(clippy::too_many_arguments)]
+async fn provider_enrich_fut<T, E>(
+    provider: &str,
+    need: bool,
+    track_id: &str,
+    artist: &str,
+    title: &str,
+    norm_artist: String,
+    norm_title: String,
+    semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    cache_tx: &tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>,
+    lookup_fut: impl std::future::Future<Output = Result<Option<T>, E>>,
+    quality_fn: impl FnOnce(&T) -> &str,
+) -> (usize, usize, Vec<serde_json::Value>)
+where
+    T: serde::Serialize,
+    E: std::fmt::Display,
+{
+    if !need {
+        return (0, 0, Vec::new());
+    }
+
+    let _permit = match semaphore.acquire().await {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                0,
+                0,
+                vec![serde_json::json!({
+                    "track_id": track_id,
+                    "artist": artist,
+                    "title": title,
+                    "provider": provider,
+                    "error": format!("{provider} semaphore closed"),
+                })],
+            );
+        }
+    };
+
+    match lookup_fut.await {
+        Ok(Some(r)) => {
+            let quality = quality_fn(&r);
+            let json_str = match serde_json::to_string(&r) {
+                Ok(j) => j,
+                Err(e) => {
+                    return (
+                        0,
+                        0,
+                        vec![serde_json::json!({
+                            "track_id": track_id,
+                            "artist": artist,
+                            "title": title,
+                            "provider": provider,
+                            "error": format!("Serialize error: {e}"),
+                        })],
+                    );
+                }
+            };
+            if let Err(e) = cache_tx
+                .send(EnrichCacheWriteMsg::Enrichment {
+                    provider: provider.to_string(),
+                    norm_artist,
+                    norm_title,
+                    norm_album: None,
+                    match_quality: Some(quality.to_string()),
+                    response_json: Some(json_str),
+                })
+                .await
+            {
+                tracing::warn!(provider, "cache channel send failed: {e}");
+            }
+            (1, 0, Vec::new())
+        }
+        Ok(None) => {
+            if let Err(e) = cache_tx
+                .send(EnrichCacheWriteMsg::Enrichment {
+                    provider: provider.to_string(),
+                    norm_artist,
+                    norm_title,
+                    norm_album: None,
+                    match_quality: Some("none".to_string()),
+                    response_json: None,
+                })
+                .await
+            {
+                tracing::warn!(provider, "cache channel send failed: {e}");
+            }
+            (0, 1, Vec::new())
+        }
+        Err(e) => (
+            0,
+            0,
+            vec![serde_json::json!({
+                "track_id": track_id,
+                "artist": artist,
+                "title": title,
+                "provider": provider,
+                "error": e.to_string(),
+            })],
+        ),
+    }
 }
 
 struct EnrichTrackResult {
@@ -623,90 +705,20 @@ async fn enrich_single_track(
         let cache_tx = cache_tx.clone();
         let beatport_sem = beatport_sem.clone();
         async move {
-            if !need_beatport {
-                return (0usize, 0usize, Vec::new());
-            }
-
-            // Rate-limit concurrent Beatport scraping
-            let _permit = match beatport_sem.acquire().await {
-                Ok(p) => p,
-                Err(_) => {
-                    return (
-                        0,
-                        0,
-                        vec![serde_json::json!({
-                            "track_id": &track_id,
-                            "artist": &artist,
-                            "title": &title,
-                            "provider": "beatport",
-                            "error": "Beatport semaphore closed",
-                        })],
-                    );
-                }
-            };
-
-            match beatport::lookup(&server.state.http, &artist, &title).await {
-                Ok(Some(r)) => {
-                    let json_str = match serde_json::to_string(&r) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            return (
-                                0,
-                                0,
-                                vec![serde_json::json!({
-                                    "track_id": &track_id,
-                                    "artist": &artist,
-                                    "title": &title,
-                                    "provider": "beatport",
-                                    "error": format!("Serialize error: {e}"),
-                                })],
-                            );
-                        }
-                    };
-                    let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
-                            provider: "beatport".to_string(),
-                            norm_artist,
-                            norm_title,
-                            norm_album: None,
-                            match_quality: Some(quality.to_string()),
-                            response_json: Some(json_str),
-                        })
-                        .await
-                    {
-                        tracing::warn!(provider = "beatport", "cache channel send failed: {e}");
-                    }
-                    (1, 0, Vec::new())
-                }
-                Ok(None) => {
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
-                            provider: "beatport".to_string(),
-                            norm_artist,
-                            norm_title,
-                            norm_album: None,
-                            match_quality: Some("none".to_string()),
-                            response_json: None,
-                        })
-                        .await
-                    {
-                        tracing::warn!(provider = "beatport", "cache channel send failed: {e}");
-                    }
-                    (0, 1, Vec::new())
-                }
-                Err(e) => (
-                    0,
-                    0,
-                    vec![serde_json::json!({
-                        "track_id": &track_id,
-                        "artist": &artist,
-                        "title": &title,
-                        "provider": "beatport",
-                        "error": e.to_string(),
-                    })],
-                ),
-            }
+            provider_enrich_fut(
+                "beatport",
+                need_beatport,
+                &track_id,
+                &artist,
+                &title,
+                norm_artist,
+                norm_title,
+                beatport_sem,
+                &cache_tx,
+                beatport::lookup(&server.state.http, &artist, &title),
+                |r| if r.fuzzy_match { "fuzzy" } else { "exact" },
+            )
+            .await
         }
     };
 
@@ -720,89 +732,20 @@ async fn enrich_single_track(
         let cache_tx = cache_tx.clone();
         let bandcamp_sem = bandcamp_sem.clone();
         async move {
-            if !need_bandcamp {
-                return (0usize, 0usize, Vec::new());
-            }
-
-            let _permit = match bandcamp_sem.acquire().await {
-                Ok(p) => p,
-                Err(_) => {
-                    return (
-                        0,
-                        0,
-                        vec![serde_json::json!({
-                            "track_id": &track_id,
-                            "artist": &artist,
-                            "title": &title,
-                            "provider": "bandcamp",
-                            "error": "Bandcamp semaphore closed",
-                        })],
-                    );
-                }
-            };
-
-            match bandcamp::lookup(&server.state.http, &artist, &title).await {
-                Ok(Some(r)) => {
-                    let quality = if r.score == 100 { "exact" } else { "fuzzy" };
-                    let json_str = match serde_json::to_string(&r) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            return (
-                                0,
-                                0,
-                                vec![serde_json::json!({
-                                    "track_id": &track_id,
-                                    "artist": &artist,
-                                    "title": &title,
-                                    "provider": "bandcamp",
-                                    "error": format!("Serialize error: {e}"),
-                                })],
-                            );
-                        }
-                    };
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
-                            provider: "bandcamp".to_string(),
-                            norm_artist,
-                            norm_title,
-                            norm_album: None,
-                            match_quality: Some(quality.to_string()),
-                            response_json: Some(json_str),
-                        })
-                        .await
-                    {
-                        tracing::warn!(provider = "bandcamp", "cache channel send failed: {e}");
-                    }
-                    (1, 0, Vec::new())
-                }
-                Ok(None) => {
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
-                            provider: "bandcamp".to_string(),
-                            norm_artist,
-                            norm_title,
-                            norm_album: None,
-                            match_quality: Some("none".to_string()),
-                            response_json: None,
-                        })
-                        .await
-                    {
-                        tracing::warn!(provider = "bandcamp", "cache channel send failed: {e}");
-                    }
-                    (0, 1, Vec::new())
-                }
-                Err(e) => (
-                    0,
-                    0,
-                    vec![serde_json::json!({
-                        "track_id": &track_id,
-                        "artist": &artist,
-                        "title": &title,
-                        "provider": "bandcamp",
-                        "error": e.to_string(),
-                    })],
-                ),
-            }
+            provider_enrich_fut(
+                "bandcamp",
+                need_bandcamp,
+                &track_id,
+                &artist,
+                &title,
+                norm_artist,
+                norm_title,
+                bandcamp_sem,
+                &cache_tx,
+                bandcamp::lookup(&server.state.http, &artist, &title),
+                |r| if r.score == 100 { "exact" } else { "fuzzy" },
+            )
+            .await
         }
     };
 
