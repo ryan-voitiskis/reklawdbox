@@ -1,4 +1,5 @@
 mod analyze;
+mod backup;
 mod hydrate;
 mod mcp_config;
 mod setup;
@@ -138,6 +139,8 @@ pub(crate) fn memory_preset_summary(budget_mb: u32) -> String {
 enum Cli {
     /// Batch audio analysis (stratum-dsp + Essentia)
     Analyze(analyze::AnalyzeArgs),
+    /// Manage Rekordbox library backups
+    Backup(backup::BackupArgs),
     /// Batch enrichment + analysis (Discogs, Beatport, audio analysis)
     Hydrate(hydrate::HydrateArgs),
     /// Read metadata tags from audio files
@@ -162,6 +165,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli {
         Cli::Analyze(args) => analyze::run_analyze(args).await,
+        Cli::Backup(args) => backup::run_backup(args).await,
         Cli::Hydrate(args) => hydrate::run_hydrate(args).await,
         Cli::ReadTags(args) => tags::run_read_tags(args),
         Cli::WriteTags(args) => tags::run_write_tags(args),

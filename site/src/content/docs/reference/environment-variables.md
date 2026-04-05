@@ -41,11 +41,11 @@ stratum-dsp always runs regardless of Essentia availability. It provides BPM and
 
 ## Backup
 
-| Variable                   | Description                                            | Default                                        |
-| -------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
-| `REKLAWDBOX_BACKUP_SCRIPT` | Path to a backup script run before `write_xml` exports | Probes built-in paths relative to project root |
+| Variable                   | Description                                           | Default         |
+| -------------------------- | ----------------------------------------------------- | --------------- |
+| `REKLAWDBOX_BACKUP_SCRIPT` | Path to a custom backup script run before `write_xml` | Built-in script |
 
-The backup script runs synchronously before any XML is written. If neither the env var nor the default probe paths point to an existing script, no backup runs and `write_xml` proceeds normally.
+A backup of your Rekordbox database files runs automatically before every `write_xml` export using a script embedded in the binary. Set this variable only if you want to replace the built-in backup with your own script. The script receives `--pre-op` as its first argument.
 
 ## Storage
 
@@ -57,13 +57,13 @@ The cache database stores Discogs/Beatport enrichment results, audio analysis ou
 
 ## Advanced
 
-| Variable                                  | Description                                        | Default                        |
-| ----------------------------------------- | -------------------------------------------------- | ------------------------------ |
-| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`     | Minimum interval between Beatport requests (ms)    | `1000`                         |
-| `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`     | Minimum interval between Bandcamp requests (ms)    | `1500`                         |
-| `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS`  | Minimum interval between MusicBrainz requests (ms) | `1100`                         |
-| `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`      | Minimum interval between Discogs broker requests (ms) | `1100`                      |
-| `REKLAWDBOX_CORPUS_PATH`                  | Path to the Rekordbox knowledge corpus manifest    | `docs/rekordbox/manifest.yaml` |
+| Variable                                 | Description                                           | Default                        |
+| ---------------------------------------- | ----------------------------------------------------- | ------------------------------ |
+| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`    | Minimum interval between Beatport requests (ms)       | `1000`                         |
+| `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`    | Minimum interval between Bandcamp requests (ms)       | `1500`                         |
+| `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS` | Minimum interval between MusicBrainz requests (ms)    | `1100`                         |
+| `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`     | Minimum interval between Discogs broker requests (ms) | `1100`                         |
+| `REKLAWDBOX_CORPUS_PATH`                 | Path to the Rekordbox knowledge corpus manifest       | `docs/rekordbox/manifest.yaml` |
 
 These are internal tuning knobs. The rate-limit intervals control minimum time between requests to each service — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
 

@@ -1549,6 +1549,24 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_returns_custom_not_found_when_env_var_path_missing() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let _backup_env = EnvVarGuard::set(
+        "REKLAWDBOX_BACKUP_SCRIPT",
+        "/nonexistent/backup.sh".as_ref(),
+    );
+
+    let status = crate::backup::run_pre_op_backup()
+        .await
+        .expect("should return Ok, not Err");
+    assert_eq!(status, crate::backup::BackupStatus::CustomNotFound);
+}
+
+#[tokio::test]
 async fn update_tracks_stages_changes() {
     let server = ReklawdboxServer::new(None);
     let known_genre = genre::GENRES

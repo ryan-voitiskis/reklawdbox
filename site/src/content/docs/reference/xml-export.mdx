@@ -99,7 +99,13 @@ Rekordbox XML uses classic notation (`Am`, `Bb`, `F#m`). Camelot is display-only
 
 ## Backup behavior
 
-Before export, reklawdbox checks for a backup script (in order): `REKLAWDBOX_BACKUP_SCRIPT` env var, then built-in probe paths. If found, it runs synchronously with `--pre-op` before writing. Failures restore staged changes and block export with an error.
+Every `write_xml` call automatically backs up your Rekordbox database files before writing. The backup is a compressed archive of `master.db` and related files, stored in `~/Music/rekordbox-backups/`. Up to 20 pre-operation backups are kept; older ones are rotated out.
+
+If the backup fails, staged changes are restored and the export is blocked — your XML file is never written with a failed backup.
+
+You can also manage backups manually with `reklawdbox backup` — see [CLI Commands](/cli/).
+
+To use a custom backup script instead of the built-in one, set `REKLAWDBOX_BACKUP_SCRIPT` in your environment. See [Environment Variables](/reference/environment-variables/).
 
 XML files are written to `~/reklawdbox-exports/` by default.
 

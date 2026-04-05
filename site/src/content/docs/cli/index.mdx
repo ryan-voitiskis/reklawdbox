@@ -21,6 +21,26 @@ CLI commands load env vars from `.mcp.json` automatically — same config as the
 
 ---
 
+## `backup`
+
+Manage Rekordbox library backups. Creates compressed archives of your database files in `~/Music/rekordbox-backups/`.
+
+```bash
+reklawdbox backup [options]
+```
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--db-only` | flag | Database files only (~50MB, fast) |
+| `--list` | flag | List existing backups |
+| `--restore` | path | Restore from a backup archive |
+
+With no flags, creates a full backup (~1GB compressed) of the entire Rekordbox data directory.
+
+A database-only backup also runs automatically before every `write_xml` export — you don't need to run this manually for that. This command is for manual backups and restores.
+
+---
+
 ## `hydrate`
 
 Batch enrichment + audio analysis. The recommended way to warm caches before classification or set building.

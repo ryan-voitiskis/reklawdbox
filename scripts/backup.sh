@@ -5,7 +5,6 @@
 # Usage:
 #   ./scripts/backup.sh                  # Full backup
 #   ./scripts/backup.sh --db-only        # Database files only (fast, ~50MB)
-#   ./scripts/backup.sh --pre-op         # Pre-operation snapshot (db-only, auto-called by tools)
 #   ./scripts/backup.sh --list           # List existing backups
 #   ./scripts/backup.sh --restore <path> # Restore from a backup archive
 #
@@ -15,7 +14,7 @@ set -euo pipefail
 
 # --- Configuration ---
 RB_DATA="$HOME/Library/Pioneer/rekordbox"
-BACKUP_DIR="$HOME/Library/Pioneer/rekordbox-backups"
+BACKUP_DIR="$HOME/Music/rekordbox-backups"
 MAX_FULL_BACKUPS=5
 MAX_DB_BACKUPS=20
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -97,8 +96,14 @@ backup_db_only() {
         exit 1
     fi
 
-    # Use tar from the RB_DATA directory
-    tar -czf "$archive" -C "$RB_DATA" "${files_to_backup[@]}"
+    # Write to temp file, move on success (prevents partial archives on disk-full)
+    local tmp_archive
+    tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
+    trap 'rm -f "$tmp_archive"' ERR
+
+    tar -czf "$tmp_archive" -C "$RB_DATA" "${files_to_backup[@]}"
+    mv "$tmp_archive" "$archive"
+    trap - ERR
 
     local size
     size=$(du -h "$archive" | cut -f1)
@@ -113,12 +118,18 @@ backup_full() {
 
     log "Creating full backup (this may take a minute for ~1GB of data)..."
 
-    # Exclude macOS metadata and any temp files
-    tar -czf "$archive" \
+    # Write to temp file, move on success (prevents partial archives on disk-full)
+    local tmp_archive
+    tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
+    trap 'rm -f "$tmp_archive"' ERR
+
+    tar -czf "$tmp_archive" \
         -C "$(dirname "$RB_DATA")" \
         --exclude='.DS_Store' \
         --exclude='*.tmp' \
         "$(basename "$RB_DATA")"
+    mv "$tmp_archive" "$archive"
+    trap - ERR
 
     local size
     size=$(du -h "$archive" | cut -f1)
@@ -378,12 +389,11 @@ case "${1:-}" in
         echo "reklawdbox: Rekordbox library backup tool"
         echo ""
         echo "Usage:"
-        echo "  ./scripts/backup.sh                  Full backup (~1GB compressed)"
-        echo "  ./scripts/backup.sh --db-only        Database files only (~50MB)"
-        echo "  ./scripts/backup.sh --pre-op         Pre-operation snapshot (silent)"
-        echo "  ./scripts/backup.sh --list           List existing backups"
-        echo "  ./scripts/backup.sh --restore <path> Restore from backup"
-        echo "  ./scripts/backup.sh --help           Show this help"
+        echo "  reklawdbox backup                  Full backup (~1GB compressed)"
+        echo "  reklawdbox backup --db-only        Database files only (~50MB)"
+        echo "  reklawdbox backup --list           List existing backups"
+        echo "  reklawdbox backup --restore <path> Restore from backup"
+        echo "  reklawdbox backup --help           Show this help"
         echo ""
         echo "Backups stored in: $BACKUP_DIR"
         ;;

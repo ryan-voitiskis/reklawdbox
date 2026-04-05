@@ -33,6 +33,7 @@ sha2 = "0.10"
 stratum-dsp = { path = "stratum-dsp" }
 strum = { version = "0.27", features = ["derive"] }
 symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "aac"] }
+tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -47,7 +48,6 @@ security-framework = "3"
 
 [dev-dependencies]
 rmcp = { version = "0.15", features = ["client", "transport-io"] }
-tempfile = "3"
 
 [profile.release]
 lto = "thin"

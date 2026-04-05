@@ -1,5 +1,6 @@
 mod audio;
 mod audit;
+mod backup;
 mod bandcamp;
 mod beatport;
 mod changes;
@@ -98,6 +99,7 @@ where
         matches!(
             a,
             "analyze"
+                | "backup"
                 | "hydrate"
                 | "read-tags"
                 | "write-tags"
@@ -175,6 +177,11 @@ mod tests {
     #[test]
     fn runs_cli_for_embed_art_subcommand() {
         assert!(should_run_cli(vec!["reklawdbox", "embed-art"].into_iter()));
+    }
+
+    #[test]
+    fn runs_cli_for_backup_subcommand() {
+        assert!(should_run_cli(vec!["reklawdbox", "backup"].into_iter()));
     }
 
     #[test]
