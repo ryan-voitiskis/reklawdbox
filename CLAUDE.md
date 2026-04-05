@@ -5,17 +5,19 @@ SQLCipher DB access and stages metadata edits as Rekordbox XML for reimport
 while never writing directly to the DB; human approval is always required.
 
 It provides tools for library search, audio analysis via stratum-dsp +
-Essentia, Discogs/Beatport enrichment, genre classification, transition
-scoring, and greedy set sequencing with energy-curve shaping.
+Essentia, multi-provider enrichment (Discogs, Beatport, Bandcamp, MusicBrainz),
+genre classification, transition scoring, and greedy set sequencing with
+energy-curve shaping.
 
-- Runtime: Rust 2024 single binary (`cargo`), `rmcp`, `tokio`, `serde`/`serde_json`/`schemars`.
-- Rekordbox access: `rusqlite` + bundled SQLCipher/OpenSSL; encrypted `master.db` is read-only.
-- Write path: DB is never written; exports Rekordbox-compatible XML.
-- Local persistence: separate SQLite (WAL) for enrichment cache, audio-analysis cache, broker session tokens.
-- Enrichment I/O: `reqwest` + `rustls`; Discogs via broker API; Beatport via HTML/JSON extraction.
-- Audio analysis: `symphonia` decode + `stratum-dsp`; optional Essentia via Python subprocess.
-- Companion service: Discogs broker in TypeScript on Cloudflare Workers + D1.
+- Workspace: Rust 2024, two crates — `reklawdbox` (MCP server + CLI) and `stratum-dsp` (audio DSP).
+- Key deps: `rmcp`, `tokio`, `rusqlite` + bundled SQLCipher/OpenSSL, `reqwest` + `rustls`, `symphonia`, `serde`/`schemars`.
+- Rekordbox access: encrypted `master.db` opened read-only via SQLCipher. No write path exists.
+- Write path: in-memory staged changes exported as Rekordbox-compatible XML for manual reimport.
+- Local persistence: SQLite (WAL) for enrichment cache and audio-analysis cache. Broker session tokens are in macOS Keychain.
+- Enrichment: Discogs via broker API (`broker/` — Cloudflare Workers + D1); Beatport, Bandcamp, MusicBrainz via direct HTTP.
+- Audio analysis: `symphonia` decode → `stratum-dsp` (BPM, key); optional Essentia via Python subprocess (energy, timbre, rhythm).
 - SOPs: `site/src/partials/sops/*.mdx` are `include_str!`'d into the binary via `help_handler.rs`. SOP changes require a release to take effect.
+- Pre-commit hook: `cargo fmt --check`, `clippy -D warnings`, `dprint check`. Run `cargo fmt && dprint fmt` before committing.
 
 ## MCP Development Loop
 
