@@ -68,25 +68,7 @@ Essentia probe behavior:
 cargo build --release
 ```
 
-2. (Recommended) Set up a persistent local env file + launcher (one-time):
-
-```bash
-mkdir -p ~/.config/reklawdbox
-cp mcp.env.example ~/.config/reklawdbox/mcp.env
-# edit ~/.config/reklawdbox/mcp.env for your machine
-chmod +x scripts/run-reklawdbox-mcp.sh
-```
-
-3. Register once with the launcher script:
-
-```bash
-codex mcp remove reklawdbox 2>/dev/null || true
-codex mcp add reklawdbox -- ./scripts/run-reklawdbox-mcp.sh
-```
-
-After this, you only update `~/.config/reklawdbox/mcp.env` and restart MCP when env changes.
-
-4. Alternative: create local MCP config from template:
+2. Create local MCP config from template:
 
 ```bash
 cp mcp-config.example.json .mcp.json
