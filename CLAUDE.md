@@ -29,14 +29,13 @@ This project IS the MCP server. The user's MCP config (`.mcp.json` in the repo r
 
 ## Releasing
 
-Tag-triggered. Pushing a `v*.*.*` tag runs `.github/workflows/release.yml` which:
+`./scripts/release.sh <version>` bumps `Cargo.toml`, updates the site homepage version,
+commits, tags, and pushes. The tag push triggers `.github/workflows/release.yml` which
 builds on ARM64 macOS, runs tests, creates a GitHub Release with the binary tarball,
 and auto-updates the Homebrew formula in `ryan-voitiskis/homebrew-reklawdbox`.
 
 ```
-# 1. Bump version in Cargo.toml
-# 2. Commit, tag, push
-git tag v0.x.y && git push origin main v0.x.y
+./scripts/release.sh 0.25.0
 ```
 
 Requires `HOMEBREW_TAP_TOKEN` repo secret (PAT with `repo` scope for the tap repo).

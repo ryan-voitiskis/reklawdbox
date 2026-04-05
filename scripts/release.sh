@@ -46,11 +46,14 @@ echo "Releasing: $CURRENT -> $VERSION"
 # Bump version in Cargo.toml
 sed -i '' "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" Cargo.toml
 
+# Bump version on site homepage
+sed -i '' "s/v${CURRENT} —/v${VERSION} —/" site/src/content/docs/index.mdx
+
 # Update Cargo.lock
 cargo generate-lockfile --quiet
 
 # Commit, tag, push
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock site/src/content/docs/index.mdx
 git commit -m "chore: bump version to $VERSION"
 git tag "$TAG"
 git push origin main "$TAG"
