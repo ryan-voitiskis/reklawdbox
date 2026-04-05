@@ -596,6 +596,20 @@ describe('broker test runner baseline', () => {
       .bind('active-cache', '{"result":null}', now - 100, now + 3600)
       .run()
 
+    await env.DB.prepare(
+      `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
+       VALUES (?1, ?2)`,
+    )
+      .bind('stale-bucket', (now - 2 * 24 * 60 * 60) * 1000)
+      .run()
+
+    await env.DB.prepare(
+      `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
+       VALUES (?1, ?2)`,
+    )
+      .bind('fresh-bucket', Date.now())
+      .run()
+
     const ctx = createExecutionContext()
     const controller = {
       cron: '0 * * * *',
@@ -626,6 +640,14 @@ describe('broker test runner baseline', () => {
     )
       .first<{ count: number }>()
     expect(Number(remainingCacheRows?.count ?? 0)).toBe(1)
+
+    const remainingRateLimitRows = await env.DB.prepare(
+      `SELECT bucket
+       FROM rate_limit_state`,
+    )
+      .all<{ bucket: string }>()
+    expect(remainingRateLimitRows.results).toHaveLength(1)
+    expect(remainingRateLimitRows.results[0].bucket).toBe('fresh-bucket')
   })
 
   it('sanitizes missing Discogs auth configuration errors', async () => {
@@ -1402,6 +1424,391 @@ describe('discogs proxy rate limiting', () => {
       expect(gapOneMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
       expect(gapTwoMs).toBeGreaterThanOrEqual(minIntervalMs - 25)
       expect(elapsedMs).toBeGreaterThanOrEqual((minIntervalMs * 2) - 25)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+})
+
+describe('device session status', () => {
+  it('rejects status requests without broker client token', async () => {
+    const response = await request(
+      '/v1/device/session/status?device_id=abc&pending_token=def',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(401)
+    const body = await response.json<{ error: string }>()
+    expect(body.error).toBe('unauthorized')
+  })
+
+  it('returns pending status for a new session', async () => {
+    const start = await request('/v1/device/session/start', {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+      },
+    })
+    const startBody = await start.json<{
+      device_id: string
+      pending_token: string
+      expires_at: number
+    }>()
+
+    const response = await request(
+      `/v1/device/session/status?device_id=${
+        encodeURIComponent(startBody.device_id)
+      }&pending_token=${encodeURIComponent(startBody.pending_token)}`,
+      {
+        method: 'GET',
+        headers: {
+          [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{
+      status: string
+      expires_at: number
+    }>()
+    expect(body.status).toBe('pending')
+    expect(body.expires_at).toBe(startBody.expires_at)
+  })
+
+  it('returns 400 when device_id or pending_token is missing', async () => {
+    const response = await request('/v1/device/session/status?device_id=abc', {
+      method: 'GET',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+      },
+    })
+
+    expect(response.status).toBe(400)
+    const body = await response.json<{ error: string }>()
+    expect(body.error).toBe('invalid_params')
+  })
+
+  it('returns 404 for unknown device_id', async () => {
+    const response = await request(
+      '/v1/device/session/status?device_id=nonexistent&pending_token=nope',
+      {
+        method: 'GET',
+        headers: {
+          [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        },
+      },
+    )
+
+    expect(response.status).toBe(404)
+    const body = await response.json<{ error: string }>()
+    expect(body.error).toBe('not_found')
+  })
+
+  it('returns expired when session TTL has passed', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const deviceId = 'device-expired-status'
+    const pendingToken = 'pending-expired-status'
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at
+      ) VALUES (?1, ?2, 'pending', 5, ?3, ?3, ?4)`,
+    )
+      .bind(deviceId, pendingToken, now - 120, now - 1)
+      .run()
+
+    const response = await request(
+      `/v1/device/session/status?device_id=${deviceId}&pending_token=${pendingToken}`,
+      {
+        method: 'GET',
+        headers: {
+          [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ status: string }>()
+    expect(body.status).toBe('expired')
+
+    const row = await env.DB.prepare(
+      `SELECT status FROM device_sessions WHERE device_id = ?1`,
+    )
+      .bind(deviceId)
+      .first<{ status: string }>()
+    expect(row?.status).toBe('expired')
+  })
+
+  it('returns authorized status after OAuth completes', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const deviceId = 'device-authorized-status'
+    const pendingToken = 'pending-authorized-status'
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at, authorized_at,
+        oauth_access_token, oauth_access_token_secret, oauth_identity
+      ) VALUES (?1, ?2, 'authorized', 5, ?3, ?3, ?4, ?3, 'tok', 'sec', 'user')`,
+    )
+      .bind(deviceId, pendingToken, now, now + 600)
+      .run()
+
+    const response = await request(
+      `/v1/device/session/status?device_id=${deviceId}&pending_token=${pendingToken}`,
+      {
+        method: 'GET',
+        headers: {
+          [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{ status: string }>()
+    expect(body.status).toBe('authorized')
+  })
+})
+
+describe('oauth link error paths', () => {
+  it('returns 400 when device_id or pending_token is missing', async () => {
+    const response = await request('/v1/discogs/oauth/link?device_id=abc', {
+      method: 'GET',
+    })
+
+    expect(response.status).toBe(400)
+    const text = await response.text()
+    expect(text).toContain('Missing')
+  })
+
+  it('returns 404 when session does not exist', async () => {
+    const response = await request(
+      '/v1/discogs/oauth/link?device_id=nonexistent&pending_token=nope',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(404)
+    const text = await response.text()
+    expect(text).toContain('not found')
+  })
+
+  it('returns 410 when session is expired', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at
+      ) VALUES (?1, ?2, 'pending', 5, ?3, ?3, ?4)`,
+    )
+      .bind('device-link-expired', 'pending-link-expired', now - 120, now - 1)
+      .run()
+
+    const response = await request(
+      '/v1/discogs/oauth/link?device_id=device-link-expired&pending_token=pending-link-expired',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(410)
+    const text = await response.text()
+    expect(text).toContain('expired')
+  })
+
+  it('returns already-linked page for finalized session', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at, authorized_at,
+        oauth_access_token, oauth_access_token_secret, oauth_identity,
+        session_token_hash, session_expires_at, finalized_at
+      ) VALUES (
+        ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, 'tok', 'sec', 'user', 'hash', ?4, ?3
+      )`,
+    )
+      .bind(
+        'device-link-finalized',
+        'pending-link-finalized',
+        now,
+        now + 3600,
+      )
+      .run()
+
+    const response = await request(
+      '/v1/discogs/oauth/link?device_id=device-link-finalized&pending_token=pending-link-finalized',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    expect(text).toContain('already linked')
+  })
+})
+
+describe('oauth callback error paths', () => {
+  it('returns 400 when required params are missing', async () => {
+    const response = await request(
+      '/v1/discogs/oauth/callback?device_id=abc',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(400)
+    const text = await response.text()
+    expect(text).toContain('Missing required callback parameters')
+  })
+
+  it('returns 404 when session does not exist', async () => {
+    const response = await request(
+      '/v1/discogs/oauth/callback?device_id=nonexistent&pending_token=nope&oauth_token=tok&oauth_verifier=ver',
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(404)
+    const text = await response.text()
+    expect(text).toContain('not found')
+  })
+
+  it('returns 410 when session is expired', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at
+      ) VALUES (?1, ?2, 'pending', 5, ?3, ?3, ?4)`,
+    )
+      .bind(
+        'device-callback-expired',
+        'pending-callback-expired',
+        now - 120,
+        now - 1,
+      )
+      .run()
+
+    const response = await request(
+      `/v1/discogs/oauth/callback?device_id=device-callback-expired&pending_token=pending-callback-expired&oauth_token=tok&oauth_verifier=ver`,
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(410)
+    const text = await response.text()
+    expect(text).toContain('expired')
+  })
+
+  it('returns 400 when request token is not found', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at
+      ) VALUES (?1, ?2, 'pending', 5, ?3, ?3, ?4)`,
+    )
+      .bind(
+        'device-callback-no-token',
+        'pending-callback-no-token',
+        now,
+        now + 600,
+      )
+      .run()
+
+    const response = await request(
+      `/v1/discogs/oauth/callback?device_id=device-callback-no-token&pending_token=pending-callback-no-token&oauth_token=missing-token&oauth_verifier=ver`,
+      { method: 'GET' },
+    )
+
+    expect(response.status).toBe(400)
+    const text = await response.text()
+    expect(text).toContain('request token')
+  })
+})
+
+describe('discogs proxy search caching', () => {
+  it('returns cache_hit true on second identical search', async () => {
+    const sessionToken = 'session-cache-hit-token'
+    const sessionTokenHash = await sha256Hex(sessionToken)
+    const now = Math.floor(Date.now() / 1000)
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id, pending_token, status, poll_interval_seconds,
+        created_at, updated_at, expires_at, authorized_at,
+        oauth_access_token, oauth_access_token_secret, oauth_identity,
+        session_token_hash, session_expires_at, finalized_at
+      ) VALUES (
+        ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, ?5, ?6, 'tester', ?7, ?4, ?3
+      )`,
+    )
+      .bind(
+        'device-cache-hit',
+        'pending-cache-hit',
+        now,
+        now + 3600,
+        'oauth-token',
+        'oauth-secret',
+        sessionTokenHash,
+      )
+      .run()
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: 'Cache Artist - Cache Track',
+              year: 2024,
+              label: ['Cache Label'],
+              genre: ['Electronic'],
+              style: ['House'],
+              uri: '/release/cache-1',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+
+    try {
+      const searchBody = JSON.stringify({
+        artist: 'Cache Artist',
+        title: 'Cache Track',
+      })
+      const headers = {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      }
+
+      const first = await request('/v1/discogs/proxy/search', {
+        method: 'POST',
+        headers,
+        body: searchBody,
+      })
+      expect(first.status).toBe(200)
+      const firstBody = await first.json<{
+        cache_hit: boolean
+        result: { title: string }
+      }>()
+      expect(firstBody.cache_hit).toBe(false)
+      expect(firstBody.result.title).toBe('Cache Artist - Cache Track')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+      const second = await request('/v1/discogs/proxy/search', {
+        method: 'POST',
+        headers,
+        body: searchBody,
+      })
+      expect(second.status).toBe(200)
+      const secondBody = await second.json<{
+        cache_hit: boolean
+        result: { title: string }
+      }>()
+      expect(secondBody.cache_hit).toBe(true)
+      expect(secondBody.result.title).toBe('Cache Artist - Cache Track')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
     } finally {
       fetchSpy.mockRestore()
     }

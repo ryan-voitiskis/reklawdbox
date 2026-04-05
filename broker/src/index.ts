@@ -94,6 +94,9 @@ const DISCOGS_AUTH_STATE_UNAVAILABLE_MESSAGE =
 const DISCOGS_UPSTREAM_FAILURE_MESSAGE = 'discogs upstream request failed'
 const DISCOGS_UPSTREAM_INVALID_RESPONSE_MESSAGE =
   'discogs upstream response was invalid'
+const BROKER_USER_AGENT = 'reklawdbox-broker/0.1'
+const MAX_RETRY_AFTER_SECONDS = 60
+const MAX_RATE_LIMIT_CAS_RETRIES = 20
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:'
 
 type SecretReadResult = {
@@ -849,7 +852,7 @@ async function handleDiscogsProxySearch(
   return json(payload)
 }
 
-function handleHealth(env: Env): Response {
+async function handleHealth(env: Env): Promise<Response> {
   const brokerClientAuth = brokerClientAuthHealth(env)
   return json({
     status: brokerClientAuth.warning ? 'warning' : 'ok',
@@ -896,7 +899,7 @@ async function lookupDiscogsViaApi(
           method: 'GET',
           headers: {
             Authorization: oauthHeader(oauthParams),
-            'User-Agent': 'reklawdbox-broker/0.1',
+            'User-Agent': BROKER_USER_AGENT,
           },
         },
       )
@@ -915,7 +918,7 @@ async function lookupDiscogsViaApi(
     const retryAfterSeconds = parseRetryAfterSeconds(
       response.headers.get('Retry-After'),
     )
-    await delay((retryAfterSeconds ?? 30) * 1000)
+    await delay(Math.min(retryAfterSeconds ?? 30, MAX_RETRY_AFTER_SECONDS) * 1000)
     response = await doRequest()
   }
 
@@ -1123,7 +1126,7 @@ async function requestDiscogsRequestToken(
     method: 'POST',
     headers: {
       Authorization: oauthHeader(oauthParams),
-      'User-Agent': 'reklawdbox-broker/0.1',
+      'User-Agent': BROKER_USER_AGENT,
     },
   }).catch((err) => {
     console.error('discogs request_token call failed', err)
@@ -1190,7 +1193,7 @@ async function requestDiscogsAccessToken(
     method: 'POST',
     headers: {
       Authorization: oauthHeader(oauthParams),
-      'User-Agent': 'reklawdbox-broker/0.1',
+      'User-Agent': BROKER_USER_AGENT,
     },
   }).catch((err) => {
     console.error('discogs access_token call failed', err)
@@ -1328,7 +1331,7 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
     DEFAULT_DISCOGS_MIN_INTERVAL_MS,
   )
 
-  for (;;) {
+  for (let attempt = 0; attempt < MAX_RATE_LIMIT_CAS_RETRIES; attempt++) {
     const nowMs = Date.now()
     const row = await env.DB.prepare(
       `SELECT last_request_at_ms
@@ -1372,6 +1375,12 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
       return
     }
   }
+
+  throw new BrokerHttpError(
+    'service_unavailable',
+    'rate limiter contention exceeded retries',
+    503,
+  )
 }
 
 async function pruneExpiredRows(env: Env): Promise<void> {
@@ -1397,6 +1406,13 @@ async function pruneExpiredRows(env: Env): Promise<void> {
      WHERE expires_at <= ?1`,
   )
     .bind(now)
+    .run()
+
+  await env.DB.prepare(
+    `DELETE FROM rate_limit_state
+     WHERE last_request_at_ms < ?1`,
+  )
+    .bind((now - 24 * 60 * 60) * 1000)
     .run()
 }
 

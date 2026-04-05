@@ -61,11 +61,11 @@ npm test
 npm run dev
 ```
 
-Or run:
+Or migrate and start in one step:
 
 ```bash
 cd broker
-./scripts/dev.sh
+npm run dev:local
 ```
 
 ## Testing philosophy

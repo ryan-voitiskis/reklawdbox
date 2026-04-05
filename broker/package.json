@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
+    "dev:local": "wrangler d1 migrations apply DB --local && wrangler dev",
     "typecheck": "tsc --noEmit",
     "build": "wrangler deploy --dry-run",
     "test": "vitest run --config vitest.config.ts",
@@ -17,10 +18,10 @@
     "d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.12.14",
+    "@cloudflare/vitest-pool-workers": "^0.14.1",
     "@cloudflare/workers-types": "^4.20260227.0",
     "typescript": "^5.7.3",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.2",
     "wrangler": "^4.67.0"
   }
 }

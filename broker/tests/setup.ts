@@ -15,6 +15,22 @@ declare module 'cloudflare:test' {
   }
 }
 
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      DB: D1Database
+      TEST_MIGRATIONS: unknown
+      DISCOGS_CONSUMER_KEY: string
+      DISCOGS_CONSUMER_SECRET: string
+      BROKER_STATE_ENCRYPTION_KEY: string
+      DISCOGS_MIN_INTERVAL_MS?: string
+      BROKER_CLIENT_TOKEN: string
+      BROKER_PUBLIC_BASE_URL: string
+      ALLOW_UNAUTHENTICATED_BROKER?: string
+    }
+  }
+}
+
 beforeEach(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS as any)
 })

@@ -6,7 +6,15 @@
     "strict": true,
     "skipLibCheck": true,
     "lib": ["ES2022", "WebWorker"],
-    "types": ["@cloudflare/workers-types"]
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers"
+    ],
+    "paths": {
+      "cloudflare:test": [
+        "./node_modules/@cloudflare/vitest-pool-workers/types/cloudflare-test.d.ts"
+      ]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }
