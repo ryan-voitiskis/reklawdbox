@@ -8,7 +8,7 @@
 #   ./scripts/backup.sh --list           # List existing backups
 #   ./scripts/backup.sh --restore <path> # Restore from a backup archive
 #
-# Backup location: ~/Library/Pioneer/rekordbox-backups/
+# Backup location: ~/Music/rekordbox-backups/
 
 set -euo pipefail
 
@@ -99,11 +99,12 @@ backup_db_only() {
     # Write to temp file, move on success (prevents partial archives on disk-full)
     local tmp_archive
     tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
+    trap 'rm -f "$tmp_archive"; exit 1' INT TERM
     trap 'rm -f "$tmp_archive"' ERR
 
     tar -czf "$tmp_archive" -C "$RB_DATA" "${files_to_backup[@]}"
     mv "$tmp_archive" "$archive"
-    trap - ERR
+    trap - ERR INT TERM
 
     local size
     size=$(du -h "$archive" | cut -f1)
@@ -121,6 +122,7 @@ backup_full() {
     # Write to temp file, move on success (prevents partial archives on disk-full)
     local tmp_archive
     tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
+    trap 'rm -f "$tmp_archive"; exit 1' INT TERM
     trap 'rm -f "$tmp_archive"' ERR
 
     tar -czf "$tmp_archive" \
@@ -129,7 +131,7 @@ backup_full() {
         --exclude='*.tmp' \
         "$(basename "$RB_DATA")"
     mv "$tmp_archive" "$archive"
-    trap - ERR
+    trap - ERR INT TERM
 
     local size
     size=$(du -h "$archive" | cut -f1)
@@ -192,7 +194,7 @@ rotate_backups() {
         log "Rotating: removing $to_remove old ${prefix} backup(s)..."
         ls -t "$BACKUP_DIR"/${prefix}_*.tar.gz | tail -n "$to_remove" | while read -r f; do
             log "  Removing $(basename "$f")"
-            rm "$f"
+            rm -f "$f"
         done
     fi
 }
@@ -259,9 +261,31 @@ restore_backup() {
         exit 0
     fi
 
-    # Create a safety backup of current state before restoring
+    # Create a safety backup of current state before restoring.
+    # Match the restore type so non-DB data is preserved on full restores.
+    # The subshell isolates trap modifications from restore_backup's context.
+    # The full_pre-restore_ prefix ensures the archive routes to the full
+    # restore path (matching full_*) when later restored via --restore.
     log "Creating safety backup of current state..."
-    backup_db_only "pre-restore"
+    if [[ "$restore_mode" == "full" ]]; then
+        (
+            safety_archive="$BACKUP_DIR/full_pre-restore_${TIMESTAMP}.tar.gz"
+            mkdir -p "$BACKUP_DIR"
+            tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
+            trap 'rm -f "$tmp_archive"; exit 1' INT TERM
+            trap 'rm -f "$tmp_archive"; err "Safety backup failed; your data is unchanged."' ERR
+            tar -czf "$tmp_archive" \
+                -C "$(dirname "$RB_DATA")" \
+                --exclude='.DS_Store' \
+                --exclude='*.tmp' \
+                "$(basename "$RB_DATA")"
+            mv "$tmp_archive" "$safety_archive"
+            trap - ERR INT TERM
+            log "Full safety backup created: $safety_archive"
+        )
+    else
+        backup_db_only "pre-restore"
+    fi
 
     local staging_dir
     staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/reklawdbox-restore.XXXXXX")"
@@ -293,9 +317,21 @@ restore_backup() {
             exit 1
         fi
 
+        local special_entry
+        special_entry="$(find "$staged_rb_dir" \( -type l -o -type p -o -type b -o -type c -o -type s \) -print -quit)"
+        if [[ -n "$special_entry" ]]; then
+            err "Full backup contains unsupported file types (e.g. symlinks); refusing restore."
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
         local rollback_dir
         rollback_dir="${RB_DATA}.restore-backup-${TIMESTAMP}"
-        mv "$RB_DATA" "$rollback_dir"
+        if ! mv "$RB_DATA" "$rollback_dir"; then
+            err "Failed to move existing data aside for restore. Your data is unchanged."
+            rm -rf "$staging_dir"
+            exit 1
+        fi
         if ! mv "$staged_rb_dir" "$RB_DATA"; then
             err "Failed to move restored data into place; attempting rollback."
             if ! mv "$rollback_dir" "$RB_DATA"; then
@@ -343,12 +379,75 @@ restore_backup() {
             exit 1
         fi
 
-        local staged_file
+        # Atomic swap: move existing files aside, copy new files in, then
+        # clean up. If any step fails, roll back the originals.
+        local -a backed_up=()
+        local bak_suffix=".restore-bak-${TIMESTAMP}"
+
+        local rename_failed=0
         for staged_file in "${staged_files[@]}"; do
             local file_name
             file_name="$(basename "$staged_file")"
-            cp -f "$staged_file" "$RB_DATA/$file_name"
+            if [[ -f "$RB_DATA/$file_name" ]]; then
+                if ! mv "$RB_DATA/$file_name" "$RB_DATA/${file_name}${bak_suffix}"; then
+                    rename_failed=1
+                    err "Failed to rename aside $file_name; rolling back."
+                    break
+                fi
+                backed_up+=("$file_name")
+            fi
         done
+
+        if [[ "$rename_failed" -eq 1 ]]; then
+            if [[ ${#backed_up[@]} -gt 0 ]]; then
+                for file_name in "${backed_up[@]}"; do
+                    mv "$RB_DATA/${file_name}${bak_suffix}" "$RB_DATA/$file_name" 2>/dev/null || true
+                done
+            fi
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local copy_failed=0
+        for staged_file in "${staged_files[@]}"; do
+            local file_name
+            file_name="$(basename "$staged_file")"
+            if ! cp -f "$staged_file" "$RB_DATA/$file_name"; then
+                copy_failed=1
+                break
+            fi
+        done
+
+        if [[ "$copy_failed" -eq 1 ]]; then
+            err "Copy failed; rolling back DB restore."
+            for staged_file in "${staged_files[@]}"; do
+                local file_name
+                file_name="$(basename "$staged_file")"
+                rm -f "$RB_DATA/$file_name"
+            done
+            local rollback_ok=1
+            if [[ ${#backed_up[@]} -gt 0 ]]; then
+                for file_name in "${backed_up[@]}"; do
+                    if ! mv "$RB_DATA/${file_name}${bak_suffix}" "$RB_DATA/$file_name"; then
+                        err "Rollback failed for $file_name. Manual recovery needed:"
+                        err "  mv '$RB_DATA/${file_name}${bak_suffix}' '$RB_DATA/$file_name'"
+                        rollback_ok=0
+                    fi
+                done
+            fi
+            if [[ "$rollback_ok" -eq 0 ]]; then
+                err "Some files could not be rolled back. Check the paths above."
+            fi
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        # All copies succeeded — remove the backup copies
+        if [[ ${#backed_up[@]} -gt 0 ]]; then
+            for file_name in "${backed_up[@]}"; do
+                rm -f "$RB_DATA/${file_name}${bak_suffix}"
+            done
+        fi
     fi
     rm -rf "$staging_dir"
 
@@ -370,7 +469,7 @@ case "${1:-}" in
         check_source_exists
         check_rekordbox_running || true
         backup_db_only "pre-op" > /dev/null
-        rotate_backups "pre-op" "$MAX_DB_BACKUPS"
+        rotate_backups "pre-op" "$MAX_DB_BACKUPS" > /dev/null
         ;;
     --list)
         list_backups
