@@ -1,20 +1,14 @@
 use std::fmt;
-use std::sync::OnceLock;
 
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as TokioMutex;
-use tokio::time::Instant;
+
+use crate::normalize::urlencoding;
 
 pub const BROKER_URL_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_URL";
 pub const BROKER_TOKEN_ENV: &str = "REKLAWDBOX_DISCOGS_BROKER_TOKEN";
 
-static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
-
-async fn wait_for_rate_limit() {
-    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
-    crate::rate_limit::wait(last, "REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS", 1100).await;
-}
+crate::rate_limit::define_rate_limiter!("REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS", 1100);
 
 pub const DEFAULT_BROKER_URL: &str = "https://reklawdbox-discogs-broker.ryanvoitiskis.workers.dev";
 
@@ -346,11 +340,7 @@ pub async fn lookup_via_broker(
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let retry_after = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .map(String::from);
+        let retry_after = crate::rate_limit::extract_retry_after(response.headers());
         let body = response.text().await.unwrap_or_default();
         return Err(LookupError::Http {
             status,
@@ -386,16 +376,6 @@ pub(crate) fn parse_broker_lookup_payload(
     serde_json::from_value::<DiscogsResult>(payload)
         .map(Some)
         .map_err(|e| format!("invalid broker payload: {e}"))
-}
-
-pub(crate) fn urlencoding(s: &str) -> String {
-    use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-    const SET: &AsciiSet = &NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'_')
-        .remove(b'.')
-        .remove(b'~');
-    utf8_percent_encode(s, SET).to_string()
 }
 
 #[cfg(test)]

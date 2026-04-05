@@ -1,5 +1,5 @@
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -155,13 +155,8 @@ fn scan_labels(
             result.filled += 1;
             result.to_stage.push(TrackChange {
                 track_id: track.id.clone(),
-                genre: None,
-                comments: None,
-                rating: None,
-                color: None,
                 label: Some(enrich_label.clone()),
-                year: None,
-                album: None,
+                ..Default::default()
             });
         } else if track.label.eq_ignore_ascii_case(&enrich_label) {
             result.already_labeled += 1;
@@ -435,8 +430,7 @@ pub(super) async fn handle_backfill_labels(
             .store(unlabeled_count as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 #[cfg(test)]

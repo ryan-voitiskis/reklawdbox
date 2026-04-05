@@ -1,9 +1,9 @@
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::mcp_internal_error;
+use super::ok_json;
 
 const SOP_BATCH_IMPORT: &str = include_str!("../../site/src/partials/sops/batch-import.mdx");
 const SOP_GENRE_CLASSIFICATION: &str =
@@ -215,6 +215,5 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
         })
     };
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::db;
@@ -129,8 +129,7 @@ pub(super) async fn handle_read_file_tags(
         "results": results,
     });
 
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) async fn handle_write_file_tags(
@@ -194,9 +193,7 @@ pub(super) async fn handle_write_file_tags(
             "results": results,
         });
 
-        let json =
-            serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        ok_json(&output)
     } else {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
         let mut handles = Vec::with_capacity(entries.len());
@@ -244,9 +241,7 @@ pub(super) async fn handle_write_file_tags(
             "results": results,
         });
 
-        let json =
-            serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        ok_json(&output)
     }
 }
 
@@ -266,8 +261,7 @@ pub(super) async fn handle_extract_cover_art(
     .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
     .map_err(|e| mcp_internal_error(e.to_string()))?;
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) async fn handle_embed_cover_art(
@@ -345,6 +339,5 @@ pub(super) async fn handle_embed_cover_art(
         "results": results,
     });
 
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }

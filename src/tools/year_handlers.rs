@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -138,13 +138,8 @@ fn scan_years(
 
     let year_change = |track_id: String, year: i32| TrackChange {
         track_id,
-        genre: None,
-        comments: None,
-        rating: None,
-        color: None,
-        label: None,
         year: Some(year),
-        album: None,
+        ..Default::default()
     };
 
     // Pre-compute normalized keys for all tracks.
@@ -606,8 +601,7 @@ pub(super) async fn handle_backfill_years(
         );
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 #[cfg(test)]

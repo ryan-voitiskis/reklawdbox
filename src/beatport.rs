@@ -1,13 +1,9 @@
-use std::sync::OnceLock;
-
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as TokioMutex;
-use tokio::time::Instant;
 
-use crate::discogs::urlencoding;
+use crate::normalize::urlencoding;
 
-static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
+crate::rate_limit::define_rate_limiter!("REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS", 1000);
 
 const BEATPORT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
     (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -44,11 +40,6 @@ pub struct BeatportResult {
     pub fuzzy_match: bool,
 }
 
-async fn wait_for_rate_limit() {
-    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
-    crate::rate_limit::wait(last, "REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS", 1000).await;
-}
-
 pub async fn lookup(
     client: &Client,
     artist: &str,
@@ -77,11 +68,7 @@ pub async fn lookup(
 
     let status = resp.status();
     if !status.is_success() {
-        let retry_after = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
+        let retry_after = crate::rate_limit::extract_retry_after(resp.headers());
         return match classify_http_status(status, retry_after.as_deref()) {
             HttpStatusOutcome::NoMatch => Ok(None),
             HttpStatusOutcome::Error(e) => Err(e),
@@ -298,6 +285,8 @@ fn is_track_match(track: &serde_json::Value, artist: &str, title: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use tokio::time::Instant;
 
     use super::*;
 

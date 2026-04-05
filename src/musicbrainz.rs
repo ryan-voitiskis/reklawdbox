@@ -1,13 +1,9 @@
-use std::sync::OnceLock;
-
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as TokioMutex;
-use tokio::time::Instant;
 
-use crate::discogs::urlencoding;
+use crate::normalize::urlencoding;
 
-static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
+crate::rate_limit::define_rate_limiter!("REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS", 1100);
 
 const USER_AGENT: &str = concat!(
     "reklawdbox/",
@@ -38,11 +34,6 @@ pub struct MusicBrainzResult {
     pub score: i32,
 }
 
-async fn wait_for_rate_limit() {
-    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
-    crate::rate_limit::wait(last, "REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS", 1100).await;
-}
-
 pub async fn lookup(
     client: &Client,
     artist: &str,
@@ -65,11 +56,7 @@ pub async fn lookup(
 
     let status = resp.status();
     if !status.is_success() {
-        let retry_after = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .map(std::string::ToString::to_string);
+        let retry_after = crate::rate_limit::extract_retry_after(resp.headers());
         let body = resp.text().await.unwrap_or_default();
         return Err(MusicBrainzError::Http {
             status,
@@ -189,11 +176,7 @@ async fn lookup_release_label(
 
     let status = resp.status();
     if !status.is_success() {
-        let retry_after = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .map(std::string::ToString::to_string);
+        let retry_after = crate::rate_limit::extract_retry_after(resp.headers());
         let body = resp.text().await.unwrap_or_default();
         return Err(MusicBrainzError::Http {
             status,
@@ -275,6 +258,8 @@ fn score_release(release: &serde_json::Value) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use tokio::time::Instant;
 
     use super::*;
 

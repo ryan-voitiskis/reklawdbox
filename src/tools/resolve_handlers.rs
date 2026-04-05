@@ -1,5 +1,5 @@
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::audio;
@@ -69,8 +69,7 @@ pub(super) fn handle_resolve_track_data(
         staged.as_ref(),
     );
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_resolve_tracks_data(
@@ -185,8 +184,7 @@ pub(super) fn handle_resolve_tracks_data(
         results.push(result);
     }
 
-    let json = serde_json::to_string(&results).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&results)
 }
 
 pub(super) fn handle_cache_coverage(
@@ -417,8 +415,7 @@ pub(super) fn handle_cache_coverage(
         },
     });
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 /// Build the resolved JSON payload for a single track.

@@ -130,6 +130,15 @@ pub enum WavTarget {
     RiffInfo,
 }
 
+impl From<&WavTarget> for TagType {
+    fn from(target: &WavTarget) -> Self {
+        match target {
+            WavTarget::Id3v2 => TagType::Id3v2,
+            WavTarget::RiffInfo => TagType::RiffInfo,
+        }
+    }
+}
+
 /// Result of reading a single file.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -737,10 +746,7 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
 
         let result = (|| -> Result<(), TagError> {
             for target in &wav_targets {
-                let tag_type = match target {
-                    WavTarget::Id3v2 => TagType::Id3v2,
-                    WavTarget::RiffInfo => TagType::RiffInfo,
-                };
+                let tag_type = TagType::from(target);
                 write_tag_layer(
                     &temp_path,
                     tag_type,
@@ -766,10 +772,7 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
     } else if is_wav {
         // Single-target WAV — direct write, no atomicity concern
         let target = &wav_targets[0];
-        let tag_type = match target {
-            WavTarget::Id3v2 => TagType::Id3v2,
-            WavTarget::RiffInfo => TagType::RiffInfo,
-        };
+        let tag_type = TagType::from(target);
         write_tag_layer(
             path,
             tag_type,

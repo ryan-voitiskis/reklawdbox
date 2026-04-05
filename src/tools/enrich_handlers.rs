@@ -1,5 +1,5 @@
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::bandcamp;
@@ -67,9 +67,7 @@ pub(super) async fn handle_lookup_discogs(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            return ok_json(&result);
         }
     }
 
@@ -83,7 +81,7 @@ pub(super) async fn handle_lookup_discogs(
     let (match_quality, response_json) = match &result {
         Some(r) => {
             let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(e.to_string()))?;
             (Some(quality), Some(json))
         }
         None => (Some("none"), None),
@@ -103,12 +101,11 @@ pub(super) async fn handle_lookup_discogs(
     }
 
     let output = lookup_output_with_cache_metadata(
-        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(e.to_string()))?,
         false,
         None,
     );
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) async fn handle_lookup_beatport(
@@ -154,9 +151,7 @@ pub(super) async fn handle_lookup_beatport(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            return ok_json(&result);
         }
     }
 
@@ -167,7 +162,7 @@ pub(super) async fn handle_lookup_beatport(
     let (match_quality, response_json) = match &result {
         Some(r) => {
             let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(e.to_string()))?;
             (Some(quality), Some(json))
         }
         None => (Some("none"), None),
@@ -187,12 +182,11 @@ pub(super) async fn handle_lookup_beatport(
     }
 
     let output = lookup_output_with_cache_metadata(
-        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(e.to_string()))?,
         false,
         None,
     );
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) async fn handle_lookup_musicbrainz(
@@ -238,9 +232,7 @@ pub(super) async fn handle_lookup_musicbrainz(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            return ok_json(&result);
         }
     }
 
@@ -251,7 +243,7 @@ pub(super) async fn handle_lookup_musicbrainz(
     let (match_quality, response_json) = match &result {
         Some(r) => {
             let quality = if r.score >= 100 { "exact" } else { "fuzzy" };
-            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(e.to_string()))?;
             (Some(quality), Some(json))
         }
         None => (Some("none"), None),
@@ -271,12 +263,11 @@ pub(super) async fn handle_lookup_musicbrainz(
     }
 
     let output = lookup_output_with_cache_metadata(
-        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(e.to_string()))?,
         false,
         None,
     );
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) async fn handle_lookup_bandcamp(
@@ -322,9 +313,7 @@ pub(super) async fn handle_lookup_bandcamp(
             };
             let result =
                 lookup_output_with_cache_metadata(result, true, Some(cached.created_at.as_str()));
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            return ok_json(&result);
         }
     }
 
@@ -335,7 +324,7 @@ pub(super) async fn handle_lookup_bandcamp(
     let (match_quality, response_json) = match &result {
         Some(r) => {
             let quality = if r.score == 100 { "exact" } else { "fuzzy" };
-            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            let json = serde_json::to_string(r).map_err(|e| mcp_internal_error(e.to_string()))?;
             (Some(quality), Some(json))
         }
         None => (Some("none"), None),
@@ -355,12 +344,11 @@ pub(super) async fn handle_lookup_bandcamp(
     }
 
     let output = lookup_output_with_cache_metadata(
-        serde_json::to_value(&result).map_err(|e| mcp_internal_error(format!("{e}")))?,
+        serde_json::to_value(&result).map_err(|e| mcp_internal_error(e.to_string()))?,
         false,
         None,
     );
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) async fn lookup_musicbrainz_remote(
@@ -989,6 +977,5 @@ pub(super) async fn handle_enrich_tracks(
         },
         "failures": progress.failures,
     });
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }

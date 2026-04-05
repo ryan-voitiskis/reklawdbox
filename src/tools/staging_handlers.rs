@@ -152,8 +152,7 @@ pub(super) fn handle_update_tracks(
     if !warnings.is_empty() {
         result["warnings"] = serde_json::json!(warnings);
     }
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_suggest_normalizations(
@@ -252,8 +251,7 @@ pub(super) fn handle_suggest_normalizations(
         });
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_preview_changes(
@@ -291,11 +289,11 @@ pub(super) fn handle_preview_changes(
     let format = params.format.unwrap_or_default();
     let json = match format {
         PreviewFormat::Full => {
-            serde_json::to_string(&diffs).map_err(|e| mcp_internal_error(format!("{e}")))?
+            serde_json::to_string(&diffs).map_err(|e| mcp_internal_error(e.to_string()))?
         }
         PreviewFormat::Summary => {
             let summary = build_preview_summary(&diffs);
-            serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?
+            serde_json::to_string(&summary).map_err(|e| mcp_internal_error(e.to_string()))?
         }
     };
     Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -374,9 +372,7 @@ pub(super) async fn handle_write_xml(
             "track_count": 0,
             "changes_applied": 0,
         });
-        let json =
-            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        return Ok(CallToolResult::success(vec![Content::text(json)]));
+        return ok_json(&result);
     }
 
     if let Err(err) = run_pre_op_backup_if_configured().await {
@@ -466,8 +462,7 @@ pub(super) async fn handle_write_xml(
     if has_playlists {
         result["playlist_count"] = serde_json::json!(playlists.len());
     }
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_clear_changes(
@@ -493,18 +488,14 @@ pub(super) fn handle_clear_changes(
             "remaining": remaining,
             "fields_cleared": fields,
         });
-        let json =
-            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        ok_json(&result)
     } else {
         let (cleared, remaining) = changes.clear(params.track_ids);
         let result = serde_json::json!({
             "cleared": cleared,
             "remaining": remaining,
         });
-        let json =
-            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        ok_json(&result)
     }
 }
 
@@ -524,6 +515,5 @@ pub(super) fn handle_clear_caches(server: &ReklawdboxServer) -> Result<CallToolR
         },
         "preserved": ["broker_discogs_session"],
     });
-    let text = serde_json::to_string(&json).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(text)]))
+    ok_json(&json)
 }

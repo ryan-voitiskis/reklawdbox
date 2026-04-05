@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -266,13 +266,8 @@ fn scan_albums(
                 }
                 r.to_stage.push(TrackChange {
                     track_id: track.id.clone(),
-                    genre: None,
-                    comments: None,
-                    rating: None,
-                    color: None,
-                    label: None,
-                    year: None,
                     album: Some(album),
+                    ..Default::default()
                 });
             }
             None => {
@@ -449,8 +444,7 @@ pub(super) async fn handle_backfill_albums(
         );
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 #[cfg(test)]

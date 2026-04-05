@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
-use super::{ReklawdboxServer, db_error, mcp_internal_error, scan_audio_directory};
+use super::{ReklawdboxServer, db_error, mcp_internal_error, ok_json, scan_audio_directory};
 use crate::audio;
 use crate::db;
 use crate::tools::params::{
@@ -36,9 +36,7 @@ pub(super) fn handle_scan_playlist_coverage(
         "tracks": result.tracks,
     });
 
-    let json =
-        serde_json::to_string(&json_result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&json_result)
 }
 
 pub(super) async fn handle_scan_broken_links(
@@ -147,8 +145,7 @@ pub(super) async fn handle_scan_broken_links(
         "broken_links": broken_results,
     });
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) async fn handle_scan_orphan_files(
@@ -255,8 +252,7 @@ pub(super) async fn handle_scan_orphan_files(
         );
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) async fn handle_scan_duplicates(
@@ -278,14 +274,12 @@ async fn handle_duplicates_metadata(
         .map_err(db_error)?;
 
     if groups.is_empty() {
-        let json = serde_json::to_string(&serde_json::json!({
+        return ok_json(&serde_json::json!({
             "detection_level": "metadata",
             "group_count": 0,
             "total_duplicate_tracks": 0,
             "duplicate_groups": [],
-        }))
-        .map_err(|e| mcp_internal_error(format!("{e}")))?;
-        return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }));
     }
 
     let all_ids: Vec<String> = groups
@@ -331,8 +325,7 @@ async fn handle_duplicates_metadata(
         "duplicate_groups": dup_groups,
     });
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 async fn handle_duplicates_exact(
@@ -364,14 +357,12 @@ async fn handle_duplicates_exact(
     .map_err(|e| mcp_internal_error(format!("Task join error: {e}")))?;
 
     if size_groups.is_empty() {
-        let json = serde_json::to_string(&serde_json::json!({
+        return ok_json(&serde_json::json!({
             "detection_level": "exact",
             "group_count": 0,
             "total_duplicate_tracks": 0,
             "duplicate_groups": [],
-        }))
-        .map_err(|e| mcp_internal_error(format!("{e}")))?;
-        return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }));
     }
 
     let sem = Arc::new(tokio::sync::Semaphore::new(8));
@@ -423,9 +414,7 @@ async fn handle_duplicates_exact(
         if hash_errors_count > 0 {
             result["hash_errors_count"] = serde_json::json!(hash_errors_count);
         }
-        let json =
-            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        return Ok(CallToolResult::success(vec![Content::text(json)]));
+        return ok_json(&result);
     }
 
     let all_ids: Vec<String> = groups_to_report
@@ -478,8 +467,7 @@ async fn handle_duplicates_exact(
         result["hash_errors_count"] = serde_json::json!(hash_errors_count);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 fn hash_file(path: &str) -> std::io::Result<String> {

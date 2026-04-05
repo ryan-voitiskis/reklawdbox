@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::db;
@@ -97,8 +97,7 @@ pub(super) fn handle_score_transition(
         result["pitch_shift_semitones"] = serde_json::json!(scores.pitch_shift_semitones);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_query_transition_candidates(
@@ -271,8 +270,7 @@ pub(super) fn handle_query_transition_candidates(
         result["skipped_profiles"] = serde_json::json!(skipped_profiles);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_build_set(
@@ -587,6 +585,5 @@ pub(super) fn handle_build_set(
         );
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }

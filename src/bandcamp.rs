@@ -3,12 +3,11 @@ use std::sync::{LazyLock, OnceLock};
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as TokioMutex;
-use tokio::time::Instant;
 
-use crate::discogs::urlencoding;
+use crate::normalize::urlencoding;
 
-static RATE_LIMITER: OnceLock<TokioMutex<Option<Instant>>> = OnceLock::new();
+crate::rate_limit::define_rate_limiter!("REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS", 1500);
+
 static URL_RE: OnceLock<Regex> = OnceLock::new();
 
 fn url_re() -> &'static Regex {
@@ -40,11 +39,6 @@ pub struct BandcampResult {
     pub album: Option<String>,
     pub bandcamp_url: String,
     pub score: i32,
-}
-
-async fn wait_for_rate_limit() {
-    let last = RATE_LIMITER.get_or_init(|| TokioMutex::new(None));
-    crate::rate_limit::wait(last, "REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS", 1500).await;
 }
 
 pub async fn lookup(
@@ -542,6 +536,8 @@ fn normalized_levenshtein(a: &str, b: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use tokio::time::Instant;
 
     use super::*;
 

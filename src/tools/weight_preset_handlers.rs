@@ -1,5 +1,5 @@
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 
@@ -56,7 +56,7 @@ pub(super) fn handle_save_weight_preset(
     };
 
     let json_str =
-        serde_json::to_string(&normalized_json).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        serde_json::to_string(&normalized_json).map_err(|e| mcp_internal_error(e.to_string()))?;
 
     let store = server.cache_store_conn()?;
     crate::store::save_weight_preset(&store, &params.name, scorer_type_str, &json_str)
@@ -68,8 +68,7 @@ pub(super) fn handle_save_weight_preset(
         "weights": normalized_json,
     });
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_list_weight_presets(
@@ -131,8 +130,7 @@ pub(super) fn handle_list_weight_presets(
     }
 
     let result = serde_json::json!({ "presets": presets });
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_delete_weight_preset(
@@ -165,6 +163,5 @@ pub(super) fn handle_delete_weight_preset(
         "name": params.name,
         "scorer_type": scorer_type_str,
     });
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }

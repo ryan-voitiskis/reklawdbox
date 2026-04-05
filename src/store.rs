@@ -226,11 +226,7 @@ pub fn get_enrichment(
             created_at: row.get(6)?,
         })
     })?;
-    match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 /// Like `get_enrichment` but includes error entries. Used by the hydrate CLI
@@ -262,11 +258,7 @@ pub fn get_enrichment_any(
             created_at: row.get(6)?,
         })
     })?;
-    match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 /// Shared helper for batch enrichment queries that differ only in WHERE suffix.
@@ -471,11 +463,7 @@ pub fn get_audio_analysis(
             created_at: row.get(6)?,
         })
     })?;
-    match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 pub fn batch_audio_analysis_existence(
@@ -710,11 +698,7 @@ pub fn get_weight_preset(
          WHERE name = ?1 AND scorer_type = ?2",
     )?;
     let mut rows = stmt.query_map(params![name, scorer_type], |row| row.get::<_, String>(0))?;
-    match rows.next() {
-        Some(Ok(json)) => Ok(Some(json)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 pub fn delete_weight_preset(
@@ -930,11 +914,7 @@ pub fn get_audit_file(conn: &Connection, path: &str) -> Result<Option<AuditFile>
             file_size: row.get(3)?,
         })
     })?;
-    match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 #[cfg(test)]
@@ -1040,11 +1020,7 @@ pub fn get_audit_issue_by_id(
          FROM audit_issues WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![id], map_audit_issue)?;
-    match rows.next() {
-        Some(Ok(entry)) => Ok(Some(entry)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
-    }
+    rows.next().transpose()
 }
 
 pub fn resolve_audit_issues(

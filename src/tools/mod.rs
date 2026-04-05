@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 use rusqlite::Connection;
 
@@ -69,8 +69,13 @@ use crate::db;
 use crate::discogs;
 use crate::store;
 
-pub(super) fn mcp_internal_error(msg: String) -> McpError {
-    McpError::internal_error(msg, None)
+pub(super) fn mcp_internal_error(msg: impl Into<String>) -> McpError {
+    McpError::internal_error(msg.into(), None)
+}
+
+pub(super) fn ok_json(value: &impl serde::Serialize) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value).map_err(|e| mcp_internal_error(e.to_string()))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
 pub(super) fn db_error(e: rusqlite::Error) -> McpError {

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use tracing::warn;
 
 use super::resolve::*;
 use super::scoring::map_genre_through_taxonomy;
-use super::{ReklawdboxServer, mcp_internal_error};
+use super::{ReklawdboxServer, mcp_internal_error, ok_json};
 use crate::audio;
 use crate::classify::{
     AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
@@ -26,7 +26,7 @@ pub(super) fn handle_classify_tracks(
         && ids.is_empty()
     {
         return Err(mcp_internal_error(
-            "track_ids was provided but empty — nothing to classify.".into(),
+            "track_ids was provided but empty — nothing to classify.",
         ));
     }
 
@@ -164,8 +164,7 @@ pub(super) fn handle_classify_tracks(
         output["staging"] = staging_info;
     }
 
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 pub(super) fn handle_audit_genres(
@@ -176,7 +175,7 @@ pub(super) fn handle_audit_genres(
         && ids.is_empty()
     {
         return Err(mcp_internal_error(
-            "track_ids was provided but empty — nothing to audit.".into(),
+            "track_ids was provided but empty — nothing to audit.",
         ));
     }
 
@@ -239,8 +238,7 @@ pub(super) fn handle_audit_genres(
         "results": visible,
     });
 
-    let json = serde_json::to_string(&output).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&output)
 }
 
 fn count_by_confidence(results: &[ClassificationResult]) -> (u32, u32, u32, u32) {

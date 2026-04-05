@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::db;
@@ -83,9 +83,7 @@ pub(super) fn handle_score_pool_compatibility(
                 "scores": scores.to_json(),
             });
 
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&result)
         }
 
         PoolMode::OneVsPool => {
@@ -172,9 +170,7 @@ pub(super) fn handle_score_pool_compatibility(
                 result["skipped_tracks"] = serde_json::json!(built.skipped);
             }
 
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&result)
         }
 
         PoolMode::Cohesion => {
@@ -227,9 +223,7 @@ pub(super) fn handle_score_pool_compatibility(
                 result["skipped_tracks"] = serde_json::json!(built.skipped);
             }
 
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&result)
         }
     }
 }
@@ -440,8 +434,7 @@ pub(super) fn handle_expand_pool(
         result["skipped_seed_tracks"] = serde_json::json!(seed_built.skipped);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) fn handle_describe_pool(
@@ -610,8 +603,7 @@ pub(super) fn handle_describe_pool(
         }
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 struct BuildProfilesResult {
@@ -1011,6 +1003,5 @@ pub(super) fn handle_discover_pools(
         result["skipped_tracks"] = serde_json::json!(built.skipped);
     }
 
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }

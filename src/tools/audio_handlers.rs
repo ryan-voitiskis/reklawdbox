@@ -1,7 +1,7 @@
 use std::process::Stdio;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::audio;
@@ -54,10 +54,9 @@ pub(super) async fn handle_analyze_track_audio(
         let analysis = analyze_stratum(&file_path)
             .await
             .map_err(mcp_internal_error)?;
-        let val =
-            serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(format!("{e}")))?;
+        let val = serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(e.to_string()))?;
         let features_json =
-            serde_json::to_string(&val).map_err(|e| mcp_internal_error(format!("{e}")))?;
+            serde_json::to_string(&val).map_err(|e| mcp_internal_error(e.to_string()))?;
         let metadata = tokio::fs::metadata(&file_path)
             .await
             .map_err(|e| mcp_internal_error(format!("Cannot stat file '{file_path}': {e}")))?;
@@ -108,9 +107,9 @@ pub(super) async fn handle_analyze_track_audio(
             {
                 Ok(features) => {
                     let val = serde_json::to_value(&features)
-                        .map_err(|e| mcp_internal_error(format!("{e}")))?;
+                        .map_err(|e| mcp_internal_error(e.to_string()))?;
                     let features_json = serde_json::to_string(&val)
-                        .map_err(|e| mcp_internal_error(format!("{e}")))?;
+                        .map_err(|e| mcp_internal_error(e.to_string()))?;
                     let metadata = tokio::fs::metadata(&file_path)
                         .await
                         .map_err(|e| mcp_internal_error(format!("Cannot stat file: {e}")))?;
@@ -147,8 +146,7 @@ pub(super) async fn handle_analyze_track_audio(
     if !essentia_available {
         result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
     }
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) struct BatchTrackAnalysis {
@@ -536,8 +534,7 @@ pub(super) async fn handle_analyze_audio_batch(
     if !essentia_available {
         result["essentia_setup_hint"] = serde_json::Value::String(essentia_setup_hint());
     }
-    let json = serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    ok_json(&result)
 }
 
 pub(super) async fn handle_setup_essentia(
@@ -566,9 +563,7 @@ pub(super) async fn handle_setup_essentia(
                 "python_path": path,
                 "message": "Essentia is already available.",
             });
-            let json =
-                serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            return ok_json(&result);
         }
         // Stale override - clear it and proceed with fresh install
         if let Ok(mut guard) = server.state.essentia_python_override.lock() {
@@ -717,9 +712,7 @@ pub(super) async fn handle_setup_essentia(
             "venv_dir": venv_dir.to_string_lossy(),
             "message": "Essentia installed successfully. Audio analysis will now include Essentia features — no restart needed.",
         });
-        let json =
-            serde_json::to_string(&result).map_err(|e| mcp_internal_error(format!("{e}")))?;
-        return Ok(CallToolResult::success(vec![Content::text(json)]));
+        return ok_json(&result);
     }
 
     Err(mcp_internal_error(format!(

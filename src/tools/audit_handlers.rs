@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::audit;
@@ -50,9 +50,7 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json =
-                serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&summary)
         }
 
         AuditOperation::QueryIssues {
@@ -81,9 +79,7 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json =
-                serde_json::to_string(&issues).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&issues)
         }
 
         AuditOperation::ResolveIssues {
@@ -101,9 +97,7 @@ pub(super) async fn handle_audit_state(
             .map_err(mcp_internal_error)?;
 
             let json = serde_json::json!({ "resolved": count });
-            let text =
-                serde_json::to_string(&json).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            ok_json(&json)
         }
 
         AuditOperation::GetSummary { path_prefix } => {
@@ -116,9 +110,7 @@ pub(super) async fn handle_audit_state(
             .map_err(|e| mcp_internal_error(format!("join error: {e}")))?
             .map_err(mcp_internal_error)?;
 
-            let json =
-                serde_json::to_string(&summary).map_err(|e| mcp_internal_error(format!("{e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            ok_json(&summary)
         }
     }
 }
