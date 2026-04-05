@@ -263,3 +263,13 @@ reklawdbox setup [options]
 | `--yes` | `-y` | Accept defaults without prompting (only applies to `--broker`) |
 
 The `--broker` flag opens an interactive prompt for custom Discogs broker configuration, writing settings to `~/Library/Application Support/reklawdbox/config.toml`. The default broker is preconfigured and needs no setup.
+
+---
+
+## `disconnect-broker`
+
+Clear the stored Discogs broker session, forcing a fresh OAuth device auth flow on the next `lookup_discogs` call. Removes the session token from both Keychain and the local SQLite store. Idempotent -- safe to run when no session exists.
+
+```bash
+reklawdbox disconnect-broker
+```
