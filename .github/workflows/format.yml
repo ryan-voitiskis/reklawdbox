@@ -2,7 +2,27 @@ name: Format
 
 on:
   push:
+    paths:
+      - "**.rs"
+      - "**.ts"
+      - "**.js"
+      - "**.mjs"
+      - "**.json"
+      - "**.toml"
+      - "**.md"
+      - "dprint.json"
+      - ".github/workflows/format.yml"
   pull_request:
+    paths:
+      - "**.rs"
+      - "**.ts"
+      - "**.js"
+      - "**.mjs"
+      - "**.json"
+      - "**.toml"
+      - "**.md"
+      - "dprint.json"
+      - ".github/workflows/format.yml"
 
 permissions:
   contents: read
