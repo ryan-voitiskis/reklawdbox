@@ -250,8 +250,7 @@ impl HmmBeatTracker {
         // Create time frames: one frame per expected beat interval
         // Use nominal BPM to determine frame spacing (for indexing only)
         let nominal_beat_interval = 60.0 / self.bpm_estimate;
-        let num_frames =
-            ((end_time - start_time) / nominal_beat_interval).ceil() as usize + 1;
+        let num_frames = ((end_time - start_time) / nominal_beat_interval).ceil() as usize + 1;
 
         if num_frames == 0 {
             return Err(AnalysisError::ProcessingError(
@@ -336,7 +335,13 @@ impl HmmBeatTracker {
             .iter()
             .map(|row| {
                 row.iter()
-                    .map(|&p| if p > EPSILON { p.ln() } else { f32::NEG_INFINITY })
+                    .map(|&p| {
+                        if p > EPSILON {
+                            p.ln()
+                        } else {
+                            f32::NEG_INFINITY
+                        }
+                    })
                     .collect()
             })
             .collect();
@@ -361,8 +366,7 @@ impl HmmBeatTracker {
                     }
                 }
 
-                log_viterbi[t][s] =
-                    best_log_prob + emission_matrix[t][s].max(EPSILON).ln();
+                log_viterbi[t][s] = best_log_prob + emission_matrix[t][s].max(EPSILON).ln();
                 backpointer[t][s] = best_prev_state;
             }
         }
@@ -610,7 +614,10 @@ mod tests {
         let tracker = HmmBeatTracker::new(120.0, vec![0.5], 44100);
         // Single onset: should succeed with 0-1 beats (only one frame)
         let beats = tracker.track_beats().unwrap();
-        assert!(beats.len() <= 1, "Single onset should produce at most 1 beat");
+        assert!(
+            beats.len() <= 1,
+            "Single onset should produce at most 1 beat"
+        );
     }
 
     #[test]

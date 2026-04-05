@@ -73,8 +73,7 @@ fn scan_labels(
         .collect();
 
     // Build batch keys for all 4 providers × all tracks.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
-        Vec::with_capacity(tracks.len() * 4);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 4);
     for (a, t, al) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
@@ -84,19 +83,38 @@ fn scan_labels(
     }
 
     // Single batch load — replaces 4N individual queries.
-    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys)
-        .unwrap_or_else(|e| {
-            tracing::warn!("batch enrichment load failed: {e}");
-            std::collections::HashMap::new()
-        });
+    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys).unwrap_or_else(|e| {
+        tracing::warn!("batch enrichment load failed: {e}");
+        std::collections::HashMap::new()
+    });
 
     for (track, (norm_artist, norm_title, norm_album)) in tracks.iter().zip(&norm_keys) {
         let album = norm_album.as_deref().unwrap_or("");
 
-        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
-        let mb_key = ("musicbrainz".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
-        let bc_key = ("bandcamp".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
-        let bp_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+        let discogs_key = (
+            "discogs".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            album.to_string(),
+        );
+        let mb_key = (
+            "musicbrainz".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
+        let bc_key = (
+            "bandcamp".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
+        let bp_key = (
+            "beatport".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
 
         let discogs_entry = cache_map.get(&discogs_key);
         let mb_entry = cache_map.get(&mb_key);
@@ -202,12 +220,10 @@ pub(super) async fn handle_backfill_labels(
             let _conn = server.cache_store_conn()?;
         }
 
-        let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<(
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-        )>(concurrency * 4);
+        let (cache_tx, mut cache_rx) =
+            tokio::sync::mpsc::channel::<(String, String, Option<String>, Option<String>)>(
+                concurrency * 4,
+            );
 
         let writer_store_path = store_path.clone();
         let writer_handle = tokio::task::spawn_blocking(move || {
@@ -252,8 +268,7 @@ pub(super) async fn handle_backfill_labels(
             let cache_tx = cache_tx.clone();
 
             handles.push(tokio::spawn(async move {
-                let result =
-                    lookup_bandcamp_remote(&server, &raw_artist, &raw_title).await;
+                let result = lookup_bandcamp_remote(&server, &raw_artist, &raw_title).await;
                 let hit = match result {
                     Ok(ref r) => {
                         let (quality, json) = match r {
@@ -278,8 +293,9 @@ pub(super) async fn handle_backfill_labels(
                             }
                             None => (Some("none".to_string()), None),
                         };
-                        if let Err(e) =
-                            cache_tx.send((norm_artist, norm_title, quality, json)).await
+                        if let Err(e) = cache_tx
+                            .send((norm_artist, norm_title, quality, json))
+                            .await
                         {
                             tracing::warn!("label backfill cache channel send failed: {e}");
                         }

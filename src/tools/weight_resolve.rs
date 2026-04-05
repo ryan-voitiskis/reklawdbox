@@ -245,8 +245,8 @@ pub(super) fn pool_weights_to_json(w: &PoolWeights) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::scoring::{PoolWeights, PriorityWeights};
+    use super::*;
 
     fn approx_eq(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

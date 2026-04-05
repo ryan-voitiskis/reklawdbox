@@ -110,7 +110,11 @@ mod tests {
             .manifest()
             .documents
             .iter()
-            .find(|document| document.id == doc_id).map_or_else(|| panic!("manifest is missing expected doc id '{doc_id}'"), |document| normalize_manifest_doc_path(&document.path))
+            .find(|document| document.id == doc_id)
+            .map_or_else(
+                || panic!("manifest is missing expected doc id '{doc_id}'"),
+                |document| normalize_manifest_doc_path(&document.path),
+            )
     }
 
     fn normalize_manifest_doc_path(path: &str) -> String {

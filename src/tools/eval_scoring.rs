@@ -1878,7 +1878,11 @@ mod tests {
         let mut found_a = false;
         let mut found_b = false;
         for pool in &pools {
-            let pool_ids: HashSet<&str> = pool.track_ids.iter().map(std::string::String::as_str).collect();
+            let pool_ids: HashSet<&str> = pool
+                .track_ids
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             let a_overlap = pool_ids.intersection(&a_ids).count();
             let b_overlap = pool_ids.intersection(&b_ids).count();
             if a_overlap >= 3 && b_overlap == 0 {
@@ -2060,12 +2064,20 @@ mod tests {
         );
 
         for (i, a) in pools.iter().enumerate() {
-            let a_set: HashSet<&str> = a.track_ids.iter().map(std::string::String::as_str).collect();
+            let a_set: HashSet<&str> = a
+                .track_ids
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             for (j, b) in pools.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let b_set: HashSet<&str> = b.track_ids.iter().map(std::string::String::as_str).collect();
+                let b_set: HashSet<&str> = b
+                    .track_ids
+                    .iter()
+                    .map(std::string::String::as_str)
+                    .collect();
                 assert!(
                     !a_set.is_subset(&b_set),
                     "pool {i} should not be a subset of pool {j}",

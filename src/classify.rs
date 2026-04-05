@@ -2232,7 +2232,9 @@ mod tests {
             result.flags
         );
         assert!(
-            result.flags.contains(&"bpm-override-same-family".to_string()),
+            result
+                .flags
+                .contains(&"bpm-override-same-family".to_string()),
             "Expected bpm-override-same-family flag, got: {:?}",
             result.flags
         );
@@ -2281,7 +2283,9 @@ mod tests {
             result.flags
         );
         assert!(
-            !result.flags.contains(&"bpm-override-same-family".to_string()),
+            !result
+                .flags
+                .contains(&"bpm-override-same-family".to_string()),
             "Should NOT have same-family flag for cross-family override"
         );
     }

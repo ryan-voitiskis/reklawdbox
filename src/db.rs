@@ -191,9 +191,11 @@ fn apply_search_filters(
 ) {
     if let Some(ref query_text) = params.query {
         let bind_index = bind_values.len() + 1;
-        write!(sql,
+        write!(
+            sql,
             " AND (c.Title LIKE ?{bind_index} ESCAPE '\\' OR a.Name LIKE ?{bind_index} ESCAPE '\\')"
-        ).unwrap();
+        )
+        .unwrap();
         bind_values.push(Box::new(format!("%{}%", escape_like(query_text))));
     }
 
@@ -333,8 +335,10 @@ fn search_tracks_with_limit_policy(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-        bind_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let rows = stmt.query_map(bind_params.as_slice(), row_to_track)?;
     rows.collect()
 }
@@ -737,8 +741,10 @@ pub fn get_sessions(
     write!(sql, " ORDER BY h.DateCreated DESC LIMIT {limit}").unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-        bind_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let sessions: Vec<(String, String, String, i32)> = stmt
         .query_map(bind_params.as_slice(), |row| {
             Ok((
@@ -861,13 +867,17 @@ pub fn get_play_stats(
     );
     let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
     apply_search_filters(&mut sql, search, &mut bind_values);
-    write!(sql,
+    write!(
+        sql,
         " GROUP BY c.ID ORDER BY PlayCount DESC, LastPlayed DESC LIMIT {limit}"
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-        bind_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let mut results: Vec<TrackPlayStats> = stmt
         .query_map(bind_params.as_slice(), |row| {
             let session_ids_raw: Option<String> = row.get("SessionIDs")?;
@@ -910,8 +920,10 @@ pub fn get_play_stats(
         write!(unplayed_sql, " ORDER BY c.Title LIMIT {unplayed_limit}").unwrap();
 
         let mut stmt = conn.prepare(&unplayed_sql)?;
-        let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-            unplayed_bind.iter().map(std::convert::AsRef::as_ref).collect();
+        let bind_params: Vec<&dyn rusqlite::types::ToSql> = unplayed_bind
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
         let unplayed: Vec<TrackPlayStats> = stmt
             .query_map(bind_params.as_slice(), |row| {
                 Ok(TrackPlayStats {
@@ -1039,7 +1051,8 @@ pub(crate) fn tracks_not_in_any_playlist(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> = track_bind.iter().map(std::convert::AsRef::as_ref).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        track_bind.iter().map(std::convert::AsRef::as_ref).collect();
     let tracks: Vec<Track> = stmt
         .query_map(params.as_slice(), row_to_track)?
         .collect::<Result<_, _>>()?;
@@ -1084,8 +1097,10 @@ pub(crate) fn find_metadata_duplicates(
     write!(sql, " ORDER BY COUNT(*) DESC LIMIT {limit}").unwrap();
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-        bind_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let rows: Vec<(String, String, String)> = stmt
         .query_map(bind_params.as_slice(), |row| {
             Ok((
@@ -1099,7 +1114,10 @@ pub(crate) fn find_metadata_duplicates(
     Ok(rows
         .into_iter()
         .map(|(artist, title, ids_str)| {
-            let track_ids: Vec<String> = ids_str.split(',').map(std::string::ToString::to_string).collect();
+            let track_ids: Vec<String> = ids_str
+                .split(',')
+                .map(std::string::ToString::to_string)
+                .collect();
             DuplicateGroup {
                 artist,
                 title,
@@ -1133,8 +1151,10 @@ pub(crate) fn all_track_paths(
     sql.push_str(" ORDER BY c.FolderPath");
 
     let mut stmt = conn.prepare(&sql)?;
-    let bind_params: Vec<&dyn rusqlite::types::ToSql> =
-        bind_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     stmt.query_map(bind_params.as_slice(), |row| {
         Ok(TrackPathEntry {
             id: row.get::<_, String>(0)?,
@@ -2397,9 +2417,7 @@ mod tests {
         );
 
         let diff = stats_all.total_tracks - stats_filtered.total_tracks;
-        eprintln!(
-            "[integration] Sample exclusion: {diff} sampler tracks filtered out"
-        );
+        eprintln!("[integration] Sample exclusion: {diff} sampler tracks filtered out");
 
         let params = SearchParams {
             exclude_samples: true,

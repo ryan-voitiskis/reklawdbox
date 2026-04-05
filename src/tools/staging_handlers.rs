@@ -67,7 +67,8 @@ async fn run_pre_op_backup_if_configured() -> Result<(), String> {
                 "pre-op backup failed with exit status {}: {}",
                 backup_output
                     .status
-                    .code().map_or_else(|| "signal".to_string(), |code| code.to_string()),
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |code| code.to_string()),
                 details
             ))
         }
@@ -267,7 +268,8 @@ pub(super) fn handle_preview_changes(
     }
 
     if let Some(ref filter_ids) = params.track_ids {
-        let filter_set: HashSet<&str> = filter_ids.iter().map(std::string::String::as_str).collect();
+        let filter_set: HashSet<&str> =
+            filter_ids.iter().map(std::string::String::as_str).collect();
         ids.retain(|id| filter_set.contains(id.as_str()));
         if ids.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -438,12 +440,15 @@ pub(super) async fn handle_write_xml(
         .collect();
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_path = params.output_path.map_or_else(|| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("reklawdbox-exports")
-            .join(format!("reklawdbox-{timestamp}.xml"))
-    }, PathBuf::from);
+    let output_path = params.output_path.map_or_else(
+        || {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("reklawdbox-exports")
+                .join(format!("reklawdbox-{timestamp}.xml"))
+        },
+        PathBuf::from,
+    );
 
     if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
         server.state.changes.restore(snapshot);

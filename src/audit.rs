@@ -750,10 +750,7 @@ pub fn check_tags(
         if !skip.contains(&IssueType::WavTagDrift) {
             let mut drifted = Vec::new();
             for field in &["artist", "title", "album", "genre", "year", "comment"] {
-                let id3v2_value = id3v2
-                    .get(*field)
-                    .and_then(|v| v.as_deref())
-                    .map(str::trim);
+                let id3v2_value = id3v2.get(*field).and_then(|v| v.as_deref()).map(str::trim);
                 let riff_info_value = riff_info
                     .get(*field)
                     .and_then(|v| v.as_deref())
@@ -803,7 +800,8 @@ pub fn check_filename(
 
     // ORIGINAL_MIX_SUFFIX (case-insensitive) — matches (Original), (Original Mix), (Original Version)
     static ORIGINAL_MIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)").expect("ORIGINAL_MIX_RE must compile")
+        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)")
+            .expect("ORIGINAL_MIX_RE must compile")
     });
     if !skip.contains(&IssueType::OriginalMixSuffix) && ORIGINAL_MIX_RE.is_match(filename) {
         let new_name = ORIGINAL_MIX_RE.replace_all(filename, "");
@@ -1322,7 +1320,10 @@ pub fn scan(
 
     let counts = aggregate_status_counts(&summary);
 
-    let skipped_names: Vec<String> = skip_issue_types.iter().map(std::string::ToString::to_string).collect();
+    let skipped_names: Vec<String> = skip_issue_types
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     Ok(ScanSummary {
         files_in_scope,

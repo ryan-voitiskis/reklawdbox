@@ -110,8 +110,7 @@ pub(super) fn handle_resolve_tracks_data(
         .collect();
 
     // Build batch keys.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
-        Vec::with_capacity(tracks.len() * 2);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
     let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
     for (a, t, al, audio_key) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
@@ -123,22 +122,39 @@ pub(super) fn handle_resolve_tracks_data(
     // Batch load — 3 queries total instead of 4N.
     let (enrich_map, stratum_map, essentia_map) = {
         let store = server.cache_store_conn()?;
-        let enrich_map = store::batch_get_enrichment(&store, &enrich_keys)
-            .map_err(cache_error)?;
+        let enrich_map = store::batch_get_enrichment(&store, &enrich_keys).map_err(cache_error)?;
         let stratum_map = store::batch_get_audio_analysis(
-            &store, &audio_paths, audio::ANALYZER_STRATUM, audio::STRATUM_SCHEMA_VERSION,
-        ).map_err(cache_error)?;
+            &store,
+            &audio_paths,
+            audio::ANALYZER_STRATUM,
+            audio::STRATUM_SCHEMA_VERSION,
+        )
+        .map_err(cache_error)?;
         let essentia_map = store::batch_get_audio_analysis(
-            &store, &audio_paths, audio::ANALYZER_ESSENTIA, audio::ESSENTIA_SCHEMA_VERSION,
-        ).map_err(cache_error)?;
+            &store,
+            &audio_paths,
+            audio::ANALYZER_ESSENTIA,
+            audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .map_err(cache_error)?;
         (enrich_map, stratum_map, essentia_map)
     };
 
     let mut results = Vec::with_capacity(tracks.len());
     for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
         let album = norm_album.as_deref().unwrap_or("");
-        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
-        let beatport_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+        let discogs_key = (
+            "discogs".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            album.to_string(),
+        );
+        let beatport_key = (
+            "beatport".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
 
         let discogs_cache = enrich_map.get(&discogs_key);
         let beatport_cache = enrich_map.get(&beatport_key);
@@ -592,8 +608,9 @@ fn resolve_single_track_compact(
     essentia_cache: Option<&store::CachedAudioAnalysis>,
 ) -> serde_json::Value {
     let bpm_range_json = |genre: &str| -> serde_json::Value {
-        genre::genre_bpm_range(genre)
-            .map_or(serde_json::Value::Null, |r| serde_json::json!([r.typical_min, r.typical_max]))
+        genre::genre_bpm_range(genre).map_or(serde_json::Value::Null, |r| {
+            serde_json::json!([r.typical_min, r.typical_max])
+        })
     };
 
     let (current_genre_canonical, current_genre_bpm_range) = if track.genre.is_empty() {
@@ -665,8 +682,7 @@ fn resolve_single_track_compact(
         .and_then(|v| v.as_str())
         .filter(|g| !g.is_empty());
 
-    let beatport_genre_raw = bp_raw_str
-        .map_or(serde_json::Value::Null, |s| serde_json::json!(s));
+    let beatport_genre_raw = bp_raw_str.map_or(serde_json::Value::Null, |s| serde_json::json!(s));
 
     let bp_canonical = bp_raw_str.and_then(|bp_genre| {
         let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);

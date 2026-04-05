@@ -219,7 +219,8 @@ fn strip_title_noise(title: &str) -> String {
     }
 
     static ORIGINAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)$").expect("ORIGINAL_RE must compile")
+        Regex::new(r"(?i)\s*\(Original(?:\s+(?:Mix|Version))?\)$")
+            .expect("ORIGINAL_RE must compile")
     });
     s = ORIGINAL_RE.replace(&s, "").into_owned();
 

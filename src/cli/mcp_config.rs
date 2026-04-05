@@ -67,13 +67,14 @@ fn configure_claude_code(binary_path: &str) -> HostResult {
     // args or env vars we shouldn't destroy. Warn if the command path differs.
     if let Some(existing) = root.get("mcpServers").and_then(|s| s.get("reklawdbox")) {
         if let Some(existing_cmd) = existing.get("command").and_then(|c| c.as_str())
-            && existing_cmd != binary_path {
-                eprintln!(
-                    "    Note: ~/Music/.mcp.json points to {existing_cmd},\n    \
+            && existing_cmd != binary_path
+        {
+            eprintln!(
+                "    Note: ~/Music/.mcp.json points to {existing_cmd},\n    \
                      but this binary is {binary_path}.\n    \
                      Edit ~/Music/.mcp.json to update it."
-                );
-            }
+            );
+        }
         return HostResult::AlreadyConfigured;
     }
 
@@ -81,10 +82,7 @@ fn configure_claude_code(binary_path: &str) -> HostResult {
     let root_obj = match root.as_object_mut() {
         Some(o) => o,
         None => {
-            return HostResult::Failed(format!(
-                "{} has non-object root JSON",
-                mcp_path.display()
-            ))
+            return HostResult::Failed(format!("{} has non-object root JSON", mcp_path.display()));
         }
     };
     let servers = root_obj
@@ -96,7 +94,7 @@ fn configure_claude_code(binary_path: &str) -> HostResult {
             return HostResult::Failed(format!(
                 "{} has non-object mcpServers field",
                 mcp_path.display()
-            ))
+            ));
         }
     };
     servers_obj.insert(
@@ -173,7 +171,7 @@ fn configure_claude_desktop(binary_path: &str) -> HostResult {
             return HostResult::Failed(format!(
                 "{} has non-object root JSON",
                 config_path.display()
-            ))
+            ));
         }
     };
     let servers = root_obj
@@ -185,7 +183,7 @@ fn configure_claude_desktop(binary_path: &str) -> HostResult {
             return HostResult::Failed(format!(
                 "{} has non-object mcpServers field",
                 config_path.display()
-            ))
+            ));
         }
     };
     servers_obj.insert(

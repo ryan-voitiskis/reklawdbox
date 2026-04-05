@@ -6,6 +6,8 @@ use crate::db::escape_like;
 
 /// (id, path, issue_type, detail)
 pub type AuditIssueRow = (i64, String, String, Option<String>);
+/// (provider, query_artist, query_title, query_album)
+pub type EnrichmentKey = (String, String, String, String);
 const STORE_SCHEMA_VERSION: i32 = 6;
 
 pub fn default_path() -> PathBuf {
@@ -353,7 +355,7 @@ pub fn batch_enrichment_with_label(
 pub fn batch_get_enrichment(
     conn: &Connection,
     keys: &[(&str, &str, &str, &str)],
-) -> Result<HashMap<(String, String, String, String), EnrichmentCacheEntry>, rusqlite::Error> {
+) -> Result<HashMap<EnrichmentKey, EnrichmentCacheEntry>, rusqlite::Error> {
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
@@ -378,8 +380,7 @@ pub fn batch_get_enrichment(
         sql.push_str(") AND COALESCE(match_quality, '') != 'error'");
 
         let mut stmt = conn.prepare(&sql)?;
-        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> =
-            Vec::with_capacity(chunk.len() * 4);
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk.len() * 4);
         for key in chunk {
             bind_values.push(&key.0);
             bind_values.push(&key.1);
@@ -542,8 +543,7 @@ pub fn batch_get_audio_analysis(
                AND analysis_version = ?{version_pos}"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> =
-            Vec::with_capacity(chunk.len() + 2);
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk.len() + 2);
         for path in chunk {
             bind_values.push(path);
         }

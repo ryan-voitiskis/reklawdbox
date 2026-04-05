@@ -1074,33 +1074,19 @@ async fn cli_discogs_lookup_with_retry(
                             .and_then(|s| s.parse::<u64>().ok())
                             .unwrap_or(5)
                             .min(120);
-                        tracing::warn!(
-                            status = 429,
-                            attempt,
-                            wait,
-                            "Discogs broker 429: {body}"
-                        );
+                        tracing::warn!(status = 429, attempt, wait, "Discogs broker 429: {body}");
                         Some(wait)
                     }
                     discogs::LookupError::Http { status, body, .. }
                         if (500..=599).contains(status) =>
                     {
                         let wait = 5 * 2u64.pow(attempt);
-                        tracing::warn!(
-                            status,
-                            attempt,
-                            wait,
-                            "Discogs broker {status}: {body}"
-                        );
+                        tracing::warn!(status, attempt, wait, "Discogs broker {status}: {body}");
                         Some(wait)
                     }
                     discogs::LookupError::Message(msg) => {
                         let wait = 5 * 2u64.pow(attempt);
-                        tracing::warn!(
-                            attempt,
-                            wait,
-                            "Discogs broker transport error: {msg}"
-                        );
+                        tracing::warn!(attempt, wait, "Discogs broker transport error: {msg}");
                         Some(wait)
                     }
                     _ => None,
@@ -1143,9 +1129,7 @@ async fn cli_beatport_lookup_with_retry(
                             .min(120);
                         Some(wait)
                     }
-                    beatport::BeatportError::Http { status, .. }
-                        if status.is_server_error() =>
-                    {
+                    beatport::BeatportError::Http { status, .. } if status.is_server_error() => {
                         Some(5 * 2u64.pow(attempt))
                     }
                     beatport::BeatportError::Request(_) => Some(5 * 2u64.pow(attempt)),

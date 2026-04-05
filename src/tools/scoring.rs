@@ -252,9 +252,7 @@ pub(super) fn build_candidate_plan(
     remaining.remove(start_track_id);
 
     let mut genre_run_length: u32 = 0;
-    let start_bpm = profiles_by_id
-        .get(start_track_id)
-        .map_or(0.0, |p| p.bpm);
+    let start_bpm = profiles_by_id.get(start_track_id).map_or(0.0, |p| p.bpm);
 
     while ordered_ids.len() < target_tracks && !remaining.is_empty() {
         let Some(from_track_id) = ordered_ids.last() else {
@@ -410,9 +408,7 @@ pub(super) fn build_candidate_plan_beam(
     let mut remaining_init: HashSet<String> = profiles_by_id.keys().cloned().collect();
     remaining_init.remove(start_track_id);
 
-    let start_bpm = profiles_by_id
-        .get(start_track_id)
-        .map_or(0.0, |p| p.bpm);
+    let start_bpm = profiles_by_id.get(start_track_id).map_or(0.0, |p| p.bpm);
 
     let initial = BeamState {
         ordered_ids: vec![start_track_id.to_string()],
@@ -651,10 +647,13 @@ pub(super) fn build_track_profile(
         .and_then(parse_camelot_key)
         .or_else(|| key_to_camelot(&track.key));
 
-    let key_display = camelot_key.map_or_else(|| match track.key.trim() {
+    let key_display = camelot_key.map_or_else(
+        || match track.key.trim() {
             "" => "Unknown".to_string(),
             _ => track.key.clone(),
-        }, format_camelot);
+        },
+        format_camelot,
+    );
 
     let energy = compute_track_energy(essentia_data.as_ref(), bpm);
     let brightness = essentia_data
@@ -2286,9 +2285,17 @@ pub(super) fn discover_pools(
         if selected.len() >= max_pools {
             break;
         }
-        let set: HashSet<&str> = pool.track_ids.iter().map(std::string::String::as_str).collect();
+        let set: HashSet<&str> = pool
+            .track_ids
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
         let is_subset = selected.iter().any(|s| {
-            let ss: HashSet<&str> = s.track_ids.iter().map(std::string::String::as_str).collect();
+            let ss: HashSet<&str> = s
+                .track_ids
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             set.is_subset(&ss)
         });
         if !is_subset {

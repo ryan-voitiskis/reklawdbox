@@ -271,6 +271,16 @@ pub(super) async fn lookup_beatport_remote(
         .map_err(|e| e.to_string())
 }
 
+pub(super) async fn lookup_bandcamp_remote(
+    server: &ReklawdboxServer,
+    artist: &str,
+    title: &str,
+) -> Result<Option<bandcamp::BandcampResult>, String> {
+    bandcamp::lookup(&server.state.http, artist, title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,14 +382,4 @@ mod tests {
         let state = resolve_pending_state(None, None, 1000);
         assert!(matches!(state, PendingState::None));
     }
-}
-
-pub(super) async fn lookup_bandcamp_remote(
-    server: &ReklawdboxServer,
-    artist: &str,
-    title: &str,
-) -> Result<Option<bandcamp::BandcampResult>, String> {
-    bandcamp::lookup(&server.state.http, artist, title)
-        .await
-        .map_err(|e| e.to_string())
 }

@@ -426,8 +426,7 @@ fn classify_batch(
         .collect();
 
     // Build batch keys.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
-        Vec::with_capacity(tracks.len() * 2);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
     let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
     for (a, t, al, audio_key) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
@@ -439,14 +438,22 @@ fn classify_batch(
     // Batch load — 3 queries total instead of 4N.
     let (enrich_map, stratum_map, essentia_map) = {
         let store_conn = server.cache_store_conn()?;
-        let enrich_map = store::batch_get_enrichment(&store_conn, &enrich_keys)
-            .map_err(super::cache_error)?;
+        let enrich_map =
+            store::batch_get_enrichment(&store_conn, &enrich_keys).map_err(super::cache_error)?;
         let stratum_map = store::batch_get_audio_analysis(
-            &store_conn, &audio_paths, audio::ANALYZER_STRATUM, audio::STRATUM_SCHEMA_VERSION,
-        ).map_err(super::cache_error)?;
+            &store_conn,
+            &audio_paths,
+            audio::ANALYZER_STRATUM,
+            audio::STRATUM_SCHEMA_VERSION,
+        )
+        .map_err(super::cache_error)?;
         let essentia_map = store::batch_get_audio_analysis(
-            &store_conn, &audio_paths, audio::ANALYZER_ESSENTIA, audio::ESSENTIA_SCHEMA_VERSION,
-        ).map_err(super::cache_error)?;
+            &store_conn,
+            &audio_paths,
+            audio::ANALYZER_ESSENTIA,
+            audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .map_err(super::cache_error)?;
         (enrich_map, stratum_map, essentia_map)
     };
 
@@ -454,8 +461,18 @@ fn classify_batch(
 
     for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
         let album = norm_album.as_deref().unwrap_or("");
-        let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
-        let beatport_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+        let discogs_key = (
+            "discogs".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            album.to_string(),
+        );
+        let beatport_key = (
+            "beatport".to_string(),
+            norm_artist.clone(),
+            norm_title.clone(),
+            String::new(),
+        );
 
         let discogs_cache = enrich_map.get(&discogs_key);
         let beatport_cache = enrich_map.get(&beatport_key);
@@ -463,7 +480,12 @@ fn classify_batch(
         let essentia_cache = essentia_map.get(audio_key);
 
         let evidence = build_track_evidence(
-            track, discogs_cache, beatport_cache, stratum_cache, essentia_cache, overrides,
+            track,
+            discogs_cache,
+            beatport_cache,
+            stratum_cache,
+            essentia_cache,
+            overrides,
         );
         results.push(classify_track(&evidence));
     }

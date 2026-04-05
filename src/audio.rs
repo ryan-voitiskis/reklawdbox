@@ -407,8 +407,7 @@ pub fn decode_to_samples(path: &str) -> Result<(Vec<f32>, u32), AudioError> {
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::Decode(format!("Failed to create decoder: {e}")))?;
 
-    let mut all_samples: Vec<f32> =
-        Vec::with_capacity(n_frames_hint.unwrap_or(0) as usize);
+    let mut all_samples: Vec<f32> = Vec::with_capacity(n_frames_hint.unwrap_or(0) as usize);
     let mut decode_warning_count: u64 = 0;
 
     loop {
@@ -1134,10 +1133,7 @@ def percentile(arr, p):
         let (samples, sample_rate) =
             decode_to_samples(&file_path).unwrap_or_else(|e| panic!("decode failed: {e}"));
 
-        assert!(
-            !samples.is_empty(),
-            "decoded zero samples from {file_path}"
-        );
+        assert!(!samples.is_empty(), "decoded zero samples from {file_path}");
         assert!(sample_rate > 0, "invalid sample rate from {file_path}");
         eprintln!(
             "[integration] Decoded: {} samples at {} Hz ({:.1}s)",

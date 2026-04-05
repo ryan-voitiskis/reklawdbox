@@ -159,8 +159,7 @@ fn scan_years(
         .collect();
 
     // Build batch keys for all 4 providers × all tracks.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> =
-        Vec::with_capacity(tracks.len() * 4);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 4);
     for (a, t, al) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
@@ -170,11 +169,10 @@ fn scan_years(
     }
 
     // Single batch load — replaces up to 8N individual queries.
-    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys)
-        .unwrap_or_else(|e| {
-            tracing::warn!("batch enrichment load failed: {e}");
-            std::collections::HashMap::new()
-        });
+    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys).unwrap_or_else(|e| {
+        tracing::warn!("batch enrichment load failed: {e}");
+        std::collections::HashMap::new()
+    });
 
     for (track, (norm_artist, norm_title, norm_album)) in tracks.iter().zip(&norm_keys) {
         let album = norm_album.as_deref().unwrap_or("");
@@ -192,10 +190,30 @@ fn scan_years(
                 continue;
             }
 
-            let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
-            let bp_key = ("beatport".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
-            let mb_key = ("musicbrainz".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
-            let bc_key = ("bandcamp".to_string(), norm_artist.clone(), norm_title.clone(), String::new());
+            let discogs_key = (
+                "discogs".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                album.to_string(),
+            );
+            let bp_key = (
+                "beatport".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                String::new(),
+            );
+            let mb_key = (
+                "musicbrainz".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                String::new(),
+            );
+            let bc_key = (
+                "bandcamp".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                String::new(),
+            );
 
             let discogs_entry = cache_map.get(&discogs_key);
             let bp_entry = cache_map.get(&bp_key);
@@ -255,7 +273,12 @@ fn scan_years(
                 "title": track.title,
             }));
         } else {
-            let discogs_key = ("discogs".to_string(), norm_artist.clone(), norm_title.clone(), album.to_string());
+            let discogs_key = (
+                "discogs".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                album.to_string(),
+            );
             let discogs_year = extract_discogs_year(cache_map.get(&discogs_key));
             if let Some(enrich_year) = discogs_year {
                 if track.year == enrich_year {
@@ -317,13 +340,10 @@ pub(super) async fn handle_backfill_years(
         );
 
         // Shared channel + spawn_blocking writer for cache writes.
-        let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<(
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-        )>(32);
+        let (cache_tx, mut cache_rx) =
+            tokio::sync::mpsc::channel::<(String, String, String, Option<String>, Option<String>)>(
+                32,
+            );
 
         let writer_store_path = server.cache_store_path();
         let writer_handle = tokio::task::spawn_blocking(move || {
@@ -368,58 +388,57 @@ pub(super) async fn handle_backfill_years(
                 let cache_tx = cache_tx.clone();
 
                 handles.push(tokio::spawn(async move {
-                    let enriched = match lookup_bandcamp_remote(&server, &raw_artist, &raw_title)
-                        .await
-                    {
-                        Ok(Some(r)) => {
-                            let json_str = match serde_json::to_string(&r) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        provider = "bandcamp",
-                                        artist = norm_artist.as_str(),
-                                        "serialization failed: {e}"
-                                    );
-                                    drop(permit);
-                                    return 1usize;
-                                }
-                            };
-                            let quality = if r.score() >= 90 {
-                                "exact".to_string()
-                            } else {
-                                "fuzzy".to_string()
-                            };
-                            let _ = cache_tx
-                                .send((
-                                    "bandcamp".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    Some(quality),
-                                    Some(json_str),
-                                ))
-                                .await;
-                            1usize
-                        }
-                        Ok(None) => {
-                            let _ = cache_tx
-                                .send((
-                                    "bandcamp".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    Some("none".to_string()),
-                                    None,
-                                ))
-                                .await;
-                            0usize
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                artist = raw_artist.as_str(),
-                                "Bandcamp auto-enrich failed: {e}"
-                            );
-                            0usize
-                        }
-                    };
+                    let enriched =
+                        match lookup_bandcamp_remote(&server, &raw_artist, &raw_title).await {
+                            Ok(Some(r)) => {
+                                let json_str = match serde_json::to_string(&r) {
+                                    Ok(j) => j,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            provider = "bandcamp",
+                                            artist = norm_artist.as_str(),
+                                            "serialization failed: {e}"
+                                        );
+                                        drop(permit);
+                                        return 1usize;
+                                    }
+                                };
+                                let quality = if r.score() >= 90 {
+                                    "exact".to_string()
+                                } else {
+                                    "fuzzy".to_string()
+                                };
+                                let _ = cache_tx
+                                    .send((
+                                        "bandcamp".to_string(),
+                                        norm_artist,
+                                        norm_title,
+                                        Some(quality),
+                                        Some(json_str),
+                                    ))
+                                    .await;
+                                1usize
+                            }
+                            Ok(None) => {
+                                let _ = cache_tx
+                                    .send((
+                                        "bandcamp".to_string(),
+                                        norm_artist,
+                                        norm_title,
+                                        Some("none".to_string()),
+                                        None,
+                                    ))
+                                    .await;
+                                0usize
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    artist = raw_artist.as_str(),
+                                    "Bandcamp auto-enrich failed: {e}"
+                                );
+                                0usize
+                            }
+                        };
                     drop(permit);
                     enriched
                 }));

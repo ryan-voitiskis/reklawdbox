@@ -112,7 +112,10 @@ pub async fn lookup(
         return Ok(None);
     };
 
-    let score = recording.get("score").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+    let score = recording
+        .get("score")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0) as i32;
 
     let recording_title = recording
         .get("title")
@@ -175,9 +178,7 @@ async fn lookup_release_label(
     client: &Client,
     release_id: &str,
 ) -> Result<Option<String>, MusicBrainzError> {
-    let url = format!(
-        "https://musicbrainz.org/ws/2/release/{release_id}?inc=labels&fmt=json"
-    );
+    let url = format!("https://musicbrainz.org/ws/2/release/{release_id}?inc=labels&fmt=json");
 
     let resp = client
         .get(&url)

@@ -754,9 +754,7 @@ fn build_addition_rationale(result: &CandidatePoolScore) -> serde_json::Value {
         .filter(|(_, v)| *v >= 0.7)
         .map(|(name, _)| *name)
         .collect();
-    let weakest = axis_means
-        .last()
-        .map_or("unknown", |(name, _)| *name);
+    let weakest = axis_means.last().map_or("unknown", |(name, _)| *name);
 
     serde_json::json!({
         "strongest_axes": strongest,

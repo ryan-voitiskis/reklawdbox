@@ -331,8 +331,12 @@ fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
     }
 
     match field {
-        "year" => tag.get_string(ItemKey::Year).map(std::string::ToString::to_string),
-        "bpm" => tag.get_string(ItemKey::Bpm).map(std::string::ToString::to_string),
+        "year" => tag
+            .get_string(ItemKey::Year)
+            .map(std::string::ToString::to_string),
+        "bpm" => tag
+            .get_string(ItemKey::Bpm)
+            .map(std::string::ToString::to_string),
         _ => None,
     }
 }
@@ -587,7 +591,9 @@ fn read_wav_tags(
         .filter(|&&field| {
             is_riff_info_field(field)
                 && id3v2.get(field).is_some_and(std::option::Option::is_some)
-                && riff_info.get(field).is_some_and(std::option::Option::is_none)
+                && riff_info
+                    .get(field)
+                    .is_some_and(std::option::Option::is_none)
         })
         .map(std::string::ToString::to_string)
         .collect();

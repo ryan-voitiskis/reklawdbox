@@ -268,9 +268,10 @@ pub fn init_overrides(raw: HashMap<String, String>) {
 pub fn canonical_genre_from_alias(genre: &str) -> Option<&'static str> {
     let key = genre.trim().to_ascii_lowercase();
     if let Some(overrides) = OVERRIDES.get()
-        && let Some(&canonical) = overrides.get(&key) {
-            return Some(canonical);
-        }
+        && let Some(&canonical) = overrides.get(&key)
+    {
+        return Some(canonical);
+    }
     genre_alias_map().get(&key).copied()
 }
 
@@ -366,9 +367,10 @@ pub fn extract_genre_tokens(genre_str: &str) -> Vec<&'static str> {
     let mut push_unique = |genres: &[&str]| {
         for &g in genres {
             if let Some(c) = canonical_genre_name(g)
-                && !matched.contains(&c) {
-                    matched.push(c);
-                }
+                && !matched.contains(&c)
+            {
+                matched.push(c);
+            }
         }
     };
 
@@ -579,8 +581,9 @@ pub fn genre_family(canonical: &str) -> GenreFamily {
         "Drum & Bass" | "Jungle" | "Dubstep" | "Breakbeat" | "Footwork" | "Future Garage"
         | "Grime" | "Bassline" | "Broken Beat" => GenreFamily::Bass,
 
-        "Ambient" | "Downtempo" | "Trip-Hop" | "Dub" | "Dub Reggae" | "IDM"
-        | "Experimental" => GenreFamily::Downtempo,
+        "Ambient" | "Downtempo" | "Trip-Hop" | "Dub" | "Dub Reggae" | "IDM" | "Experimental" => {
+            GenreFamily::Downtempo
+        }
 
         _ => GenreFamily::Other,
     }
@@ -724,10 +727,7 @@ mod tests {
                 "alias '{alias}' must be lowercase ASCII"
             );
             let inserted = seen.insert(alias.to_ascii_lowercase());
-            assert!(
-                inserted,
-                "duplicate alias key '{alias}' (case-insensitive)"
-            );
+            assert!(inserted, "duplicate alias key '{alias}' (case-insensitive)");
         }
     }
 
