@@ -12,16 +12,35 @@ pub(super) fn handle_search_tracks(
     conn: MutexGuard<'_, Connection>,
     params: SearchTracksParams,
 ) -> Result<CallToolResult, McpError> {
-    let mut search = params
-        .filters
+    let has_unknown_genre = params.filters.has_unknown_genre == Some(true);
+    let limit = params.limit;
+    let mut filters = params.filters;
+    if has_unknown_genre && filters.has_genre.is_none() {
+        filters.has_genre = Some(true);
+    }
+    // When has_unknown_genre is active, skip the DB limit so the post-filter
+    // has the full candidate set, then truncate afterward.
+    let mut search = filters
         .into_search_params(
             !params.include_samples.unwrap_or(false),
-            params.limit,
+            if has_unknown_genre { None } else { limit },
             params.offset,
         )
         .map_err(|e| McpError::invalid_params(e, None))?;
     search.playlist = params.playlist;
-    let tracks = db::search_tracks(&conn, &search).map_err(db_error)?;
+    let mut tracks = if has_unknown_genre {
+        db::search_tracks_unbounded(&conn, &search).map_err(db_error)?
+    } else {
+        db::search_tracks(&conn, &search).map_err(db_error)?
+    };
+    if has_unknown_genre {
+        tracks.retain(|t| {
+            !t.genre.is_empty()
+                && !genre::is_known_genre(&t.genre)
+                && genre::canonical_genre_from_alias(&t.genre).is_none()
+        });
+        tracks.truncate(limit.unwrap_or(50).min(200) as usize);
+    }
     ok_json(&tracks)
 }
 

@@ -54,28 +54,44 @@ pub(super) fn resolve_tracks(
     let has_unknown_genre = filters.has_unknown_genre;
     let bounded = opts.max_tracks_cap.is_some();
 
+    // When has_unknown_genre is active, the post-filter will discard most rows.
+    // Fetch without a limit so the post-filter has the full candidate set to work
+    // with, then truncate to effective_max afterward.
+    let skip_db_limit = has_unknown_genre == Some(true) && track_ids.is_none();
+
     let tracks = if let Some(ids) = track_ids {
         db::get_tracks_by_ids(conn, ids).map_err(db_error)?
     } else if let Some(pid) = playlist_id {
-        let db_limit = if bounded {
-            effective_max.map(|m| m as u32)
+        if skip_db_limit {
+            db::get_playlist_tracks_unbounded(conn, pid, None).map_err(db_error)?
         } else {
-            None
-        };
-        if bounded {
-            db::get_playlist_tracks(conn, pid, db_limit).map_err(db_error)?
-        } else {
-            db::get_playlist_tracks_unbounded(conn, pid, db_limit).map_err(db_error)?
+            let db_limit = if bounded {
+                effective_max.map(|m| m as u32)
+            } else {
+                None
+            };
+            if bounded {
+                db::get_playlist_tracks(conn, pid, db_limit).map_err(db_error)?
+            } else {
+                db::get_playlist_tracks_unbounded(conn, pid, db_limit).map_err(db_error)?
+            }
         }
     } else {
-        let limit = effective_max.map(|m| m as u32);
-        let search = filters
-            .into_search_params(true, limit, offset)
-            .map_err(|e| McpError::invalid_params(e, None))?;
-        if bounded {
-            db::search_tracks(conn, &search).map_err(db_error)?
-        } else {
+        if skip_db_limit {
+            let search = filters
+                .into_search_params(true, None, offset)
+                .map_err(|e| McpError::invalid_params(e, None))?;
             db::search_tracks_unbounded(conn, &search).map_err(db_error)?
+        } else {
+            let limit = effective_max.map(|m| m as u32);
+            let search = filters
+                .into_search_params(true, limit, offset)
+                .map_err(|e| McpError::invalid_params(e, None))?;
+            if bounded {
+                db::search_tracks(conn, &search).map_err(db_error)?
+            } else {
+                db::search_tracks_unbounded(conn, &search).map_err(db_error)?
+            }
         }
     };
 

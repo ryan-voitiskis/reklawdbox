@@ -177,6 +177,39 @@ pub fn validate_iso_date(s: &str, field: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
+/// Advance a validated ISO date (YYYY-MM-DD) by one day.
+/// Used to convert `<= date` into `< next_day` for datetime column comparisons.
+fn next_day(date: &str) -> String {
+    debug_assert!(
+        validate_iso_date(date, "next_day").is_ok(),
+        "next_day called with unvalidated date: {date}"
+    );
+    let year: u32 = date[..4].parse().unwrap();
+    let month: u32 = date[5..7].parse().unwrap();
+    let day: u32 = date[8..10].parse().unwrap();
+
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => unreachable!(),
+    };
+
+    if day < max_day {
+        format!("{year:04}-{month:02}-{:02}", day + 1)
+    } else if month < 12 {
+        format!("{year:04}-{:02}-01", month + 1)
+    } else {
+        format!("{:04}-01-01", year + 1)
+    }
+}
+
 #[derive(Default)]
 pub struct SearchParams {
     pub query: Option<String>,
@@ -306,8 +339,11 @@ fn apply_search_filters(
 
     if let Some(ref added_before) = params.added_before {
         let idx = bind_values.len() + 1;
-        write!(sql, " AND c.created_at <= ?{idx}").unwrap();
-        bind_values.push(Box::new(added_before.clone()));
+        // created_at stores full datetimes ("YYYY-MM-DD HH:MM:SS.SSS +00:00").
+        // A bare date like "2026-01-31" sorts before any datetime on that day,
+        // so we use < next-day instead of <= to include the whole boundary date.
+        write!(sql, " AND c.created_at < ?{idx}").unwrap();
+        bind_values.push(Box::new(next_day(added_before)));
     }
 
     if params.exclude_samples {
@@ -1344,6 +1380,7 @@ mod tests {
             INSERT INTO djmdGenre (ID, Name) VALUES ('g1', 'Dubstep');
             INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
             INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Minimal');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g4', 'Wonky Bass');
             INSERT INTO djmdKey (ID, ScaleName) VALUES ('k1', 'Am');
             INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Cm');
             INSERT INTO djmdKey (ID, ScaleName) VALUES ('k3', 'Fm');
@@ -1352,19 +1389,21 @@ mod tests {
             INSERT INTO djmdColor (ID, ColorCode, Commnt) VALUES ('c1', 16711935, 'Rose');
             INSERT INTO djmdColor (ID, ColorCode, Commnt) VALUES ('c2', 65280, 'Green');
 
-            -- Tracks
+            -- Tracks (created_at uses full datetime to match real Rekordbox format)
             INSERT INTO djmdContent (ID, Title, ArtistID, AlbumID, GenreID, KeyID, LabelID, ColorID, BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t1', 'Archangel', 'a1', 'al1', 'g1', 'k1', 'l1', 'c1', 13950, 204, 'iconic garage vocal', 2007, 240, '/Users/testuser/Music/Burial/Untrue/01 Archangel.flac', '12', 1411, 44100, 5, '2023-01-15');
+            VALUES ('t1', 'Archangel', 'a1', 'al1', 'g1', 'k1', 'l1', 'c1', 13950, 204, 'iconic garage vocal', 2007, 240, '/Users/testuser/Music/Burial/Untrue/01 Archangel.flac', '12', 1411, 44100, 5, '2023-01-15 10:30:00.000 +00:00');
             INSERT INTO djmdContent (ID, Title, ArtistID, AlbumID, GenreID, KeyID, LabelID, BPM, Rating, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t2', 'Endorphin', 'a1', 'al1', 'g1', 'k2', 'l1', 14000, 153, 2007, 300, '/Users/testuser/Music/Burial/Untrue/02 Endorphin.flac', '5', 1411, 44100, 5, '2023-01-15');
+            VALUES ('t2', 'Endorphin', 'a1', 'al1', 'g1', 'k2', 'l1', 14000, 153, 2007, 300, '/Users/testuser/Music/Burial/Untrue/02 Endorphin.flac', '5', 1411, 44100, 5, '2023-01-15 10:31:00.000 +00:00');
             INSERT INTO djmdContent (ID, Title, ArtistID, AlbumID, GenreID, KeyID, BPM, Rating, ReleaseYear, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t3', 'R.I.P.', 'a2', 'al2', 'g2', 'k3', 12800, 102, 2012, 360, '/Users/testuser/Music/Actress/R.I.P./01 R.I.P..flac', 1411, 44100, 5, '2023-02-20');
+            VALUES ('t3', 'R.I.P.', 'a2', 'al2', 'g2', 'k3', 12800, 102, 2012, 360, '/Users/testuser/Music/Actress/R.I.P./01 R.I.P..flac', 1411, 44100, 5, '2023-02-20 14:00:00.000 +00:00');
             INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t4', 'Dexter', 'a3', 'g3', 12500, 480, '/Users/testuser/Music/Villalobos/Dexter.wav', 1411, 44100, 11, '2023-03-10');
+            VALUES ('t4', 'Dexter', 'a3', 'g3', 12500, 480, '/Users/testuser/Music/Villalobos/Dexter.wav', 1411, 44100, 11, '2023-03-10 09:00:00.000 +00:00');
             INSERT INTO djmdContent (ID, Title, ArtistID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t5', 'Unknown Track', 'a1', 0, 200, '/Users/testuser/Music/unknown.mp3', 320, 44100, 1, '2023-04-01');
+            VALUES ('t5', 'Unknown Track', 'a1', 0, 200, '/Users/testuser/Music/unknown.mp3', 320, 44100, 1, '2023-04-01 12:00:00.000 +00:00');
             INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
-            VALUES ('t6', 'Loop Sample 01', 'a1', 'g2', 12000, 8, '/Users/alice/Music/rekordbox/Sampler/Loop/01.wav', 1411, 44100, 11, '2023-01-01');
+            VALUES ('t6', 'Loop Sample 01', 'a1', 'g2', 12000, 8, '/Users/alice/Music/rekordbox/Sampler/Loop/01.wav', 1411, 44100, 11, '2023-01-01 08:00:00.000 +00:00');
+            INSERT INTO djmdContent (ID, Title, ArtistID, GenreID, BPM, Length, FolderPath, BitRate, SampleRate, FileType, created_at)
+            VALUES ('t7', 'Wonky Bassline', 'a2', 'g4', 12600, 300, '/Users/testuser/Music/Actress/Wonky.flac', 1411, 44100, 5, '2023-02-20 15:00:00.000 +00:00');
 
             -- Playlists
             INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID) VALUES ('p1', 1, 'Deep Cuts', 0, 'root');
@@ -1454,7 +1493,7 @@ mod tests {
         let conn = create_test_db();
         let params = SearchParams::default();
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 6);
+        assert_eq!(tracks.len(), 7);
     }
 
     #[test]
@@ -1465,7 +1504,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 5);
+        assert_eq!(tracks.len(), 6);
         assert!(!tracks.iter().any(|t| t.file_path.contains("Sampler")));
     }
 
@@ -1599,7 +1638,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 6);
+        assert_eq!(tracks.len(), 7);
     }
 
     #[test]
@@ -1610,7 +1649,7 @@ mod tests {
             ..Default::default()
         };
         let tracks = search_tracks(&conn, &params).unwrap();
-        assert_eq!(tracks.len(), 5);
+        assert_eq!(tracks.len(), 6);
         assert!(
             tracks
                 .iter()
@@ -1701,9 +1740,9 @@ mod tests {
     fn test_library_stats() {
         let conn = create_test_db();
         let stats = get_library_stats(&conn).unwrap();
-        assert_eq!(stats.total_tracks, 5);
+        assert_eq!(stats.total_tracks, 6);
         assert_eq!(stats.rated_count, 3);
-        assert_eq!(stats.unrated_count, 2);
+        assert_eq!(stats.unrated_count, 3);
         assert_eq!(stats.playlist_count, 1);
         assert!(stats.avg_bpm > 0.0);
         assert!(!stats.genres.is_empty());
@@ -1711,7 +1750,7 @@ mod tests {
         assert_eq!(stats.content_roots, vec!["/Users/testuser/Music/"]);
 
         let stats_all = get_library_stats_filtered(&conn, false).unwrap();
-        assert_eq!(stats_all.total_tracks, 6);
+        assert_eq!(stats_all.total_tracks, 7);
         assert_eq!(
             stats_all.content_roots,
             vec!["/Users/alice/", "/Users/testuser/"]
@@ -1866,9 +1905,10 @@ mod tests {
         };
         let stats = get_play_stats(&conn, &params, true, None).unwrap();
         let unplayed: Vec<_> = stats.iter().filter(|s| s.play_count == 0).collect();
-        assert_eq!(unplayed.len(), 2);
+        assert_eq!(unplayed.len(), 3);
         assert!(unplayed.iter().any(|s| s.track_id == "t4"));
         assert!(unplayed.iter().any(|s| s.track_id == "t5"));
+        assert!(unplayed.iter().any(|s| s.track_id == "t7"));
     }
 
     #[test]
@@ -1892,13 +1932,14 @@ mod tests {
             ..Default::default()
         };
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        assert_eq!(result.total_tracks, 5);
-        assert_eq!(result.uncovered_count, 3);
-        assert_eq!(result.tracks.len(), 3);
+        assert_eq!(result.total_tracks, 6);
+        assert_eq!(result.uncovered_count, 4);
+        assert_eq!(result.tracks.len(), 4);
         let ids: Vec<&str> = result.tracks.iter().map(|t| t.id.as_str()).collect();
         assert!(ids.contains(&"t2"));
         assert!(ids.contains(&"t4"));
         assert!(ids.contains(&"t5"));
+        assert!(ids.contains(&"t7"));
     }
 
     #[test]
@@ -1906,8 +1947,8 @@ mod tests {
         let conn = create_test_db();
         let search = SearchParams::default();
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        assert_eq!(result.total_tracks, 6);
-        assert_eq!(result.uncovered_count, 4);
+        assert_eq!(result.total_tracks, 7);
+        assert_eq!(result.uncovered_count, 5);
     }
 
     #[test]
@@ -1923,8 +1964,8 @@ mod tests {
             ..Default::default()
         };
         let result = tracks_not_in_any_playlist(&conn, &search).unwrap();
-        assert_eq!(result.total_tracks, 4);
-        assert_eq!(result.uncovered_count, 2);
+        assert_eq!(result.total_tracks, 5);
+        assert_eq!(result.uncovered_count, 3);
         assert!(!result.tracks.iter().any(|t| t.id == "t2"));
     }
 
@@ -1932,7 +1973,7 @@ mod tests {
     fn test_all_track_paths() {
         let conn = create_test_db();
         let entries = all_track_paths(&conn, None).unwrap();
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 6);
         let t1 = entries.iter().find(|e| e.id == "t1").unwrap();
         assert_eq!(t1.artist, "Burial");
         assert_eq!(t1.title, "Archangel");
@@ -2516,5 +2557,116 @@ mod tests {
         // rating_to_stars treats >255 as 5 stars (catch-all arm)
         assert_eq!(decode_rating_stars(256), 5);
         assert_eq!(decode_rating_stars(1000), 5);
+    }
+
+    #[test]
+    fn next_day_normal() {
+        assert_eq!(next_day("2023-06-15"), "2023-06-16");
+    }
+
+    #[test]
+    fn next_day_month_boundary_31() {
+        assert_eq!(next_day("2023-01-31"), "2023-02-01");
+    }
+
+    #[test]
+    fn next_day_month_boundary_30() {
+        assert_eq!(next_day("2023-04-30"), "2023-05-01");
+    }
+
+    #[test]
+    fn next_day_feb_non_leap() {
+        assert_eq!(next_day("2023-02-28"), "2023-03-01");
+    }
+
+    #[test]
+    fn next_day_feb_leap_28() {
+        assert_eq!(next_day("2024-02-28"), "2024-02-29");
+    }
+
+    #[test]
+    fn next_day_feb_leap_29() {
+        assert_eq!(next_day("2024-02-29"), "2024-03-01");
+    }
+
+    #[test]
+    fn next_day_year_rollover() {
+        assert_eq!(next_day("2023-12-31"), "2024-01-01");
+    }
+
+    #[test]
+    fn next_day_century_non_leap() {
+        assert_eq!(next_day("1900-02-28"), "1900-03-01");
+    }
+
+    #[test]
+    fn next_day_century_leap() {
+        assert_eq!(next_day("2000-02-29"), "2000-03-01");
+    }
+
+    #[test]
+    fn added_before_includes_boundary_date_with_datetime() {
+        // Real Rekordbox created_at has time component: "2023-02-20 14:00:00.000 +00:00"
+        // added_before="2023-02-20" must include tracks on that date.
+        let conn = create_test_db();
+        let params = SearchParams {
+            added_before: Some("2023-02-20".to_string()),
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        let ids: Vec<&str> = tracks.iter().map(|t| t.id.as_str()).collect();
+        // t1, t2 (Jan 15), t3 (Feb 20 14:00), t7 (Feb 20 15:00) should be included
+        assert!(ids.contains(&"t1"), "t1 added Jan 15 should be included");
+        assert!(
+            ids.contains(&"t3"),
+            "t3 added Feb 20 should be included (boundary)"
+        );
+        assert!(
+            ids.contains(&"t7"),
+            "t7 added Feb 20 should be included (boundary)"
+        );
+        assert!(!ids.contains(&"t4"), "t4 added Mar 10 should be excluded");
+    }
+
+    #[test]
+    fn added_after_includes_boundary_date_with_datetime() {
+        let conn = create_test_db();
+        let params = SearchParams {
+            added_after: Some("2023-02-20".to_string()),
+            exclude_samples: true,
+            ..Default::default()
+        };
+        let tracks = search_tracks(&conn, &params).unwrap();
+        let ids: Vec<&str> = tracks.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"t3"), "t3 added Feb 20 should be included");
+        assert!(ids.contains(&"t7"), "t7 added Feb 20 should be included");
+        assert!(ids.contains(&"t4"), "t4 added Mar 10 should be included");
+        assert!(!ids.contains(&"t1"), "t1 added Jan 15 should be excluded");
+    }
+
+    #[test]
+    fn search_has_unknown_genre() {
+        // t7 has genre "Wonky Bass" which is not in the canonical taxonomy.
+        // All other tracks have canonical genres (Dubstep, Techno, Minimal) or no genre.
+        let conn = create_test_db();
+        let params = SearchParams {
+            has_genre: Some(true),
+            ..Default::default()
+        };
+        let all_with_genre = search_tracks(&conn, &params).unwrap();
+
+        // Post-filter for unknown genres (same logic as handle_search_tracks)
+        let unknown: Vec<_> = all_with_genre
+            .into_iter()
+            .filter(|t| {
+                !t.genre.is_empty()
+                    && !crate::genre::is_known_genre(&t.genre)
+                    && crate::genre::canonical_genre_from_alias(&t.genre).is_none()
+            })
+            .collect();
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].id, "t7");
+        assert_eq!(unknown[0].genre, "Wonky Bass");
     }
 }
