@@ -1,119 +1,95 @@
 ---
 title: Harmonic Mixing
-description: How reklawdbox uses the Camelot wheel and audio features to score transitions.
+description: How reklawdbox scores transitions using the Camelot wheel, BPM, energy, and more.
 sidebar:
   order: 2
 ---
 
-import { Aside, Card, CardGrid, Badge } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 import CamelotWheel from '../../../components/CamelotWheel.astro';
 import PriorityWeights from '../../../components/PriorityWeights.astro';
 import EnergyCurves from '../../../components/EnergyCurves.astro';
 
-Mixing tracks in compatible musical keys so transitions sound smooth. reklawdbox automates this via the Camelot wheel and extends it with multi-axis scoring across BPM, energy, genre, brightness, and rhythm.
+reklawdbox scores transitions using the Camelot wheel for key compatibility, then extends it with BPM, energy, genre, brightness, and rhythm — six axes total.
 
 ## The Camelot wheel
 
-Maps all 24 musical keys to a numbered wheel: 1-12 with **A** (minor) or **B** (major). Adjacent positions are harmonically compatible — moving ±1 (same letter) shifts by a perfect fifth.
+All 24 musical keys mapped to a numbered wheel: 1-12 with **A** (minor) or **B** (major). Adjacent positions are harmonically compatible.
 
 <CamelotWheel />
 
-<Aside type="note">
-  Rekordbox displays keys in Classic (Am) or Camelot (8A) notation — user preference. reklawdbox always uses Camelot internally.
-</Aside>
+## Key compatibility
 
-## Key compatibility scoring
+Key transitions are scored 0-1 based on Camelot position:
 
-reklawdbox scores key transitions on a 0-1 scale based on the relationship between the two Camelot positions:
-
-| Relationship | Score | Example | Label |
+| Relationship | Score | Example | What it sounds like |
 |:-------------|:-----:|:-------:|:------|
-| Same key | 1.0 | 6A to 6A | Perfect |
+| Same key | 1.0 | 6A to 6A | Perfect match |
 | +/-1, same letter | 0.9 | 6A to 7A | Energy boost / drop |
-| Same number, A to B | 0.8 | 6A to 6B | Mood shift |
-| +/-1, different letter | 0.55 | 6A to 7B | Energy diagonal |
-| +/-2, same letter | 0.45 | 6A to 8A | Extended |
+| Same number, A↔B | 0.8 | 6A to 6B | Mood shift |
+| +/-1, different letter | 0.55 | 6A to 7B | Diagonal move |
+| +/-2, same letter | 0.45 | 6A to 8A | Extended reach |
 | Everything else | 0.1 | — | Clash |
 
-The wheel wraps: 12A to 1A is a +1 move (adjacent), not an 11-step jump.
+The wheel wraps — 12A to 1A is one step, not eleven.
 
-Missing keys (track has no key detected) score 0.1 — same as a clash. Run `analyze_track_audio` first to ensure key detection.
+## Beyond key: six-axis scoring
 
-## Beyond key: multi-axis scoring
+Key is just one of six axes. Each produces a 0-1 score, combined into a weighted average.
 
-reklawdbox scores transitions on **six axes**, combined into a weighted composite score.
+| Axis | What it measures |
+|:-----|:-----------------|
+| **Key** | Camelot wheel distance |
+| **BPM** | Tempo difference between tracks |
+| **Energy** | Whether energy direction matches the set's arc |
+| **Genre** | Same genre or related genre family |
+| **Brightness** | Timbral similarity (spectral centroid) |
+| **Rhythm** | Groove similarity (rhythm regularity) |
 
-### The six axes
-
-| Axis | What it measures | Data source |
-|:-----|:-----------------|:------------|
-| **Key** | Camelot wheel distance | stratum-dsp key detection |
-| **BPM** | Tempo difference between tracks | stratum-dsp / Rekordbox BPM |
-| **Energy** | Whether energy direction matches the current curve phase | Essentia descriptors (fallback: BPM proxy) |
-| **Genre** | Same genre or same genre family | Genre taxonomy classification |
-| **Brightness** | Spectral centroid delta (timbre similarity) | Essentia spectral centroid |
-| **Rhythm** | Rhythm regularity delta (groove similarity) | Essentia rhythm regularity |
-
-Each axis produces a score from 0 to 1. The composite score is a weighted average — the weights depend on the priority mode.
+Brightness and rhythm need Essentia. Without it, those axes are dropped and the remaining weights adjust automatically.
 
 ### Priority modes
 
+Different priority modes change which axes matter most:
+
 <PriorityWeights />
 
-<Aside type="tip">
-  Without Essentia, brightness and rhythm axes are excluded and remaining weights renormalized.
-</Aside>
+### BPM compatibility
 
-### BPM scoring detail
+How much tempo difference is tolerable:
 
-BPM compatibility uses an exponential decay: `score = exp(-0.019 * pct^2)` where `pct` is the percentage delta between the two BPMs.
-
-| Delta % | Score | Label |
-|:-------:|:-----:|:------|
-| &lt;2% | ~1.0 | Seamless |
+| BPM difference | Score | Feel |
+|:--------------:|:-----:|:-----|
+| Under 2% | ~1.0 | Seamless |
 | 2-4% | ~0.8 | Comfortable pitch adjust |
 | 4-6% | ~0.5 | Noticeable |
-| 6-9% | ~0.3 | Creative transition needed |
-| &ge;9% | &lt;0.2 | Jarring |
+| 6-9% | ~0.3 | Needs a creative transition |
+| Over 9% | Under 0.2 | Jarring |
 
 ## Energy curves
 
-`build_set` shapes the energy arc across the sequence. Each position is assigned an **energy phase**, and the energy axis rewards transitions matching the expected direction.
+When building a set, the agent shapes the energy arc across the sequence. Each position gets an energy phase, and transitions that match the expected direction score higher.
 
 <EnergyCurves />
 
 ### Phases
 
-| Phase | Behavior | Energy direction |
-|:------|:---------|:-----------------|
-| **Warmup** | Stable or slight rise | Delta -0.03 to +0.12 |
-| **Build** | Rising energy | Delta ≥ +0.03 |
-| **Peak** | High and stable | Track energy ≥ 0.65, delta ≤ 0.10 |
-| **Release** | Dropping energy | Delta ≤ -0.03 |
+| Phase | What it wants |
+|:------|:-------------|
+| **Warmup** | Stable or slight rise |
+| **Build** | Rising energy |
+| **Peak** | High and stable |
+| **Release** | Dropping energy |
 
 ### Presets
 
-**warmup_build_peak_release** (default) — the classic DJ arc. Gradual warmup (first 15%), build through the middle (15-45%), sustained peak (45-75%), then wind down (75-100%).
+- **warmup_build_peak_release** (default) — the classic DJ arc
+- **flat** — everything at peak, for peak-time sets
+- **peak_only** — fast ramp, good for shorter sets or festival slots
+- **custom** — define the phase for each position yourself
 
-**flat** — every position is Peak phase. Use this for peak-time sets where you want consistently high energy throughout.
+## How it all fits together
 
-**peak_only** — fast ramp to peak. Short build (first 10%), sustained peak (10-85%), brief release (85-100%). Good for shorter sets or festival slots.
-
-**custom** — define the phase for each position yourself by passing an array of phase values. The array length must match the target set size.
-
-## How `score_transition` and `build_set` use this
-
-`score_transition` scores a single pair in isolation (no energy curve needed). `build_set` uses beam search from a seed track, exploring multiple paths in parallel (`beam_width` controls breadth). Not globally optimal, but produces strong results quickly with multiple candidates to choose from.
+When you ask the agent to score a single transition, it evaluates one pair across all six axes. When you ask it to build a set, it uses beam search from a seed track — exploring multiple paths in parallel and presenting the best candidates.
 
 For the full scoring math, see the [Transition Scoring reference](/reference/transition-scoring/).
-
-<CardGrid>
-  <Card title="Concepts Overview" icon="open-book">
-    Core design principles: read-only access, staging, XML export.
-    [Back to overview](/concepts/)
-  </Card>
-  <Card title="Architecture" icon="setting">
-    How the binary, database, external services, and audio pipeline connect.
-    [Read more](/concepts/architecture/)
-  </Card>
-</CardGrid>

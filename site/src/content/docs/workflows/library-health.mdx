@@ -8,37 +8,29 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import LibraryHealthSOP from '../../../partials/sops/library-health.mdx'
 
-Scan your Rekordbox library for structural issues: broken links, orphan files on disk, duplicate tracks, and playlist coverage gaps. All scans are read-only — nothing is modified, moved, or deleted.
+Scans your library for structural issues: broken links, orphan files on disk, duplicate tracks, and playlist coverage gaps. All read-only — nothing is modified, moved, or deleted.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Run a full health scan on my library.
 ```
 
-<Aside type="caution">
-  These scans are point-in-time snapshots. Run them after any Rekordbox import/export or file system changes for accurate results.
-</Aside>
+No enrichment or cache coverage needed — all scanning is built-in.
 
 ## When to scan
 
-- Before starting a library cleanup — identify structural issues first
+- Before starting [Library Cleanup](/workflows/library-cleanup/) — catch structural issues first
 - After moving or reorganizing files on disk
 - After a large batch import
-- Periodically, as part of library maintenance
+- Periodically, as general maintenance
 
-## How it works
+## What it checks
 
-Four independent scans cover different aspects of library health:
-
-1. **`scan_broken_links`** — checks every database track for missing files on disk. Suggests relocations when a matching filename exists elsewhere.
-2. **`scan_orphan_files`** — finds audio files on disk not imported into Rekordbox. Groups by directory.
-3. **`scan_playlist_coverage`** — finds tracks not assigned to any playlist.
-4. **`scan_duplicates`** — groups tracks by matching artist + title (metadata level) or by file hash (exact level).
-
-## Prerequisites
-
-No enrichment or cache coverage required — all scanning is built-in.
+1. **Broken links** — tracks in Rekordbox pointing to files that no longer exist. Suggests relocations when a match is found elsewhere.
+2. **Orphan files** — audio files on disk that aren't imported into Rekordbox.
+3. **Playlist coverage** — tracks not assigned to any playlist.
+4. **Duplicates** — matching artist + title, or exact file hash matches.
 
 ## Step-by-step
 
@@ -46,5 +38,5 @@ No enrichment or cache coverage required — all scanning is built-in.
 
 ## Next steps
 
-- [Collection Audit](/workflows/collection-audit/) — fix naming and tagging issues found during health scans
-- [Library Cleanup](/workflows/library-cleanup/) — follow the full session-based cleanup guide
+- [Collection Audit](/workflows/collection-audit/) — fix naming and tagging issues
+- [Library Cleanup](/workflows/library-cleanup/) — the full five-session cleanup guide

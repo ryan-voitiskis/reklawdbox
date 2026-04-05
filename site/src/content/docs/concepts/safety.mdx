@@ -1,0 +1,49 @@
+---
+title: Safety & Trust
+description: How reklawdbox keeps your Rekordbox library safe — read-only access, staged changes, and human approval at every step.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+reklawdbox never writes to your Rekordbox database. Here's how that works in practice.
+
+## Your database is read-only
+
+reklawdbox opens your Rekordbox `master.db` in read-only mode. It can see your tracks, playlists, and metadata, but it cannot modify anything. The database file is never changed.
+
+It auto-detects your database at the standard Rekordbox location (`~/Library/Pioneer/rekordbox/master.db`). You can override this with the `REKORDBOX_DB_PATH` environment variable if needed.
+
+<Aside type="caution">
+  Don't open `master.db` in a generic SQLite browser — Rekordbox encrypts it. Without the right decryption support you'll see garbage data or risk corruption.
+</Aside>
+
+## Changes are staged in memory
+
+When the agent suggests metadata changes (genre, comments, rating, color, label, year, album), those changes live in memory only. Nothing is written to disk or to your database.
+
+You can review, modify, or throw away staged changes at any point. If the server restarts, staged changes are gone — nothing persists without your say-so.
+
+## Export as XML, import yourself
+
+When you're happy with the staged changes, the agent exports a Rekordbox-compatible XML file. You then import that file into Rekordbox yourself through **Preferences > Advanced > rekordbox xml > Imported Library**.
+
+XML reimport is additive — it updates or adds tracks, never deletes them. Your existing data stays intact.
+
+See [XML Export](/reference/xml-export/) for the full import workflow and format details.
+
+## You approve everything
+
+Every step requires your sign-off:
+
+- The agent proposes changes — you review them before export
+- The agent produces an XML file — you import it into Rekordbox yourself
+- Enrichment lookups (Discogs, Beatport, etc.) only populate a cache — they never touch your track metadata
+
+The agent handles the tedious parts: looking up metadata, normalizing genres, scoring transitions. You make every final decision.
+
+## What reklawdbox does not do
+
+- **No database writes.** The only output is XML files.
+- **No background process.** It only runs when you're talking to it.
+- **No auto-sync.** Changes in Rekordbox aren't pulled automatically — the agent reads fresh data each time you ask.
+- **macOS Apple Silicon only.** No Windows or Linux support currently.

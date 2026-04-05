@@ -1,6 +1,6 @@
 ---
 title: Pool Building
-description: Build compatible track pools for live improvisation using symmetric pool scoring.
+description: Build compatible track pools for live improvisation.
 sidebar:
   order: 5
 ---
@@ -8,48 +8,35 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import PoolBuildingSOP from '../../../partials/sops/pool-building.mdx'
 
-Build unordered pools of mutually compatible tracks — the raw material for live improvisation. Unlike set building (which produces a fixed sequence), pools are crates where any permutation works.
+Builds unordered pools of tracks that mix well together in any direction. Unlike [Set Building](/workflows/set-building/) (which produces a fixed sequence), pools are crates for live improvisation — any permutation works.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Build a track pool from my collection.
 ```
 
-<Aside type="note">
-  Pool building is read-only — it never modifies track metadata. It discovers compatible groupings and exports them as playlists.
-</Aside>
+Pool building is read-only — it discovers compatible groupings and exports them as playlists, never changing your metadata.
 
 ## Prerequisites
 
-- **Essentia analysis** is strongly recommended. Tracks without it lose the timbral axis (the discovery axis) and brightness/rhythm axes. Run `analyze_audio_batch` first.
-- **Cache coverage at 100%** across all providers. Run `cache_coverage` to check.
-- **Genre classification** improves the genre axis but isn't required — the genre pre-filter uses genre families, and `cross_genre=true` bypasses it entirely.
+- **Essentia analysis** is strongly recommended — without it you lose the timbral axis (the main discovery axis) and brightness/rhythm scoring
+- Enrichment caches should be populated — ask the agent to check cache coverage if unsure
+- Genre classification improves results but isn't required
 
-## How pool scoring differs from transition scoring
+## How it differs from set building
 
 Pool scoring is **symmetric** — score(A,B) always equals score(B,A). There are no energy phases, no genre streaks, no BPM drift penalties. The question is "do these tracks belong in the same crate?" not "should B follow A?"
 
-Key differences:
-
-| Concern | Transition scorer | Pool scorer |
-|---------|-------------------|-------------|
-| Direction | A→B ≠ B→A | Always symmetric |
-| Energy | Phase-conditioned (warmup wants +delta) | Absolute distance (similar = high) |
-| Genre | Streak bonuses/penalties | Simple match only |
-| BPM drift | Cumulative penalty from start | Pairwise only |
-| Timbral | Not used | z-score normalized distance |
-| Harmonic gate | Post-composite penalty | None — key is just one axis |
-
 ## Presets
 
-Two weight presets control which axes dominate:
-
-- **balanced** (default) — BPM and energy lead, with timbral as the discovery axis
+- **balanced** (default) — BPM and energy lead, with timbral similarity as the discovery axis
 - **timbral** — upweights timbral similarity for cross-genre sonic discovery
 
 ## Master tempo
 
-Pool tools default to `master_tempo=false` (accounting for pitch shift from BPM adjustment). This is correct for DJs who play without master tempo — BPM differences cause key shifts that affect harmonic compatibility. Set `master_tempo=true` only if you play with Rekordbox's master tempo on.
+Pool tools default to `master_tempo=false`, which accounts for the pitch shift that happens when you adjust BPM without master tempo on. If you play with Rekordbox's master tempo enabled, set `master_tempo=true`.
+
+See [Pool Discovery](/concepts/pool-discovery/) for the full scoring model and expansion algorithm.
 
 <PoolBuildingSOP />

@@ -8,29 +8,32 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import SetBuildingSOP from '../../../partials/sops/set-building.mdx'
 
-Build ordered tracklists using cached audio analysis and enrichment data. Transitions are scored across 6 axes, sequenced via beam search, and presented as multiple candidates for comparison.
+Builds ordered tracklists scored across six axes: key compatibility, BPM, energy, genre, brightness, and rhythm. The agent explores multiple paths and presents candidates for you to compare.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Build a DJ set from my collection.
 ```
 
-<Aside type="note">
-  Set building is read-only — it never modifies track metadata. It only creates playlist orderings exported as XML.
-</Aside>
+Set building is read-only — it doesn't change any track metadata, just creates playlist orderings you can export as XML.
 
 ## Prerequisites
 
-- **Genre classification** should be substantially complete for the tracks you want to use.
-- **Cache coverage at 100%** across all providers. Run `cache_coverage` to check.
-- **Essentia** is optional but improves energy, brightness, and rhythm scoring.
+- Genre classification should be mostly complete for the tracks you want to use
+- Enrichment and audio analysis caches should be populated (the [Library Cleanup](/workflows/library-cleanup/) guide handles this)
+- Essentia is optional but makes energy, brightness, and rhythm scoring much better
 
-## Scoring and energy curves
+## Energy curves
 
-See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model (Camelot wheel, BPM decay, energy phases, priority weights).
+The agent shapes the energy arc across your set. Four presets are available:
 
-**Energy presets:** `warmup_build_peak_release` (default), `flat` (constant peak), `peak_only` (fast ramp), or custom per-position arrays.
+- **warmup_build_peak_release** (default) — the classic DJ arc
+- **flat** — every track at peak energy, for peak-time sets
+- **peak_only** — fast ramp to peak, good for shorter sets or festival slots
+- **custom** — define the energy phase for each position yourself
+
+See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model.
 
 ## Step-by-step
 
@@ -42,9 +45,4 @@ See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model (Ca
 - **Pin your opener and closer first.** The agent optimizes the middle.
 - **Use genre focus loosely.** "Techno, Tech House" gives better results than "Techno" alone.
 - **Re-run with different priority axes.** A "harmonic" build and an "energy" build can look very different.
-- **Check individual transitions.** Use `score_transition` on any two tracks to see the detailed axis breakdown.
-
-## Next steps
-
-- [Harmonic Mixing](/concepts/harmonic-mixing/) — understand the Camelot wheel and key compatibility scoring
-- [Genre Classification](/workflows/genre-classification/) — classify genres first to improve genre affinity scoring
+- **Check individual transitions.** Ask the agent to score any two tracks to see the axis-by-axis breakdown.

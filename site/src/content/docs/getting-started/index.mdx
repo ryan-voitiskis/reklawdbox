@@ -1,8 +1,7 @@
 ---
-title: Getting Started
-description: Install reklawdbox and configure your MCP host.
+title: Install
+description: Install reklawdbox and get it connected to your AI agent.
 sidebar:
-  label: Setup Guide
   order: 0
 ---
 
@@ -10,7 +9,7 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 ## Prerequisites
 
-- **macOS on Apple Silicon** (ARM64) — reklawdbox targets `aarch64-apple-darwin`
+- **macOS on Apple Silicon** — M1 or later
 - **Rekordbox 7.x** installed with at least one collection imported
 
 ## Install
@@ -21,8 +20,6 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
     brew tap ryan-voitiskis/reklawdbox
     brew install reklawdbox
     ```
-
-    The binary is installed to `/opt/homebrew/bin/reklawdbox`.
   </TabItem>
   <TabItem label="Build from source">
     Requires the [Rust toolchain](https://rustup.rs/) and Xcode Command Line Tools:
@@ -33,8 +30,6 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
     cd reklawdbox
     cargo build --release
     ```
-
-    The binary is at `./target/release/reklawdbox`.
   </TabItem>
 </Tabs>
 
@@ -44,67 +39,53 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 reklawdbox setup
 ```
 
-This command does three things:
-
-1. **Installs Essentia** — finds Python 3.9+, creates a managed venv at `~/.local/share/reklawdbox/essentia-venv`, and installs Essentia via pip. Provides danceability, energy, loudness, and spectral features used by genre classification, set building, and audio analysis.
-
-2. **Configures Claude Code** — writes `~/Music/.mcp.json` so reklawdbox tools are available when you start Claude Code from your Music directory. Tools do not load in other projects.
-
-3. **Configures Claude Desktop** — adds reklawdbox to the Claude Desktop config (loads globally, since Desktop has no project scoping).
-
-<Aside type="tip" title="Why ~/Music?">
-  Reklawdbox tools are scoped to `~/Music` to avoid polluting unrelated Claude Code sessions. When you start Claude Code from `~/Music`, the tools load automatically. When you're working in a code project, they stay out of the way. To add reklawdbox to other directories, see [Adding to other directories](#adding-to-other-directories).
-</Aside>
+This installs audio analysis tools (Essentia) and configures both Claude Code and Claude Desktop so the agent can use reklawdbox.
 
 <Aside type="note">
-  Essentia requires Python 3.9 or later. If you don't have Python installed, get it from [python.org](https://www.python.org/downloads/) or via `brew install python`.
+  Essentia needs Python 3.9+. If you don't have Python, grab it from [python.org](https://www.python.org/downloads/) or `brew install python`.
 </Aside>
 
-## Using with Claude Code
+## Start a conversation
 
-After running `reklawdbox setup`, start Claude Code from your Music directory:
+For Claude Code, start it from your Music directory:
 
 ```bash
 cd ~/Music && claude
 ```
 
-Reklawdbox tools load automatically because setup placed `.mcp.json` there. In any other directory, the tools stay out of the way.
+The setup command placed a config file in `~/Music` so the tools load automatically there. In other directories, the tools stay out of the way.
 
-### Adding to other directories
+For Claude Desktop, the tools load globally — just open a new conversation.
 
-To make reklawdbox available in additional directories, copy `~/Music/.mcp.json` to the target directory:
+## Verify it works
 
-```bash
-cp ~/Music/.mcp.json /path/to/directory/
+Paste this into your agent:
+
+```text
+Show me a summary of my Rekordbox library.
 ```
 
-If you built from source, check that the `command` path inside the copied file points to your binary.
+You should see your track count, playlist count, and genre distribution. If something's wrong, check [Troubleshooting](/troubleshooting/).
 
-Or create a new `.mcp.json` there with the following content:
+## Discogs authorization
 
-```json
-{
-  "mcpServers": {
-    "reklawdbox": {
-      "command": "/opt/homebrew/bin/reklawdbox"
-    }
-  }
-}
-```
+Discogs provides labels, catalog numbers, and release metadata that power genre classification. It's preconfigured — no setup needed.
 
-If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`).
+<Steps>
 
-<Aside type="caution">
-  If you previously registered reklawdbox at user scope (e.g., via `claude mcp add`), that entry in `~/.claude.json` overrides any project `.mcp.json`. Remove it first: `claude mcp remove -s user reklawdbox`. See [Troubleshooting](/troubleshooting/#tools-appearing-in-every-project).
-</Aside>
+1. Ask the agent to look up any track on Discogs. On first use, you'll get an authorization URL — open it in your browser.
 
-## Manual MCP host configuration
+2. After authorizing, it works automatically from then on.
 
-If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify). Otherwise, configure manually:
+</Steps>
+
+## Manual configuration
+
+If `reklawdbox setup` didn't configure things correctly, or you want to add reklawdbox to other directories, you can set it up manually.
 
 <Tabs>
   <TabItem label="Claude Code">
-    Create `~/Music/.mcp.json`:
+    Create a `.mcp.json` in the directory you want the tools available:
 
     ```json
     {
@@ -116,14 +97,10 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
     }
     ```
 
-    If you built from source, use the full absolute path to the binary instead. Then start Claude Code from `~/Music`:
-
-    ```bash
-    cd ~/Music && claude
-    ```
+    If you built from source, use the full path to your binary instead.
   </TabItem>
   <TabItem label="Claude Desktop">
-    Add the following to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+    Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
     ```json
     {
@@ -134,8 +111,6 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
       }
     }
     ```
-
-    If you built from source, use the full absolute path to the binary (e.g., `/Users/you/reklawdbox/target/release/reklawdbox`).
   </TabItem>
   <TabItem label="Codex">
     ```bash
@@ -144,40 +119,8 @@ If `reklawdbox setup` already configured your MCP host, skip to [Verify](#verify
   </TabItem>
 </Tabs>
 
-<Aside type="tip">
-  The Rekordbox database is auto-detected at `~/Library/Pioneer/rekordbox/master.db`. Set `REKORDBOX_DB_PATH` only for non-standard locations.
-</Aside>
-
-<Aside type="caution">
-  After configuring your MCP host, reload it to pick up the changes. In Claude Code, run `/mcp` or start a new conversation. In Claude Desktop, quit and reopen the app.
-</Aside>
-
-## Verify
-
-Start a new conversation and paste this:
-
-```text
-Show me a summary of my Rekordbox library.
-```
-
-It should return your track count, playlist count, and genre distribution. If it fails, check [Troubleshooting](/troubleshooting/).
-
-## Discogs authorization
-
-Discogs enrichment provides labels, catalog numbers, and release metadata used by genre classification and library cleanup. The broker is preconfigured — no env vars or setup needed.
-
-<Steps>
-
-1. Call `lookup_discogs` for any track. On first use, the broker returns an OAuth URL — open it in your browser.
-
-2. After authorizing, subsequent calls work automatically.
-
-</Steps>
+After changing config, reload your agent. In Claude Code, run `/mcp` or start a new conversation. In Claude Desktop, quit and reopen the app.
 
 ## Next steps
 
-Ask your agent: `What workflows are available?` — it will show a menu of step-by-step guides covering genre classification, set building, library cleanup, and more.
-
-- [Library Cleanup](/workflows/library-cleanup/) — recommended starting point for organizing a new collection
-- [Genre Classification](/workflows/genre-classification/) — most common workflow
-- [Concepts](/concepts/) — architecture and safety model
+Start with [Library Cleanup](/workflows/library-cleanup/) — five sessions that clean your metadata, enrich your tracks, and classify genres. It's the foundation for everything else.

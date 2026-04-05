@@ -102,38 +102,67 @@ export default defineConfig({
         }),
       ],
       sidebar: [
+        { slug: 'getting-started', label: 'Install' },
         {
-          label: 'Getting Started',
-          autogenerate: { directory: 'getting-started' },
+          label: 'Library Cleanup',
+          items: [
+            { slug: 'workflows/library-cleanup', label: 'Overview' },
+            { slug: 'workflows/collection-audit' },
+            { slug: 'workflows/metadata-backfill' },
+            { slug: 'workflows/genre-classification' },
+            { slug: 'workflows/genre-audit' },
+          ],
         },
         {
-          label: 'Concepts',
-          autogenerate: { directory: 'concepts' },
+          label: 'Mixing & Sets',
+          items: [
+            { slug: 'workflows/set-building' },
+            { slug: 'workflows/pool-building' },
+            { slug: 'workflows/chapter-set-planning' },
+            { slug: 'concepts/harmonic-mixing' },
+            { slug: 'workflows/dj-prompts' },
+          ],
         },
         {
-          label: 'Workflows',
-          autogenerate: { directory: 'workflows' },
+          label: 'Day-to-Day',
+          items: [
+            { slug: 'workflows/batch-import' },
+            { slug: 'workflows/library-health' },
+          ],
         },
         {
-          label: 'MCP Tools',
-          autogenerate: { directory: 'mcp-tools' },
-        },
-        {
-          label: 'CLI',
-          autogenerate: { directory: 'cli' },
+          label: 'How It Works',
+          collapsed: true,
+          items: [
+            { slug: 'concepts', label: 'Overview' },
+            { slug: 'concepts/architecture' },
+            { slug: 'concepts/pool-discovery' },
+            { slug: 'concepts/safety', label: 'Safety & Trust' },
+          ],
         },
         {
           label: 'Reference',
-          autogenerate: { directory: 'reference' },
+          collapsed: true,
+          items: [
+            {
+              label: 'MCP Tools',
+              items: [
+                { slug: 'mcp-tools', label: 'Overview' },
+                { slug: 'mcp-tools/library-data' },
+                { slug: 'mcp-tools/enrichment-analysis' },
+                { slug: 'mcp-tools/classification-staging' },
+                { slug: 'mcp-tools/mixing' },
+                { slug: 'mcp-tools/files-system' },
+              ],
+            },
+            { slug: 'cli' },
+            { slug: 'reference/environment-variables' },
+            { slug: 'reference/transition-scoring' },
+            { slug: 'reference/xml-export' },
+            { slug: 'reference/keyboard-shortcuts' },
+          ],
         },
-        {
-          label: 'Agent SOPs',
-          autogenerate: { directory: 'agent' },
-        },
-        {
-          label: 'Troubleshooting',
-          autogenerate: { directory: 'troubleshooting' },
-        },
+        { slug: 'troubleshooting' },
       ],
     }),
   ],

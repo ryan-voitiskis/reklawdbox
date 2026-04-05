@@ -1,126 +1,81 @@
 ---
 title: Architecture
-description: How reklawdbox connects to Rekordbox, external services, and your MCP host.
+description: System design, data flow, database access, enrichment services, and audio analysis.
 sidebar:
   order: 1
 ---
 
-import { Aside, Steps, Tabs, Card, CardGrid } from '@astrojs/starlight/components';
+import { Aside, Steps } from '@astrojs/starlight/components';
 
-## System overview
+## Overview
 
-Single Rust binary (arm64), communicates with your MCP host over stdio. No runtime dependencies except an optional Python venv for Essentia.
-
-- **MCP server** — tool calls over stdio, structured JSON responses
-- **SQLCipher reader** — encrypted Rekordbox `master.db`, read-only, via rusqlite with bundled SQLCipher/OpenSSL
-- **Internal SQLite** — WAL-mode cache for enrichment, audio analysis, and broker sessions
-- **HTTP client** — reqwest + rustls for Discogs broker and Beatport
-- **Audio analysis** — symphonia decode, stratum-dsp BPM/key detection (embedded)
-- **Essentia** — optional Python subprocess for energy, danceability, spectral features
+reklawdbox is a single binary that talks to your AI agent over stdio. It reads your Rekordbox database, fetches metadata from external services, analyzes audio, and exports XML. No runtime dependencies beyond an optional Python install for Essentia.
 
 ## Data flow
 
 ```
-MCP Host (Claude Code / Claude Desktop / Codex)
+Your AI agent (Claude Code / Claude Desktop / Codex)
   │
-  │  stdio (JSON-RPC)
+  │  stdio
   ▼
-reklawdbox (single Rust binary)
-  ├── Rekordbox master.db ──── read-only, SQLCipher encrypted
-  ├── Internal SQLite ──────── cache: enrichment, audio analysis, broker sessions
-  ├── Discogs broker ───────── Cloudflare Workers + D1 (OAuth proxy)
-  ├── Beatport ─────────────── HTML/JSON extraction (no API key needed)
-  ├── stratum-dsp ──────────── embedded Rust audio analysis (BPM, key)
-  ├── Essentia ─────────────── optional Python subprocess (energy, danceability)
+reklawdbox
+  ├── Rekordbox master.db ──── read-only, encrypted
+  ├── Local cache ──────────── enrichment, audio analysis, sessions
+  ├── Discogs broker ───────── OAuth proxy for metadata lookups
+  ├── Beatport ─────────────── metadata extraction (no API key needed)
+  ├── Audio analysis ───────── BPM, key, energy, danceability, spectral features
   └── XML output ───────────── Rekordbox-compatible export files
 ```
 
 ## Rekordbox database
 
-Rekordbox 6/7 encrypt `master.db` with SQLCipher 4 (AES-256-CBC). The key is universal across installations. reklawdbox bundles SQLCipher and handles decryption transparently.
+Rekordbox 6/7 encrypt `master.db` with SQLCipher. reklawdbox bundles everything needed to decrypt it and opens it read-only.
 
 ### Key tables
 
-| Table | Purpose |
+| Table | What's in it |
 |-------|---------|
-| `djmdContent` | Tracks — title, ArtistID, GenreID, BPM (int × 100), KeyID, Rating, `Commnt` (actual column name) |
-| `djmdArtist` | Artist names (FK from djmdContent) |
-| `djmdAlbum` | Album names (FK from djmdContent) |
-| `djmdGenre` | Genre names (FK from djmdContent) |
-| `djmdKey` | Musical key names (FK from djmdContent) |
-| `djmdLabel` | Record label names |
-| `djmdColor` | Color tag names (FK from djmdContent) |
-| `djmdPlaylist` | Playlists/folders (Attribute 0 = playlist, 1 = folder, 4 = smart) |
-| `djmdSongPlaylist` | Track-to-playlist join table |
-
-<Aside type="note">
-  All primary keys are `VARCHAR(255)` strings, not integers.
-</Aside>
+| `djmdContent` | Tracks (title, artist, genre, BPM, key, rating, comments) |
+| `djmdPlaylist` | Playlists and folders |
+| `djmdSongPlaylist` | Which tracks are in which playlists |
+| `djmdArtist`, `djmdAlbum`, `djmdGenre`, `djmdKey`, `djmdLabel`, `djmdColor` | Lookup tables |
 
 ## Discogs broker
 
-TypeScript companion on Cloudflare Workers + D1. Acts as an OAuth proxy — reklawdbox never holds Discogs consumer secrets directly.
-
-### Authentication flow
+Discogs requires OAuth for API access. A companion service on Cloudflare Workers handles this so reklawdbox never holds consumer secrets directly.
 
 <Steps>
 
-1. Call `lookup_discogs`. The broker checks for an active session.
+1. Ask the agent to look up any track on Discogs.
 
-2. If unauthenticated, the broker returns an OAuth URL. Open it in your browser.
+2. On first use, you get an authorization URL — open it in your browser and approve.
 
-3. After approval, the broker stores your OAuth token and returns a session token to reklawdbox.
-
-4. Subsequent calls use the session token automatically. The token is stored in the macOS Keychain and mirrored in the internal database.
+3. After that, lookups work automatically. Your session is stored locally in macOS Keychain.
 
 </Steps>
 
-<Aside type="tip">
-  The broker is open-source and self-hostable. Set `REKLAWDBOX_DISCOGS_BROKER_URL` and `REKLAWDBOX_DISCOGS_BROKER_TOKEN` to point at your own deployment.
-</Aside>
+The broker is open-source and self-hostable if you prefer. See [Environment Variables](/reference/environment-variables/) for configuration.
 
-## Audio analysis pipeline
+## Audio analysis
 
-Two backends, cached per track in internal SQLite.
+Two analysis backends, both cached per track so they only run once:
 
-### stratum-dsp (always available)
+**Built-in (stratum-dsp)** — BPM and key detection in Rust. Always available, no setup needed.
 
-Rust library embedded in the binary. Provides key detection (Camelot notation) and BPM detection. Key is preferred over Rekordbox; BPM is a fallback only (Rekordbox BPM is preferred because it's the value the DJ sees and can manually correct). No setup required.
+**Essentia (optional)** — adds danceability, rhythm regularity, brightness (spectral centroid), loudness, onset rate, and dynamic complexity via a Python subprocess. These features are combined to produce energy scores and improve genre classification, set building, and pool discovery significantly. Installed automatically by `reklawdbox setup`.
 
-### Essentia (optional)
+Without Essentia, energy scoring falls back to a BPM-based estimate and brightness/rhythm axes are dropped from transition scoring.
 
-Python subprocess adding advanced descriptors: danceability, rhythm regularity, spectral centroid (brightness), loudness (LUFS), onset rate, and dynamic complexity. Requires a Python venv — see [Getting Started](/getting-started/).
+## CLI
 
-<Aside type="note">
-  Without Essentia, energy falls back to a BPM proxy and brightness/rhythm axes are excluded from the composite (remaining weights renormalized).
-</Aside>
+The same binary also works as a standalone CLI — no AI agent needed. Useful for batch operations:
 
-Analysis runs once per track per backend. Use `skip_cached: false` to force re-analysis.
-
-## CLI subcommands
-
-The binary doubles as a standalone CLI. No MCP host required.
-
-| Subcommand | Purpose |
-|------------|---------|
-| *(default)* | Start the MCP server (stdio) |
+| Command | What it does |
+|---------|-------------|
 | `hydrate` | Batch enrichment + audio analysis |
-| `analyze` | Batch audio analysis with filters |
-| `read-tags` | Read native file tags (ID3, Vorbis, etc.) |
-| `write-tags` | Write native file tags |
-| `extract-art` | Extract embedded cover art |
-| `embed-art` | Embed cover art into audio files |
-| `setup` | Install Essentia (and optionally configure broker URL/token with `--broker`) |
+| `analyze` | Audio analysis only |
+| `read-tags` / `write-tags` | Read or write audio file tags |
+| `extract-art` / `embed-art` | Cover art operations |
+| `setup` | Install Essentia and configure MCP hosts |
 
-See [CLI Commands](/cli/) for full usage.
-
-<CardGrid>
-  <Card title="Concepts Overview" icon="open-book">
-    Core design principles: read-only access, staging, XML export.
-    [Back to overview](/concepts/)
-  </Card>
-  <Card title="Harmonic Mixing" icon="star">
-    How reklawdbox uses the Camelot wheel and audio features to score transitions.
-    [Read more](/concepts/harmonic-mixing/)
-  </Card>
-</CardGrid>
+See [CLI Commands](/cli/) for details.

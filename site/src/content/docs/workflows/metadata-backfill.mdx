@@ -1,6 +1,6 @@
 ---
 title: Metadata Backfill
-description: Backfill missing labels, years, and albums from enrichment caches and file metadata.
+description: Fill missing labels, years, and albums from enrichment data.
 sidebar:
   order: 7
 ---
@@ -8,40 +8,27 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import MetadataBackfillSOP from '../../../partials/sops/metadata-backfill.mdx'
 
-Fill missing labels, years, and albums from Discogs, Beatport, Bandcamp, MusicBrainz, file tags, and folder paths. Labels are the strongest genre signal for electronic music; years provide era context for classification and set building. Albums round out the metadata for library browsing.
+Fills missing labels, years, and albums using data from Discogs, Beatport, Bandcamp, MusicBrainz, file tags, and folder paths. Labels are the strongest genre signal for electronic music, and years give era context that improves classification.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Find tracks missing labels and years in my collection and fill them from enrichment data.
 ```
 
-<Aside type="caution">
-  Label conflicts require your approval. Year conflicts are resolved automatically using the earliest year. Album backfill only fills empty values — no conflicts.
-</Aside>
-
-## When to backfill
-
-- After enrichment hydration completes (100% cache coverage)
-- Before genre classification — labels and years improve classification accuracy
-- After importing tracks from another collection that may lack label/year metadata
-- Periodically, as new enrichment data becomes available (e.g. Beatport label extraction)
-
 ## How it works
 
-Three backfill tools run in sequence:
+The agent runs three backfill passes:
 
-1. **`backfill_labels`** — pulls labels from all four enrichment providers. Empty labels are auto-staged; conflicts are grouped by pattern for review. Remaining gaps are researched by the agent.
-2. **`backfill_years`** — tries six sources in priority order (file tags, folder path, Discogs, Beatport, MusicBrainz, Bandcamp). Conflicts auto-resolve to the earliest year. Remaining gaps are researched by the agent.
-3. **`backfill_albums`** — fills empty albums from file tags, folder paths, Bandcamp, and Discogs. Best-effort only — empty album is valid for singles and loose tracks.
+1. **Labels** — pulls from all four enrichment providers. Empty labels are filled automatically; conflicts are grouped for your review.
+2. **Years** — checks six sources in priority order (file tags, folder path, Discogs, Beatport, MusicBrainz, Bandcamp). Conflicts auto-resolve to the earliest year.
+3. **Albums** — fills empty albums from file tags, folder paths, Bandcamp, and Discogs. Best-effort — an empty album is fine for singles and loose tracks.
 
-## Cache coverage
+Label conflicts always need your approval. Year conflicts resolve automatically. Albums only fill empty values, so there are no conflicts.
 
-All providers should be at 100% before starting. Run `cache_coverage(has_label=false)` to check. If any provider is below 100%, hydrate first.
+## Prerequisites
 
-<Aside type="tip">
-  Use `auto_enrich=true` on backfill tools to automatically fetch missing Bandcamp data inline — slower but requires no manual batching.
-</Aside>
+All enrichment providers should be at 100% cache coverage before you start. If you're following the [Library Cleanup](/workflows/library-cleanup/) guide, Session 2 handles this.
 
 ## Step-by-step
 

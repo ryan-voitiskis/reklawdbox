@@ -1,6 +1,6 @@
 ---
 title: Batch Import
-description: Prepare newly acquired music for Rekordbox import with proper tagging and organization.
+description: Prepare newly acquired music for Rekordbox import.
 sidebar:
   order: 5
 ---
@@ -8,30 +8,24 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import BatchImportSOP from '../../../partials/sops/batch-import.mdx'
 
-Process newly acquired music into a tagged, organized structure for Rekordbox import. Handles albums, loose tracks, and zip archives from any source.
+Processes newly acquired music — albums, loose tracks, zip archives — into a properly tagged and organized structure for Rekordbox import.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Process the new music in [/path/to/folder] for Rekordbox import.
 ```
 
-<Aside type="note">
-  This workflow handles Artist, Title, Album, Year, Track Number, Label, and cover art. Genre tagging is handled separately by the [genre classification workflow](/workflows/genre-classification/) after import.
-</Aside>
+Genre tagging is handled separately by [Genre Classification](/workflows/genre-classification/) after import.
 
-## What this workflow does
+## What it does
 
-1. **Extracts and organizes** — unzips archives, categorizes albums vs loose tracks
-2. **Enriches metadata** — Discogs/Beatport lookups for label, year, artist verification
-3. **Writes tags** — all required fields including WAV dual-tagging
-4. **Renames files** — `NN Artist - Title.ext` convention
-5. **Embeds cover art** — from included images or Discogs
-6. **Moves to final location** — organized by artist/album with year
-
-<Aside type="caution">
-  Rekordbox reads **only RIFF INFO** from WAVs. `write_file_tags` writes both ID3v2 and RIFF INFO automatically.
-</Aside>
+1. Extracts and organizes (unzips archives, sorts albums vs loose tracks)
+2. Enriches metadata from Discogs/Beatport (label, year, artist verification)
+3. Writes tags to files (including WAV dual-tagging for Rekordbox compatibility)
+4. Renames files to a consistent convention
+5. Embeds cover art from included images or Discogs
+6. Moves everything to its final location
 
 ## Step-by-step
 
@@ -40,4 +34,4 @@ Process the new music in [/path/to/folder] for Rekordbox import.
 ## Next steps
 
 - [Collection Audit](/workflows/collection-audit/) — scan for any remaining naming or tagging issues
-- [Genre Classification](/workflows/genre-classification/) — classify genres using evidence from Discogs, Beatport, and audio analysis
+- [Genre Classification](/workflows/genre-classification/) — classify genres for the newly imported tracks

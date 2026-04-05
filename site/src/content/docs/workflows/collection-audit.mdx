@@ -1,6 +1,6 @@
 ---
 title: Collection Audit
-description: Detect and fix naming, tagging, and convention violations in your music files.
+description: Fix naming, tagging, and convention issues in your music files.
 sidebar:
   order: 1
 ---
@@ -8,9 +8,9 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import CollectionAuditSOP from '../../../partials/sops/collection-audit.mdx'
 
-Fix naming, tagging, and convention violations so tracks import into Rekordbox correctly. Genre is handled separately by [genre classification](/workflows/genre-classification/).
+Fixes artist names, track titles, file naming, and tagging issues so everything is clean before enrichment. Genre tagging is a separate step — see [Genre Classification](/workflows/genre-classification/).
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Audit my collection for naming and tagging issues.
@@ -18,43 +18,24 @@ Audit my collection for naming and tagging issues.
 
 ## WAV tagging
 
-<Aside type="caution">
-  Rekordbox reads **only RIFF INFO (tag 3)** from WAV files, completely ignoring ID3v2 tags. If your WAV files only have ID3v2 tags (common with files from Bandcamp, Beatport, etc.), Rekordbox will show them as untagged.
-</Aside>
+Rekordbox only reads RIFF INFO tags from WAV files, ignoring ID3v2 entirely. If your WAVs only have ID3v2 tags (common with files from Bandcamp, Beatport, etc.), Rekordbox shows them as untagged.
 
-Both ID3v2 and RIFF INFO must be written for full compatibility across players. The `WAV_TAG3_MISSING` and `WAV_TAG_DRIFT` checks catch these problems, and `write_file_tags` handles writing both tag formats automatically.
+The audit catches these issues and the agent writes both tag formats automatically.
 
 ## Imported file protection
 
-<Aside type="caution">
-  Imported files are **never** renamed — Rekordbox stores absolute paths and can't update them via XML. To rename an imported file: delete from Rekordbox, rename, re-import.
-</Aside>
+Files already imported into Rekordbox are never renamed — Rekordbox stores absolute paths and can't update them through XML. To rename an imported file: delete it from Rekordbox first, rename, then re-import.
 
 ## File naming conventions
 
-### Album tracks
+**Album tracks:** `NN Artist Name - Track Title.ext`
+e.g. `01 Actress - Maze.flac`, `12 Four Tet - Baby.wav`
 
-```
-NN Artist Name - Track Title.ext
-```
+**Loose tracks:** `Artist Name - Track Title.ext`
+e.g. `Burial - Archangel.flac`, `Joy Orbison - Hyph Mngo.wav`
 
-Examples: `01 Actress - Maze.flac`, `12 Four Tet - Baby.wav`
-
-### Loose tracks (singles, downloads)
-
-```
-Artist Name - Track Title.ext
-```
-
-Examples: `Burial - Archangel.flac`, `Joy Orbison - Hyph Mngo.wav`
-
-### Album directories
-
-```
-Album Name (Year)/
-```
-
-Examples: `Untrue (2007)/`, `New Energy (2017)/`
+**Album directories:** `Album Name (Year)/`
+e.g. `Untrue (2007)/`, `New Energy (2017)/`
 
 ## Step-by-step
 
@@ -62,5 +43,7 @@ Examples: `Untrue (2007)/`, `New Energy (2017)/`
 
 ## Next steps
 
+If you're following the [Library Cleanup](/workflows/library-cleanup/) guide, next is enrichment (`reklawdbox hydrate` in your terminal), then:
+
+- [Metadata Backfill](/workflows/metadata-backfill/) — fill in missing labels, years, and albums
 - [Genre Classification](/workflows/genre-classification/) — classify genres for ungenred tracks
-- [Set Building](/workflows/set-building/) — build transition-scored set sequences once your metadata is clean

@@ -1,146 +1,130 @@
 ---
 title: Library Cleanup
-description: A session-based workflow for organizing a messy library, structured around the dependency chain between phases.
+description: Five sessions that clean your Rekordbox metadata, enrich tracks, backfill labels, classify genres, and verify the results.
 sidebar:
   order: -1
 ---
 
-import { LinkCard, Aside, Badge } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard, Aside, Badge } from '@astrojs/starlight/components';
 import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
-Five sessions, each with clear entry and exit criteria. Follow in order — later sessions depend on earlier ones.
+Five sessions that build on each other. Follow them in order — each one depends on the last.
 
-<Aside type="tip" title="Start with a health scan">
-  Before Session 1, run a [Library Health](/workflows/library-health/) scan to find broken links, orphan files, and duplicates. Fixing structural issues first prevents wasted work in later sessions.
-</Aside>
+Before you start, consider running a [Library Health](/workflows/library-health/) scan to catch broken links, orphan files, and duplicates. Fixing structural issues first saves you from redoing work later.
 
-<Aside type="danger">
-  **Session 1 writes directly to files. Sessions 3–5 stage changes as XML** — the Rekordbox database only updates after you import the XML file. Each session reads from the database, so you **must** complete each checkpoint before starting the next session. Session 2 is a CLI command, not an agent session.
+<Aside type="caution">
+  Session 1 writes directly to your audio files. Sessions 3-5 stage changes as XML — your Rekordbox database only updates after you import the XML yourself. Complete each checkpoint before moving on. Session 2 is a terminal command, not an agent session.
 </Aside>
 
 ## Why order matters
 
-**Clean metadata → accurate enrichment → label data → genre signals**
+**Clean metadata > accurate enrichment > label data > genre signals**
 
-Enrichment matches on artist/title — typos cause missed matches. Genre classification uses enrichment + audio analysis as evidence. Working out of order means poor results or re-running workflows.
+Enrichment matches on artist and title — typos cause missed matches. Genre classification uses enrichment and audio analysis as evidence. If you skip ahead, you'll get worse results and end up re-running things.
 
 ## Sessions
 
 ### Session 1: Collection Audit
 
-<Badge text="Entry" variant="note" /> MCP server connected.
+<Badge text="Requires" variant="note" /> reklawdbox connected
 
-**Paste into your agent to start this session:**
+Paste into your agent:
 
 ```
 Audit my collection for naming and tagging issues.
 ```
 
-To scope to specific directories:
+This fixes artist names, track titles, and file naming conventions. Getting these right first means better enrichment match rates in Session 2.
 
-```
-Audit [/path/to/music, /another/path] for naming and tagging issues.
-```
+<LinkCard title="Collection Audit details" href="/workflows/collection-audit/" />
 
-Fix artist names, track titles, and naming conventions. Cleaning these first improves enrichment match rates.
+#### Checkpoint
 
-<LinkCard title="Collection Audit workflow" href="/workflows/collection-audit/" />
-
-#### CHECKPOINT
-
-No XML export — Collection Audit uses direct file operations. Spot-check corrected tracks in Rekordbox.
-
-<Aside type="tip">
-  Natural context-reset point — close this session and start fresh for Session 2.
-</Aside>
+No XML needed here — Collection Audit writes directly to files. Spot-check a few corrected tracks in Rekordbox, then start a fresh session for Session 2.
 
 ---
 
 ### Session 2: Enrichment
 
-<Badge text="Entry" variant="note" /> Clean metadata — Session 1 complete.
+<Badge text="Requires" variant="note" /> Session 1 complete
+
+Run this in your terminal (not through the agent):
 
 ```sh
 reklawdbox hydrate --cpu overnight -y
 ```
 
-`--cpu overnight` uses most cores (total - 2, capped at 16); `-y` skips confirmation. Use `--artist`, `--genre`, or `--added-after` to scope.
+This fetches metadata from Discogs, Beatport, MusicBrainz, and Bandcamp, plus runs audio analysis on every track. `--cpu overnight` uses most of your cores; `-y` skips the confirmation prompt.
 
-**Exit:** Re-run `reklawdbox hydrate` — it reports remaining gaps. All providers must be at 100%.
+When it finishes, run `reklawdbox hydrate` again — it'll report any remaining gaps. All providers should be at 100% before moving on.
 
 ---
 
 ### Session 3: Metadata Backfill
 
-<Badge text="Entry" variant="note" /> All tracks enriched — Session 2 complete.
+<Badge text="Requires" variant="note" /> Session 2 complete (all providers at 100%)
 
-**Paste into your agent to start this session:**
+Paste into your agent:
 
 ```
 Find tracks missing labels and years in my collection and fill them from enrichment data.
 ```
 
-Labels are the strongest genre signal for electronic music, years provide era context for classification and set building, and albums round out metadata for library browsing. The agent checks enrichment coverage, backfills empty labels, missing years, and albums from all enrichment providers, and presents conflicts grouped by pattern for your review.
+Labels are the strongest genre signal for electronic music. Years give era context. The agent fills in what's missing from enrichment data and shows you any conflicts for review.
 
-<LinkCard title="Metadata Backfill workflow" href="/workflows/metadata-backfill/" />
+<LinkCard title="Metadata Backfill details" href="/workflows/metadata-backfill/" />
 
-#### CHECKPOINT
+#### Checkpoint
 
-The agent will ask: **"Export these changes to XML?"** — approve, then import:
+The agent will ask to export to XML. Approve, then import into Rekordbox:
 
 <XmlImportSteps />
 
-<Aside type="tip">
-  Natural context-reset point — close this session and start fresh for Session 4.
-</Aside>
+Start a fresh session for Session 4.
 
 ---
 
 ### Session 4: Genre Classification
 
-<Badge text="Entry" variant="note" /> Labels backfilled — Session 3 XML imported.
+<Badge text="Requires" variant="note" /> Session 3 XML imported
 
-**Paste into your agent to start this session:**
+Paste into your agent:
 
 ```
 Classify genres for my ungenred tracks.
 ```
 
-The agent normalizes aliases first (e.g. `Hip-Hop` → `Hip Hop`), then classifies ungenred tracks in batches. You review results grouped by confidence level — high and medium can be approved in bulk, low and insufficient need per-track review.
+The agent normalizes any genre aliases first, then classifies tracks in batches. You review results grouped by confidence — high and medium confidence can usually be approved in bulk, while low confidence needs a closer look.
 
-<LinkCard title="Genre Classification workflow" href="/workflows/genre-classification/" />
+<LinkCard title="Genre Classification details" href="/workflows/genre-classification/" />
 
-#### CHECKPOINT
+#### Checkpoint
 
-The agent will ask: **"Export these changes to XML?"** — approve, then import:
+Export to XML, import into Rekordbox. Verify a few genres look right, then start a fresh session for Session 5.
 
 <XmlImportSteps />
-
-Verify genres, then start a fresh session for Session 5.
 
 ---
 
 ### Session 5: Genre Audit
 
-<Badge text="Entry" variant="note" /> Genres classified — Session 4 XML imported.
+<Badge text="Requires" variant="note" /> Session 4 XML imported
 
-**Paste into your agent to start this session:**
+Paste into your agent:
 
 ```
 Audit my existing genre tags.
 ```
 
-The agent checks existing genre tags against enrichment and audio evidence. Only conflicts and manual-review tracks are surfaced — confirmed genres are skipped. Review and approve or reject in batches.
+This checks your existing genre tags against enrichment and audio evidence. It only shows you conflicts and things that need a second look — confirmed genres are skipped.
 
-<LinkCard title="Genre Audit workflow" href="/workflows/genre-audit/" />
+<LinkCard title="Genre Audit details" href="/workflows/genre-audit/" />
 
-#### CHECKPOINT
+#### Checkpoint
 
-The agent will ask: **"Export these changes to XML?"** — approve, then import:
+Export to XML, import into Rekordbox. Spot-check the corrections.
 
 <XmlImportSteps />
-
-Spot-check corrected genres.
 
 ---
 
@@ -151,3 +135,22 @@ Spot-check corrected genres.
 - **Labels and years present?** Skip Session 3.
 - **No ungenred tracks?** Skip Session 4.
 - **No existing genre tags?** Skip Session 5.
+
+## What's next
+
+With your library clean, enriched, and genre-tagged, you're ready for the good stuff:
+
+<CardGrid>
+  <Card title="Set Building" icon="list-format">
+    Build transition-scored DJ sequences with energy curve shaping.
+    [Build a set](/workflows/set-building/)
+  </Card>
+  <Card title="Pool Building" icon="puzzle">
+    Find compatible track pools for live improvisation.
+    [Build a pool](/workflows/pool-building/)
+  </Card>
+  <Card title="DJ Prompts" icon="rocket">
+    Gig prep, collection analysis, practice sessions, and more.
+    [Browse prompts](/workflows/dj-prompts/)
+  </Card>
+</CardGrid>

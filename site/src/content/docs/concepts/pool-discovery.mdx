@@ -1,76 +1,64 @@
 ---
 title: Pool Discovery
-description: How reklawdbox discovers groups of mutually compatible tracks using symmetric pool scoring.
+description: How pool scoring works — symmetric compatibility, timbral similarity, detuning, and greedy expansion.
 sidebar:
   order: 3
 ---
 
-import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import { Aside, LinkCard } from '@astrojs/starlight/components';
 import PoolWeights from '../../../components/PoolWeights.astro';
 import DetuningCurve from '../../../components/DetuningCurve.astro';
 import PoolGraph from '../../../components/PoolGraph.astro';
 import GreedyExpansion from '../../../components/GreedyExpansion.astro';
 
-Pool discovery finds groups of tracks that all work well together — tracks you can throw into a crate and improvise from live, knowing any transition within the pool will sound good.
+Pool discovery finds groups of tracks that all work well together — tracks you can throw into a crate and improvise from, knowing any transition within the pool will sound good.
+
+For the practical workflow, see [Pool Building](/workflows/pool-building/). This page explains the scoring model underneath.
 
 ## Pools vs sequences
 
-A **pool** is an unordered set. A **sequence** (from [Set Building](/workflows/set-building/)) is an ordered list. Most DJs prep pools, not sequences — they read the room and choose the next track in the moment.
+A **pool** is an unordered set — pick any track next. A **sequence** (from [Set Building](/workflows/set-building/)) is a fixed order. Most DJs prep pools and read the room live.
 
-| Concern | Set Building | Pool Discovery |
-|---------|-------------|----------------|
-| Output | Ordered tracklist | Unordered crate |
-| Scoring | Directional (A→B ≠ B→A) | Symmetric (A↔B always) |
-| Context | Energy phases, genre streaks | None — just pairwise compatibility |
-| Use case | Pre-planned set | Live improvisation |
+## Symmetric scoring
 
-## The symmetric kernel
+Pool scoring asks "do these tracks belong in the same crate?" — not "should B follow A?"
 
-Pool scoring answers "do these tracks belong in the same crate?" — not "should B follow A?"
-
-Key properties:
-- **Symmetric**: `score(A,B) == score(B,A)` always
-- **No sequential context**: no energy phases, genre streaks, or BPM drift penalties
-- **Seven axes**: BPM, energy, key, genre, timbral, brightness, rhythm
+- `score(A,B)` always equals `score(B,A)`
+- No energy phases, genre streaks, or BPM drift penalties
+- Seven axes: BPM, energy, key, genre, timbral, brightness, rhythm
 
 <PoolGraph />
 
-## Scoring axes
+## The seven axes
 
-### Always available
+**Always available:**
 
-| Axis | What it measures | Pool scoring |
-|:-----|:-----------------|:-------------|
-| **BPM** | Tempo proximity | Gaussian decay on % difference (symmetric denominator) |
-| **Energy** | Energy band similarity | Gaussian decay on absolute distance |
-| **Key** | Harmonic compatibility | Camelot distance with continuous detuning |
-| **Genre** | Genre/family match | Same=1.0, same family=0.7, different=0.3 |
+| Axis | What it measures |
+|:-----|:-----------------|
+| **BPM** | How close the tempos are |
+| **Energy** | How similar the energy levels are |
+| **Key** | Harmonic compatibility (Camelot distance with detuning) |
+| **Genre** | Same genre (1.0), same family (0.7), or different (0.3) |
 
-### Require Essentia analysis
+**With Essentia:**
 
-| Axis | What it measures | Pool scoring |
-|:-----|:-----------------|:-------------|
-| **Timbral** | Sonic texture similarity | z-score normalized Euclidean distance |
-| **Brightness** | Spectral centroid delta | Same thresholds as transition scorer |
-| **Rhythm** | Groove regularity delta | Same thresholds as transition scorer |
+| Axis | What it measures |
+|:-----|:-----------------|
+| **Timbral** | Sonic texture similarity — the discovery axis |
+| **Brightness** | Spectral centroid similarity |
+| **Rhythm** | Groove regularity similarity |
 
-<Aside type="tip">
-  Tracks without Essentia data are scored on non-timbral axes only. The composite is renormalized — they aren't penalized for missing data, but may rank higher than they deserve. Run `analyze_audio_batch` for best results.
-</Aside>
+Tracks without Essentia data are scored on the first four axes only, with weights adjusted automatically.
 
 ### The timbral axis
 
-The discovery axis — "sounds like it belongs." Concatenates five Essentia descriptors into a 34-dimensional feature vector:
+This is the discovery axis — "sounds like it belongs." It compares tracks using a 34-dimensional audio fingerprint built from MFCCs, spectral contrast, brightness variation, and dissonance. Each dimension is normalized across your library so no single feature dominates.
 
-- **MFCC mean** (13-dim): overall spectral envelope / timbral color
-- **MFCC std** (13-dim): timbral variation within the track
-- **Spectral contrast mean** (6-dim): frequency band energy distribution
-- **Spectral centroid CV**: brightness variation over time
-- **Dissonance mean**: harmonic roughness
-
-Each dimension is z-score normalized across the library before computing distance. This prevents dimensions on different scales from dominating.
+This is what lets pool discovery find cross-genre connections: a deep house track and a downtempo track that happen to share a similar sonic texture.
 
 ## Weight presets
+
+<PoolWeights />
 
 | Axis | Balanced | Timbral |
 |:-----|:--------:|:-------:|
@@ -82,58 +70,44 @@ Each dimension is z-score normalized across the library before computing distanc
 | Brightness | 0.08 | 0.08 |
 | Rhythm | 0.07 | 0.07 |
 
-**Balanced** (default): BPM and energy lead. Timbral is the discovery axis but doesn't dominate.
+**Balanced** (default) — BPM and energy lead. Timbral adds a discovery dimension without dominating.
 
-**Timbral**: upweights timbral to 0.35 for cross-genre sonic discovery — "what in my library sounds like these regardless of tags."
+**Timbral** — upweights sonic similarity for cross-genre discovery. "What in my library sounds like these, regardless of genre tags?"
 
-<PoolWeights />
+## Master tempo and detuning
 
-## Master tempo and reference BPM
+With master tempo off, pitching a track to match BPM shifts its key — just like vinyl. A 3% BPM change shifts the key by about half a semitone.
 
-With master tempo off, pitching a track to match BPM shifts its key — just like vinyl. A 3% BPM change shifts the key by ~0.5 semitones.
-
-Pool tools handle this via a **reference BPM**: all tracks' effective keys are computed at the reference BPM using a continuous detuning model. The choice of reference BPM can change which harmonic relationships exist.
-
-`describe_pool` sweeps reference BPMs and reports the **optimal reference BPM** — the one that maximizes key compatibility across the pool.
+Pool tools account for this using a **reference BPM**: all tracks' effective keys are computed at that reference BPM. The agent can sweep reference BPMs to find the one that maximizes key compatibility across the pool.
 
 <Aside type="caution">
-  If a pool spans too wide a BPM range (>1 semitone of shift per track from any reference), no single reference BPM works. The tool reports this as a warning.
+  If a pool spans too wide a BPM range, no single reference BPM works well. The agent flags this.
 </Aside>
 
-### Continuous detuning model
+### The detuning model
 
-When master tempo is off, the key score between two tracks degrades continuously with the pitch shift caused by BPM matching. The scoring uses bilinear interpolation: at *X* cents of detuning, the score blends linearly between the discrete Camelot score and the next-worse position's score.
+Key compatibility degrades smoothly with pitch shift. Instead of hard Camelot boundaries, the score blends linearly between positions as detuning increases.
 
 <DetuningCurve />
 
-## Iterative greedy expansion
+## How expansion works
 
-`expand_pool` doesn't just rank candidates from a flat list. It uses iterative greedy expansion:
+When adding tracks to a pool, the agent uses iterative greedy expansion:
 
-1. Score all candidates against the seed pool. Pick the single best.
+1. Score all candidates against the current pool. Pick the best one.
 2. Add it to the pool. Re-score remaining candidates against the expanded pool.
-3. Repeat until the requested number of additions is reached or quality drops below threshold.
+3. Repeat until done or quality drops below threshold.
 
-Each addition is guaranteed compatible with the full pool at the time it's added — including prior additions. This prevents the failure mode where multiple additions are each compatible with seeds but incompatible with each other.
+Each addition is guaranteed compatible with the full pool at the time it's added — including previous additions. This prevents the problem where multiple additions are each compatible with the seeds but not with each other.
 
 <GreedyExpansion />
 
-## Chapters and set plans
+## Chapters
 
-Pools become **chapters** when the DJ validates and locks them. Two chapter types:
+Pools become **chapters** when you validate and lock them. A chapter can be:
+- **Sequenced** — fixed track order (you've tested the transitions)
+- **Unordered** — you trust the compatibility and will improvise order live
 
-- **Sequenced**: fixed track order (the DJ tested the transitions)
-- **Unordered**: the DJ trusts internal compatibility and will improvise order live
+**Bridges** connect chapters — tracks compatible with both the end of one chapter and the start of the next. See [Chapter Set Planning](/workflows/chapter-set-planning/).
 
-**Bridges** connect chapters — tracks compatible with both the tail of one chapter and the head of the next. The [Chapter Set Planning](/workflows/chapter-set-planning/) workflow handles this.
-
-<CardGrid>
-  <Card title="Pool Building" icon="puzzle">
-    Step-by-step workflow for building pools.
-    [Get started](/workflows/pool-building/)
-  </Card>
-  <Card title="MCP Tools" icon="bars-ascending">
-    Full parameter reference for pool tools.
-    [Tool reference](/mcp-tools/mixing/#pool-discovery-tools)
-  </Card>
-</CardGrid>
+<LinkCard title="Pool Building" href="/workflows/pool-building/" description="Step-by-step workflow for building pools from your collection." />

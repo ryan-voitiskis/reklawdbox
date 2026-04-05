@@ -1,91 +1,31 @@
 ---
-title: Concepts
-description: Core ideas behind reklawdbox — how it reads, stages, and exports Rekordbox data safely.
+title: How It Works
+description: How reklawdbox connects to Rekordbox, caches data, and keeps everything safe.
 sidebar:
   order: 0
 ---
 
-import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import { LinkCard } from '@astrojs/starlight/components';
 
-reklawdbox is an MCP server that sits between an AI agent and Rekordbox 7.x. It reads your encrypted database directly, stages metadata changes in memory, and exports Rekordbox-compatible XML for reimport.
+reklawdbox sits between your AI agent and Rekordbox. It reads your database, caches enrichment and audio analysis data, and stages any metadata changes as XML for you to import. Your database is never modified directly.
 
-## Read-only database access
+## The basics
 
-reklawdbox opens the Rekordbox `master.db` **read-only** via SQLCipher (AES-256-CBC, PBKDF2-HMAC-SHA512). The database is never modified.
+1. **The agent reads your library** — track metadata, playlists, play history. All read-only.
+2. **Enrichment and audio analysis get cached** — Discogs, Beatport, MusicBrainz, and Bandcamp metadata plus audio features from stratum-dsp and Essentia. This cache powers everything downstream: genre classification, set building, transition scoring.
+3. **Changes are staged in memory** — when the agent suggests metadata updates (genre, label, year, etc.), nothing is written until you approve.
+4. **You export and import XML** — the agent produces a Rekordbox-compatible XML file. You import it into Rekordbox yourself.
 
-- Auto-detects at `~/Library/Pioneer/rekordbox/master.db` (override with `REKORDBOX_DB_PATH`)
-- Key tables: `djmdContent` (tracks), `djmdPlaylist`, `djmdSongPlaylist`, plus lookup tables for artists, albums, genres, keys, labels, and colors
-- BPM is stored as integer × 100 (128.50 BPM = `12850`) — converted to float automatically
+That's the whole loop. The agent handles the tedious work, you make the decisions.
 
-<Aside type="caution">
-  Never open `master.db` in a generic SQLite browser without SQLCipher support — you'll see garbage data or corrupt it.
-</Aside>
+## Caching
 
-## In-memory change staging
+Most workflows need cached data to work well. The [Library Cleanup](/workflows/library-cleanup/) guide walks you through populating caches as part of the process. Once cached, data is reused across all workflows — you only enrich and analyze once.
 
-Changes to genre, comments, rating, color, label, year, or album are staged in memory — not written anywhere. You can review, modify, or discard freely before exporting.
+The cache is a local SQLite file you can safely delete. Everything gets re-fetched on next use.
 
-- `update_tracks` — stage changes for one or more tracks
-- `preview_changes` — review everything staged so far
-- `clear_changes` — discard all staged changes
+## Go deeper
 
-Nothing touches disk until you call `write_xml`. If the server restarts, staged changes are lost.
-
-<Aside type="tip">
-  The agent calls `preview_changes` before every export so you can review exactly what will end up in the XML.
-</Aside>
-
-## XML export (never direct DB writes)
-
-`write_xml` produces a Rekordbox-compatible XML file. In Rekordbox: **Preferences → Advanced → rekordbox xml → Imported Library**, then import tracks to your collection. See [XML Export](/reference/xml-export/) for the full import workflow and known quirks.
-
-<Aside type="caution">
-  XML reimport is **additive only** — it updates or adds tracks, never deletes them.
-</Aside>
-
-## Local caching
-
-A separate SQLite database (WAL mode) caches enrichment, audio analysis, and broker sessions. Safe to delete — data is re-fetched on next use.
-
-- **Default:** `~/Library/Application Support/reklawdbox/internal.sqlite3` (override with `CRATE_DIG_STORE_PATH`)
-- **Enrichment cache:** Discogs, Beatport, MusicBrainz, and Bandcamp metadata keyed by search terms
-- **Audio analysis cache:** stratum-dsp and Essentia results keyed by file path and analyzer
-- **Broker sessions:** OAuth tokens for the Discogs broker
-
-Classification, set building, and transition scoring all read from cached data. Run enrichment and audio analysis first, then use the results downstream.
-
-<Aside type="tip">
-  Use `cache_coverage` to check how much of your library has cached data before starting a workflow.
-</Aside>
-
-## Human-in-the-loop
-
-Every stage requires human approval:
-
-- The agent proposes changes; you review via `preview_changes` before export.
-- `write_xml` produces a file — you import it into Rekordbox yourself.
-- Enrichment lookups populate the cache but never modify track metadata.
-
-The agent handles the tedious work (genre normalization, key math, Discogs lookups). You make the final call on every change.
-
-## What reklawdbox does not do
-
-- **No DB writes.** The only output is XML.
-- **No background process.** Request-response only — your agent calls a tool, reklawdbox responds.
-- **No auto-sync.** New Rekordbox tracks appear on the next `read_library` or `search_tracks` call.
-- **macOS Apple Silicon only.** No Windows or Linux support.
-
-<CardGrid>
-  <Card title="Architecture" icon="setting">
-    How the binary, database, external services, and audio pipeline connect.
-    [Read more](/concepts/architecture/)
-  </Card>
-  <Card title="Harmonic Mixing" icon="star">
-    Camelot wheel, key compatibility scoring, and multi-axis transitions.
-    [Read more](/concepts/harmonic-mixing/)
-  </Card>
-  <Card title="Pool Discovery" icon="puzzle">
-    Symmetric pool scoring, timbral similarity, and iterative pool expansion.
-    [Read more](/concepts/pool-discovery/)
-  </Card>
-</CardGrid>
+<LinkCard title="Architecture" href="/concepts/architecture/" description="System design, data flow, database tables, external services, and the audio analysis pipeline." />
+<LinkCard title="Pool Discovery" href="/concepts/pool-discovery/" description="Symmetric pool scoring, timbral similarity, detuning models, and the greedy expansion algorithm." />
+<LinkCard title="Safety & Trust" href="/concepts/safety/" description="Read-only database access, in-memory staging, XML export, and human approval at every step." />

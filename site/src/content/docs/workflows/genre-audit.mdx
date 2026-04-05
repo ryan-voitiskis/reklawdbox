@@ -1,6 +1,6 @@
 ---
 title: Genre Audit
-description: Verify and correct existing genre tags using enrichment and audio evidence.
+description: Verify existing genre tags against enrichment and audio evidence.
 sidebar:
   order: 3
 ---
@@ -8,46 +8,30 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import GenreAuditSOP from '../../../partials/sops/genre-audit.mdx'
 
-Review existing genre tags against Discogs, Beatport, and audio evidence. Only tracks with conflicts or BPM-implausible tags are surfaced. Every change requires your approval.
+Checks your existing genre tags against Discogs, Beatport, and audio evidence. Only conflicts and questionable tags are surfaced — tracks where the evidence confirms the genre are skipped. Every change needs your approval.
 
-**Paste into your agent to start:**
+Paste into your agent:
 
 ```
 Audit my existing genre tags.
 ```
 
-<Aside type="caution">
-  No auto-tagging. Every genre change requires your explicit approval before it is staged or exported.
-</Aside>
-
 ## When to audit
 
-- After a bulk genre classification pass — catch any misclassifications
+- After genre classification — catch any misclassifications
 - When you suspect a genre was applied too broadly (e.g. everything tagged "Techno")
-- After importing tracks from another collection with different tagging conventions
-- Periodically, as enrichment data improves over time
+- After importing tracks from another collection with different conventions
+- Periodically, as enrichment data improves
 
 ## How it works
 
-`audit_genres` applies the same decision tree as classification but compares results against existing tags. Only conflicts and manual-review tracks are shown — confirmed tracks are counted but omitted.
+The audit uses the same decision tree as classification, but compares results against existing tags instead of filling blanks. Only conflicts and tracks needing manual review show up.
 
-## Audit vs Classification
+**Audit vs Classification:** Classification assigns genres to ungenred tracks. Audit verifies genres that are already there. Classification shows everything; audit only shows problems.
 
-| | Classification | Audit |
-|---|---|---|
-| **Tool** | `classify_tracks` | `audit_genres` |
-| **Scope** | Ungenred tracks (enforces `has_genre=false`) | Tracks with genres (enforces `has_genre=true`) |
-| **Goal** | Assign genres from scratch | Verify existing genres are correct |
-| **Output** | All results grouped by confidence | Only conflicts and manual-review tracks |
-| **Typical volume** | All ungenred tracks | Subset with conflicts only |
+## Prerequisites
 
-## Cache coverage
-
-All providers must be at 100% before starting. Run `cache_coverage(has_genre=true)` to check. If any provider is below 100%, hydrate first.
-
-<Aside type="tip">
-  Run audio analysis first (local, fast), then enrichment (external, rate-limited). This order minimizes wall-clock time.
-</Aside>
+All enrichment providers should be at 100% cache coverage. If you're following [Library Cleanup](/workflows/library-cleanup/), Session 2 (enrichment) handles this.
 
 ## Step-by-step
 
@@ -55,5 +39,5 @@ All providers must be at 100% before starting. Run `cache_coverage(has_genre=tru
 
 ## Next steps
 
-- [Genre Classification](/workflows/genre-classification/) — classify ungenred tracks
-- [Set Building](/workflows/set-building/) — build transition-scored set sequences
+- [Genre Classification](/workflows/genre-classification/) — classify any remaining ungenred tracks
+- [Set Building](/workflows/set-building/) — build sets with your verified genres

@@ -1,18 +1,18 @@
 ---
 title: reklawdbox
-description: MCP server for Rekordbox 7.x — AI-assisted library management, genre classification, and set building.
+description: AI-assisted Rekordbox library management — clean up metadata, classify genres, and build DJ sets through conversation.
 head:
   - tag: title
     content: reklawdbox
 template: splash
 hero:
-  tagline: v0.24.3 — AI-assisted Rekordbox library management via MCP. Read your encrypted database directly. Stage metadata changes safely. Export Rekordbox-compatible XML.
+  tagline: v0.24.3 — Agent-powered Rekordbox library management. Clean up metadata, classify genres, and build sets through conversation.
   image:
     file: ../../assets/logo.png
     alt: reklawdbox logo — a crab gripping a vinyl record
   actions:
-    - text: Get Started
-      link: /getting-started/
+    - text: Install
+      link: '#install'
       icon: right-arrow
     - text: GitHub
       link: https://github.com/ryan-voitiskis/reklawdbox
@@ -20,51 +20,71 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard, Aside, Steps } from '@astrojs/starlight/components';
 
-Manage your Rekordbox library with AI through the
-[Model Context Protocol](https://modelcontextprotocol.io/).
-reklawdbox connects any MCP-compatible host — Claude Code, Claude Desktop,
-Codex — to your collection.
+## Install
 
-<Aside type="tip" title="New to reklawdbox?">
-  The [Library Cleanup](/workflows/library-cleanup/) guide walks you through organizing your collection in five sessions — from fixing metadata to classifying genres.
-</Aside>
+<Steps>
+
+1. **Tap and install**
+
+   ```bash
+   brew tap ryan-voitiskis/reklawdbox && brew install reklawdbox
+   ```
+
+2. **Run setup** — installs audio analysis tools and configures Claude Code + Claude Desktop
+
+   ```bash
+   reklawdbox setup
+   ```
+
+3. **Start a conversation**
+
+   ```bash
+   cd ~/Music && claude
+   ```
+
+</Steps>
+
+<LinkCard title="Full setup guide" href="/getting-started/" description="Build from source, manual MCP config, Discogs authorization, and troubleshooting." />
+
+## Start here: Library Cleanup
+
+You probably have metadata issues. Library Cleanup walks you through five sessions that fix naming conventions, enrich tracks from Discogs, Beatport, MusicBrainz, and Bandcamp, backfill missing labels and years, classify genres, and verify the results.
+
+It's the foundation for everything else — enrichment data powers genre classification, and classified genres are used by set building and pool discovery.
+
+<LinkCard title="Library Cleanup" href="/workflows/library-cleanup/" description="Five sessions that build on each other — the recommended starting point for every new user." />
+
+## Then the fun stuff
+
+Once your library is clean and enriched:
 
 <CardGrid>
-  <LinkCard title="Getting Started" href="/getting-started/" description="Install, configure, and connect reklawdbox to your MCP host." />
-  <LinkCard title="Concepts" href="/concepts/" description="Architecture, safety model, and how harmonic mixing works." />
-  <LinkCard title="Workflows" href="/workflows/" description="Genre classification, set building, and collection audits." />
-  <LinkCard title="MCP Tools" href="/mcp-tools/" description="All 51 tools grouped by function — library, enrichment, staging, mixing, and more." />
-  <LinkCard title="CLI" href="/cli/" description="Standalone commands for batch enrichment, audio analysis, and file tag management." />
-  <LinkCard title="Reference" href="/reference/" description="Environment variables, transition scoring math, and XML export details." />
-  <LinkCard title="Troubleshooting" href="/troubleshooting/" description="Fix common setup, auth, and runtime problems." />
+  <Card title="Set Building" icon="list-format">
+    Build transition-scored sequences with energy curve shaping — key, BPM, energy, genre, brightness, and rhythm.
+    [Build a set](/workflows/set-building/)
+  </Card>
+  <Card title="Pool Building" icon="puzzle">
+    Discover compatible track pools for live improvisation. Symmetric scoring finds tracks that mix well in any direction.
+    [Build a pool](/workflows/pool-building/)
+  </Card>
+  <Card title="Gig Prep" icon="rocket">
+    Describe your gig — venue, time slot, vibe — and the agent translates context into curated pools and sequences.
+    [Prep for a gig](/workflows/dj-prompts/)
+  </Card>
+  <Card title="Chapter Sets" icon="open-book">
+    Plan multi-chapter sets with bridge tracks between sections. Lock your chapters, let the agent connect them.
+    [Plan chapters](/workflows/chapter-set-planning/)
+  </Card>
 </CardGrid>
 
-## What reklawdbox does
+## Safe by design
 
-An MCP server between your AI agent and Rekordbox 7.x. The database is read-only — all changes are staged in memory and exported as XML.
+reklawdbox never writes to your Rekordbox database. Changes are staged in memory, reviewed by you, and exported as Rekordbox-compatible XML for reimport. The agent handles the tedious work — you make every final call.
 
-- **Reads encrypted `master.db`** directly via SQLCipher (read-only)
-- **Stages metadata changes** (genre, comments, rating, color, label, year, album) for review before export
-- **Exports Rekordbox-compatible XML** for safe reimport
-- **Enriches tracks** via Discogs, Beatport, MusicBrainz, and Bandcamp — labels, years, artwork
-- **Analyzes audio** with stratum-dsp + optional Essentia — BPM, key, energy, danceability
-- **Scores transitions and builds sets** — harmonic compatibility, BPM, energy curves, genre affinity
-- **CLI subcommands** for batch analysis and file tag operations outside MCP
+- **Read-only database access** — your `master.db` is never modified
+- **Human-in-the-loop** — every change requires your approval before export
+- **No background process** — request-response only, nothing runs when you're not using it
 
-## 51 MCP tools
-
-**Library & Data** — `read_library`, `search_tracks`, `get_track`, `get_playlists`, `get_playlist_tracks`, `get_sessions`, `get_session_tracks`, `get_play_stats`, `resolve_track_data`, `resolve_tracks_data`, `cache_coverage`
-
-**Enrichment & Analysis** — `lookup_discogs`, `lookup_beatport`, `lookup_musicbrainz`, `lookup_bandcamp`, `enrich_tracks`, `analyze_track_audio`, `analyze_audio_batch`, `setup_essentia`
-
-**Classification & Staging** — `get_genre_taxonomy`, `suggest_normalizations`, `classify_tracks`, `audit_genres`, `backfill_labels`, `backfill_years`, `backfill_albums`, `update_tracks`, `preview_changes`, `write_xml`, `clear_changes`
-
-**Mixing & Sequencing** — `score_transition`, `query_transition_candidates`, `build_set`, `score_pool_compatibility`, `expand_pool`, `describe_pool`, `discover_pools`, `save_weight_preset`, `list_weight_presets`, `delete_weight_preset`
-
-**Files & System** — `read_file_tags`, `write_file_tags`, `extract_cover_art`, `embed_cover_art`, `scan_broken_links`, `scan_orphan_files`, `scan_playlist_coverage`, `scan_duplicates`, `audit_state`, `clear_caches`, `help`
-
-## 7 CLI commands
-
-`hydrate`, `analyze`, `read-tags`, `write-tags`, `extract-art`, `embed-art`, `setup`
+<LinkCard title="How it works" href="/concepts/" description="Architecture, safety model, and the tech behind harmonic mixing and pool discovery." />
