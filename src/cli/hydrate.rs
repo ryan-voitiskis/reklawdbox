@@ -433,6 +433,21 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         }
     });
 
+    // Force indicatif to clear-and-redraw on terminal resize so its internal
+    // line tracking stays in sync with the actual terminal state.
+    let winch_cancel = cancel.clone();
+    let winch_mp = mp.clone();
+    tokio::spawn(async move {
+        let mut sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+            .expect("failed to register SIGWINCH handler");
+        loop {
+            tokio::select! {
+                _ = sig.recv() => { winch_mp.println("").ok(); }
+                _ = winch_cancel.cancelled() => break,
+            }
+        }
+    });
+
     let discogs_counters = Arc::new(ProviderCounters::new());
     let beatport_counters = Arc::new(ProviderCounters::new());
     let analysis_counters = Arc::new(ProviderCounters::new());
@@ -907,6 +922,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     cancel.cancel();
     let _ = status_task.await;
     let _ = writer_handle.await;
+    status_pb.finish_and_clear();
+    pb.finish_and_clear();
     mp.clear().ok();
 
     // 10. Summary
