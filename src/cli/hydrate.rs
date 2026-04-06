@@ -422,31 +422,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     status_pb.set_style(ProgressStyle::with_template("  {msg}").unwrap());
     status_pb.enable_steady_tick(Duration::from_secs(1));
 
-    let cancel_clone = cancel.clone();
-    let mp_clone = mp.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            mp_clone
-                .println("Shutting down gracefully... (waiting for in-flight tasks)")
-                .ok();
-            cancel_clone.cancel();
-        }
-    });
-
-    // Force indicatif to clear-and-redraw on terminal resize so its internal
-    // line tracking stays in sync with the actual terminal state.
-    let winch_cancel = cancel.clone();
-    let winch_mp = mp.clone();
-    tokio::spawn(async move {
-        let mut sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-            .expect("failed to register SIGWINCH handler");
-        loop {
-            tokio::select! {
-                _ = sig.recv() => { winch_mp.println("").ok(); }
-                _ = winch_cancel.cancelled() => break,
-            }
-        }
-    });
+    super::spawn_signal_handlers(&mp, &cancel);
 
     let discogs_counters = Arc::new(ProviderCounters::new());
     let beatport_counters = Arc::new(ProviderCounters::new());
