@@ -4,7 +4,7 @@ resolver = "3"
 
 [package]
 name = "reklawdbox"
-version = "0.25.3"
+version = "0.25.4"
 edition = "2024"
 homepage = "https://reklawdbox.com"
 license = "MIT"
