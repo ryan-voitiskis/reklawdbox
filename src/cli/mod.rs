@@ -8,8 +8,47 @@ mod tags;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use indicatif::MultiProgress;
+use tokio_util::sync::CancellationToken;
 
 use crate::{audio, store};
+
+/// Spawn signal handlers for graceful shutdown (Ctrl+C) and terminal resize
+/// (SIGWINCH). The SIGWINCH handler forces indicatif to clear-and-redraw so its
+/// internal line tracking stays in sync with the actual terminal state.
+pub(crate) fn spawn_signal_handlers(mp: &MultiProgress, cancel: &CancellationToken) {
+    let cancel_clone = cancel.clone();
+    let mp_clone = mp.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            mp_clone
+                .println("Shutting down gracefully... (waiting for in-flight tasks)")
+                .ok();
+            cancel_clone.cancel();
+        }
+    });
+
+    // Register before spawning so failures surface here rather than panicking
+    // inside a detached task where tokio silently swallows the panic.
+    let sig = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Could not register SIGWINCH handler (resize redraw disabled): {e}");
+            return;
+        }
+    };
+    let winch_cancel = cancel.clone();
+    let winch_mp = mp.clone();
+    tokio::spawn(async move {
+        let mut sig = sig;
+        loop {
+            tokio::select! {
+                _ = sig.recv() => { winch_mp.println("").ok(); }
+                _ = winch_cancel.cancelled() => break,
+            }
+        }
+    });
+}
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 pub(crate) enum CpuPreset {

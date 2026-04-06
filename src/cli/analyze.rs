@@ -193,29 +193,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
 
     let cancel = CancellationToken::new();
 
-    let cancel_clone = cancel.clone();
-    let mp_clone = mp.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            mp_clone
-                .println("Shutting down gracefully... (waiting for in-flight tasks)")
-                .ok();
-            cancel_clone.cancel();
-        }
-    });
-
-    let winch_cancel = cancel.clone();
-    let winch_mp = mp.clone();
-    tokio::spawn(async move {
-        let mut sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-            .expect("failed to register SIGWINCH handler");
-        loop {
-            tokio::select! {
-                _ = sig.recv() => { winch_mp.println("").ok(); }
-                _ = winch_cancel.cancelled() => break,
-            }
-        }
-    });
+    super::spawn_signal_handlers(&mp, &cancel);
 
     let batch_start = Instant::now();
     let analyzed = Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -385,6 +363,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         let _ = handle.await;
     }
 
+    cancel.cancel();
     pb.finish_and_clear();
 
     drop(cache_tx);
