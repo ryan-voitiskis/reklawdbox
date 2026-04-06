@@ -42,6 +42,7 @@ pub const GENRES: &[&str] = &[
     "House",
     "IDM",
     "Italo Disco",
+    "Italodance",
     "Jazz",
     "Jungle",
     "Minimal",
@@ -81,26 +82,18 @@ pub fn is_known_genre(genre: &str) -> bool {
 /// Alias entries mapping non-canonical genre strings to canonical genres.
 /// Keys must be lowercase ASCII. Sorted alphabetically by key.
 pub const ALIASES: &[(&str, &str)] = &[
-    ("140 / deep dubstep / grime", "Dubstep"),
-    ("breaks / breakbeat / uk bass", "Breakbeat"),
     ("chill dnb", "Drum & Bass"),
-    ("dance / electro pop", "Synth-pop"),
-    ("dance-pop", "Synth-pop"),
     ("dnb", "Drum & Bass"),
     ("electronic body music", "EBM"),
     ("garage house", "House"),
-    ("glitch", "IDM"),
     ("hip-hop", "Hip Hop"),
     ("industrial hardcore", "Hardcore"),
     ("italo", "Italo Disco"),
-    ("italodance", "Italo Disco"),
     ("juke", "Footwork"),
     ("juke/footwork", "Footwork"),
     ("loop (hip-hop)", "Hip Hop"),
     ("loop (trance)", "Trance"),
-    ("mainstage", "Trance"),
     ("mainstream hardcore", "Hardcore"),
-    ("melodic house & techno", "Deep Techno"),
     ("minimal / deep tech", "Minimal"),
     ("minimal techno", "Minimal"),
     ("post-dubstep", "Future Garage"),
@@ -112,7 +105,6 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("trance (main floor)", "Trance"),
     ("trance (raw / deep / hypnotic)", "Trance"),
     ("uk / happy hardcore", "Happy Hardcore"),
-    ("uk bass", "Future Garage"),
     ("uk garage", "Garage"),
     ("uk hardcore", "Happy Hardcore"),
     ("uptempo", "Hardcore"),
@@ -502,6 +494,14 @@ const GENRE_META: &[(&str, GenreMeta)] = &[
             family: GenreFamily::House,
             depth: 1,
             bpm: Some(BpmRange::new(118.0, 135.0)),
+        },
+    ),
+    (
+        "Italodance",
+        GenreMeta {
+            family: GenreFamily::House,
+            depth: 1,
+            bpm: Some(BpmRange::new(135.0, 145.0)),
         },
     ),
     (
@@ -965,16 +965,11 @@ mod tests {
     fn normalize_known_aliases() {
         assert_eq!(canonical_genre_from_alias("Hip-Hop"), Some("Hip Hop"));
         assert_eq!(canonical_genre_from_alias("DnB"), Some("Drum & Bass"));
-        assert_eq!(canonical_genre_from_alias("Glitch"), Some("IDM"));
         assert_eq!(canonical_genre_from_alias("Terror"), Some("Hardcore"));
         assert_eq!(canonical_genre_from_alias("Uptempo"), Some("Hardcore"));
         assert_eq!(
             canonical_genre_from_alias("UK / Happy Hardcore"),
             Some("Happy Hardcore")
-        );
-        assert_eq!(
-            canonical_genre_from_alias("140 / Deep Dubstep / Grime"),
-            Some("Dubstep")
         );
     }
 
