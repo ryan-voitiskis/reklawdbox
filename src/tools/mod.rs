@@ -592,6 +592,16 @@ impl ReklawdboxServer {
     }
 
     #[tool(
+        description = "Calibrate genre audio profiles from a playlist of verified tracks. Computes Fisher discriminant weights per genre and stores prototypes in the internal database. These prototypes are used as supplementary votes during genre classification. Requires a playlist of ear-verified tracks with correct genre tags."
+    )]
+    async fn calibrate_audio_profiles(
+        &self,
+        params: Parameters<params::CalibrateAudioProfilesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_calibrate_audio_profiles(self, params.0)
+    }
+
+    #[tool(
         description = "Read metadata tags directly from audio files on disk. Supports FLAC, MP3, WAV, M4A, AAC, AIFF. Provide exactly one input selector: paths, track_ids, or directory."
     )]
     async fn read_file_tags(

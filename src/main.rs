@@ -1,4 +1,5 @@
 mod audio;
+mod audio_profile;
 mod audit;
 mod backup;
 mod bandcamp;

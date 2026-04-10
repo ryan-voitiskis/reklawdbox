@@ -399,6 +399,16 @@ impl StageLevel {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
+pub struct CalibrateAudioProfilesParams {
+    #[schemars(
+        description = "Name of the playlist containing verified tracks (default: 'genre_verified')"
+    )]
+    pub playlist: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 pub struct AuditGenresParams {
     #[serde(flatten)]
     pub filters: SearchFilterParams,

@@ -8,7 +8,7 @@ use crate::db::escape_like;
 pub type AuditIssueRow = (i64, String, String, Option<String>);
 /// (provider, query_artist, query_title, query_album)
 pub type EnrichmentKey = (String, String, String, String);
-const STORE_SCHEMA_VERSION: i32 = 6;
+const STORE_SCHEMA_VERSION: i32 = 7;
 
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
@@ -116,6 +116,31 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (name, scorer_type)
+        );
+        CREATE TABLE IF NOT EXISTS genre_audio_profiles (
+            genre         TEXT NOT NULL,
+            feature       TEXT NOT NULL,
+            mean          REAL NOT NULL,
+            stddev        REAL NOT NULL,
+            fisher_weight REAL NOT NULL,
+            n_verified    INTEGER NOT NULL DEFAULT 0,
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (genre, feature)
+        );
+        CREATE TABLE IF NOT EXISTS genre_timbral_centroids (
+            genre         TEXT NOT NULL,
+            centroid_type TEXT NOT NULL,
+            values_json   TEXT NOT NULL,
+            mean_dist     REAL,
+            n_verified    INTEGER NOT NULL DEFAULT 0,
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (genre, centroid_type)
+        );
+        CREATE TABLE IF NOT EXISTS genre_global_stats (
+            feature       TEXT PRIMARY KEY,
+            mean          REAL NOT NULL,
+            stddev        REAL NOT NULL,
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
         ",
     )?;

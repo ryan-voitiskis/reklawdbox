@@ -8,14 +8,17 @@ use super::resolve::*;
 use super::scoring::map_genre_through_taxonomy;
 use super::{ReklawdboxServer, mcp_internal_error, ok_json};
 use crate::audio;
+use crate::audio_profile;
 use crate::classify::{
     AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    MappedGenre, TrackEvidence, classify_track,
+    MappedGenre, TrackEvidence, classify_track_with_profiles,
 };
 use crate::genre;
 use crate::normalize;
 use crate::store;
-use crate::tools::params::{AuditGenresParams, ClassifyFormat, ClassifyTracksParams};
+use crate::tools::params::{
+    AuditGenresParams, CalibrateAudioProfilesParams, ClassifyFormat, ClassifyTracksParams,
+};
 use crate::types::TrackChange;
 
 pub(super) fn handle_classify_tracks(
@@ -364,9 +367,10 @@ fn build_dispatch_groups(
             .push(serde_json::json!({
                 "track_id": r.track_id,
                 "title": r.title,
-                "suggested_genre": r.genre,
+                "genre": r.genre,
                 "confidence": conf,
                 "evidence": r.evidence,
+                "candidates": r.candidates,
                 "flags": r.flags,
             }));
     }
@@ -427,7 +431,7 @@ fn classify_batch(
     }
 
     // Batch load — 3 queries total instead of 4N.
-    let (enrich_map, stratum_map, essentia_map) = {
+    let (enrich_map, stratum_map, essentia_map, profile_registry) = {
         let store_conn = server.cache_store_conn()?;
         let enrich_map =
             store::batch_get_enrichment(&store_conn, &enrich_keys).map_err(super::cache_error)?;
@@ -445,7 +449,8 @@ fn classify_batch(
             audio::ESSENTIA_SCHEMA_VERSION,
         )
         .map_err(super::cache_error)?;
-        (enrich_map, stratum_map, essentia_map)
+        let registry = audio_profile::load_from_db(&store_conn).map_err(super::cache_error)?;
+        (enrich_map, stratum_map, essentia_map, registry)
     };
 
     let mut results = Vec::with_capacity(tracks.len());
@@ -478,7 +483,10 @@ fn classify_batch(
             essentia_cache,
             overrides,
         );
-        results.push(classify_track(&evidence));
+        results.push(classify_track_with_profiles(
+            &evidence,
+            profile_registry.as_ref(),
+        ));
     }
 
     Ok((results, 0))
@@ -686,5 +694,169 @@ fn extract_audio_features(
         spectral_centroid_mean: essentia_data
             .as_ref()
             .and_then(|e| e.spectral_centroid_mean),
+        // Scalar features from Stratum
+        decay_mid_tau: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("decay_mid_tau"))
+            .and_then(serde_json::Value::as_f64),
+        decay_high_tau: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("decay_high_tau"))
+            .and_then(serde_json::Value::as_f64),
+        key_clarity: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("key_clarity"))
+            .and_then(serde_json::Value::as_f64),
+        // Scalar features from Essentia
+        onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
+        loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),
+        spectral_centroid_cv: essentia_data.as_ref().and_then(|e| e.spectral_centroid_cv),
+        spectral_flux_mean: essentia_data.as_ref().and_then(|e| e.spectral_flux_mean),
+        dissonance_mean: essentia_data.as_ref().and_then(|e| e.dissonance_mean),
+        // Vector features from Essentia (for timbral distances)
+        mfcc_mean: essentia_data.as_ref().and_then(|e| e.mfcc_mean.clone()),
+        mfcc_std: essentia_data.as_ref().and_then(|e| e.mfcc_std.clone()),
+        spectral_contrast_mean: essentia_data
+            .as_ref()
+            .and_then(|e| e.spectral_contrast_mean.clone()),
     })
+}
+
+pub(super) fn handle_calibrate_audio_profiles(
+    server: &ReklawdboxServer,
+    params: CalibrateAudioProfilesParams,
+) -> Result<CallToolResult, McpError> {
+    let playlist_name = params.playlist.as_deref().unwrap_or("genre_verified");
+
+    // 1. Get playlist tracks
+    let (tracks, _playlist_name) = {
+        let conn = server.rekordbox_conn()?;
+        let playlists = crate::db::get_playlists(&conn).map_err(|e| {
+            McpError::internal_error(format!("Failed to list playlists: {e}"), None)
+        })?;
+        let playlist = playlists
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(playlist_name))
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    format!("Playlist '{playlist_name}' not found. Create it in Rekordbox and add verified tracks."),
+                    None,
+                )
+            })?;
+        let tracks = crate::db::get_playlist_tracks(&conn, &playlist.id, None).map_err(|e| {
+            McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
+        })?;
+        (tracks, playlist.name.clone())
+    };
+
+    if tracks.is_empty() {
+        return Err(McpError::internal_error(
+            format!("Playlist '{playlist_name}' is empty — add verified tracks first."),
+            None,
+        ));
+    }
+
+    // 2. Load audio features for each track
+    let store_conn = server.cache_store_conn()?;
+    let mut samples: Vec<(&'static str, AudioFeatures)> = Vec::new();
+    let mut skipped_no_genre = 0u32;
+    let mut skipped_no_audio = 0u32;
+    let mut skipped_unknown_genre = 0u32;
+
+    for track in &tracks {
+        // Must have a genre tag
+        if track.genre.is_empty() {
+            skipped_no_genre += 1;
+            continue;
+        }
+
+        // Resolve to canonical genre
+        let canonical = match genre::resolve_genre(&track.genre) {
+            Some(g) => g,
+            None => {
+                skipped_unknown_genre += 1;
+                continue;
+            }
+        };
+
+        // Load audio features
+        let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
+        let stratum = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_STRATUM)
+            .ok()
+            .flatten();
+        let essentia = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_ESSENTIA)
+            .ok()
+            .flatten();
+
+        let stratum_cache = stratum.as_ref();
+        let essentia_cache = essentia.as_ref();
+
+        match extract_audio_features(track, stratum_cache, essentia_cache) {
+            Some(features) => samples.push((canonical, features)),
+            None => {
+                skipped_no_audio += 1;
+            }
+        }
+    }
+
+    if samples.is_empty() {
+        return Err(McpError::internal_error(
+            "No tracks with both genre tags and audio features found.",
+            None,
+        ));
+    }
+
+    // 3. Calibrate
+    let sample_refs: Vec<(&str, &AudioFeatures)> = samples.iter().map(|(g, f)| (*g, f)).collect();
+    let registry = audio_profile::calibrate(&sample_refs);
+
+    // 4. Save to SQLite
+    audio_profile::save_to_db(&store_conn, &registry).map_err(super::cache_error)?;
+
+    // 5. Build summary
+    let mut genre_summaries: Vec<serde_json::Value> = registry
+        .prototypes
+        .values()
+        .map(|proto| {
+            let mut top_features: Vec<(&str, f64)> = proto
+                .features
+                .iter()
+                .map(|(&name, stat)| (name, stat.fisher_weight))
+                .collect();
+            top_features.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            top_features.truncate(5);
+
+            let feature_strs: Vec<String> = top_features
+                .iter()
+                .map(|(name, weight)| format!("{name} ({:.0}%)", weight * 100.0))
+                .collect();
+
+            serde_json::json!({
+                "genre": proto.genre,
+                "n_verified": proto.total_n,
+                "n_features": proto.features.len(),
+                "has_timbral": proto.mfcc_centroid.is_some(),
+                "top_discriminators": feature_strs,
+            })
+        })
+        .collect();
+    genre_summaries.sort_by(|a, b| {
+        let na = a["n_verified"].as_u64().unwrap_or(0);
+        let nb = b["n_verified"].as_u64().unwrap_or(0);
+        nb.cmp(&na)
+    });
+
+    let result = serde_json::json!({
+        "status": "calibrated",
+        "playlist": playlist_name,
+        "total_tracks": tracks.len(),
+        "tracks_with_features": samples.len(),
+        "skipped_no_genre": skipped_no_genre,
+        "skipped_unknown_genre": skipped_unknown_genre,
+        "skipped_no_audio": skipped_no_audio,
+        "prototypes_built": registry.prototypes.len(),
+        "genres": genre_summaries,
+    });
+
+    ok_json(&result)
 }

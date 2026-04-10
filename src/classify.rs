@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::audio_profile::{self, ProfileRegistry};
 use crate::genre::{self, GenreFamily};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -31,11 +32,17 @@ pub(crate) enum ClassificationAction {
     Manual,
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct GenreCandidate {
     pub(crate) genre: &'static str,
     pub(crate) score: f32,
     pub(crate) bpm_plausible: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(crate) chosen: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +124,30 @@ pub(crate) struct AudioFeatures {
     pub(crate) dynamic_complexity: Option<f64>,
     pub(crate) rhythm_regularity: Option<f64>,
     pub(crate) spectral_centroid_mean: Option<f64>,
+    // Scalar features for Genre Audio Profiles (Item 6).
+    #[allow(dead_code)]
+    pub(crate) decay_mid_tau: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) decay_high_tau: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) onset_rate: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) loudness_integrated: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) spectral_centroid_cv: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) spectral_flux_mean: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) dissonance_mean: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) key_clarity: Option<f64>,
+    // Vector features for timbral distances (Item 6).
+    #[allow(dead_code)]
+    pub(crate) mfcc_mean: Option<Vec<f64>>,
+    #[allow(dead_code)]
+    pub(crate) mfcc_std: Option<Vec<f64>>,
+    #[allow(dead_code)]
+    pub(crate) spectral_contrast_mean: Option<Vec<f64>>,
 }
 
 /// All inputs needed for classification of a single track.
@@ -160,6 +191,7 @@ struct AudioProfile {
     bucket: EnergyBucket,
     flags: Vec<CharFlag>,
     bpm: f64,
+    centroid: Option<f64>,
 }
 
 /// A single vote for a genre from one evidence source.
@@ -174,7 +206,20 @@ struct GenreVote {
 /// BPM tolerance: ±5 BPM around the defined genre range.
 const BPM_TOLERANCE: f64 = 5.0;
 
+/// Spectral centroid threshold: sub-bass dominated (ambient, drone, dub techno).
+const CENTROID_VERY_LOW: f64 = 600.0;
+/// Spectral centroid threshold: dark timbre (dub techno, deep techno).
+const CENTROID_DARK: f64 = 1200.0;
+
+#[cfg(test)]
 pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
+    classify_track_with_profiles(evidence, None)
+}
+
+pub(crate) fn classify_track_with_profiles(
+    evidence: &TrackEvidence,
+    profile_registry: Option<&ProfileRegistry>,
+) -> ClassificationResult {
     let audio_profile = evidence.audio.as_ref().map(compute_audio_profile);
 
     if let Some(profile) = audio_profile.as_ref()
@@ -183,13 +228,20 @@ pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
         return result;
     }
 
-    let votes = gather_votes(evidence, audio_profile.as_ref());
+    let (votes, affinities) = gather_votes(evidence, audio_profile.as_ref(), profile_registry);
 
-    let (genre, confidence, ev_lines, mut flags) = if votes.is_empty() {
+    let (genre, confidence, mut ev_lines, mut flags) = if votes.is_empty() {
         audio_only_inference(evidence, audio_profile.as_ref())
     } else {
         find_consensus(evidence, &votes, audio_profile.as_ref())
     };
+
+    // Add audio-profile evidence strings for affinities that contributed
+    for a in &affinities {
+        if a.vote_weight >= 0.1 {
+            ev_lines.push(audio_profile::format_evidence(a));
+        }
+    }
 
     let current_canonical = resolve_current_canonical(&evidence.current_genre);
     let action = compare_to_current(current_canonical, genre);
@@ -241,7 +293,7 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
 
     let mut flags = Vec::new();
     let dc = audio.dynamic_complexity.unwrap_or(0.0);
-    let rr = audio.rhythm_regularity.unwrap_or(0.85);
+    let rr = audio.rhythm_regularity.unwrap_or(0.0);
 
     if dc > 10.0 {
         flags.push(CharFlag::Ambient);
@@ -263,7 +315,12 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
         flags.push(CharFlag::Slow);
     }
 
-    AudioProfile { bucket, flags, bpm }
+    AudioProfile {
+        bucket,
+        flags,
+        bpm,
+        centroid: audio.spectral_centroid_mean,
+    }
 }
 
 fn has_flag(profile: &AudioProfile, flag: CharFlag) -> bool {
@@ -308,6 +365,24 @@ fn check_audio_vetoes(
             action,
             vec!["audio veto: non-dancefloor + ambient → Ambient".into()],
             None,
+        ));
+    }
+
+    // Expanded ambient veto: NonDancefloor + Atmospheric (dc > 5.0) catches ambient
+    // tracks below the dc > 10.0 Ambient flag threshold. Lower confidence than above.
+    if profile.bucket == EnergyBucket::NonDancefloor
+        && has_flag(profile, CharFlag::Atmospheric)
+        && !has_flag(profile, CharFlag::Ambient)
+    // don't double-fire with the veto above
+    {
+        let action = compare_to_current(current_canonical, Some("Ambient"));
+        return Some(veto_result(
+            evidence,
+            "Ambient",
+            ClassificationConfidence::Low,
+            action,
+            vec!["audio veto: non-dancefloor + atmospheric → Ambient".into()],
+            Some("Atmospheric non-dancefloor track — review genre assignment.".into()),
         ));
     }
 
@@ -436,7 +511,11 @@ fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'
         .map(|mg| mg.genre)
 }
 
-fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) -> Vec<GenreVote> {
+fn gather_votes(
+    evidence: &TrackEvidence,
+    audio_profile: Option<&AudioProfile>,
+    profile_registry: Option<&ProfileRegistry>,
+) -> (Vec<GenreVote>, Vec<audio_profile::AudioAffinity>) {
     let mut votes = Vec::new();
     let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
 
@@ -521,7 +600,26 @@ fn gather_votes(evidence: &TrackEvidence, audio_profile: Option<&AudioProfile>) 
         }
     }
 
-    votes
+    // Audio-profile votes: Fisher discriminant scoring against calibrated prototypes.
+    let affinities = if let (Some(audio), Some(registry)) = (&evidence.audio, profile_registry) {
+        let aff = audio_profile::score_all(audio, registry);
+        for a in &aff {
+            if a.vote_weight < 0.05 {
+                continue;
+            }
+            votes.push(GenreVote {
+                genre: a.genre,
+                weight: a.vote_weight,
+                source: "audio-profile",
+                bpm_plausible: bpm_plausible(a.genre, effective_bpm),
+            });
+        }
+        aff
+    } else {
+        vec![]
+    };
+
+    (votes, affinities)
 }
 
 fn bpm_plausible(genre: &str, bpm: f64) -> bool {
@@ -546,22 +644,32 @@ fn find_consensus(
     Vec<String>,
     Vec<String>,
 ) {
-    let mut tally: HashMap<&'static str, f32> = HashMap::new();
+    let mut tally: HashMap<&'static str, (f32, bool)> = HashMap::new();
     for v in votes {
-        *tally.entry(v.genre).or_default() += v.weight;
+        let entry = tally.entry(v.genre).or_insert((0.0, true));
+        entry.0 += v.weight;
+        if !v.bpm_plausible {
+            entry.1 = false;
+        }
     }
 
-    let mut ranked: Vec<(&'static str, f32)> = tally.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ranked: Vec<(&'static str, f32, bool)> =
+        tally.into_iter().map(|(g, (w, p))| (g, w, p)).collect();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.2.cmp(&a.2)) // plausible before implausible
+            .then_with(|| a.0.cmp(b.0)) // alphabetical
+    });
 
     if ranked.is_empty() {
         return (None, ClassificationConfidence::Insufficient, vec![], vec![]);
     }
 
-    let (mut top_genre, top_score) = ranked[0];
+    let (mut top_genre, top_score, _) = ranked[0];
     let second = ranked.get(1);
     let margin = top_score - second.map_or(0.0, |s| s.1);
-    let total_weight: f32 = ranked.iter().map(|(_, w)| w).sum();
+    let total_weight: f32 = ranked.iter().map(|(_, w, _)| w).sum();
 
     let mut ev = Vec::new();
     let mut flags = Vec::new();
@@ -657,7 +765,7 @@ fn find_consensus(
             ClassificationConfidence::Medium
         }
     } else if ranked.len() >= 2 {
-        let (second_genre, _) = second.expect("second exists when ranked.len() >= 2");
+        let (second_genre, _, _) = second.expect("second exists when ranked.len() >= 2");
         let same_family = genre::genre_family(top_genre) == genre::genre_family(second_genre);
 
         if margin / total_weight > 0.4 {
@@ -694,7 +802,14 @@ fn find_consensus(
                 ClassificationConfidence::Low
             } else {
                 if let Some(profile) = audio_profile.as_ref() {
-                    if audio_clearly_favors_family(profile, top_genre) {
+                    let top_favored = audio_clearly_favors_family(profile, top_genre);
+                    let second_genre = second.expect("second exists").0;
+                    let second_favored = audio_clearly_favors_family(profile, second_genre);
+                    if top_favored && !second_favored {
+                        flags.push("audio-assisted-tiebreak".into());
+                        ClassificationConfidence::Low
+                    } else if second_favored && !top_favored {
+                        top_genre = second_genre;
                         flags.push("audio-assisted-tiebreak".into());
                         ClassificationConfidence::Low
                     } else {
@@ -723,10 +838,10 @@ fn find_consensus(
     // Swap to a BPM-plausible alternative if the winner is implausible
     let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
     if !bpm_plausible(final_genre, effective_bpm)
-        && let Some((alt_genre, _)) = ranked
+        && let Some((alt_genre, _, _)) = ranked
             .iter()
             .skip(1)
-            .find(|(g, _)| bpm_plausible(g, effective_bpm))
+            .find(|(g, _, _)| bpm_plausible(g, effective_bpm))
     {
         ev.push(format!(
             "bpm-override: {} implausible at {}bpm → {}",
@@ -758,7 +873,7 @@ fn find_consensus(
         let demote = match profile.bucket {
             EnergyBucket::HighEnergy => true,
             EnergyBucket::Dancefloor => {
-                ranked.iter().any(|(g, _)| *g == shallower)
+                ranked.iter().any(|(g, _, _)| *g == shallower)
                     && !has_flag(profile, CharFlag::Atmospheric)
             }
             _ => false,
@@ -856,7 +971,10 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
     let family = genre::genre_family(candidate);
     match family {
         GenreFamily::Downtempo => {
-            profile.bucket == EnergyBucket::LowEnergy && has_flag(profile, CharFlag::Atmospheric)
+            let very_low_centroid = profile.centroid.is_some_and(|c| c < CENTROID_VERY_LOW);
+            (profile.bucket == EnergyBucket::LowEnergy
+                && (has_flag(profile, CharFlag::Atmospheric) || very_low_centroid))
+                || (profile.bucket == EnergyBucket::NonDancefloor && very_low_centroid)
         }
         GenreFamily::Bass => {
             has_flag(profile, CharFlag::Fast)
@@ -864,9 +982,15 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
                     && profile.bucket >= EnergyBucket::Dancefloor)
         }
         GenreFamily::Techno => {
-            profile.bucket >= EnergyBucket::Dancefloor
+            let dark_timbre = profile.centroid.is_some_and(|c| c < CENTROID_DARK);
+            (profile.bucket >= EnergyBucket::Dancefloor
                 && !has_flag(profile, CharFlag::Broken)
-                && profile.bpm >= 125.0
+                && profile.bpm >= 125.0)
+                || (profile.bucket == EnergyBucket::LowEnergy
+                    && !has_flag(profile, CharFlag::Broken)
+                    && profile.bpm >= 118.0
+                    && profile.bpm <= 132.0
+                    && dark_timbre)
         }
         GenreFamily::House => {
             profile.bucket == EnergyBucket::Dancefloor
@@ -930,7 +1054,7 @@ fn audio_only_inference(
         .audio
         .as_ref()
         .and_then(|a| a.rhythm_regularity)
-        .unwrap_or(0.85);
+        .unwrap_or(0.0);
     let sc = evidence
         .audio
         .as_ref()
@@ -1135,19 +1259,26 @@ fn build_candidates(votes: &[GenreVote], top_genre: Option<&str>) -> Vec<GenreCa
 
     let mut candidates: Vec<GenreCandidate> = tally
         .into_iter()
-        .filter(|(g, _)| Some(*g) != top_genre)
         .map(|(g, (score, bpm))| GenreCandidate {
             genre: g,
             score,
             bpm_plausible: bpm,
+            chosen: Some(g) == top_genre,
         })
         .collect();
+    // Chosen first, then by score desc, then deterministic tiebreak
     candidates.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.chosen
+            .cmp(&a.chosen)
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| b.bpm_plausible.cmp(&a.bpm_plausible))
+            .then_with(|| a.genre.cmp(b.genre))
     });
-    candidates.truncate(3);
+    candidates.truncate(4);
     candidates
 }
 
@@ -1175,6 +1306,29 @@ fn build_review_hint(evidence: &TrackEvidence, _flags: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_audio(bpm: f64, danceability: f64, dc: f64, rr: f64, centroid: f64) -> AudioFeatures {
+        AudioFeatures {
+            rekordbox_bpm: bpm,
+            stratum_bpm: Some(bpm),
+            bpm_agreement: Some(true),
+            danceability: Some(danceability),
+            dynamic_complexity: Some(dc),
+            rhythm_regularity: Some(rr),
+            spectral_centroid_mean: Some(centroid),
+            decay_mid_tau: None,
+            decay_high_tau: None,
+            onset_rate: None,
+            loudness_integrated: None,
+            spectral_centroid_cv: None,
+            spectral_flux_mean: None,
+            dissonance_mean: None,
+            key_clarity: None,
+            mfcc_mean: None,
+            mfcc_std: None,
+            spectral_contrast_mean: None,
+        }
+    }
 
     fn make_evidence(current: &str) -> TrackEvidence {
         TrackEvidence {
@@ -1209,15 +1363,7 @@ mod tests {
         let mut ev = make_evidence("");
         ev.beatport_genre = Some("Techno");
         ev.has_beatport = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 132.0,
-            stratum_bpm: Some(132.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1238,15 +1384,7 @@ mod tests {
             style_count: 3,
         }];
         ev.has_discogs = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 132.0,
-            stratum_bpm: Some(132.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1264,15 +1402,7 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 132.0,
-            stratum_bpm: Some(132.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1289,15 +1419,7 @@ mod tests {
             style_count: 3,
         }];
         ev.has_discogs = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 132.0,
-            stratum_bpm: Some(132.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1310,15 +1432,7 @@ mod tests {
         ev.beatport_genre = Some("Deep House");
         ev.has_beatport = true;
         // BPM 140 is way outside Deep House range (118-126)
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 140.0,
-            stratum_bpm: Some(140.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(140.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Deep House"));
@@ -1333,15 +1447,7 @@ mod tests {
         let mut ev = make_evidence("");
         ev.beatport_genre = Some("Techno");
         ev.has_beatport = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 100.0,
-            stratum_bpm: Some(100.0),
-            bpm_agreement: Some(true),
-            danceability: Some(0.5),        // non-dancefloor
-            dynamic_complexity: Some(12.0), // ambient
-            rhythm_regularity: Some(0.3),
-            spectral_centroid_mean: Some(400.0),
-        });
+        ev.audio = Some(make_audio(100.0, 0.5, 12.0, 0.3, 400.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Ambient"));
@@ -1355,15 +1461,7 @@ mod tests {
         ev.has_beatport = true;
         ev.label = Some("Tresor".into());
         ev.label_genre = Some("Techno"); // Tresor → Techno
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 132.0,
-            stratum_bpm: Some(132.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.0),
-            dynamic_complexity: Some(3.0),
-            rhythm_regularity: Some(0.92),
-            spectral_centroid_mean: Some(1800.0),
-        });
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1380,15 +1478,7 @@ mod tests {
         ev.has_discogs = true;
         ev.beatport_genre = Some("Techno");
         ev.has_beatport = true;
-        ev.audio = Some(AudioFeatures {
-            rekordbox_bpm: 135.0,
-            stratum_bpm: Some(135.0),
-            bpm_agreement: Some(true),
-            danceability: Some(2.8),
-            dynamic_complexity: Some(2.0),
-            rhythm_regularity: Some(0.95),
-            spectral_centroid_mean: Some(2500.0),
-        });
+        ev.audio = Some(make_audio(135.0, 2.8, 2.0, 0.95, 2500.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -1515,15 +1605,7 @@ mod tests {
             beatport_raw: None,
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 156.97,
-                stratum_bpm: Some(156.77),
-                bpm_agreement: Some(true),
-                danceability: Some(1.01),
-                dynamic_complexity: Some(3.95),
-                rhythm_regularity: Some(1.04),
-                spectral_centroid_mean: Some(1395.0),
-            }),
+            audio: Some(make_audio(156.97, 1.01, 3.95, 1.04, 1395.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1642,15 +1724,7 @@ mod tests {
             beatport_raw: None,
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 134.31,
-                stratum_bpm: Some(134.0),
-                bpm_agreement: Some(true),
-                danceability: Some(1.74),
-                dynamic_complexity: Some(3.64),
-                rhythm_regularity: Some(1.07),
-                spectral_centroid_mean: Some(1244.0),
-            }),
+            audio: Some(make_audio(134.31, 1.74, 3.64, 1.07, 1244.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1703,7 +1777,7 @@ mod tests {
                 result.confidence,
                 ClassificationConfidence::Low | ClassificationConfidence::Insufficient
             ),
-            "4-way even split should be Low or Insufficient depending on sort order, got {:?}",
+            "4-way even split should be Low or Insufficient, got {:?}",
             result.confidence
         );
     }
@@ -1792,15 +1866,7 @@ mod tests {
             beatport_raw: Some("Breaks / Breakbeat / UK Bass".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 130.0,
-                stratum_bpm: Some(162.92),
-                bpm_agreement: Some(false),
-                danceability: Some(1.15),
-                dynamic_complexity: Some(3.35),
-                rhythm_regularity: Some(1.16),
-                spectral_centroid_mean: Some(1585.0),
-            }),
+            audio: Some(make_audio(130.0, 1.15, 3.35, 1.16, 1585.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1838,15 +1904,7 @@ mod tests {
             beatport_raw: Some("Electronica".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 164.7,
-                stratum_bpm: Some(164.79),
-                bpm_agreement: Some(true),
-                danceability: Some(1.19),
-                dynamic_complexity: Some(4.18),
-                rhythm_regularity: Some(0.68),
-                spectral_centroid_mean: Some(1919.0),
-            }),
+            audio: Some(make_audio(164.7, 1.19, 4.18, 0.68, 1919.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1883,15 +1941,7 @@ mod tests {
             beatport_raw: Some("Electronica".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 104.02,
-                stratum_bpm: Some(51.89),
-                bpm_agreement: Some(false),
-                danceability: Some(1.36),
-                dynamic_complexity: Some(7.02),
-                rhythm_regularity: Some(0.97),
-                spectral_centroid_mean: Some(1161.0),
-            }),
+            audio: Some(make_audio(104.02, 1.36, 7.02, 0.97, 1161.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1929,15 +1979,7 @@ mod tests {
             beatport_raw: Some("House".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 128.0,
-                stratum_bpm: Some(127.91),
-                bpm_agreement: Some(true),
-                danceability: Some(1.42),
-                dynamic_complexity: Some(1.76),
-                rhythm_regularity: Some(0.84),
-                spectral_centroid_mean: Some(1923.0),
-            }),
+            audio: Some(make_audio(128.0, 1.42, 1.76, 0.84, 1923.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -1963,15 +2005,7 @@ mod tests {
             beatport_raw: None,
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 154.0,
-                stratum_bpm: Some(153.93),
-                bpm_agreement: Some(true),
-                danceability: Some(1.36),
-                dynamic_complexity: Some(3.47),
-                rhythm_regularity: Some(1.10),
-                spectral_centroid_mean: Some(1341.0),
-            }),
+            audio: Some(make_audio(154.0, 1.36, 3.47, 1.10, 1341.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2005,15 +2039,7 @@ mod tests {
             beatport_raw: None,
             label: Some("Lobster Theremin".into()),
             label_genre: Some("House"),
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 136.0,
-                stratum_bpm: Some(136.58),
-                bpm_agreement: Some(true),
-                danceability: Some(1.69),
-                dynamic_complexity: Some(6.62),
-                rhythm_regularity: Some(0.95),
-                spectral_centroid_mean: Some(2205.0),
-            }),
+            audio: Some(make_audio(136.0, 1.69, 6.62, 0.95, 2205.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2039,15 +2065,7 @@ mod tests {
             beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 132.0,
-                stratum_bpm: Some(164.97),
-                bpm_agreement: Some(false),
-                danceability: Some(3.62),
-                dynamic_complexity: Some(2.71),
-                rhythm_regularity: Some(1.00),
-                spectral_centroid_mean: Some(1572.0),
-            }),
+            audio: Some(make_audio(132.0, 3.62, 2.71, 1.00, 1572.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2119,15 +2137,7 @@ mod tests {
             beatport_raw: None,
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 122.0,
-                stratum_bpm: Some(121.60),
-                bpm_agreement: Some(true),
-                danceability: Some(2.06),
-                dynamic_complexity: Some(4.30),
-                rhythm_regularity: Some(0.92),
-                spectral_centroid_mean: Some(601.0),
-            }),
+            audio: Some(make_audio(122.0, 2.06, 4.30, 0.92, 601.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2158,15 +2168,7 @@ mod tests {
             beatport_raw: Some("Techno (Peak Time / Driving)".into()),
             label: None,
             label_genre: None,
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 130.0,
-                stratum_bpm: Some(130.0),
-                bpm_agreement: Some(true),
-                danceability: Some(2.2),
-                dynamic_complexity: Some(3.0),
-                rhythm_regularity: Some(0.92),
-                spectral_centroid_mean: Some(1800.0),
-            }),
+            audio: Some(make_audio(130.0, 2.2, 3.0, 0.92, 1800.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2209,15 +2211,7 @@ mod tests {
             beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
             label: Some("Test Label".into()),
             label_genre: Some("Techno"),
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 145.0,
-                stratum_bpm: Some(145.0),
-                bpm_agreement: Some(true),
-                danceability: Some(1.6),
-                dynamic_complexity: Some(6.0), // atmospheric
-                rhythm_regularity: Some(0.92),
-                spectral_centroid_mean: Some(800.0),
-            }),
+            audio: Some(make_audio(145.0, 1.6, 6.0, 0.92, 800.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2260,15 +2254,7 @@ mod tests {
             beatport_raw: Some("House".into()),
             label: Some("Test Label".into()),
             label_genre: Some("Drum & Bass"),
-            audio: Some(AudioFeatures {
-                rekordbox_bpm: 170.0,
-                stratum_bpm: Some(170.0),
-                bpm_agreement: Some(true),
-                danceability: Some(2.0),
-                dynamic_complexity: Some(3.0),
-                rhythm_regularity: Some(0.85),
-                spectral_centroid_mean: Some(2000.0),
-            }),
+            audio: Some(make_audio(170.0, 2.0, 3.0, 0.85, 2000.0)),
             has_discogs: true,
             has_beatport: true,
             has_audio: true,
@@ -2286,6 +2272,255 @@ mod tests {
                 .flags
                 .contains(&"bpm-override-same-family".to_string()),
             "Should NOT have same-family flag for cross-family override"
+        );
+    }
+
+    // --- Tests for new behaviors from the classification improvements ---
+
+    #[test]
+    fn expanded_ambient_veto_atmospheric_not_ambient() {
+        // dc=7.0 → Atmospheric (>5.0) but NOT Ambient (<10.0)
+        // danceability=0.5 → NonDancefloor
+        // Should trigger the new NonDancefloor + Atmospheric veto
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio(100.0, 0.5, 7.0, 0.3, 400.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Ambient"));
+        assert_eq!(result.confidence, ClassificationConfidence::Low);
+        assert!(result.flags.contains(&"audio-vetoed".to_string()));
+        assert!(
+            result.evidence.iter().any(|e| e.contains("atmospheric")),
+            "Should mention atmospheric in evidence"
+        );
+    }
+
+    #[test]
+    fn both_candidates_tiebreak_favors_downtempo() {
+        // Cross-family close race: Disco vs Downtempo at BPM 100.
+        // BPM 100 is plausible for Downtempo (80-115) but implausible for Disco (115-130).
+        // So Disco's weight is halved → not quite a tie. Use label to bring Disco closer.
+        // Audio: LowEnergy + Atmospheric → Downtempo passes.
+        // Disco family (Other) → audio_clearly_favors_family returns false.
+        let ev = TrackEvidence {
+            track_id: "test-swap".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 100.0,
+            discogs_mapped: vec![
+                MappedGenre {
+                    genre: "Disco",
+                    style_count: 2,
+                },
+                MappedGenre {
+                    genre: "Downtempo",
+                    style_count: 2,
+                },
+            ],
+            beatport_genre: None,
+            beatport_raw: None,
+            label: None,
+            label_genre: None,
+            // LowEnergy (1.2) + Atmospheric (dc=6.0) → Downtempo passes
+            audio: Some(make_audio(100.0, 1.2, 6.0, 0.85, 1500.0)),
+            has_discogs: true,
+            has_beatport: false,
+            has_audio: true,
+        };
+        let result = classify_track(&ev);
+        assert_eq!(
+            result.genre,
+            Some("Downtempo"),
+            "Audio should favor Downtempo. Got {:?}, flags: {:?}, evidence: {:?}",
+            result.genre,
+            result.flags,
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn both_candidates_tiebreak_insufficient_when_both_pass() {
+        // Cross-family close race where BOTH families pass audio check → Insufficient
+        // LowEnergy + centroid < 600 → Downtempo passes (very_low_centroid)
+        // LowEnergy + bpm 118-132 + centroid < 1200 → Techno also passes (dark timbre)
+        let ev = TrackEvidence {
+            track_id: "test-both".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 125.0,
+            discogs_mapped: vec![
+                MappedGenre {
+                    genre: "Ambient",
+                    style_count: 1,
+                },
+                MappedGenre {
+                    genre: "Minimal",
+                    style_count: 1,
+                },
+            ],
+            beatport_genre: None,
+            beatport_raw: None,
+            label: None,
+            label_genre: None,
+            // LowEnergy + very low centroid → both Downtempo and Techno pass
+            audio: Some(make_audio(125.0, 1.2, 3.0, 0.95, 264.0)),
+            has_discogs: true,
+            has_beatport: false,
+            has_audio: true,
+        };
+        let result = classify_track(&ev);
+        assert_eq!(
+            result.confidence,
+            ClassificationConfidence::Insufficient,
+            "Both families pass audio check → should be Insufficient"
+        );
+    }
+
+    #[test]
+    fn deterministic_tiebreak_across_runs() {
+        // Two genres with identical scores → result must be deterministic
+        let ev = TrackEvidence {
+            track_id: "test-det".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 125.0,
+            discogs_mapped: vec![
+                MappedGenre {
+                    genre: "Ambient",
+                    style_count: 1,
+                },
+                MappedGenre {
+                    genre: "Minimal",
+                    style_count: 1,
+                },
+            ],
+            beatport_genre: None,
+            beatport_raw: None,
+            label: None,
+            label_genre: None,
+            audio: None,
+            has_discogs: true,
+            has_beatport: true,
+            has_audio: false,
+        };
+        let first_result = classify_track(&ev);
+        for _ in 0..10 {
+            let result = classify_track(&ev);
+            assert_eq!(
+                result.genre, first_result.genre,
+                "Genre should be deterministic across runs"
+            );
+        }
+    }
+
+    #[test]
+    fn candidates_include_chosen_genre() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
+        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert!(
+            result.candidates.iter().any(|c| c.chosen),
+            "Should have a chosen candidate"
+        );
+        let chosen = result.candidates.iter().find(|c| c.chosen).unwrap();
+        assert_eq!(chosen.genre, result.genre.unwrap());
+    }
+
+    #[test]
+    fn profile_votes_influence_consensus() {
+        use crate::audio_profile;
+
+        // Build a registry with Dub Techno prototype: low BPM, low centroid, moderate danceability
+        let dub_techno_tracks: Vec<AudioFeatures> = (0..8)
+            .map(|i| {
+                let mut a = make_audio(122.0 + i as f64 * 0.5, 2.3, 4.5, 0.96, 550.0);
+                a.onset_rate = Some(4.2);
+                a.loudness_integrated = Some(-9.0);
+                a
+            })
+            .collect();
+        let ambient_tracks: Vec<AudioFeatures> = (0..8)
+            .map(|i| {
+                let mut a = make_audio(85.0 + i as f64, 0.8, 7.0, 0.5, 350.0);
+                a.onset_rate = Some(1.5);
+                a.loudness_integrated = Some(-12.0);
+                a
+            })
+            .collect();
+
+        let samples: Vec<(&str, &AudioFeatures)> = dub_techno_tracks
+            .iter()
+            .map(|a| ("Dub Techno", a))
+            .chain(ambient_tracks.iter().map(|a| ("Ambient", a)))
+            .collect();
+        let registry = audio_profile::calibrate(&samples);
+
+        // Evidence: noisy Discogs (Ambient vs Minimal tie) but audio is dub-techno-like
+        let ev = TrackEvidence {
+            track_id: "test-profile".into(),
+            artist: "Test".into(),
+            title: "Test".into(),
+            current_genre: "".into(),
+            bpm: 124.0,
+            discogs_mapped: vec![
+                MappedGenre {
+                    genre: "Ambient",
+                    style_count: 1,
+                },
+                MappedGenre {
+                    genre: "Minimal",
+                    style_count: 1,
+                },
+            ],
+            beatport_genre: None,
+            beatport_raw: None,
+            label: None,
+            label_genre: None,
+            audio: Some({
+                let mut a = make_audio(124.0, 2.4, 4.0, 0.97, 520.0);
+                a.onset_rate = Some(4.3);
+                a.loudness_integrated = Some(-9.5);
+                a
+            }),
+            has_discogs: true,
+            has_beatport: true,
+            has_audio: true,
+        };
+
+        // Without profiles: Ambient or Minimal wins
+        let result_no_profile = classify_track(&ev);
+
+        // With profiles: Dub Techno should get a vote and influence the result
+        let result_with_profile = classify_track_with_profiles(&ev, Some(&registry));
+
+        // The profile should inject a Dub Techno vote
+        assert!(
+            result_with_profile
+                .evidence
+                .iter()
+                .any(|e| e.contains("audio-profile")),
+            "Should have audio-profile evidence string. Evidence: {:?}",
+            result_with_profile.evidence
+        );
+
+        // With profile, result should differ from no-profile (Dub Techno vote changes things)
+        assert_ne!(
+            result_no_profile.genre, result_with_profile.genre,
+            "Profile votes should influence the consensus. Without: {:?}, With: {:?}",
+            result_no_profile.genre, result_with_profile.genre
         );
     }
 }
