@@ -23,11 +23,10 @@ energy-curve shaping.
 
 This project IS the MCP server. The user's MCP config (`.mcp.json` in the repo root) normally resolves `reklawdbox` from PATH, which points to the Homebrew-installed binary in the Cellar. Claude Code ignores config file edits for running servers — `/mcp` always re-resolves the command from PATH. To test local changes:
 
-1. `cargo build --release`
-2. Overwrite the Homebrew binary: `sudo cp target/release/reklawdbox /opt/homebrew/Cellar/reklawdbox/$(brew list --versions reklawdbox | awk '{print $2}')/bin/reklawdbox`
-3. Ask the user to run `/mcp` to reconnect with the new binary.
-4. Smoke-test the changed functionality by calling the affected MCP tools. Include at least one happy-path call and one edge-case or error-path call per changed tool.
-5. The Cellar binary stays overwritten until the next `brew upgrade` or release, so no manual revert is needed.
+1. `./scripts/deploy-local.sh` (builds release, copies to Cellar, re-signs to avoid macOS Gatekeeper block). Requires sudo.
+2. Ask the user to run `/mcp` to reconnect with the new binary.
+3. Smoke-test the changed functionality by calling the affected MCP tools. Include at least one happy-path call and one edge-case or error-path call per changed tool.
+4. The Cellar binary stays overwritten until the next `brew upgrade` or release, so no manual revert is needed.
 
 ## Releasing
 
