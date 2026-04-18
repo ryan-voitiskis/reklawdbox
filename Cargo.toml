@@ -19,7 +19,7 @@ dirs = "6"
 globset = "0.4"
 indicatif = "0.17"
 libc = "0.2"
-lofty = "0.23"
+lofty = "0.24"
 percent-encoding = "2"
 regex = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
