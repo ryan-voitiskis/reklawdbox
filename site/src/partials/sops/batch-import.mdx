@@ -223,23 +223,25 @@ embed_cover_art(image_path="/path/to/album/cover.jpg", targets=["/path/to/album/
 
 **Multiple images:** Ask user which is the cover.
 
-**No images:** Try `lookup_bandcamp(artist="...", title="...")` first — if the result includes a `cover_image` URL, download it:
+**No images:** Source a cover. Always embed when a cover can be obtained.
+
+1. Try `lookup_bandcamp(artist="...", title="...")`.
+   - If the result includes a `cover_image` URL, use it.
+   - Otherwise, if the result includes a `bandcamp_url`, fetch that page and extract the `og:image` URL (this is the full-size artwork).
+2. If no Bandcamp result, try `lookup_discogs(...)`.
+   - If the result includes a `cover_image`, use it.
+   - Otherwise, if the result includes a release `url`, fetch that page and extract the primary release image.
+3. Download and embed:
 
 ```sh
-curl -sL -o "/path/to/album/cover.jpg" "BANDCAMP_COVER_URL"
-```
-
-If no Bandcamp result, try `lookup_discogs(...)` — if result includes `cover_image`, download and embed:
-
-```sh
-curl -sL -o "/path/to/album/cover.jpg" "DISCOGS_COVER_IMAGE_URL"
+curl -sL -o "/path/to/album/cover.jpg" "COVER_URL"
 ```
 
 ```
 embed_cover_art(image_path="/path/to/album/cover.jpg", targets=["/path/to/album/01 Artist - Track.flac", ...])
 ```
 
-If no cover from `lookup_bandcamp` or `lookup_discogs`, note for user to source manually.
+Only fall back to "note for user to source manually" when neither Bandcamp nor Discogs returns any URL at all.
 
 ### Step 9: Create target directory and move files
 
@@ -316,25 +318,35 @@ write_file_tags(writes=[{
 
 ### Step 3: Embed cover art
 
-Check for `cover_Artist Name - Track Title.jpg` files. If found:
+Always embed cover art when a cover can be obtained — regardless of format. The WAV caveat is about Rekordbox ingestion, not about whether to embed: tags are still useful for other apps, format conversions, and future tooling.
+
+Check for `cover_Artist Name - Track Title.jpg` files. If found, embed and skip to the WAV note below:
 
 ```
 embed_cover_art(image_path="/path/to/cover.jpg", targets=["/path/to/track.flac"])
 ```
 
-If no local cover file exists, try `lookup_bandcamp(artist="...", title="...")` — if the result includes a `cover_image` URL, download it:
+If no local cover file exists, source one:
+
+1. Try `lookup_bandcamp(artist="...", title="...")`.
+   - If the result includes a `cover_image` URL, use it.
+   - Otherwise, if the result includes a `bandcamp_url`, fetch that page and extract the `og:image` URL (this is the full-size artwork).
+2. If no Bandcamp result, try `lookup_discogs(...)`.
+   - If the result includes a `cover_image`, use it.
+   - Otherwise, if the result includes a release `url`, fetch that page and extract the primary release image.
+3. Download and embed:
 
 ```sh
-curl -sL -o "/path/to/cover_Artist - Title.jpg" "BANDCAMP_COVER_URL"
+curl -sL -o "/path/to/cover_Artist - Title.jpg" "COVER_URL"
 ```
 
 ```
 embed_cover_art(image_path="/path/to/cover_Artist - Title.jpg", targets=["/path/to/Artist - Title.wav"])
 ```
 
-**WAV files:** Keep the cover image file alongside the audio — Rekordbox cannot import cover art from WAV tags, so the user needs the image colocated for manual import. For other formats (FLAC, MP3, AIFF), clean up the downloaded image after embedding.
+**WAV files:** Keep the cover image file alongside the audio — Rekordbox cannot read cover art from WAV tags, so the user needs the image colocated for manual import into Rekordbox. The embedded tag is still written. For other formats (FLAC, MP3, AIFF), clean up the downloaded image after embedding.
 
-If no Bandcamp result, try `lookup_discogs(...)` for `cover_image`. Note any tracks without cover art in the report.
+Only fall back to "note for user to source manually" when neither Bandcamp nor Discogs returns any URL at all.
 
 ### Step 4: Move loose tracks
 
@@ -360,7 +372,7 @@ If an album has disc subdirectories (`CD1/`, `CD2/`, `Disc 1/`, etc.):
 
 ## Phase 5: Final Verification
 
-Summarize: albums processed (single artist vs VA), loose tracks processed, any unresolved items, WAV tracks needing manual cover art in Rekordbox, and next steps (import, collection audit SOP, genre classification SOP).
+Summarize: albums processed (single artist vs VA), loose tracks processed, any unresolved items, WAV tracks whose covers need manual import into Rekordbox (tag is embedded; colocated image file required for Rekordbox), and next steps (import, collection audit SOP, genre classification SOP).
 
 ---
 
