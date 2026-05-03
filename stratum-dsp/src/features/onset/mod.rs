@@ -7,6 +7,7 @@
 //! - Harmonic-percussive source separation (HPSS)
 //! - Consensus voting
 
+pub mod band;
 pub mod consensus;
 pub mod energy_flux;
 pub mod hfc;

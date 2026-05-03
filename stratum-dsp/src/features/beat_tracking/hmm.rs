@@ -465,9 +465,9 @@ mod tests {
 
     #[test]
     fn test_emission_floor_below_threshold() {
-        assert!(
+        const _: () = assert!(
             EMISSION_FLOOR < EMISSION_THRESHOLD,
-            "EMISSION_FLOOR ({EMISSION_FLOOR}) must be < EMISSION_THRESHOLD ({EMISSION_THRESHOLD})"
+            "EMISSION_FLOOR must be < EMISSION_THRESHOLD"
         );
     }
 
