@@ -308,6 +308,214 @@ mod tests {
     }
 
     #[test]
+    fn full_spectrum_band_matches_unbanded_detector() {
+        use super::super::spectral_flux::detect_spectral_flux_onsets;
+
+        // With band == full spectrum, the band-restricted variant reduces
+        // exactly to the existing detector (same per-frame normaliser, same
+        // flux summation, same peak-pick). Sanity check the equivalence.
+        let n_frames = 30;
+        let mut spec = vec![vec![0.01_f32; N_BINS]; n_frames];
+        for frame in &mut spec[10..15] {
+            for cell in frame.iter_mut().take(300).skip(100) {
+                *cell = 1.0;
+            }
+        }
+        for frame in &mut spec[20..25] {
+            for cell in frame.iter_mut().take(800).skip(600) {
+                *cell = 1.0;
+            }
+        }
+
+        let nyquist = SR as f32 / 2.0;
+        let banded = detect_band_onsets(&spec, SR, FRAME, (0.0, nyquist), 0.5).unwrap();
+        let unbanded = detect_spectral_flux_onsets(&spec, 0.5).unwrap();
+        assert_eq!(banded, unbanded);
+    }
+
+    #[test]
+    fn rejects_out_of_band_events_that_full_spectrum_detector_picks_up() {
+        // Per-band normalisation must do two things: surface a quiet in-band
+        // onset, AND ignore loud out-of-band events. We exercise the second
+        // (and harder) claim by comparing against the existing full-spectrum
+        // detector on the same magnitudes.
+        //
+        // Data: impulsive sub-bass kicks (bins 0..=4 jump 0→10→0) at frames
+        // 3, 7, 13, plus a single in-band step (bins 50..=59 from 0 to 1.0)
+        // at frame 10. The chord-stab band (350–2000 Hz) covers bins ~17–92
+        // so excludes the kicks entirely.
+        use super::super::spectral_flux::detect_spectral_flux_onsets;
+
+        let n_frames = 20;
+        let mut spec = vec![vec![0.0_f32; N_BINS]; n_frames];
+        for &kick_frame in &[3usize, 7, 13] {
+            for cell in spec[kick_frame].iter_mut().take(5) {
+                *cell = 10.0;
+            }
+        }
+        for frame in &mut spec[10..] {
+            for cell in frame.iter_mut().take(60).skip(50) {
+                *cell = 1.0;
+            }
+        }
+
+        let banded = detect_band_onsets(&spec, SR, FRAME, (350.0, 2000.0), 0.5).unwrap();
+        let unbanded = detect_spectral_flux_onsets(&spec, 0.5).unwrap();
+
+        // Banded detector finds the in-band onset (frame 10, ±1 for picker).
+        assert!(
+            banded.iter().any(|&f| (9..=11).contains(&f)),
+            "banded detector missed the in-band onset: {:?}",
+            banded
+        );
+        // ...and ignores the kicks entirely.
+        for &kick_frame in &[3usize, 7, 13] {
+            assert!(
+                !banded.iter().any(|&f| f.abs_diff(kick_frame) <= 1),
+                "banded detector should ignore kick at frame {}: {:?}",
+                kick_frame,
+                banded
+            );
+        }
+        // Sanity: the full-spectrum detector *does* fire on the kicks — proves
+        // the test setup actually exercises out-of-band rejection rather than
+        // just running on quiet data.
+        for &kick_frame in &[3usize, 7, 13] {
+            assert!(
+                unbanded.iter().any(|&f| f.abs_diff(kick_frame) <= 1),
+                "test setup broken: full-spectrum should detect kick at frame {}: {:?}",
+                kick_frame,
+                unbanded
+            );
+        }
+    }
+
+    #[test]
+    fn detects_synthesised_kick_pattern_via_real_stft() {
+        // Synthesise time-domain kicks, run compute_stft, then detect_band_onsets.
+        // This exercises real FFT output rather than hand-built magnitudes —
+        // the production path the chord-stab and kick-pattern detectors will use.
+        use crate::features::chroma::extractor::compute_stft;
+
+        let sr: u32 = 44_100;
+        let frame_size = 2048;
+        let hop_size = 512;
+        let duration_secs = 3.0;
+        let n_samples = (sr as f32 * duration_secs) as usize;
+        let mut samples = vec![0.0_f32; n_samples];
+
+        let kick_times_s = [0.5_f32, 1.0, 1.5, 2.0];
+        for &kick_t in &kick_times_s {
+            let start = (kick_t * sr as f32) as usize;
+            for i in 0..2200 {
+                let t = i as f32 / sr as f32;
+                let env = (-t * 60.0).exp();
+                let s = (2.0 * std::f32::consts::PI * 60.0 * t).sin() * env * 0.8
+                    + (2.0 * std::f32::consts::PI * 180.0 * t).sin() * env * 0.3;
+                if start + i < samples.len() {
+                    samples[start + i] += s;
+                }
+            }
+        }
+
+        let spec = compute_stft(&samples, frame_size, hop_size).unwrap();
+        let onsets = detect_band_onsets(&spec, sr, frame_size, (40.0, 200.0), 0.7).unwrap();
+        assert!(!onsets.is_empty(), "expected kick onsets in 40-200 Hz band");
+
+        let onset_times: Vec<f32> = onsets
+            .iter()
+            .map(|&f| f as f32 * hop_size as f32 / sr as f32)
+            .collect();
+        for &kick_t in &kick_times_s {
+            let hit = onset_times.iter().any(|&t| (t - kick_t).abs() < 0.1);
+            assert!(
+                hit,
+                "no onset within 100 ms of {} s; got {:?}",
+                kick_t, onset_times
+            );
+        }
+
+        // Sharp kick attacks leak across the spectrum, so the stab band fires
+        // too — but every stab-band onset must land near a kick time. This
+        // documents *why* the chord-stab detector needs kick-coincidence
+        // masking: band restriction alone cannot reject transient bleed.
+        let stab_band = detect_band_onsets(&spec, sr, frame_size, (350.0, 2000.0), 0.95).unwrap();
+        let stab_times: Vec<f32> = stab_band
+            .iter()
+            .map(|&f| f as f32 * hop_size as f32 / sr as f32)
+            .collect();
+        for &t in &stab_times {
+            let near_kick = kick_times_s.iter().any(|&kt| (t - kt).abs() < 0.1);
+            assert!(
+                near_kick,
+                "stab-band onset at {} s did not coincide with any kick: {:?}",
+                t, stab_times
+            );
+        }
+    }
+
+    #[test]
+    fn detects_stabs_in_stab_band_alongside_kicks() {
+        // The complement of the kick-pattern test: a real in-band event must
+        // survive when out-of-band kicks are also present. The chord-stab
+        // detector's downstream kick-coincidence mask must not eliminate
+        // genuine on-kick stabs, so one stab is placed at a kick time.
+        use crate::features::chroma::extractor::compute_stft;
+
+        let sr: u32 = 44_100;
+        let frame_size = 2048;
+        let hop_size = 512;
+        let duration_secs = 3.0;
+        let n_samples = (sr as f32 * duration_secs) as usize;
+        let mut samples = vec![0.0_f32; n_samples];
+
+        // Kicks at every half-second.
+        let kick_times_s = [0.5_f32, 1.0, 1.5, 2.0];
+        for &kick_t in &kick_times_s {
+            let start = (kick_t * sr as f32) as usize;
+            for i in 0..2200 {
+                let t = i as f32 / sr as f32;
+                let env = (-t * 60.0).exp();
+                let s = (2.0 * std::f32::consts::PI * 60.0 * t).sin() * env * 0.8
+                    + (2.0 * std::f32::consts::PI * 180.0 * t).sin() * env * 0.3;
+                if start + i < samples.len() {
+                    samples[start + i] += s;
+                }
+            }
+        }
+
+        // Stabs: 1 kHz tone bursts at 1.25 s (between kicks) and 2.0 s (on a kick).
+        let stab_times_s = [1.25_f32, 2.0];
+        for &stab_t in &stab_times_s {
+            let start = (stab_t * sr as f32) as usize;
+            for i in 0..4400 {
+                let t = i as f32 / sr as f32;
+                let env = (-t * 30.0).exp();
+                let s = (2.0 * std::f32::consts::PI * 1000.0 * t).sin() * env * 0.6;
+                if start + i < samples.len() {
+                    samples[start + i] += s;
+                }
+            }
+        }
+
+        let spec = compute_stft(&samples, frame_size, hop_size).unwrap();
+        let onsets = detect_band_onsets(&spec, sr, frame_size, (350.0, 2000.0), 0.7).unwrap();
+        let onset_times: Vec<f32> = onsets
+            .iter()
+            .map(|&f| f as f32 * hop_size as f32 / sr as f32)
+            .collect();
+
+        for &stab_t in &stab_times_s {
+            let hit = onset_times.iter().any(|&t| (t - stab_t).abs() < 0.1);
+            assert!(
+                hit,
+                "stab-band onset missing within 100 ms of {} s; got {:?}",
+                stab_t, onset_times
+            );
+        }
+    }
+
+    #[test]
     fn band_too_narrow_for_any_bin_returns_empty() {
         // A band thinner than the bin width (~21.5 Hz at sr=44.1k, frame=2048)
         // may or may not contain a bin centre. With (1000.0, 1001.0) Hz the
