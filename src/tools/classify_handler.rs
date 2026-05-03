@@ -707,6 +707,10 @@ fn extract_audio_features(
             .as_ref()
             .and_then(|sj| sj.get("key_clarity"))
             .and_then(serde_json::Value::as_f64),
+        key_confidence: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("key_confidence"))
+            .and_then(serde_json::Value::as_f64),
         // Scalar features from Essentia
         onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
         loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),

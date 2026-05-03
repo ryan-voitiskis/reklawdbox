@@ -141,6 +141,9 @@ pub(crate) struct AudioFeatures {
     pub(crate) dissonance_mean: Option<f64>,
     #[allow(dead_code)]
     pub(crate) key_clarity: Option<f64>,
+    /// Stratum's tonal-content confidence. `0.0` is a sentinel for "detection
+    /// failed"; values in `(0.0, 0.1)` indicate atonal/noise-dominated material.
+    pub(crate) key_confidence: Option<f64>,
     // Vector features for timbral distances (Item 6).
     #[allow(dead_code)]
     pub(crate) mfcc_mean: Option<Vec<f64>>,
@@ -185,6 +188,8 @@ enum CharFlag {
     Irregular,
     Fast,
     Slow,
+    /// `key_confidence` in `(0.0, 0.1)`: no clear tonal centre.
+    Atonal,
 }
 
 struct AudioProfile {
@@ -313,6 +318,11 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
     }
     if bpm < 115.0 {
         flags.push(CharFlag::Slow);
+    }
+    // `key_confidence == 0.0` is stratum's sentinel for "key detection failed",
+    // not atonal music — exclude it so analysis failures aren't relabelled.
+    if audio.key_confidence.is_some_and(|kc| kc > 0.0 && kc < 0.1) {
+        flags.push(CharFlag::Atonal);
     }
 
     AudioProfile {
@@ -726,6 +736,7 @@ fn find_consensus(
                 CharFlag::Irregular => "irregular",
                 CharFlag::Fast => "fast",
                 CharFlag::Slow => "slow",
+                CharFlag::Atonal => "atonal",
             })
             .collect();
         let audio_str = if flag_names.is_empty() {
@@ -866,7 +877,8 @@ fn find_consensus(
     }
 
     // HighEnergy always demotes deep variants (e.g. Deep Techno → Techno).
-    // Dancefloor demotes only when the shallower variant also has votes.
+    // Dancefloor demotes only when the shallower variant also has votes,
+    // and not when the track is Atmospheric or Atonal — both signal a deeper read.
     if let Some(profile) = audio_profile.as_ref()
         && let Some(shallower) = shallower_alternative(final_genre)
     {
@@ -875,6 +887,7 @@ fn find_consensus(
             EnergyBucket::Dancefloor => {
                 ranked.iter().any(|(g, _, _)| *g == shallower)
                     && !has_flag(profile, CharFlag::Atmospheric)
+                    && !has_flag(profile, CharFlag::Atonal)
             }
             _ => false,
         };
@@ -933,6 +946,23 @@ fn resolve_same_family_specificity(
     };
 
     if let Some(profile) = audio_profile {
+        let family = genre::genre_family(deeper);
+        let atonal = has_flag(profile, CharFlag::Atonal);
+
+        if atonal && family == GenreFamily::House {
+            evidence.push(format!(
+                "depth: audio atonal → {shallower} over {deeper} (chord-driven Deep House unlikely)"
+            ));
+            return shallower;
+        }
+
+        if atonal && family == GenreFamily::Techno {
+            evidence.push(format!(
+                "depth: audio atonal → {deeper} over {shallower} (noise/drone-driven)"
+            ));
+            return deeper;
+        }
+
         if has_flag(profile, CharFlag::Atmospheric) || profile.bucket == EnergyBucket::LowEnergy {
             evidence.push(format!(
                 "depth: audio atmospheric/low-energy → {deeper} over {shallower}"
@@ -995,6 +1025,7 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
         GenreFamily::House => {
             profile.bucket == EnergyBucket::Dancefloor
                 && !has_flag(profile, CharFlag::Broken)
+                && !has_flag(profile, CharFlag::Atonal)
                 && profile.bpm >= 118.0
                 && profile.bpm <= 132.0
         }
@@ -1324,6 +1355,7 @@ mod tests {
             spectral_flux_mean: None,
             dissonance_mean: None,
             key_clarity: None,
+            key_confidence: None,
             mfcc_mean: None,
             mfcc_std: None,
             spectral_contrast_mean: None,
@@ -1483,6 +1515,108 @@ mod tests {
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
         assert!(result.evidence.iter().any(|e| e.contains("depth:")));
+    }
+
+    fn make_audio_with_key_conf(
+        bpm: f64,
+        danceability: f64,
+        dc: f64,
+        rr: f64,
+        centroid: f64,
+        key_conf: f64,
+    ) -> AudioFeatures {
+        let mut a = make_audio(bpm, danceability, dc, rr, centroid);
+        a.key_confidence = Some(key_conf);
+        a
+    }
+
+    #[test]
+    fn atonal_techno_prefers_deep_techno() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        // Dancefloor (not high-energy), bright centroid, atonal (key_conf=0.05).
+        ev.audio = Some(make_audio_with_key_conf(
+            125.0, 2.0, 3.0, 0.92, 1800.0, 0.05,
+        ));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep Techno"));
+        assert!(
+            result.evidence.iter().any(|e| e.contains("atonal")),
+            "evidence should mention atonal: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn atonal_house_demotes_to_house() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("House");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_key_conf(
+            124.0, 2.0, 3.0, 0.92, 1800.0, 0.05,
+        ));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("House"));
+        assert!(
+            result.evidence.iter().any(|e| e.contains("atonal")),
+            "evidence should mention atonal: {:?}",
+            result.evidence
+        );
+    }
+
+    // Energy demotion runs after same-family resolution, so HighEnergy overrides Atonal.
+    #[test]
+    fn high_energy_atonal_still_demotes_deep_techno() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        // HighEnergy bucket (danceability > 2.5) + atonal.
+        ev.audio = Some(make_audio_with_key_conf(
+            135.0, 2.8, 2.0, 0.95, 2500.0, 0.05,
+        ));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+    }
+
+    // `key_confidence == 0.0` is stratum's sentinel for detection failure,
+    // not atonal music — must not flip the resolver toward Deep House.
+    #[test]
+    fn key_confidence_zero_sentinel_does_not_set_atonal() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("House");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_key_conf(124.0, 2.0, 3.0, 0.92, 1800.0, 0.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert!(
+            !result.evidence.iter().any(|e| e.contains("atonal")),
+            "key_confidence=0.0 must not set Atonal flag: {:?}",
+            result.evidence
+        );
     }
 
     // 1. Marcel Dettmann - Aim: full consensus Techno
