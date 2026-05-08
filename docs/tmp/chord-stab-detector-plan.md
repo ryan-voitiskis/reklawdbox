@@ -1,8 +1,10 @@
 # Chord-Stab Detector: Implementation Plan
 
-**Date:** 2026-04-26 (revised 2026-04-27 with review-driven fixes)
-**Status:** Design proposal. No implementation yet. Validation strategy included; **wire-into-classification gated on validation pass**.
-**Related:** [deep-techno-classification-ideas.md](deep-techno-classification-ideas.md) — this is feature A1 from that doc, the "single biggest gap" in audio-based discrimination of Dub Techno from its neighbours.
+**Date:** 2026-04-26 (revised 2026-04-27 with review-driven fixes; revised 2026-05-08 with kick-bleed investigation findings cross-validated across 5 tracks)
+**Status:** Design proposal. PR 1 (`detect_band_onsets` primitive) shipped. Validation strategy included; **wire-into-classification gated on validation pass**.
+**Related:**
+- [deep-techno-classification-ideas.md](deep-techno-classification-ideas.md) — this is feature A1 from that doc, the "single biggest gap" in audio-based discrimination of Dub Techno from its neighbours.
+- [kick-bleed-investigation.md](kick-bleed-investigation.md) — quantitative evidence behind the asymmetric kick-coincidence mask and the decision to leave HPSS preprocessing as opt-in.
 
 ## Goal
 
@@ -48,16 +50,21 @@ Apply percentile thresholding (matching existing onset detectors at
 `features/onset/spectral_flux.rs:69`, configurable via `onset_threshold_percentile`).
 
 Then mask kick-coincident candidates: drop any candidate onset whose frame falls
-within ±30 ms of a kick-band onset (40–120 Hz, computed via the same primitive).
-This removes the dominant Stage-1 false-positive class — kick punch transients
-that bleed into the mid band — without depending on Stage 2's geometry.
+within ±80 ms of a kick-band onset (40–120 Hz, computed via the same
+primitive). This removes the dominant Stage-1 false-positive class — kick
+punch transients that bleed into the mid band — without depending on Stage
+2's geometry.
 
 Output: list of kick-disjoint candidate onset frame indices.
 ```
 
 This is a sibling of the existing `detect_spectral_flux_onsets` at `features/onset/spectral_flux.rs:69`, parameterised to a frequency band rather than the full spectrum. Cleanest to add a new function `detect_band_onsets(fft_magnitudes, sample_rate, frame_size, band_hz, threshold)` and have the new detector call it with `band_hz = (350.0, 2000.0)`.
 
-The kick-masking step calls the same primitive a second time with `band_hz = (40.0, 120.0)`, then sets-differences within the ±30 ms tolerance. If the kick-pattern detector (sibling plan) has already run and cached its onsets, reuse that result rather than recomputing.
+The kick-masking step calls the same primitive a second time with `band_hz = (40.0, 120.0)`, then drops any stab-band onset within ±80 ms of any kick-band onset. **Mask shape derived from the kick-bleed investigation** ([kick-bleed-investigation.md](kick-bleed-investigation.md), Experiment 7). The original `±30 ms` symmetric window catches only ~20% of bleed events on real audio. Cross-validation across 5 Dub Techno tracks (Maurizio, cv313, Deepchord, Monolake, Rhythm & Sound) shows the bleed histogram is roughly symmetric (mean pre/post ratio 0.99) with bulk between ±60 ms and tails to ±100 ms. A symmetric `±80 ms` mask captures ~80–85% of bleed across the cross-validation set while masking only 33% of total time at 125 BPM 4-on-floor — leaving a 160 ms gap before the off-beat 8th (240 ms from kick), comfortable margin for real stabs to survive.
+
+If the kick-pattern detector (sibling plan) has already run and cached its onsets, reuse that result rather than recomputing.
+
+**HPSS preprocessing was evaluated and rejected.** The investigation tested running `hpss_decompose` first and detecting on the harmonic component. On synthetic kicks-only audio HPSS suppressed ~85% of bleed; on the 5-track real-audio cross-validation set the mean suppression collapsed to 8% at ±20 ms, 2% at ±50 ms, and neutral or net-negative beyond. On 3/5 tracks HPSS produces *more* total stab-band onsets than raw STFT, suggesting artifact introduction. The ~30 s per-track preprocessing cost is not justified. No HPSS knob in the config.
 
 Cost: O(n_frames × bins_in_band) over the existing STFT — single-digit-percent overhead, doubled by the second band-onset pass for kick masking. Still well within the 5–10% budget.
 
@@ -215,16 +222,16 @@ Multiplicative combination ensures all conditions matter. A track with off-beat 
    ```
 5. **Config:** `stratum-dsp/src/config.rs` — `AnalysisConfig` is monolithic (no per-feature struct precedent in this codebase). Add fields directly:
    ```rust
-   pub dub_stab_band_low_hz: f32,           // 350.0
-   pub dub_stab_band_high_hz: f32,          // 2000.0
-   pub dub_stab_kick_band_low_hz: f32,      // 40.0  (for kick-coincidence masking)
-   pub dub_stab_kick_band_high_hz: f32,     // 120.0
-   pub dub_stab_kick_mask_window_ms: f32,   // 30.0
-   pub dub_stab_template_threshold: f32,    // 0.4
-   pub dub_stab_decay_min_ms: f32,          // 50.0
-   pub dub_stab_decay_max_ms: f32,          // 3000.0  (raised from draft's 1500)
-   pub dub_stab_decay_optimum_ms: f32,      // 400.0   (raised from draft's 250)
-   pub dub_stab_persistence_floor: f32,     // 0.3
+   pub dub_stab_band_low_hz: f32,             // 350.0
+   pub dub_stab_band_high_hz: f32,            // 2000.0
+   pub dub_stab_kick_band_low_hz: f32,        // 40.0  (for kick-coincidence masking)
+   pub dub_stab_kick_band_high_hz: f32,       // 120.0
+   pub dub_stab_kick_mask_window_ms: f32,     // 80.0  (symmetric; see kick-bleed investigation)
+   pub dub_stab_template_threshold: f32,      // 0.4
+   pub dub_stab_decay_min_ms: f32,            // 50.0
+   pub dub_stab_decay_max_ms: f32,            // 3000.0  (raised from draft's 1500)
+   pub dub_stab_decay_optimum_ms: f32,        // 400.0   (raised from draft's 250)
+   pub dub_stab_persistence_floor: f32,       // 0.3
    ```
 6. **Public API:** `pub use features::dub_stab::DubStabResult;` in `lib.rs` if downstream code wants the full result; otherwise the `Option<f32>` on `AnalysisResult` is enough.
 
@@ -299,6 +306,8 @@ Default to a moderate vote weight (similar to `AFFINITY_CAP = 0.5` defined in `s
 
 1. **Band-choice sensitivity.** Pilot listens suggest 200–2000 Hz, but some atmospheric Dub Techno (Deepchord territory) has stabs reaching 3 kHz. The validation set will tell us if the default band misses too many positives. Mitigation: per-band-choice config so it can be tuned without code changes.
 
+   **Lower bound also bleed-sensitive.** The kick-bleed investigation showed that kicks with strong 540 Hz harmonics (saturated/punchy techno kicks) push bleed up into the lower stab-band region. If validation surfaces such tracks, raising the lower bound from 350 → 500 Hz is the recourse — but this risks clipping stab fundamentals near C5 (≈523 Hz). Tune from data, not theory.
+
 2. **Tech House sidechain pumping.** Sidechain creates mid-band amplitude *modulation* but not transient *onsets* — the spectral flux step should reject it. But if any Tech House tracks slip through, the stab-vs-pump discrimination requires the separate `sidechain_depth` feature (A5 in the parent doc). Validation will surface this.
 
 3. **Half-time vs double-time confusion.** If the BPM detector reports half-time (e.g. 62 instead of 125), the beat grid is half as dense and "off-beat 8ths" become "on-beat quarters." Existing BPM detection is robust here per the metrical-agreement logic at `lib.rs:819–892`, but worth checking against fixtures with known halftime-ambiguity.
@@ -314,6 +323,8 @@ Default to a moderate vote weight (similar to `AFFINITY_CAP = 0.5` defined in `s
 8. **Beat-grid micro-drift over long tracks.** A 0.5% tempo drift across a 7-minute track shifts late onsets by half a bin (in 32-bin terms). Soft binning (Stage 2) absorbs this gracefully — a single onset's weight spreads over neighbouring bins — but worth verifying against long-form fixtures.
 
 9. **Half-time confusion (symmetric case).** Risk #3 above covers half-tempo BPM detection. The symmetric case — a 132 BPM track classified as 66 — produces an apparent "8 stabs/bar" pattern that T2 already covers. The dominant template would still match, just labeled with the wrong period. Acceptable.
+
+10. **Mask shape derived from a 5-track cross-validation set within Dub Techno.** The symmetric `±80 ms` kick-coincidence window is anchored to the histograms of Maurizio, cv313, Deepchord, Monolake, and Rhythm & Sound (Experiment 7 in the investigation). Bleed shape was consistent across the 5 tracks (mean pre/post ratio 0.99). The full 60-track fixture set (PR 5) covers genres outside Dub Techno where the mask shape may differ — but the chord-stab detector is targeted at Dub Techno, so the cross-validated default is appropriate. Minor tuning may surface during PR 5; the config knob `dub_stab_kick_mask_window_ms` makes this a one-line change.
 
 ## Suggested Implementation Order
 

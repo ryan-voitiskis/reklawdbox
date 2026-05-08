@@ -10,6 +10,7 @@
 pub mod beat_tracking;
 pub mod chroma;
 pub mod decay;
+pub mod dub_stab;
 pub mod key;
 pub mod modulation;
 pub mod onset;
