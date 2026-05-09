@@ -315,6 +315,123 @@ fn locate_bar(bars: &[f32], onset_time: f32) -> Option<usize> {
     }
 }
 
+// === Stage 3: template matching =============================================
+//
+// The 24-track Dub Techno corpus showed four canonical chord-stab patterns:
+// - the offbeat eighth (Basic Channel skank)
+// - all 16th offbeats (denser productions, e.g. Vladislav Delay)
+// - anticipation / 16th-note pickup before the downbeat
+// - on-beat (rare; deep/minimal techno with dub FX)
+//
+// Each template is constructed by placing the same Gaussian bumps Stage 2
+// uses for soft-binning at the canonical offsets, so we can compare templates
+// to observed histograms with cosine similarity in the same coordinate
+// system — no rescaling needed.
+
+/// A named expected chord-stab placement pattern.
+#[derive(Debug, Clone)]
+pub struct DubStabTemplate {
+    /// Stable identifier — also used in `TemplateMatch::name`.
+    pub name: &'static str,
+    /// L2-normalised template histogram (length `HISTOGRAM_BINS`).
+    pub histogram: [f32; HISTOGRAM_BINS],
+}
+
+/// Result of `match_template`.
+#[derive(Debug, Clone)]
+pub struct TemplateMatch {
+    /// Name of the highest-scoring template.
+    pub name: &'static str,
+    /// Cosine similarity in `[0, 1]`. Higher = better match.
+    pub score: f32,
+    /// All template scores in declaration order, for callers that want the
+    /// runner-up (e.g. to apply a margin threshold before classifying).
+    pub all_scores: Vec<(&'static str, f32)>,
+}
+
+/// Build an L2-normalised template by placing soft-binned bumps at each
+/// `expected_offset` in `[0, 1)`. The width matches Stage 2's `SOFT_BIN_SIGMA`.
+fn build_template(expected_offsets: &[f32]) -> [f32; HISTOGRAM_BINS] {
+    let two_sigma_sq = 2.0 * SOFT_BIN_SIGMA * SOFT_BIN_SIGMA;
+    let mut t = [0.0_f32; HISTOGRAM_BINS];
+    for (bin, slot) in t.iter_mut().enumerate() {
+        let centre = bin as f32 / HISTOGRAM_BINS as f32;
+        for &offset in expected_offsets {
+            let mut d = (centre - offset).abs();
+            if d > 0.5 {
+                d = 1.0 - d;
+            }
+            *slot += (-(d * d) / two_sigma_sq).exp();
+        }
+    }
+    let norm: f32 = t.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in t.iter_mut() {
+            *x /= norm;
+        }
+    }
+    t
+}
+
+/// Return the canonical Dub Techno chord-stab templates.
+///
+/// Order is stable across calls. Templates are L2-normalised so dot product
+/// with an L2-normalised observed histogram is a cosine similarity in
+/// `[0, 1]`.
+pub fn dub_stab_templates() -> Vec<DubStabTemplate> {
+    vec![
+        DubStabTemplate {
+            name: "offbeat_eighth",
+            histogram: build_template(&[0.5]),
+        },
+        DubStabTemplate {
+            name: "all_16th_offbeats",
+            histogram: build_template(&[0.25, 0.5, 0.75]),
+        },
+        DubStabTemplate {
+            name: "anticipation",
+            histogram: build_template(&[0.75]),
+        },
+        DubStabTemplate {
+            name: "on_beat",
+            histogram: build_template(&[0.0]),
+        },
+    ]
+}
+
+/// Score `observed` against every template, returning the best match.
+///
+/// Uses cosine similarity. Returns `None` only when `observed` is all-zero
+/// (no signal to match against). Score ties resolve to whichever template
+/// appears first in `dub_stab_templates()`.
+pub fn match_template(observed: &[f32; HISTOGRAM_BINS]) -> Option<TemplateMatch> {
+    let obs_norm: f32 = observed.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    if obs_norm == 0.0 || !obs_norm.is_finite() {
+        return None;
+    }
+    let templates = dub_stab_templates();
+    let scores: Vec<(&'static str, f32)> = templates
+        .iter()
+        .map(|t| {
+            let dot: f32 = observed
+                .iter()
+                .zip(t.histogram.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            (t.name, dot / obs_norm)
+        })
+        .collect();
+    let (best_name, best_score) = scores
+        .iter()
+        .copied()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+    Some(TemplateMatch {
+        name: best_name,
+        score: best_score,
+        all_scores: scores,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -760,5 +877,90 @@ mod tests {
         // Far bins receive negligible weight.
         assert!(h0 < h15 / 100.0, "bin 0 should be ~zero: {h0} vs {h15}");
         assert!(h8 < h15 / 100.0, "bin 8 should be ~zero: {h8} vs {h15}");
+    }
+
+    // === Stage 3 tests ======================================================
+
+    #[test]
+    fn templates_are_l2_normalised() {
+        for t in dub_stab_templates() {
+            let norm: f32 = t.histogram.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-5,
+                "template '{}' L2 norm = {norm}, expected 1.0",
+                t.name
+            );
+        }
+    }
+
+    #[test]
+    fn match_template_rejects_zero_histogram() {
+        let zero = [0.0_f32; HISTOGRAM_BINS];
+        assert!(match_template(&zero).is_none());
+    }
+
+    /// Build an observation that places many onsets at a specific offset,
+    /// running them through Stage 2's soft-binner so the result has the same
+    /// shape as a real histogram from `beat_relative_offset_histogram`.
+    fn synthesise_histogram(offsets: &[f32]) -> [f32; HISTOGRAM_BINS] {
+        let two_sigma_sq = 2.0 * SOFT_BIN_SIGMA * SOFT_BIN_SIGMA;
+        let mut h = [0.0_f32; HISTOGRAM_BINS];
+        for bin in 0..HISTOGRAM_BINS {
+            let centre = bin as f32 / HISTOGRAM_BINS as f32;
+            for &off in offsets {
+                let mut d = (centre - off).abs();
+                if d > 0.5 {
+                    d = 1.0 - d;
+                }
+                // 50× to give realistic absolute weights — scoring is
+                // L2-normalised so the multiplier is irrelevant.
+                h[bin] += 50.0 * (-(d * d) / two_sigma_sq).exp();
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn match_picks_offbeat_eighth_for_canonical_skank() {
+        let h = synthesise_histogram(&[0.5; 16]);
+        let m = match_template(&h).expect("non-zero");
+        assert_eq!(m.name, "offbeat_eighth");
+        assert!(m.score > 0.95, "score = {}", m.score);
+    }
+
+    #[test]
+    fn match_picks_all_16ths_for_three_peak_pattern() {
+        let h = synthesise_histogram(&[0.25, 0.5, 0.75, 0.25, 0.5, 0.75]);
+        let m = match_template(&h).expect("non-zero");
+        assert_eq!(m.name, "all_16th_offbeats");
+        // Should beat the runner-up (offbeat_eighth) by a clear margin.
+        let runner_up = m
+            .all_scores
+            .iter()
+            .filter(|(n, _)| *n != m.name)
+            .map(|(_, s)| *s)
+            .fold(0.0_f32, f32::max);
+        assert!(
+            m.score - runner_up > 0.05,
+            "all_16ths={:.3} vs runner_up={:.3}",
+            m.score,
+            runner_up
+        );
+    }
+
+    #[test]
+    fn match_picks_anticipation_for_late_offset_only() {
+        let h = synthesise_histogram(&[0.75; 8]);
+        let m = match_template(&h).expect("non-zero");
+        // anticipation beats all_16ths because the 16ths template demands
+        // weight at 0.25 and 0.5 too.
+        assert_eq!(m.name, "anticipation");
+    }
+
+    #[test]
+    fn match_picks_on_beat_for_downbeat_dominant() {
+        let h = synthesise_histogram(&[0.0; 8]);
+        let m = match_template(&h).expect("non-zero");
+        assert_eq!(m.name, "on_beat");
     }
 }

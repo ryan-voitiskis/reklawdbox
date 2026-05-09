@@ -56,6 +56,12 @@ pub struct StratumResult {
     /// are not surfaced here — callers needing them should run the
     /// analyzer with stratum-dsp directly.
     pub dub_stab_histogram: Option<Vec<f64>>,
+    /// Stage 3 — best-matching dub-techno chord-stab template name. One of
+    /// "offbeat_eighth", "all_16th_offbeats", "anticipation", "on_beat".
+    pub dub_stab_template: Option<String>,
+    /// Cosine similarity in `[0, 1]` of the histogram against
+    /// `dub_stab_template`. Treat values below ~0.7 as low-confidence.
+    pub dub_stab_template_score: Option<f64>,
     pub flags: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -69,7 +75,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "5";
+pub const STRATUM_SCHEMA_VERSION: &str = "6";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -425,6 +431,16 @@ pub fn analyze_with_stratum(
             .dub_stab
             .as_ref()
             .map(|d| d.histogram.iter().map(|&v| v as f64).collect()),
+        dub_stab_template: result
+            .dub_stab
+            .as_ref()
+            .and_then(|d| d.template_match.as_ref())
+            .map(|t| t.name.clone()),
+        dub_stab_template_score: result
+            .dub_stab
+            .as_ref()
+            .and_then(|d| d.template_match.as_ref())
+            .map(|t| t.score as f64),
         flags: result
             .metadata
             .flags
@@ -462,6 +478,8 @@ mod tests {
             decay_high_r2: Some(0.88),
             dub_stab_onset_count: Some(168),
             dub_stab_histogram: Some(vec![0.0; 32]),
+            dub_stab_template: Some("offbeat_eighth".to_string()),
+            dub_stab_template_score: Some(0.92),
             flags: vec!["MultimodalBpm".to_string()],
             warnings: vec!["Low key clarity".to_string()],
         };

@@ -52,7 +52,7 @@ pub mod ml;
 // Re-export main types
 pub use analysis::confidence::{compute_confidence, AnalysisConfidence};
 pub use analysis::result::{
-    AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, Key, KeyType,
+    AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, DubStabTemplateMatch, Key, KeyType,
 };
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
@@ -1638,7 +1638,8 @@ pub fn analyze_audio(
     // logged but don't fail the whole analysis.
     let dub_stab = if beat_grid.beats.len() >= 2 {
         use features::dub_stab::{
-            beat_relative_offset_histogram, detect_kick_disjoint_stab_onsets, DubStabConfig,
+            beat_relative_offset_histogram, detect_kick_disjoint_stab_onsets, match_template,
+            DubStabConfig,
         };
         let cfg = DubStabConfig::default();
         match detect_kick_disjoint_stab_onsets(
@@ -1654,11 +1655,19 @@ pub fn analyze_audio(
                 sample_rate,
                 &beat_grid,
             ) {
-                Ok(hist) => Some(DubStabAnalysis {
-                    stab_onset_count: stab_onsets.len(),
-                    histogram: hist.global.to_vec(),
-                    per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
-                }),
+                Ok(hist) => {
+                    let template_match =
+                        match_template(&hist.global).map(|m| DubStabTemplateMatch {
+                            name: m.name.to_string(),
+                            score: m.score,
+                        });
+                    Some(DubStabAnalysis {
+                        stab_onset_count: stab_onsets.len(),
+                        histogram: hist.global.to_vec(),
+                        per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
+                        template_match,
+                    })
+                }
                 Err(e) => {
                     log::warn!("dub_stab Stage 2 (histogram) failed: {}", e);
                     None

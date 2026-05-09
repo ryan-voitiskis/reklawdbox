@@ -237,12 +237,14 @@ pub struct AnalysisResult {
     pub dub_stab: Option<DubStabAnalysis>,
 }
 
-/// Dub-stab Stage 1 + Stage 2 result, surfaced from the top-level pipeline.
+/// Dub-stab Stage 1 + Stage 2 + Stage 3 result, surfaced from the
+/// top-level pipeline.
 ///
 /// `histogram` is always 32-element; `per_bar_histograms` has one 32-element
-/// inner vec per bar in the beat grid. Stage 3 (template scoring) is not
-/// yet implemented; callers wanting a classifier output should score the
-/// histogram against a template bank externally.
+/// inner vec per bar in the beat grid. `template_match`, when present,
+/// names the canonical chord-stab pattern that best fits the global
+/// histogram (Stage 3) — see `features::dub_stab::dub_stab_templates` for
+/// the bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DubStabAnalysis {
     /// Kick-disjoint stab-band onsets surviving Stage 1's ±80 ms kick mask.
@@ -251,6 +253,23 @@ pub struct DubStabAnalysis {
     pub histogram: Vec<f32>,
     /// One sub-histogram per bar in the beat grid. Each is length 32.
     pub per_bar_histograms: Vec<Vec<f32>>,
+    /// Stage 3 — best-matching template name + cosine similarity.
+    /// `None` when the histogram is all zero (no signal to match).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_match: Option<DubStabTemplateMatch>,
+}
+
+/// Compact serialisable view of `features::dub_stab::TemplateMatch` for
+/// inclusion in `AnalysisResult`. Drops `all_scores` to keep the cached
+/// JSON small; callers wanting the full vector should call
+/// `features::dub_stab::match_template` directly on the histogram.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DubStabTemplateMatch {
+    /// Best-matching template name (e.g. `"offbeat_eighth"`).
+    pub name: String,
+    /// Cosine similarity in `[0, 1]` between the histogram and the named
+    /// template. Higher = better match.
+    pub score: f32,
 }
 
 /// Analysis metadata
