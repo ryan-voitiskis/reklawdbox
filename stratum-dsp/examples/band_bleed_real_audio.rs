@@ -118,10 +118,22 @@ fn downmix_to_mono(buf: &AudioBufferRef, out: &mut Vec<f32>) {
     match buf {
         AudioBufferRef::F32(b) => mix(b.planes().planes(), |v| v, out),
         AudioBufferRef::F64(b) => mix(b.planes().planes(), |v| v as f32, out),
+        AudioBufferRef::S8(b) => mix(b.planes().planes(), |v| v as f32 / 128.0, out),
         AudioBufferRef::S16(b) => mix(b.planes().planes(), |v| v as f32 / 32768.0, out),
+        AudioBufferRef::S24(b) => mix(b.planes().planes(), |v| v.inner() as f32 / 8388608.0, out),
         AudioBufferRef::S32(b) => mix(b.planes().planes(), |v| v as f32 / 2147483648.0, out),
         AudioBufferRef::U8(b) => mix(b.planes().planes(), |v| (v as f32 - 128.0) / 128.0, out),
-        _ => eprintln!("Unsupported sample format"),
+        AudioBufferRef::U16(b) => mix(b.planes().planes(), |v| (v as f32 - 32768.0) / 32768.0, out),
+        AudioBufferRef::U24(b) => mix(
+            b.planes().planes(),
+            |v| (v.inner() as f32 - 8388608.0) / 8388608.0,
+            out,
+        ),
+        AudioBufferRef::U32(b) => mix(
+            b.planes().planes(),
+            |v| (v as f32 - 2147483648.0) / 2147483648.0,
+            out,
+        ),
     }
 }
 
