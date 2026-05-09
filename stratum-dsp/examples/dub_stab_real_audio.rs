@@ -354,19 +354,21 @@ fn main() {
     }
     let path = &args[1];
     let bpm: f32 = args[2].parse().expect("bpm must be a number");
+    // When a grid JSON is supplied we treat its absence/mismatch as a hard
+    // error rather than silently falling back to HMM. The whole point of
+    // running with --grid_json is to compare against the Rekordbox grid;
+    // a quiet HMM run would invalidate the comparison without warning.
     let grids = match args.get(3) {
-        Some(p) => match load_grid_json(p) {
-            Ok(g) => Some(g),
-            Err(e) => {
-                eprintln!("Warning: failed to load grid JSON: {e}; falling back to HMM");
-                None
-            }
-        },
+        Some(p) => Some(load_grid_json(p).unwrap_or_else(|e| {
+            eprintln!("Error: failed to load grid JSON: {e}");
+            std::process::exit(2);
+        })),
         None => None,
     };
     let json_grid = grids.as_ref().and_then(|m| m.get(path));
     if grids.is_some() && json_grid.is_none() {
-        eprintln!("Warning: grid JSON has no entry for {path}; falling back to HMM");
+        eprintln!("Error: grid JSON has no entry for {path}");
+        std::process::exit(2);
     }
     if let Err(e) = analyse(path, bpm, json_grid) {
         eprintln!("Error: {e}");

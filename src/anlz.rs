@@ -156,11 +156,18 @@ fn parse_pqtz_body(tag: &[u8]) -> Result<Vec<PqtzBeat>, AnlzError> {
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let p = PQTZ_HEADER_LEN + i * PQTZ_ENTRY_LEN;
-        let bar_position = read_u16_be(tag, p)? as u8;
+        let raw_position = read_u16_be(tag, p)?;
+        if !(1..=4).contains(&raw_position) {
+            // Reject rather than truncate to u8: a value of 257 would wrap to
+            // 1 and inject a phantom downbeat into the bars list.
+            return Err(AnlzError::Invalid(format!(
+                "beat[{i}] bar_position={raw_position} out of 1..=4"
+            )));
+        }
         let bpm_x100 = read_u16_be(tag, p + 2)?;
         let time_ms = read_u32_be(tag, p + 4)?;
         out.push(PqtzBeat {
-            bar_position,
+            bar_position: raw_position as u8,
             bpm: bpm_x100 as f32 / 100.0,
             time_seconds: time_ms as f32 / 1000.0,
         });
@@ -288,6 +295,28 @@ mod tests {
             .collect();
         assert_eq!(beats.len(), 6);
         assert_eq!(bars, vec![0.500, 2.500]);
+    }
+
+    #[test]
+    fn rejects_bar_position_out_of_range() {
+        // Hand-craft a PQTZ tag with bar_position = 257. Without the
+        // u16-vs-u8 check, this would silently wrap to 1 and look like a
+        // downbeat.
+        let mut tag = Vec::new();
+        tag.extend_from_slice(b"PQTZ");
+        tag.extend_from_slice(&24u32.to_be_bytes());
+        let total = TAG_ENVELOPE_LEN + 12 + PQTZ_ENTRY_LEN;
+        tag.extend_from_slice(&(total as u32).to_be_bytes());
+        tag.extend_from_slice(&0u32.to_be_bytes());
+        tag.extend_from_slice(&0x00080000u32.to_be_bytes());
+        tag.extend_from_slice(&1u32.to_be_bytes()); // count = 1
+        tag.extend_from_slice(&257u16.to_be_bytes()); // bar_position
+        tag.extend_from_slice(&12000u16.to_be_bytes()); // bpm
+        tag.extend_from_slice(&0u32.to_be_bytes()); // time
+        match parse_pqtz_body(&tag) {
+            Err(AnlzError::Invalid(msg)) => assert!(msg.contains("bar_position"), "msg={msg}"),
+            other => panic!("expected Invalid(bar_position), got {other:?}"),
+        }
     }
 
     #[test]

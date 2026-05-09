@@ -28,11 +28,20 @@ def grid_for_track(content) -> dict | None:
     if not os.path.exists(path):
         print(f"  missing ANLZ: {path}", file=sys.stderr)
         return None
-    af = AnlzFile.parse_file(path)
+    try:
+        af = AnlzFile.parse_file(path)
+    except Exception as e:
+        # Don't abort the whole batch if one ANLZ is corrupt.
+        print(f"  failed to parse {path}: {e}", file=sys.stderr)
+        return None
     pqtz = af.getall("PQTZ")
     if not pqtz:
         return None
     bits, _bpms, times = pqtz[0]
+    if len(times) == 0:
+        # Empty PQTZ would produce a zero-bar grid that silently makes the
+        # downstream histogram look on-beat — refuse instead.
+        return None
     beats = [float(t) for t in times]
     bars = [float(t) for t, b in zip(times, bits) if int(b) == 1]
     return {"beats": beats, "bars": bars}
