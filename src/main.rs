@@ -1,3 +1,4 @@
+mod anlz;
 mod audio;
 mod audio_profile;
 mod audit;
