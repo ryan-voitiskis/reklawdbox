@@ -51,7 +51,9 @@ pub mod ml;
 
 // Re-export main types
 pub use analysis::confidence::{compute_confidence, AnalysisConfidence};
-pub use analysis::result::{AnalysisMetadata, AnalysisResult, BeatGrid, Key, KeyType};
+pub use analysis::result::{
+    AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, Key, KeyType,
+};
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
 
@@ -910,7 +912,18 @@ pub fn analyze_audio(
     }
 
     // Phase 1C: Beat Tracking
-    let (beat_grid, grid_stability) = if bpm > 0.0 && onsets_for_beat_tracking.len() >= 2 {
+    //
+    // If the caller supplied an `external_beat_grid` (e.g. Rekordbox ANLZ
+    // PQTZ), skip the HMM tracker entirely. External grids are assumed
+    // hand-verified, so stability is reported as 1.0.
+    let (beat_grid, grid_stability) = if let Some(ref ext) = config.external_beat_grid {
+        log::debug!(
+            "Using external beat grid: {} beats, {} downbeats",
+            ext.beats.len(),
+            ext.downbeats.len()
+        );
+        (ext.clone(), 1.0)
+    } else if bpm > 0.0 && onsets_for_beat_tracking.len() >= 2 {
         // Convert onsets from sample indices to seconds
         let onsets_seconds: Vec<f32> = onsets_for_beat_tracking
             .iter()
@@ -1619,6 +1632,48 @@ pub fn analyze_audio(
     )
     .unwrap_or(None);
 
+    // Dub-stab Stage 1 + 2: kick-disjoint stab onsets + beat-relative offset
+    // histogram. Only meaningful when the beat grid has at least two beats —
+    // otherwise the histogram is all-zero by construction. Failures are
+    // logged but don't fail the whole analysis.
+    let dub_stab = if beat_grid.beats.len() >= 2 {
+        use features::dub_stab::{
+            beat_relative_offset_histogram, detect_kick_disjoint_stab_onsets, DubStabConfig,
+        };
+        let cfg = DubStabConfig::default();
+        match detect_kick_disjoint_stab_onsets(
+            &magnitude_spec_frames,
+            sample_rate,
+            config.frame_size,
+            config.hop_size,
+            &cfg,
+        ) {
+            Ok(stab_onsets) => match beat_relative_offset_histogram(
+                &stab_onsets,
+                config.hop_size,
+                sample_rate,
+                &beat_grid,
+            ) {
+                Ok(hist) => Some(DubStabAnalysis {
+                    stab_onset_count: stab_onsets.len(),
+                    histogram: hist.global.to_vec(),
+                    per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
+                }),
+                Err(e) => {
+                    log::warn!("dub_stab Stage 2 (histogram) failed: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                log::warn!("dub_stab Stage 1 (kick-disjoint onsets) failed: {}", e);
+                None
+            }
+        }
+    } else {
+        log::debug!("Skipping dub_stab: beat grid has < 2 beats");
+        None
+    };
+
     let result = AnalysisResult {
         bpm,
         bpm_confidence,
@@ -1630,6 +1685,7 @@ pub fn analyze_audio(
         mod_centroid,
         harmonic_proportion,
         decay,
+        dub_stab,
         metadata: AnalysisMetadata {
             duration_seconds: trimmed_samples.len() as f32 / sample_rate as f32,
             sample_rate,

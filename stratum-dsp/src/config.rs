@@ -1,5 +1,6 @@
 //! Configuration parameters for audio analysis
 
+use crate::analysis::result::BeatGrid;
 use crate::features::key::templates::TemplateSet;
 use crate::preprocessing::normalization::NormalizationMethod;
 
@@ -589,6 +590,12 @@ pub struct AnalysisConfig {
     /// Enable ML refinement (requires ml feature)
     #[cfg(feature = "ml")]
     pub enable_ml_refinement: bool,
+
+    /// Pre-supplied beat grid (e.g. from Rekordbox ANLZ). When `Some`, the
+    /// HMM beat tracker is skipped entirely and this grid is used downstream.
+    /// Beats and bars must be strictly ascending and finite — `dub_stab`'s
+    /// `validate_beat_grid` will reject malformed input. Default: `None`.
+    pub external_beat_grid: Option<BeatGrid>,
 }
 
 impl Default for AnalysisConfig {
@@ -739,6 +746,7 @@ impl Default for AnalysisConfig {
             key_minor_leading_tone_bonus_weight: 0.2,
             #[cfg(feature = "ml")]
             enable_ml_refinement: false,
+            external_beat_grid: None,
         }
     }
 }

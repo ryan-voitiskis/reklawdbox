@@ -229,6 +229,28 @@ pub struct AnalysisResult {
     /// Post-transient spectral decay rates in two frequency bands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decay: Option<crate::features::decay::DecayResult>,
+
+    /// Dub-stab Stage 1 + Stage 2: kick-disjoint stab-band onset count and
+    /// the beat-relative offset histogram. Populated when a beat grid is
+    /// available (either from the HMM tracker or supplied externally).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dub_stab: Option<DubStabAnalysis>,
+}
+
+/// Dub-stab Stage 1 + Stage 2 result, surfaced from the top-level pipeline.
+///
+/// `histogram` is always 32-element; `per_bar_histograms` has one 32-element
+/// inner vec per bar in the beat grid. Stage 3 (template scoring) is not
+/// yet implemented; callers wanting a classifier output should score the
+/// histogram against a template bank externally.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DubStabAnalysis {
+    /// Kick-disjoint stab-band onsets surviving Stage 1's ±80 ms kick mask.
+    pub stab_onset_count: usize,
+    /// Global histogram aggregated across the analysed window. Length 32.
+    pub histogram: Vec<f32>,
+    /// One sub-histogram per bar in the beat grid. Each is length 32.
+    pub per_bar_histograms: Vec<Vec<f32>>,
 }
 
 /// Analysis metadata

@@ -273,4 +273,100 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn external_beat_grid_replaces_hmm_grid() {
+        // Synthesize a short kick-like pulse train so analyze_audio's
+        // pipeline runs to the beat-tracking phase. We don't care what BPM
+        // the rest of the pipeline infers — we only check that the supplied
+        // external_beat_grid round-trips into result.beat_grid unchanged.
+        use stratum_dsp::analysis::result::BeatGrid;
+
+        let sample_rate: u32 = 44100;
+        let duration_s = 8.0_f32;
+        let n = (duration_s * sample_rate as f32) as usize;
+        let mut samples = vec![0.0_f32; n];
+        // Pulses every 0.5s with a short decay.
+        let pulse_interval = (0.5 * sample_rate as f32) as usize;
+        for start in (0..n).step_by(pulse_interval) {
+            for i in 0..200 {
+                if start + i >= n {
+                    break;
+                }
+                samples[start + i] = (1.0 - i as f32 / 200.0) * 0.6;
+            }
+        }
+
+        // Deliberately-skewed grid (0.6 s spacing, not 0.5 s) so we'd notice
+        // if the HMM tracker silently overrode it.
+        let beats: Vec<f32> = (0..12).map(|i| 0.05 + i as f32 * 0.6).collect();
+        let bars: Vec<f32> = beats.iter().step_by(4).copied().collect();
+        let supplied = BeatGrid {
+            downbeats: bars.clone(),
+            beats: beats.clone(),
+            bars: bars.clone(),
+        };
+
+        let config = AnalysisConfig {
+            external_beat_grid: Some(supplied.clone()),
+            ..AnalysisConfig::default()
+        };
+        let result = analyze_audio(&samples, sample_rate, config).expect("analysis");
+
+        assert_eq!(result.beat_grid.beats, beats);
+        assert_eq!(result.beat_grid.bars, bars);
+        assert!(
+            (result.grid_stability - 1.0).abs() < 1e-6,
+            "external grid should report stability=1.0, got {}",
+            result.grid_stability
+        );
+
+        // dub_stab fires whenever beats.len() >= 2; with synthesized pulse
+        // train + 12-beat external grid, the histogram should be populated.
+        let dub = result
+            .dub_stab
+            .expect("dub_stab populated when grid has beats");
+        assert_eq!(dub.histogram.len(), 32, "histogram is 32-bin");
+        assert_eq!(
+            dub.per_bar_histograms.len(),
+            bars.len(),
+            "one per-bar histogram per bar"
+        );
+        for h in &dub.per_bar_histograms {
+            assert_eq!(h.len(), 32);
+        }
+    }
+
+    #[test]
+    fn dub_stab_skipped_when_beat_grid_empty() {
+        // 30 s of silence trims to nothing, so analyze_audio returns Err.
+        // To get a non-error path with an empty grid, supply low-energy
+        // noise that survives silence trimming but yields no detectable
+        // onsets, so the HMM tracker produces an empty grid.
+        use stratum_dsp::analysis::result::BeatGrid;
+        let sample_rate: u32 = 44100;
+        let n = (5.0 * sample_rate as f32) as usize;
+        let mut samples = vec![0.0_f32; n];
+        for (i, s) in samples.iter_mut().enumerate() {
+            *s = ((i as f32 * 0.001).sin()) * 0.05;
+        }
+
+        // Force empty grid via external_beat_grid.
+        let config = AnalysisConfig {
+            external_beat_grid: Some(BeatGrid {
+                downbeats: vec![],
+                beats: vec![],
+                bars: vec![],
+            }),
+            ..AnalysisConfig::default()
+        };
+
+        let Ok(result) = analyze_audio(&samples, sample_rate, config) else {
+            return; // tolerate silence-trim failure on this synthetic input
+        };
+        assert!(
+            result.dub_stab.is_none(),
+            "dub_stab should be None when beat grid is empty"
+        );
+    }
 }
