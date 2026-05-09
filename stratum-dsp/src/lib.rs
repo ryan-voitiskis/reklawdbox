@@ -129,8 +129,15 @@ pub fn analyze_audio(
     }
 
     // 2. Silence detection and trimming
+    //
+    // Silence trimming removes leading samples, which shifts the audio out
+    // of phase with any externally-supplied beat grid (the grid is in
+    // original-time). When an external grid is supplied, skip trimming so
+    // frame indices and grid times share an origin. Spurious onsets in
+    // leading silence are filtered by the onset threshold downstream.
     use preprocessing::silence::{detect_and_trim, SilenceDetector};
-    let (trimmed_samples, _silence_regions) = if config.enable_silence_trimming {
+    let trim_silence = config.enable_silence_trimming && config.external_beat_grid.is_none();
+    let (trimmed_samples, _silence_regions) = if trim_silence {
         let silence_detector = SilenceDetector {
             threshold_db: config.min_amplitude_db,
             min_duration_ms: 500,
@@ -138,7 +145,11 @@ pub fn analyze_audio(
         };
         detect_and_trim(&processed_samples, sample_rate, silence_detector)?
     } else {
-        log::debug!("Skipping silence trimming (enable_silence_trimming=false)");
+        if config.external_beat_grid.is_some() {
+            log::debug!("Skipping silence trimming (external beat grid supplied)");
+        } else {
+            log::debug!("Skipping silence trimming (enable_silence_trimming=false)");
+        }
         (processed_samples.clone(), Vec::new())
     };
 

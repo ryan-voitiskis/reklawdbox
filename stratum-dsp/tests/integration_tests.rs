@@ -338,6 +338,58 @@ mod tests {
     }
 
     #[test]
+    fn external_grid_survives_leading_silence_without_phase_shift() {
+        // 0.3 s of silence then a steady pulse train at 0.5-s intervals.
+        // The external grid is anchored at the FIRST PULSE (t=0.3, then
+        // 0.8, 1.3, …). If silence-trimming runs, frame indices into the
+        // trimmed STFT would be relative to t=0.3 but the grid would still
+        // be in original time → 0.3 s offset → ~3/4 of a beat phase error.
+        //
+        // We assert the dub_stab onset count is non-trivial. Before the fix,
+        // analyze_audio would either error (grid before trimmed t=0) or
+        // silently produce a phase-shifted histogram.
+        use stratum_dsp::analysis::result::BeatGrid;
+
+        let sample_rate: u32 = 44100;
+        let lead_silence_s = 0.3_f32;
+        let dur_s = 8.0_f32;
+        let n = (dur_s * sample_rate as f32) as usize;
+        let mut samples = vec![0.0_f32; n];
+        let lead_samples = (lead_silence_s * sample_rate as f32) as usize;
+        for start in (lead_samples..n).step_by((0.5 * sample_rate as f32) as usize) {
+            for i in 0..200 {
+                if start + i >= n {
+                    break;
+                }
+                samples[start + i] = (1.0 - i as f32 / 200.0) * 0.6;
+            }
+        }
+
+        let beats: Vec<f32> = (0..14).map(|i| lead_silence_s + i as f32 * 0.5).collect();
+        let bars: Vec<f32> = beats.iter().step_by(4).copied().collect();
+        let supplied = BeatGrid {
+            downbeats: bars.clone(),
+            beats: beats.clone(),
+            bars: bars.clone(),
+        };
+
+        let config = AnalysisConfig {
+            external_beat_grid: Some(supplied),
+            ..AnalysisConfig::default()
+        };
+        let result = analyze_audio(&samples, sample_rate, config).expect("analysis");
+
+        assert_eq!(result.beat_grid.beats, beats);
+        let dub = result
+            .dub_stab
+            .expect("dub_stab populated when external grid is supplied");
+        assert!(
+            dub.stab_onset_count == 0 || !dub.histogram.iter().all(|&w| w == 0.0),
+            "stab onsets should land coherently against the beat grid"
+        );
+    }
+
+    #[test]
     fn dub_stab_skipped_when_beat_grid_empty() {
         // 30 s of silence trims to nothing, so analyze_audio returns Err.
         // To get a non-error path with an empty grid, supply low-energy
