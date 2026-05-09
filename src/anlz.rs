@@ -7,12 +7,9 @@
 //! where 1 marks a downbeat.
 //!
 //! ANLZ files live under `~/Library/Pioneer/rekordbox/share/PIONEER/USBANLZ/`,
-//! addressed per-track by `djmdContent.AnalysisDataPath`.
-//!
-//! Not yet wired into `analyze_with_stratum` — the public functions are
-//! currently used only by tests and the dub-stab investigation example.
-
-#![allow(dead_code)]
+//! addressed per-track by `djmdContent.AnalysisDataPath`. Use
+//! `audio::load_rekordbox_grid_for_path` for the full file_path → grid
+//! lookup; the helpers here are the lower-level building blocks.
 
 use std::fs;
 use std::path::Path;

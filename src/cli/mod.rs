@@ -429,6 +429,7 @@ mod tests {
             key_confidence: 0.8,
             key_clarity: 0.7,
             grid_stability: 0.95,
+            grid_source: "hmm".to_string(),
             duration_seconds: 180.0,
             processing_time_ms: 42.0,
             analyzer_version: "1.0.0".to_string(),
@@ -438,6 +439,8 @@ mod tests {
             decay_mid_r2: Some(0.92),
             decay_high_tau: Some(95.0),
             decay_high_r2: Some(0.88),
+            dub_stab_onset_count: None,
+            dub_stab_histogram: None,
             flags: vec![],
             warnings: vec![],
         }

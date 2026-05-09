@@ -35,6 +35,10 @@ pub struct StratumResult {
     pub key_confidence: f64,
     pub key_clarity: f64,
     pub grid_stability: f64,
+    /// "rekordbox" when the caller supplied an external grid (e.g. from
+    /// ANLZ PQTZ), "hmm" when the analyzer's own beat tracker was used.
+    /// Empty string on cached results from before this field existed.
+    pub grid_source: String,
     pub duration_seconds: f64,
     pub processing_time_ms: f64,
     pub analyzer_version: String,
@@ -44,6 +48,14 @@ pub struct StratumResult {
     pub decay_mid_r2: Option<f64>,
     pub decay_high_tau: Option<f64>,
     pub decay_high_r2: Option<f64>,
+    /// Number of kick-disjoint stab-band onsets surviving the ±80 ms kick
+    /// mask. Populated when the beat grid has at least two beats.
+    pub dub_stab_onset_count: Option<u32>,
+    /// 32-bin global beat-relative offset histogram (Stage 2).
+    /// Bin 0 is on-beat; bin 16 is the offbeat-eighth. Per-bar histograms
+    /// are not surfaced here — callers needing them should run the
+    /// analyzer with stratum-dsp directly.
+    pub dub_stab_histogram: Option<Vec<f64>>,
     pub flags: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -57,7 +69,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "4";
+pub const STRATUM_SCHEMA_VERSION: &str = "5";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -322,11 +334,48 @@ fn stratum_notation_to_camelot(stratum_notation: &str) -> String {
     format!("{camelot_num}{camelot_letter}")
 }
 
+/// Look up a track's Rekordbox-tagged beat grid by its file path.
+///
+/// Opens the master.db read-only, finds the track's `AnalysisDataPath`,
+/// resolves it under the USBANLZ root, and parses the PQTZ tag. Returns
+/// `None` if anything in the chain fails (no DB, track not found, ANLZ
+/// missing, parse error). Callers should treat `None` as "no Rekordbox
+/// grid available — fall back to HMM tracking", not as an error.
+///
+/// Each call opens a fresh DB connection. For batch use this is wasteful
+/// (~ms per track) — callers iterating many tracks may want a variant
+/// that takes a borrowed connection instead.
+pub fn load_rekordbox_grid_for_path(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
+    let db_path = crate::db::resolve_db_path()?;
+    let conn = crate::db::open(&db_path).ok()?;
+    let analysis_data_path: String = conn
+        .query_row(
+            "SELECT AnalysisDataPath FROM djmdContent WHERE FolderPath = ?1 LIMIT 1",
+            [file_path],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if analysis_data_path.is_empty() {
+        return None;
+    }
+    let abs = crate::anlz::resolve_anlz_path(&analysis_data_path)?;
+    crate::anlz::read_beat_grid(std::path::Path::new(&abs)).ok()
+}
+
 pub fn analyze_with_stratum(
     samples: &[f32],
     sample_rate: u32,
+    external_beat_grid: Option<stratum_dsp::BeatGrid>,
 ) -> Result<StratumResult, AudioError> {
-    let config = stratum_dsp::AnalysisConfig::default();
+    let grid_source = if external_beat_grid.is_some() {
+        "rekordbox"
+    } else {
+        "hmm"
+    };
+    let config = stratum_dsp::AnalysisConfig {
+        external_beat_grid,
+        ..stratum_dsp::AnalysisConfig::default()
+    };
 
     let start = Instant::now();
     let result = stratum_dsp::analyze_audio(samples, sample_rate, config)
@@ -345,6 +394,7 @@ pub fn analyze_with_stratum(
         key_confidence: confidence.key_confidence as f64,
         key_clarity: result.key_clarity as f64,
         grid_stability: confidence.grid_stability as f64,
+        grid_source: grid_source.to_string(),
         duration_seconds,
         processing_time_ms,
         analyzer_version: result.metadata.algorithm_version.clone(),
@@ -370,6 +420,11 @@ pub fn analyze_with_stratum(
             .as_ref()
             .and_then(|d| d.high.as_ref())
             .map(|b| b.fit_r2_median as f64),
+        dub_stab_onset_count: result.dub_stab.as_ref().map(|d| d.stab_onset_count as u32),
+        dub_stab_histogram: result
+            .dub_stab
+            .as_ref()
+            .map(|d| d.histogram.iter().map(|&v| v as f64).collect()),
         flags: result
             .metadata
             .flags
@@ -395,6 +450,7 @@ mod tests {
             key_confidence: 0.88,
             key_clarity: 0.72,
             grid_stability: 0.91,
+            grid_source: "rekordbox".to_string(),
             duration_seconds: 300.5,
             processing_time_ms: 1234.5,
             analyzer_version: "stratum-dsp-1.0.0".to_string(),
@@ -404,6 +460,8 @@ mod tests {
             decay_mid_r2: Some(0.92),
             decay_high_tau: Some(95.0),
             decay_high_r2: Some(0.88),
+            dub_stab_onset_count: Some(168),
+            dub_stab_histogram: Some(vec![0.0; 32]),
             flags: vec!["MultimodalBpm".to_string()],
             warnings: vec!["Low key clarity".to_string()],
         };
@@ -937,7 +995,7 @@ def percentile(arr, p):
             samples.len() as f64 / sample_rate as f64
         );
 
-        let result = analyze_with_stratum(&samples, sample_rate)
+        let result = analyze_with_stratum(&samples, sample_rate, None)
             .unwrap_or_else(|e| panic!("analysis failed: {e}"));
 
         assert!(
@@ -1027,7 +1085,7 @@ def percentile(arr, p):
         };
 
         let (samples, sample_rate) = decode_to_samples(&file_path).unwrap();
-        let result = analyze_with_stratum(&samples, sample_rate).unwrap();
+        let result = analyze_with_stratum(&samples, sample_rate, None).unwrap();
         let features_json = serde_json::to_string(&result).unwrap();
 
         let dir = tempfile::tempdir().unwrap();

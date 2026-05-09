@@ -44,8 +44,12 @@ pub(super) async fn analyze_stratum(file_path: &str) -> Result<audio::StratumRes
             .map_err(|e| format!("Decode task failed: {e}"))?
             .map_err(|e| format!("Decode error: {e}"))?;
 
-    tokio::task::spawn_blocking(move || audio::analyze_with_stratum(&samples, sample_rate))
-        .await
-        .map_err(|e| format!("Analysis task failed: {e}"))?
-        .map_err(|e| format!("Analysis error: {e}"))
+    let path_for_grid = file_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
+        audio::analyze_with_stratum(&samples, sample_rate, grid)
+    })
+    .await
+    .map_err(|e| format!("Analysis task failed: {e}"))?
+    .map_err(|e| format!("Analysis error: {e}"))
 }

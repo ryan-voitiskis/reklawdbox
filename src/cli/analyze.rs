@@ -433,11 +433,14 @@ async fn cli_analyze_single_track(
                 .map_err(|e| format!("Decode task failed: {e}"))?
                 .map_err(|e| format!("Decode error: {e}"))?;
 
-        let stratum_result =
-            tokio::task::spawn_blocking(move || audio::analyze_with_stratum(&samples, sample_rate))
-                .await
-                .map_err(|e| format!("Analysis task failed: {e}"))?
-                .map_err(|e| format!("Analysis error: {e}"))?;
+        let path_for_grid = file_path.clone();
+        let stratum_result = tokio::task::spawn_blocking(move || {
+            let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
+            audio::analyze_with_stratum(&samples, sample_rate, grid)
+        })
+        .await
+        .map_err(|e| format!("Analysis task failed: {e}"))?
+        .map_err(|e| format!("Analysis error: {e}"))?;
 
         let features_json = serialize_cache_payload(&stratum_result, "stratum-dsp analysis")?;
         send_cache_message(

@@ -1170,8 +1170,10 @@ async fn cli_analyze_for_hydrate(
 
         match decode_result {
             Ok(Ok((samples, sample_rate))) => {
+                let path_for_grid = file_path.clone();
                 let analysis = tokio::task::spawn_blocking(move || {
-                    audio::analyze_with_stratum(&samples, sample_rate)
+                    let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
+                    audio::analyze_with_stratum(&samples, sample_rate, grid)
                 })
                 .await;
 
