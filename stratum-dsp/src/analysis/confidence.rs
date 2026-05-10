@@ -325,6 +325,7 @@ mod tests {
             harmonic_proportion: None,
             decay: None,
             dub_stab: None,
+            sections: None,
             metadata: AnalysisMetadata {
                 duration_seconds: 30.0,
                 sample_rate: 44100,

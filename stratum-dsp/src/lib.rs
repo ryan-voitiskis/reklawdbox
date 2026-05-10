@@ -1643,6 +1643,24 @@ pub fn analyze_audio(
     )
     .unwrap_or(None);
 
+    // Track-section labels — coarse Intro / MainGroove / Breakdown / Outro
+    // identification. Used downstream to filter feature aggregation to
+    // only the relevant sections (e.g. dub_stab over MainGroove only).
+    // Failures fall back to None — never fatal to the analysis.
+    let sections = match features::sections::detect_track_sections(
+        &magnitude_spec_frames,
+        sample_rate,
+        config.frame_size,
+        config.hop_size,
+    ) {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(s),
+        Err(e) => {
+            log::warn!("track-section detection failed: {}", e);
+            None
+        }
+    };
+
     // Dub-stab Stage 1 + 2: kick-disjoint stab onsets + beat-relative offset
     // histogram. Only meaningful when the beat grid has at least two beats —
     // otherwise the histogram is all-zero by construction. Failures are
@@ -1652,7 +1670,28 @@ pub fn analyze_audio(
             beat_relative_offset_histogram, detect_kick_disjoint_stab_onsets, match_template,
             DubStabConfig, MIN_TEMPLATE_CONFIDENCE, TEMPLATE_UNMATCHED,
         };
+        use features::sections::SectionKind;
         let cfg = DubStabConfig::default();
+
+        // Build the MainGroove time ranges for filtering, plus their total
+        // duration for the per-second rate. When sections is None or has no
+        // MainGroove section, fall through to using the full track.
+        let main_groove_ranges: Vec<(f32, f32)> = sections
+            .as_ref()
+            .map(|secs| {
+                secs.iter()
+                    .filter(|s| s.kind == SectionKind::MainGroove)
+                    .map(|s| (s.start_seconds, s.end_seconds))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let track_duration_seconds = trimmed_samples.len() as f32 / sample_rate as f32;
+        let main_groove_duration: f32 = if main_groove_ranges.is_empty() {
+            track_duration_seconds
+        } else {
+            main_groove_ranges.iter().map(|(a, b)| b - a).sum()
+        };
+
         match detect_kick_disjoint_stab_onsets(
             &magnitude_spec_frames,
             sample_rate,
@@ -1660,42 +1699,64 @@ pub fn analyze_audio(
             config.hop_size,
             &cfg,
         ) {
-            Ok(stab_onsets) => match beat_relative_offset_histogram(
-                &stab_onsets,
-                config.hop_size,
-                sample_rate,
-                &beat_grid,
-            ) {
-                Ok(hist) => {
-                    // Surface the matcher result with TEMPLATE_UNMATCHED as a
-                    // sentinel when no template clears the threshold, so
-                    // consumers can distinguish "no histogram" (template_match
-                    // is None) from "histogram exists but doesn't fit any
-                    // template" (template_match.name = "unmatched").
-                    let template_match = match_template(&hist.global).map(|m| {
-                        let name = if m.score >= MIN_TEMPLATE_CONFIDENCE {
-                            m.name.to_string()
+            Ok(stab_onsets) => {
+                // Filter onsets to MainGroove sections when available.
+                let frames_per_second = sample_rate as f32 / config.hop_size as f32;
+                let filtered_onsets: Vec<usize> = if main_groove_ranges.is_empty() {
+                    stab_onsets
+                } else {
+                    stab_onsets
+                        .into_iter()
+                        .filter(|&f| {
+                            let t = f as f32 / frames_per_second;
+                            main_groove_ranges.iter().any(|&(a, b)| t >= a && t < b)
+                        })
+                        .collect()
+                };
+
+                match beat_relative_offset_histogram(
+                    &filtered_onsets,
+                    config.hop_size,
+                    sample_rate,
+                    &beat_grid,
+                ) {
+                    Ok(hist) => {
+                        // Surface the matcher result with TEMPLATE_UNMATCHED as a
+                        // sentinel when no template clears the threshold, so
+                        // consumers can distinguish "no histogram" (template_match
+                        // is None) from "histogram exists but doesn't fit any
+                        // template" (template_match.name = "unmatched").
+                        let template_match = match_template(&hist.global).map(|m| {
+                            let name = if m.score >= MIN_TEMPLATE_CONFIDENCE {
+                                m.name.to_string()
+                            } else {
+                                TEMPLATE_UNMATCHED.to_string()
+                            };
+                            DubStabTemplateMatch {
+                                name,
+                                score: m.score,
+                            }
+                        });
+                        let onset_rate = if main_groove_duration > 0.0 {
+                            filtered_onsets.len() as f32 / main_groove_duration
                         } else {
-                            TEMPLATE_UNMATCHED.to_string()
+                            0.0
                         };
-                        DubStabTemplateMatch {
-                            name,
-                            score: m.score,
-                        }
-                    });
-                    Some(DubStabAnalysis {
-                        stab_onset_count: stab_onsets.len() as u32,
-                        histogram: hist.global.to_vec(),
-                        per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
-                        template_match,
-                    })
+                        Some(DubStabAnalysis {
+                            stab_onset_count: filtered_onsets.len() as u32,
+                            stab_onset_rate: onset_rate,
+                            histogram: hist.global.to_vec(),
+                            per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
+                            template_match,
+                        })
+                    }
+                    Err(e) => {
+                        log::warn!("dub_stab Stage 2 (histogram) failed: {}", e);
+                        flags.push(crate::analysis::result::AnalysisFlag::DubStabStage2Failed);
+                        None
+                    }
                 }
-                Err(e) => {
-                    log::warn!("dub_stab Stage 2 (histogram) failed: {}", e);
-                    flags.push(crate::analysis::result::AnalysisFlag::DubStabStage2Failed);
-                    None
-                }
-            },
+            }
             Err(e) => {
                 log::warn!("dub_stab Stage 1 (kick-disjoint onsets) failed: {}", e);
                 flags.push(crate::analysis::result::AnalysisFlag::DubStabStage1Failed);
@@ -1720,6 +1781,7 @@ pub fn analyze_audio(
         harmonic_proportion,
         decay,
         dub_stab,
+        sections,
         metadata: AnalysisMetadata {
             duration_seconds: trimmed_samples.len() as f32 / sample_rate as f32,
             sample_rate,

@@ -241,6 +241,12 @@ pub struct AnalysisResult {
     /// available (either from the HMM tracker or supplied externally).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dub_stab: Option<DubStabAnalysis>,
+
+    /// Coarse track-level section labels (Intro / MainGroove / Breakdown /
+    /// Outro). Used by downstream feature aggregators to filter to
+    /// kick-active or main-groove sections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<crate::features::sections::TrackSection>>,
 }
 
 /// Dub-stab Stage 1 + Stage 2 + Stage 3 result, surfaced from the
@@ -253,12 +259,20 @@ pub struct AnalysisResult {
 /// the bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DubStabAnalysis {
-    /// Kick-disjoint stab-band onsets surviving Stage 1's ±80 ms kick mask.
-    /// `u32` (not `usize`) so the serialised JSON is platform-independent.
+    /// Kick-disjoint stab-band onsets surviving Stage 1's ±80 ms kick mask
+    /// AND (when sections are available) the MainGroove filter. `u32` (not
+    /// `usize`) so the serialised JSON is platform-independent.
     pub stab_onset_count: u32,
+    /// Stab onsets per second of MainGroove time (or per second of total
+    /// track time when no sections are available). More comparable across
+    /// tracks of different lengths than the raw count, since intros and
+    /// outros — which contribute few stabs — don't dilute the rate.
+    pub stab_onset_rate: f32,
     /// Global histogram aggregated across the analysed window. Length 32.
     pub histogram: Vec<f32>,
     /// One sub-histogram per bar in the beat grid. Each is length 32.
+    /// Bars outside MainGroove sections (when sections are available) will
+    /// have empty histograms because no onsets are attributed to them.
     pub per_bar_histograms: Vec<Vec<f32>>,
     /// Stage 3 — best-matching template name + cosine similarity.
     /// `None` when the histogram is all zero (no signal to match).

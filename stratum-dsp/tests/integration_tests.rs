@@ -335,6 +335,17 @@ mod tests {
         for h in &dub.per_bar_histograms {
             assert_eq!(h.len(), 32);
         }
+        // Onset rate is the count divided by the analysed duration (seconds).
+        // The synthetic pulse train should produce a strictly-positive rate
+        // when any onsets are detected.
+        if dub.stab_onset_count > 0 {
+            assert!(
+                dub.stab_onset_rate > 0.0,
+                "onset_rate should be > 0 when count > 0; got rate={}, count={}",
+                dub.stab_onset_rate,
+                dub.stab_onset_count
+            );
+        }
     }
 
     #[test]

@@ -49,8 +49,14 @@ pub struct StratumResult {
     pub decay_high_tau: Option<f64>,
     pub decay_high_r2: Option<f64>,
     /// Number of kick-disjoint stab-band onsets surviving the ±80 ms kick
-    /// mask. Populated when the beat grid has at least two beats.
+    /// mask AND (when sections are available) the MainGroove filter.
+    /// Populated when the beat grid has at least two beats.
     pub dub_stab_onset_count: Option<u32>,
+    /// Stab onsets per second of MainGroove time (or per second of total
+    /// track time when no sections are available). More comparable across
+    /// tracks of different lengths than the raw count — pure dub techno is
+    /// typically 1.5–4 stabs/s, sparser genres < 1.0.
+    pub dub_stab_onset_rate: Option<f64>,
     /// 32-bin global beat-relative offset histogram (Stage 2).
     /// Bin 0 is on-beat; bin 16 is the offbeat-eighth. Per-bar histograms
     /// are not surfaced here — callers needing them should run the
@@ -67,8 +73,29 @@ pub struct StratumResult {
     /// best-matching template (regardless of whether that template's name
     /// is surfaced or replaced by `unmatched`).
     pub dub_stab_template_score: Option<f64>,
+    /// Coarse track structure: ordered list of sections with start/end
+    /// times and labels (Intro / MainGroove / Breakdown / Outro). Used by
+    /// downstream feature aggregators (kick-pattern, sub-rumble, sidechain
+    /// depth) to filter to relevant sections only. `None` when section
+    /// detection failed or returned an empty list.
+    pub sections: Option<Vec<TrackSectionView>>,
     pub flags: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+/// Compact section view surfaced through the cached `StratumResult`.
+/// Mirrors `stratum_dsp::features::sections::TrackSection` but with `String`
+/// `kind` (instead of an enum) so the JSON cache shape is stable across
+/// stratum-dsp version changes that might add new section kinds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackSectionView {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    /// One of `"intro"`, `"main_groove"`, `"breakdown"`, `"outro"`.
+    pub kind: String,
+    pub kick_band_rms: f64,
+    pub broadband_rms: f64,
 }
 
 pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["flac", "wav", "mp3", "m4a", "aac", "aiff"];
@@ -80,7 +107,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "8";
+pub const STRATUM_SCHEMA_VERSION: &str = "9";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -509,6 +536,7 @@ pub fn analyze_with_stratum(
             .and_then(|d| d.high.as_ref())
             .map(|b| b.fit_r2_median as f64),
         dub_stab_onset_count: result.dub_stab.as_ref().map(|d| d.stab_onset_count),
+        dub_stab_onset_rate: result.dub_stab.as_ref().map(|d| d.stab_onset_rate as f64),
         dub_stab_histogram: result
             .dub_stab
             .as_ref()
@@ -530,6 +558,23 @@ pub fn analyze_with_stratum(
             .as_ref()
             .and_then(|d| d.template_match.as_ref())
             .map(|t| t.score as f64),
+        sections: result.sections.as_ref().map(|secs| {
+            secs.iter()
+                .map(|s| TrackSectionView {
+                    start_seconds: s.start_seconds as f64,
+                    end_seconds: s.end_seconds as f64,
+                    kind: match s.kind {
+                        stratum_dsp::features::sections::SectionKind::Intro => "intro",
+                        stratum_dsp::features::sections::SectionKind::MainGroove => "main_groove",
+                        stratum_dsp::features::sections::SectionKind::Breakdown => "breakdown",
+                        stratum_dsp::features::sections::SectionKind::Outro => "outro",
+                    }
+                    .to_string(),
+                    kick_band_rms: s.kick_band_rms as f64,
+                    broadband_rms: s.broadband_rms as f64,
+                })
+                .collect()
+        }),
         flags: result
             .metadata
             .flags
@@ -566,9 +611,17 @@ mod tests {
             decay_high_tau: Some(95.0),
             decay_high_r2: Some(0.88),
             dub_stab_onset_count: Some(168),
+            dub_stab_onset_rate: Some(1.87),
             dub_stab_histogram: Some(vec![0.0; 32]),
             dub_stab_template: Some("offbeat_eighth".to_string()),
             dub_stab_template_score: Some(0.92),
+            sections: Some(vec![TrackSectionView {
+                start_seconds: 0.0,
+                end_seconds: 30.0,
+                kind: "main_groove".to_string(),
+                kick_band_rms: 1.5,
+                broadband_rms: 0.5,
+            }]),
             flags: vec!["MultimodalBpm".to_string()],
             warnings: vec!["Low key clarity".to_string()],
         };

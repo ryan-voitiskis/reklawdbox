@@ -440,9 +440,11 @@ mod tests {
             decay_high_tau: Some(95.0),
             decay_high_r2: Some(0.88),
             dub_stab_onset_count: None,
+            dub_stab_onset_rate: None,
             dub_stab_histogram: None,
             dub_stab_template: None,
             dub_stab_template_score: None,
+            sections: None,
             flags: vec![],
             warnings: vec![],
         }
