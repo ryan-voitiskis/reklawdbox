@@ -52,11 +52,16 @@ pub struct StratumResult {
     /// mask AND (when sections are available) the MainGroove filter.
     /// Populated when the beat grid has at least two beats.
     pub dub_stab_onset_count: Option<u32>,
-    /// Stab onsets per second of MainGroove time (or per second of total
-    /// track time when no sections are available). More comparable across
-    /// tracks of different lengths than the raw count — pure dub techno is
-    /// typically 1.5–4 stabs/s, sparser genres < 1.0.
+    /// Stab onsets per second. The denominator depends on
+    /// `dub_stab_rate_basis` — MainGroove time when sections detected at
+    /// least one MainGroove section, else total track duration. Consumers
+    /// comparing rates across tracks should filter to one basis since the
+    /// same numeric value means different things under the two
+    /// denominators.
     pub dub_stab_onset_rate: Option<f64>,
+    /// Either `"main_groove"` or `"track"` — the denominator regime used
+    /// for `dub_stab_onset_rate`. `None` when dub_stab itself didn't run.
+    pub dub_stab_rate_basis: Option<String>,
     /// 32-bin global beat-relative offset histogram (Stage 2).
     /// Bin 0 is on-beat; bin 16 is the offbeat-eighth. Per-bar histograms
     /// are not surfaced here — callers needing them should run the
@@ -107,7 +112,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "9";
+pub const STRATUM_SCHEMA_VERSION: &str = "10";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -537,6 +542,14 @@ pub fn analyze_with_stratum(
             .map(|b| b.fit_r2_median as f64),
         dub_stab_onset_count: result.dub_stab.as_ref().map(|d| d.stab_onset_count),
         dub_stab_onset_rate: result.dub_stab.as_ref().map(|d| d.stab_onset_rate as f64),
+        dub_stab_rate_basis: result.dub_stab.as_ref().map(|d| {
+            match d.rate_basis {
+                stratum_dsp::RateBasis::MainGroove => "main_groove",
+                stratum_dsp::RateBasis::Track => "track",
+                _ => "unknown",
+            }
+            .to_string()
+        }),
         dub_stab_histogram: result
             .dub_stab
             .as_ref()
@@ -568,6 +581,9 @@ pub fn analyze_with_stratum(
                         stratum_dsp::features::sections::SectionKind::MainGroove => "main_groove",
                         stratum_dsp::features::sections::SectionKind::Breakdown => "breakdown",
                         stratum_dsp::features::sections::SectionKind::Outro => "outro",
+                        // SectionKind is #[non_exhaustive]; future variants
+                        // surface as "unknown" until the cache catches up.
+                        _ => "unknown",
                     }
                     .to_string(),
                     kick_band_rms: s.kick_band_rms as f64,
@@ -612,6 +628,7 @@ mod tests {
             decay_high_r2: Some(0.88),
             dub_stab_onset_count: Some(168),
             dub_stab_onset_rate: Some(1.87),
+            dub_stab_rate_basis: Some("main_groove".to_string()),
             dub_stab_histogram: Some(vec![0.0; 32]),
             dub_stab_template: Some("offbeat_eighth".to_string()),
             dub_stab_template_score: Some(0.92),

@@ -22,7 +22,12 @@ use crate::error::AnalysisError;
 use serde::{Deserialize, Serialize};
 
 /// Coarse section type. Identified from kick-density + RMS energy only.
+///
+/// Marked `#[non_exhaustive]` so adding a fifth variant (e.g. `Buildup`,
+/// `Drop`) later is not a breaking change for downstream `match` arms.
+/// Internal `match`es should use a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SectionKind {
     /// Low energy, low kick density, near track start.
     Intro,
@@ -119,10 +124,15 @@ pub fn detect_track_sections(
 
     let n_bins = spec[0].len();
     let bin_width_hz = sample_rate as f32 / frame_size as f32;
-    let kick_bin_low = (KICK_BAND_LOW_HZ / bin_width_hz).floor() as usize;
-    let kick_bin_high = ((KICK_BAND_HIGH_HZ / bin_width_hz).ceil() as usize).min(n_bins - 1);
-    let broad_bin_low = (BROADBAND_LOW_HZ / bin_width_hz).floor() as usize;
-    let broad_bin_high = ((BROADBAND_HIGH_HZ / bin_width_hz).ceil() as usize).min(n_bins - 1);
+    // Use `.ceil()` for low edges and `.floor()` for high edges so the
+    // resulting bin range is strictly inside the named Hz band — avoids
+    // pulling in sub-band rumble that's not part of the kick. (At
+    // 44.1 kHz / 2048, `.floor(40 / 21.53) = 1` covers ~21–43 Hz; ceil
+    // gives bin 2, which starts at ~43 Hz.)
+    let kick_bin_low = (KICK_BAND_LOW_HZ / bin_width_hz).ceil() as usize;
+    let kick_bin_high = ((KICK_BAND_HIGH_HZ / bin_width_hz).floor() as usize).min(n_bins - 1);
+    let broad_bin_low = (BROADBAND_LOW_HZ / bin_width_hz).ceil() as usize;
+    let broad_bin_high = ((BROADBAND_HIGH_HZ / bin_width_hz).floor() as usize).min(n_bins - 1);
 
     let window_frames = (SECTION_WINDOW_SECONDS * frames_per_second).round() as usize;
     let hop_frames = (SECTION_HOP_SECONDS * frames_per_second).round() as usize;

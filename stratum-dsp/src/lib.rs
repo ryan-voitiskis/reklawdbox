@@ -52,7 +52,8 @@ pub mod ml;
 // Re-export main types
 pub use analysis::confidence::{compute_confidence, AnalysisConfidence};
 pub use analysis::result::{
-    AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, DubStabTemplateMatch, Key, KeyType,
+    AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, DubStabTemplateMatch, Key,
+    KeyType, RateBasis,
 };
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
@@ -1657,6 +1658,7 @@ pub fn analyze_audio(
         Ok(s) => Some(s),
         Err(e) => {
             log::warn!("track-section detection failed: {}", e);
+            flags.push(crate::analysis::result::AnalysisFlag::SectionDetectionFailed);
             None
         }
     };
@@ -1675,7 +1677,9 @@ pub fn analyze_audio(
 
         // Build the MainGroove time ranges for filtering, plus their total
         // duration for the per-second rate. When sections is None or has no
-        // MainGroove section, fall through to using the full track.
+        // MainGroove section, fall through to using the full track. The
+        // chosen denominator is recorded in `rate_basis` so consumers can
+        // compare rates only within one regime.
         let main_groove_ranges: Vec<(f32, f32)> = sections
             .as_ref()
             .map(|secs| {
@@ -1686,10 +1690,21 @@ pub fn analyze_audio(
             })
             .unwrap_or_default();
         let track_duration_seconds = trimmed_samples.len() as f32 / sample_rate as f32;
-        let main_groove_duration: f32 = if main_groove_ranges.is_empty() {
-            track_duration_seconds
+        let (rate_denominator, rate_basis) = if main_groove_ranges.is_empty() {
+            // Sections present but no MainGroove → push a flag so the
+            // fallback to track-duration is observable downstream.
+            if sections.is_some() {
+                flags.push(crate::analysis::result::AnalysisFlag::NoMainGrooveDetected);
+            }
+            (
+                track_duration_seconds,
+                crate::analysis::result::RateBasis::Track,
+            )
         } else {
-            main_groove_ranges.iter().map(|(a, b)| b - a).sum()
+            (
+                main_groove_ranges.iter().map(|(a, b)| b - a).sum(),
+                crate::analysis::result::RateBasis::MainGroove,
+            )
         };
 
         match detect_kick_disjoint_stab_onsets(
@@ -1737,14 +1752,22 @@ pub fn analyze_audio(
                                 score: m.score,
                             }
                         });
-                        let onset_rate = if main_groove_duration > 0.0 {
-                            filtered_onsets.len() as f32 / main_groove_duration
+                        // Guard against NaN (`> 0.0` returns false for NaN
+                        // but is_finite is explicit) and against tiny
+                        // sub-second denominators that would explode the
+                        // rate into a meaningless huge value.
+                        const MIN_RATE_DENOMINATOR_S: f32 = 1.0;
+                        let onset_rate = if rate_denominator.is_finite()
+                            && rate_denominator >= MIN_RATE_DENOMINATOR_S
+                        {
+                            filtered_onsets.len() as f32 / rate_denominator
                         } else {
                             0.0
                         };
                         Some(DubStabAnalysis {
                             stab_onset_count: filtered_onsets.len() as u32,
                             stab_onset_rate: onset_rate,
+                            rate_basis,
                             histogram: hist.global.to_vec(),
                             per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
                             template_match,

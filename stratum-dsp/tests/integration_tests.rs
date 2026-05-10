@@ -346,6 +346,14 @@ mod tests {
                 dub.stab_onset_count
             );
         }
+        // rate_basis must be one of the two known regimes — the type
+        // system enforces this, but pin it as a sanity check.
+        use stratum_dsp::RateBasis;
+        assert!(
+            matches!(dub.rate_basis, RateBasis::MainGroove | RateBasis::Track),
+            "rate_basis should be MainGroove or Track; got {:?}",
+            dub.rate_basis
+        );
     }
 
     #[test]

@@ -441,6 +441,7 @@ mod tests {
             decay_high_r2: Some(0.88),
             dub_stab_onset_count: None,
             dub_stab_onset_rate: None,
+            dub_stab_rate_basis: None,
             dub_stab_histogram: None,
             dub_stab_template: None,
             dub_stab_template_score: None,

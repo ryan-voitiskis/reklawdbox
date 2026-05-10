@@ -170,6 +170,15 @@ pub enum AnalysisFlag {
     DubStabStage1Failed,
     /// Stage 2 (beat-relative offset histogram) returned an error.
     DubStabStage2Failed,
+    /// Track-section detector returned an error. The downstream pipeline
+    /// continues with sections=None and the dub_stab MainGroove filter is
+    /// effectively a no-op. Distinct from `NoMainGrooveDetected`.
+    SectionDetectionFailed,
+    /// Section detection succeeded but identified no MainGroove section
+    /// (e.g. continuous-pad ambient track). Dub-stab onset rate is then
+    /// denominated by total track duration rather than MainGroove time —
+    /// see `DubStabAnalysis.rate_basis`.
+    NoMainGrooveDetected,
 }
 
 /// Tempogram candidate diagnostics (for validation/tuning)
@@ -263,11 +272,16 @@ pub struct DubStabAnalysis {
     /// AND (when sections are available) the MainGroove filter. `u32` (not
     /// `usize`) so the serialised JSON is platform-independent.
     pub stab_onset_count: u32,
-    /// Stab onsets per second of MainGroove time (or per second of total
-    /// track time when no sections are available). More comparable across
-    /// tracks of different lengths than the raw count, since intros and
-    /// outros — which contribute few stabs — don't dilute the rate.
+    /// Stab onsets per second. The denominator depends on `rate_basis` —
+    /// MainGroove time when sections detected at least one MainGroove
+    /// section, else total track duration. Consumers comparing rates
+    /// across tracks should check `rate_basis` first or filter to one
+    /// regime, since the same numeric value means different things under
+    /// the two denominators.
     pub stab_onset_rate: f32,
+    /// Whether `stab_onset_rate` was computed against MainGroove duration
+    /// or against total track duration. See `RateBasis`.
+    pub rate_basis: RateBasis,
     /// Global histogram aggregated across the analysed window. Length 32.
     pub histogram: Vec<f32>,
     /// One sub-histogram per bar in the beat grid. Each is length 32.
@@ -278,6 +292,21 @@ pub struct DubStabAnalysis {
     /// `None` when the histogram is all zero (no signal to match).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_match: Option<DubStabTemplateMatch>,
+}
+
+/// Denominator regime for `DubStabAnalysis.stab_onset_rate`. Surfaced so
+/// consumers comparing rates across tracks can filter to a single regime
+/// rather than silently mixing apples and oranges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RateBasis {
+    /// Rate denominator was the sum of MainGroove section durations.
+    MainGroove,
+    /// Rate denominator was the entire track duration. Either no
+    /// sections were detected, or sections existed but contained no
+    /// MainGroove entry.
+    Track,
 }
 
 /// Compact serialisable view of `features::dub_stab::TemplateMatch` for
