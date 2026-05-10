@@ -75,7 +75,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "6";
+pub const STRATUM_SCHEMA_VERSION: &str = "7";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -431,10 +431,17 @@ pub fn analyze_with_stratum(
             .dub_stab
             .as_ref()
             .map(|d| d.histogram.iter().map(|&v| v as f64).collect()),
+        // Surface the template name only when the cosine similarity clears
+        // MIN_TEMPLATE_CONFIDENCE — below that, the histogram has peaks in
+        // positions none of the canonical templates cover well, and the
+        // "best match" is just the least-bad fit. The score is always
+        // surfaced (when a match exists at all) so callers can see what was
+        // rejected.
         dub_stab_template: result
             .dub_stab
             .as_ref()
             .and_then(|d| d.template_match.as_ref())
+            .filter(|t| t.score >= stratum_dsp::features::dub_stab::MIN_TEMPLATE_CONFIDENCE)
             .map(|t| t.name.clone()),
         dub_stab_template_score: result
             .dub_stab

@@ -349,10 +349,34 @@ pub struct TemplateMatch {
     pub all_scores: Vec<(&'static str, f32)>,
 }
 
-/// Build an L2-normalised template by placing soft-binned bumps at each
-/// `expected_offset` in `[0, 1)`. The width matches Stage 2's `SOFT_BIN_SIGMA`.
+/// Width multiplier applied to `SOFT_BIN_SIGMA` when building templates.
+///
+/// Real tracks have stab placements with more jitter than Stage 2's
+/// soft-binner produces (DAW quantisation isn't exact, and live performers
+/// drift around the canonical position). Templates wider than the per-onset
+/// soft-bin keep the cosine similarity high under that jitter without
+/// hurting discrimination — the canonical positions are still 1/4 beat
+/// apart, well outside the wider bumps' overlap region. Tuned empirically
+/// against the 24-track Dub Techno corpus: 1.5 raises mean confidence by
+/// roughly 30% versus 1.0 without changing template assignments on the
+/// strong-match tracks.
+const TEMPLATE_SIGMA_MULTIPLIER: f32 = 1.5;
+
+/// Below this cosine similarity the best-matching template is considered
+/// unreliable and callers should treat the histogram as "no clear pattern"
+/// rather than the named match. Picked from the 24-track validation: tracks
+/// scoring below ~0.4 had peaks in unconventional positions (1/16-late,
+/// 1/2-late) that none of the four canonical templates cover well, so the
+/// "best match" was effectively the least-bad fit.
+pub const MIN_TEMPLATE_CONFIDENCE: f32 = 0.4;
+
+/// Build an L2-normalised template by placing widened soft-binned bumps at
+/// each `expected_offset` in `[0, 1)`. Width is `TEMPLATE_SIGMA_MULTIPLIER ×
+/// SOFT_BIN_SIGMA` — wider than Stage 2's per-onset bumps so realistic
+/// onset jitter doesn't tank the cosine score.
 fn build_template(expected_offsets: &[f32]) -> [f32; HISTOGRAM_BINS] {
-    let two_sigma_sq = 2.0 * SOFT_BIN_SIGMA * SOFT_BIN_SIGMA;
+    let sigma = SOFT_BIN_SIGMA * TEMPLATE_SIGMA_MULTIPLIER;
+    let two_sigma_sq = 2.0 * sigma * sigma;
     let mut t = [0.0_f32; HISTOGRAM_BINS];
     for (bin, slot) in t.iter_mut().enumerate() {
         let centre = bin as f32 / HISTOGRAM_BINS as f32;
@@ -925,7 +949,12 @@ mod tests {
         let h = synthesise_histogram(&[0.5; 16]);
         let m = match_template(&h).expect("non-zero");
         assert_eq!(m.name, "offbeat_eighth");
-        assert!(m.score > 0.95, "score = {}", m.score);
+        // Templates are wider than per-onset bumps (TEMPLATE_SIGMA_MULTIPLIER
+        // = 1.5×), so a perfect-on-target synthetic observation scores
+        // slightly under 1.0 — the template "expects" jitter the synthetic
+        // histogram doesn't have. ~0.9+ is still well above any other
+        // template and well above MIN_TEMPLATE_CONFIDENCE.
+        assert!(m.score > 0.9, "score = {}", m.score);
     }
 
     #[test]
