@@ -208,6 +208,11 @@ pub fn detect_track_sections(
         window_frames,
     );
     merge_short_sections(&mut sections, SECTION_MIN_LENGTH_SECONDS);
+    // After short-section absorption, neighbouring sections on opposite
+    // sides of an absorbed run can end up adjacent and same-kind (the
+    // absorbed section was the only thing separating them). Collapse
+    // those before returning.
+    collapse_adjacent_same_kind(&mut sections);
     Ok(sections)
 }
 
@@ -295,6 +300,12 @@ fn run_length_encode(
     if labels.is_empty() {
         return sections;
     }
+    // Each section's end is the right edge of its LAST window. Because
+    // windows are wider than the hop, neighbouring sections overlap by
+    // `window_frames - hop_frames` seconds — that overlap represents
+    // transition uncertainty (the windows themselves overlap), not a
+    // bug. Downstream callers using sections for filtering should treat
+    // the overlap inclusively.
     let mut run_start_idx = 0;
     for i in 1..=labels.len() {
         if i == labels.len() || labels[i] != labels[run_start_idx] {
@@ -360,6 +371,35 @@ fn merge_short_sections(sections: &mut Vec<TrackSection>, min_length_seconds: f3
         target.start_seconds = target.start_seconds.min(removed.start_seconds);
         target.end_seconds = target.end_seconds.max(removed.end_seconds);
     }
+}
+
+/// Collapses adjacent same-kind sections into a single section. Energy
+/// and kick stats are recomputed as duration-weighted means so the
+/// merged section represents the union faithfully.
+fn collapse_adjacent_same_kind(sections: &mut Vec<TrackSection>) {
+    if sections.len() < 2 {
+        return;
+    }
+    let mut out: Vec<TrackSection> = Vec::with_capacity(sections.len());
+    for s in sections.drain(..) {
+        match out.last_mut() {
+            Some(prev) if prev.kind == s.kind => {
+                let prev_dur = (prev.end_seconds - prev.start_seconds).max(0.0);
+                let s_dur = (s.end_seconds - s.start_seconds).max(0.0);
+                let total = prev_dur + s_dur;
+                if total > 0.0 {
+                    prev.kick_band_rms =
+                        (prev.kick_band_rms * prev_dur + s.kick_band_rms * s_dur) / total;
+                    prev.broadband_rms =
+                        (prev.broadband_rms * prev_dur + s.broadband_rms * s_dur) / total;
+                }
+                prev.start_seconds = prev.start_seconds.min(s.start_seconds);
+                prev.end_seconds = prev.end_seconds.max(s.end_seconds);
+            }
+            _ => out.push(s),
+        }
+    }
+    *sections = out;
 }
 
 #[cfg(test)]
@@ -540,5 +580,67 @@ mod tests {
         assert_eq!(sections[0].kind, SectionKind::Breakdown);
         assert_eq!(sections[0].start_seconds, 0.0);
         assert_eq!(sections[0].end_seconds, 32.0);
+    }
+
+    #[test]
+    fn collapse_adjacent_same_kind_merges_post_absorption_pairs() {
+        // Recovery IDea-style structure: long Main, short Breakdown,
+        // long Main. After short-section absorption the Breakdown is
+        // gone but two adjacent Main sections remain — collapse should
+        // fuse them.
+        let mut sections = vec![
+            TrackSection {
+                start_seconds: 0.0,
+                end_seconds: 30.0,
+                kind: SectionKind::MainGroove,
+                kick_band_rms: 1.0,
+                broadband_rms: 1.0,
+            },
+            TrackSection {
+                start_seconds: 30.0,
+                end_seconds: 60.0,
+                kind: SectionKind::MainGroove,
+                kick_band_rms: 2.0,
+                broadband_rms: 2.0,
+            },
+        ];
+        collapse_adjacent_same_kind(&mut sections);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].kind, SectionKind::MainGroove);
+        assert_eq!(sections[0].start_seconds, 0.0);
+        assert_eq!(sections[0].end_seconds, 60.0);
+        // Stats are duration-weighted means; both sections were 30 s, so
+        // the merge of (1.0, 2.0) is (1.5, 1.5).
+        assert!((sections[0].kick_band_rms - 1.5).abs() < 1e-5);
+        assert!((sections[0].broadband_rms - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn collapse_adjacent_same_kind_leaves_alternating_pattern() {
+        let mut sections = vec![
+            TrackSection {
+                start_seconds: 0.0,
+                end_seconds: 30.0,
+                kind: SectionKind::MainGroove,
+                kick_band_rms: 1.0,
+                broadband_rms: 1.0,
+            },
+            TrackSection {
+                start_seconds: 30.0,
+                end_seconds: 50.0,
+                kind: SectionKind::Breakdown,
+                kick_band_rms: 0.0,
+                broadband_rms: 1.0,
+            },
+            TrackSection {
+                start_seconds: 50.0,
+                end_seconds: 80.0,
+                kind: SectionKind::MainGroove,
+                kick_band_rms: 1.0,
+                broadband_rms: 1.0,
+            },
+        ];
+        collapse_adjacent_same_kind(&mut sections);
+        assert_eq!(sections.len(), 3);
     }
 }
