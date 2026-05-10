@@ -26,6 +26,13 @@ pub const HISTOGRAM_BINS: usize = 32;
 /// one, absorbing micro-timing without smearing across the histogram.
 const SOFT_BIN_SIGMA: f32 = 0.5 / HISTOGRAM_BINS as f32;
 
+/// Upper bound on the per-bar histogram count. A real Dub Techno track in a
+/// 4/4 time signature has ~70–120 bars; values above this indicate a
+/// malformed beat grid and are rejected to bound the per-bar allocation
+/// (`bars × 32 × f32` ≈ 256 KB at 2000 bars). Tracks beyond this length are
+/// rare enough that any caller hitting the cap is almost certainly wrong.
+const MAX_BARS: usize = 2000;
+
 /// Configuration for the dub-stab detector.
 ///
 /// `kick_mask_window_ms = 80.0` and the symmetric mask shape are derived
@@ -219,6 +226,12 @@ pub fn beat_relative_offset_histogram(
         ));
     }
     validate_beat_grid(beat_grid)?;
+    if beat_grid.bars.len() > MAX_BARS {
+        return Err(AnalysisError::InvalidInput(format!(
+            "beat_grid.bars has {} entries (max {MAX_BARS}); likely malformed grid",
+            beat_grid.bars.len()
+        )));
+    }
 
     let mut global = [0.0_f32; HISTOGRAM_BINS];
     let mut per_bar: Vec<[f32; HISTOGRAM_BINS]> = vec![[0.0; HISTOGRAM_BINS]; beat_grid.bars.len()];
@@ -369,6 +382,12 @@ const TEMPLATE_SIGMA_MULTIPLIER: f32 = 1.5;
 /// 1/2-late) that none of the four canonical templates cover well, so the
 /// "best match" was effectively the least-bad fit.
 pub const MIN_TEMPLATE_CONFIDENCE: f32 = 0.4;
+
+/// Sentinel name returned when a histogram exists but no template clears
+/// `MIN_TEMPLATE_CONFIDENCE`. Surfaced in place of `None` so consumers can
+/// distinguish "we ran the matcher and nothing fits" from "we never got to
+/// run the matcher" (which is `None`).
+pub const TEMPLATE_UNMATCHED: &str = "unmatched";
 
 /// Build an L2-normalised template by placing widened soft-binned bumps at
 /// each `expected_offset` in `[0, 1)`. Width is `TEMPLATE_SIGMA_MULTIPLIER ×
@@ -991,5 +1010,28 @@ mod tests {
         let h = synthesise_histogram(&[0.0; 8]);
         let m = match_template(&h).expect("non-zero");
         assert_eq!(m.name, "on_beat");
+    }
+
+    #[test]
+    fn rejects_excessive_bar_count() {
+        // Constructing a beat grid with > MAX_BARS bars should error rather
+        // than silently allocating an unbounded `per_bar` vec.
+        let beats: Vec<f32> = (0..(MAX_BARS as f32 * 4.0 + 8.0) as usize)
+            .map(|i| i as f32 * 0.1)
+            .collect();
+        let bars: Vec<f32> = beats.iter().step_by(4).copied().collect();
+        let grid = BeatGrid {
+            downbeats: bars.clone(),
+            beats,
+            bars,
+        };
+        assert!(grid.bars.len() > MAX_BARS);
+        match beat_relative_offset_histogram(&[], HOP, SR, &grid) {
+            Err(AnalysisError::InvalidInput(msg)) => assert!(
+                msg.contains("malformed grid") || msg.contains("MAX_BARS"),
+                "msg={msg}"
+            ),
+            other => panic!("expected Invalid(malformed grid), got {other:?}"),
+        }
     }
 }

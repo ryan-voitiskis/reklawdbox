@@ -1650,7 +1650,7 @@ pub fn analyze_audio(
     let dub_stab = if beat_grid.beats.len() >= 2 {
         use features::dub_stab::{
             beat_relative_offset_histogram, detect_kick_disjoint_stab_onsets, match_template,
-            DubStabConfig,
+            DubStabConfig, MIN_TEMPLATE_CONFIDENCE, TEMPLATE_UNMATCHED,
         };
         let cfg = DubStabConfig::default();
         match detect_kick_disjoint_stab_onsets(
@@ -1667,13 +1667,24 @@ pub fn analyze_audio(
                 &beat_grid,
             ) {
                 Ok(hist) => {
-                    let template_match =
-                        match_template(&hist.global).map(|m| DubStabTemplateMatch {
-                            name: m.name.to_string(),
+                    // Surface the matcher result with TEMPLATE_UNMATCHED as a
+                    // sentinel when no template clears the threshold, so
+                    // consumers can distinguish "no histogram" (template_match
+                    // is None) from "histogram exists but doesn't fit any
+                    // template" (template_match.name = "unmatched").
+                    let template_match = match_template(&hist.global).map(|m| {
+                        let name = if m.score >= MIN_TEMPLATE_CONFIDENCE {
+                            m.name.to_string()
+                        } else {
+                            TEMPLATE_UNMATCHED.to_string()
+                        };
+                        DubStabTemplateMatch {
+                            name,
                             score: m.score,
-                        });
+                        }
+                    });
                     Some(DubStabAnalysis {
-                        stab_onset_count: stab_onsets.len(),
+                        stab_onset_count: stab_onsets.len() as u32,
                         histogram: hist.global.to_vec(),
                         per_bar_histograms: hist.per_bar.iter().map(|h| h.to_vec()).collect(),
                         template_match,
@@ -1681,16 +1692,19 @@ pub fn analyze_audio(
                 }
                 Err(e) => {
                     log::warn!("dub_stab Stage 2 (histogram) failed: {}", e);
+                    flags.push(crate::analysis::result::AnalysisFlag::DubStabStage2Failed);
                     None
                 }
             },
             Err(e) => {
                 log::warn!("dub_stab Stage 1 (kick-disjoint onsets) failed: {}", e);
+                flags.push(crate::analysis::result::AnalysisFlag::DubStabStage1Failed);
                 None
             }
         }
     } else {
         log::debug!("Skipping dub_stab: beat grid has < 2 beats");
+        flags.push(crate::analysis::result::AnalysisFlag::DubStabGridTooShort);
         None
     };
 

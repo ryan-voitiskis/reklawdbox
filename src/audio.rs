@@ -57,10 +57,15 @@ pub struct StratumResult {
     /// analyzer with stratum-dsp directly.
     pub dub_stab_histogram: Option<Vec<f64>>,
     /// Stage 3 — best-matching dub-techno chord-stab template name. One of
-    /// "offbeat_eighth", "all_16th_offbeats", "anticipation", "on_beat".
+    /// `offbeat_eighth`, `all_16th_offbeats`, `anticipation`, `on_beat`,
+    /// or `unmatched` when a histogram exists but no template clears
+    /// `MIN_TEMPLATE_CONFIDENCE`. `None` here means dub_stab itself didn't
+    /// run (no beat grid, Stage 1/2 error) — distinct from "histogram
+    /// exists but doesn't fit any template".
     pub dub_stab_template: Option<String>,
-    /// Cosine similarity in `[0, 1]` of the histogram against
-    /// `dub_stab_template`. Treat values below ~0.7 as low-confidence.
+    /// Cosine similarity in `[0, 1]` of the histogram against the
+    /// best-matching template (regardless of whether that template's name
+    /// is surfaced or replaced by `unmatched`).
     pub dub_stab_template_score: Option<f64>,
     pub flags: Vec<String>,
     pub warnings: Vec<String>,
@@ -75,7 +80,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "7";
+pub const STRATUM_SCHEMA_VERSION: &str = "8";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -344,28 +349,105 @@ fn stratum_notation_to_camelot(stratum_notation: &str) -> String {
 ///
 /// Opens the master.db read-only, finds the track's `AnalysisDataPath`,
 /// resolves it under the USBANLZ root, and parses the PQTZ tag. Returns
-/// `None` if anything in the chain fails (no DB, track not found, ANLZ
-/// missing, parse error). Callers should treat `None` as "no Rekordbox
-/// grid available — fall back to HMM tracking", not as an error.
+/// `None` if anything in the chain fails. Each failure path emits a
+/// `tracing::warn` so a misconfigured library (e.g. wrong SQLCipher key
+/// silently degrading every track to HMM) is observable in logs.
+///
+/// Callers should treat `None` as "no Rekordbox grid available — fall
+/// back to HMM tracking", not as an error.
 ///
 /// Each call opens a fresh DB connection. For batch use this is wasteful
 /// (~ms per track) — callers iterating many tracks may want a variant
 /// that takes a borrowed connection instead.
 pub fn load_rekordbox_grid_for_path(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
-    let db_path = crate::db::resolve_db_path()?;
-    let conn = crate::db::open(&db_path).ok()?;
-    let analysis_data_path: String = conn
-        .query_row(
+    use unicode_normalization::UnicodeNormalization;
+
+    let db_path = match crate::db::resolve_db_path() {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                "Rekordbox grid lookup: no master.db found (set REKORDBOX_DB_PATH); \
+                 falling back to HMM for all tracks"
+            );
+            return None;
+        }
+    };
+    let conn = match crate::db::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                "Rekordbox grid lookup: could not open master.db ({e}); falling back to HMM"
+            );
+            return None;
+        }
+    };
+
+    // macOS HFS+/APFS sometimes hands out NFD-decomposed paths while
+    // Rekordbox stored the original NFC form (or vice versa). Try the path
+    // as-is first; on miss, retry with the other normalisation form before
+    // giving up.
+    let lookup = |path: &str| -> Result<String, rusqlite::Error> {
+        conn.query_row(
             "SELECT AnalysisDataPath FROM djmdContent WHERE FolderPath = ?1 LIMIT 1",
-            [file_path],
+            [path],
             |row| row.get(0),
         )
-        .ok()?;
+    };
+    let analysis_data_path = match lookup(file_path) {
+        Ok(p) => p,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            // Try NFC then NFD (whichever differs from the input).
+            let nfc: String = file_path.nfc().collect();
+            let nfd: String = file_path.nfd().collect();
+            let alt = if nfc != file_path { Some(nfc) } else { None }
+                .or_else(|| (nfd != file_path).then_some(nfd));
+            match alt.as_deref().map(lookup) {
+                Some(Ok(p)) => {
+                    tracing::warn!(
+                        "Rekordbox grid lookup: matched only after Unicode renormalisation \
+                         for '{file_path}' — investigate the import path"
+                    );
+                    p
+                }
+                _ => {
+                    tracing::debug!(
+                        "Rekordbox grid lookup: no track row for '{file_path}'; falling back to HMM"
+                    );
+                    return None;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Rekordbox grid lookup: query failed for '{file_path}' ({e}); falling back to HMM"
+            );
+            return None;
+        }
+    };
+
     if analysis_data_path.is_empty() {
+        tracing::debug!("Rekordbox grid lookup: track '{file_path}' has empty AnalysisDataPath");
         return None;
     }
-    let abs = crate::anlz::resolve_anlz_path(&analysis_data_path)?;
-    crate::anlz::read_beat_grid(std::path::Path::new(&abs)).ok()
+    let abs = match crate::anlz::resolve_anlz_path(&analysis_data_path) {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                "Rekordbox grid lookup: cannot resolve ANLZ root (no HOME or \
+                 REKORDBOX_ANLZ_ROOT); falling back to HMM"
+            );
+            return None;
+        }
+    };
+    match crate::anlz::read_beat_grid(std::path::Path::new(&abs)) {
+        Ok(g) => Some(g),
+        Err(e) => {
+            tracing::warn!(
+                "Rekordbox grid lookup: failed to parse {abs} ({e}); falling back to HMM"
+            );
+            None
+        }
+    }
 }
 
 pub fn analyze_with_stratum(
@@ -426,22 +508,22 @@ pub fn analyze_with_stratum(
             .as_ref()
             .and_then(|d| d.high.as_ref())
             .map(|b| b.fit_r2_median as f64),
-        dub_stab_onset_count: result.dub_stab.as_ref().map(|d| d.stab_onset_count as u32),
+        dub_stab_onset_count: result.dub_stab.as_ref().map(|d| d.stab_onset_count),
         dub_stab_histogram: result
             .dub_stab
             .as_ref()
             .map(|d| d.histogram.iter().map(|&v| v as f64).collect()),
-        // Surface the template name only when the cosine similarity clears
-        // MIN_TEMPLATE_CONFIDENCE — below that, the histogram has peaks in
-        // positions none of the canonical templates cover well, and the
-        // "best match" is just the least-bad fit. The score is always
-        // surfaced (when a match exists at all) so callers can see what was
-        // rejected.
+        // Surface whatever the matcher returned — either a canonical template
+        // name (when score >= MIN_TEMPLATE_CONFIDENCE) or the
+        // TEMPLATE_UNMATCHED sentinel "unmatched" when a histogram exists but
+        // no template clears the threshold. `None` here means dub_stab itself
+        // didn't run (no beat grid, Stage 1/2 error), distinct from
+        // "histogram exists but no template fits". stratum-dsp does the
+        // thresholding so the schema stays stable across threshold tunings.
         dub_stab_template: result
             .dub_stab
             .as_ref()
             .and_then(|d| d.template_match.as_ref())
-            .filter(|t| t.score >= stratum_dsp::features::dub_stab::MIN_TEMPLATE_CONFIDENCE)
             .map(|t| t.name.clone()),
         dub_stab_template_score: result
             .dub_stab

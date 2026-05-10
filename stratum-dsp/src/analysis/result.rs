@@ -164,6 +164,12 @@ pub enum AnalysisFlag {
     TempoVariation,
     /// Multiple onset interpretations
     OnsetDetectionAmbiguous,
+    /// Beat grid had fewer than 2 beats — dub-stab Stage 1+2 skipped.
+    DubStabGridTooShort,
+    /// Stage 1 (kick-disjoint stab onset detection) returned an error.
+    DubStabStage1Failed,
+    /// Stage 2 (beat-relative offset histogram) returned an error.
+    DubStabStage2Failed,
 }
 
 /// Tempogram candidate diagnostics (for validation/tuning)
@@ -248,7 +254,8 @@ pub struct AnalysisResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DubStabAnalysis {
     /// Kick-disjoint stab-band onsets surviving Stage 1's ±80 ms kick mask.
-    pub stab_onset_count: usize,
+    /// `u32` (not `usize`) so the serialised JSON is platform-independent.
+    pub stab_onset_count: u32,
     /// Global histogram aggregated across the analysed window. Length 32.
     pub histogram: Vec<f32>,
     /// One sub-histogram per bar in the beat grid. Each is length 32.

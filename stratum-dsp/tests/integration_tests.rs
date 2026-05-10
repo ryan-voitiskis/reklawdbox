@@ -420,5 +420,15 @@ mod tests {
             result.dub_stab.is_none(),
             "dub_stab should be None when beat grid is empty"
         );
+        // dub_stab=None alone is ambiguous — also assert the flag so callers
+        // can distinguish "no histogram because no beats" from other paths.
+        assert!(
+            result.metadata.flags.iter().any(|f| matches!(
+                f,
+                stratum_dsp::analysis::result::AnalysisFlag::DubStabGridTooShort
+            )),
+            "DubStabGridTooShort flag should be set; got flags={:?}",
+            result.metadata.flags
+        );
     }
 }
