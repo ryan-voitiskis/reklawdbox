@@ -948,7 +948,7 @@ mod tests {
     fn synthesise_histogram(offsets: &[f32]) -> [f32; HISTOGRAM_BINS] {
         let two_sigma_sq = 2.0 * SOFT_BIN_SIGMA * SOFT_BIN_SIGMA;
         let mut h = [0.0_f32; HISTOGRAM_BINS];
-        for bin in 0..HISTOGRAM_BINS {
+        for (bin, slot) in h.iter_mut().enumerate() {
             let centre = bin as f32 / HISTOGRAM_BINS as f32;
             for &off in offsets {
                 let mut d = (centre - off).abs();
@@ -957,7 +957,7 @@ mod tests {
                 }
                 // 50× to give realistic absolute weights — scoring is
                 // L2-normalised so the multiplier is irrelevant.
-                h[bin] += 50.0 * (-(d * d) / two_sigma_sq).exp();
+                *slot += 50.0 * (-(d * d) / two_sigma_sq).exp();
             }
         }
         h
