@@ -1,6 +1,8 @@
 //! Integration tests for audio analysis engine
 
-use std::path::PathBuf;
+mod common;
+
+use common::fixture_path;
 use stratum_dsp::{analyze_audio, AnalysisConfig};
 
 /// Load a WAV file and return (samples, sample_rate)
@@ -30,13 +32,6 @@ fn load_wav(path: &str) -> Result<(Vec<f32>, u32), Box<dyn std::error::Error>> {
     };
 
     Ok((mono_samples, spec.sample_rate))
-}
-
-fn fixture_path(filename: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(filename)
 }
 
 #[cfg(test)]
