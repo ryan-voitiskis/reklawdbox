@@ -155,7 +155,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let total = tracks.len();
 
     // LPT scheduling: longest tracks first so short tracks fill gaps at the tail
-    to_analyze.sort_by(|a, b| b.0.length.cmp(&a.0.length));
+    to_analyze.sort_by_key(|b| std::cmp::Reverse(b.0.length));
 
     let pending = to_analyze.len();
 

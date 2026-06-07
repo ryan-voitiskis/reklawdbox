@@ -298,7 +298,7 @@ pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serd
             (genre, conf_map, total)
         })
         .collect();
-    genres.sort_by(|a, b| b.2.cmp(&a.2));
+    genres.sort_by_key(|b| std::cmp::Reverse(b.2));
 
     genres
         .into_iter()
@@ -311,7 +311,7 @@ pub(super) fn build_genre_distribution(results: &[ClassificationResult]) -> serd
                 }
             }
             let mut top: Vec<_> = artist_counts.into_iter().collect();
-            top.sort_by(|a, b| b.1.cmp(&a.1));
+            top.sort_by_key(|b| std::cmp::Reverse(b.1));
             let top_artists: Vec<String> = top
                 .iter()
                 .take(5)
@@ -379,7 +379,7 @@ fn build_dispatch_groups(
     let total_artists = artist_map.len();
 
     let mut artists: Vec<_> = artist_map.into_iter().collect();
-    artists.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    artists.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     let artists: Vec<serde_json::Value> = artists
         .into_iter()

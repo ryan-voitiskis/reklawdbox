@@ -2426,7 +2426,7 @@ pub(super) fn find_bridge_tracks(pools: &[DiscoveredPool]) -> Vec<(String, Vec<u
         .into_iter()
         .filter(|(_, p)| p.len() >= 2)
         .collect();
-    bridges.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    bridges.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     bridges
 }
 

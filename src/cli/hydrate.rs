@@ -286,7 +286,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
 
     // LPT scheduling: longest tracks first so short tracks fill gaps at the tail
-    analysis_pending.sort_by(|a, b| b.0.length.cmp(&a.0.length));
+    analysis_pending.sort_by_key(|b| std::cmp::Reverse(b.0.length));
 
     drop(store_conn);
 

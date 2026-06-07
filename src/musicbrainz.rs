@@ -129,7 +129,7 @@ pub async fn lookup(
     let best_release_id = releases.and_then(|rels| {
         let mut scored: Vec<(&serde_json::Value, i32)> =
             rels.iter().map(|r| (r, score_release(r))).collect();
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.1));
         scored
             .first()
             .and_then(|(r, _)| r.get("id").and_then(|v| v.as_str()))
