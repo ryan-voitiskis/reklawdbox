@@ -77,8 +77,15 @@ Local MCP test loop:
 2. Ask the user to run `/mcp`.
 3. Smoke-test changed MCP tools with a happy path and an error/edge path.
 
-If `sudo` is unavailable, run the release build and CLI smoke tests, then say
-that MCP host testing was not performed.
+In Codex Desktop, active MCP tools are fixed when the thread starts; there is no
+known in-thread equivalent of Claude Code's `/mcp` reconnect. Use
+`./scripts/mcp-smoke.mjs` after `cargo build --release` to drive the local
+binary over stdio from the current thread. It runs handshake, `tools/list`,
+`help(topic='genre')`, `calibration_coverage`, and a missing-playlist error
+path. Use `--skip-db` when the real Rekordbox DB is unavailable.
+
+If `sudo` is unavailable and Codex smoke is not enough, run the release build
+and CLI smoke tests, then say that MCP host testing was not performed.
 
 Essentia uses `.venvs/essentia/bin/python` via `CRATE_DIG_ESSENTIA_PYTHON` in
 `.mcp.json`. For analysis tests that must bypass cache, pass

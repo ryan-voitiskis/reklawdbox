@@ -128,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { config::apply_env(&cfg) };
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
     genre::init_overrides(cfg.genre_overrides);
     if should_run_cli(std::env::args()) || std::io::stdin().is_terminal() {
