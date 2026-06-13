@@ -53,8 +53,33 @@ So: ship 3–4 more discriminating features, then do one classifier-tuning pass.
       the `DubStabGridTooShort` flag. ~5 LOC. No new DSP, no schema break (new
       Optional field).
 
-      **Status:** implemented in the current branch with schema bump and cache
-      output. Still needs real-library MCP smoke testing after local deploy.
+      **Status:** implemented with schema bump and cache output. Real-library
+      MCP validation confirms the rate is useful but not discriminative alone:
+      Dub Techno samples landed in the expected 1.5-4 stabs/s range, but some
+      Techno/House controls also landed there.
+
+## Validation snapshot — 2026-06-13
+
+Using the local stdio MCP smoke path against `genre_verified`:
+
+- `calibration_coverage`: 604 verified tracks, all 604 with cached audio
+  features, 23 canonical genres.
+- Fresh section analysis after schema 11 produced contiguous, non-overlapping
+  section ranges on the real-track sample.
+- Dub-stab validation:
+  - E110 — "00946" (Dub Techno): 1.55 stabs/s, `all_16th_offbeats`, score 0.82.
+  - Tzusing — "4 Floors of Whores" (Techno control): 3.59 stabs/s,
+    `offbeat_eighth`, score 0.65.
+  - Daniel Stefanik — "#six" (House control): 2.17 stabs/s,
+    `all_16th_offbeats`, score 0.72.
+  - nthng — "And Then There Was Light" (Ambient control): 0.80 stabs/s,
+    template score 0.44.
+
+**Conclusion:** MainGroove section filtering is worth keeping, but
+`dub_stab_onset_rate` / template score should not be wired as a direct Dub
+Techno rule. Treat it as one feature to combine with A2/A4/A5 and profile
+training. False-positive mitigation may need tonal/percussive separation or a
+more chord-specific stab detector, but defer until it hurts classifier diffs.
 
 ## Phase 1.5 — Track-section detection primitive (foundational)
 
@@ -159,15 +184,18 @@ day one. Doing it after means refactoring all of them.
 
       **Status:** implemented in the current branch and surfaced through
       `AnalysisResult.sections`. Unit tests cover synthetic sections. Real-track
-      validation on known breakdowns is still needed.
+      validation found and fixed overlapping boundary output; schema 11
+      invalidates older cached section ranges. Broader validation on known
+      breakdown-heavy tracks is still useful.
 
 - [x] **S2. Retrofit dub_stab to use sections.** Filter
       `beat_relative_offset_histogram` per-bar histograms to MainGroove bars
       when available; fall back to full-track aggregation otherwise.
 
       **Status:** implemented in the current branch with `rate_basis` reporting.
-      Real-track comparison is still needed to judge whether MainGroove filtering
-      sharpens histograms enough for classifier use.
+      Initial real-track comparison shows MainGroove filtering gives a better
+      denominator, but does not make dub-stab evidence independently
+      discriminative enough for classifier use.
 
 **Note for A2/A4/A5 below:** each new DSP feature should accept an optional
 `sections: &[TrackSection]` parameter and aggregate stats over MainGroove

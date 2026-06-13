@@ -213,6 +213,7 @@ pub fn detect_track_sections(
     // absorbed section was the only thing separating them). Collapse
     // those before returning.
     collapse_adjacent_same_kind(&mut sections);
+    make_sections_contiguous(&mut sections);
     Ok(sections)
 }
 
@@ -300,12 +301,10 @@ fn run_length_encode(
     if labels.is_empty() {
         return sections;
     }
-    // Each section's end is the right edge of its LAST window. Because
-    // windows are wider than the hop, neighbouring sections overlap by
-    // `window_frames - hop_frames` seconds — that overlap represents
-    // transition uncertainty (the windows themselves overlap), not a
-    // bug. Downstream callers using sections for filtering should treat
-    // the overlap inclusively.
+    // Each raw section's end is the right edge of its LAST window. Because
+    // windows are wider than the hop, neighbouring raw sections overlap by
+    // `window_frames - hop_frames` seconds. We resolve that uncertainty into
+    // contiguous section boundaries after merging/collapsing.
     let mut run_start_idx = 0;
     for i in 1..=labels.len() {
         if i == labels.len() || labels[i] != labels[run_start_idx] {
@@ -400,6 +399,22 @@ fn collapse_adjacent_same_kind(sections: &mut Vec<TrackSection>) {
         }
     }
     *sections = out;
+}
+
+/// Converts blurred, overlapping window boundaries into contiguous,
+/// end-exclusive section ranges by splitting each adjacent overlap/gap at its
+/// midpoint. This preserves transition uncertainty without returning
+/// overlapping sections to downstream duration and range filters.
+fn make_sections_contiguous(sections: &mut [TrackSection]) {
+    if sections.len() < 2 {
+        return;
+    }
+    for idx in 0..sections.len() - 1 {
+        let boundary = ((sections[idx].end_seconds + sections[idx + 1].start_seconds) * 0.5)
+            .clamp(sections[idx].start_seconds, sections[idx + 1].end_seconds);
+        sections[idx].end_seconds = boundary;
+        sections[idx + 1].start_seconds = boundary;
+    }
 }
 
 #[cfg(test)]
@@ -641,5 +656,46 @@ mod tests {
         ];
         collapse_adjacent_same_kind(&mut sections);
         assert_eq!(sections.len(), 3);
+    }
+
+    #[test]
+    fn make_sections_contiguous_splits_overlaps_at_midpoint() {
+        let mut sections = vec![
+            TrackSection {
+                start_seconds: 0.0,
+                end_seconds: 12.0,
+                kind: SectionKind::MainGroove,
+                kick_band_rms: 1.0,
+                broadband_rms: 1.0,
+            },
+            TrackSection {
+                start_seconds: 8.0,
+                end_seconds: 20.0,
+                kind: SectionKind::Outro,
+                kick_band_rms: 0.2,
+                broadband_rms: 0.1,
+            },
+        ];
+        make_sections_contiguous(&mut sections);
+        assert_eq!(sections[0].end_seconds, 10.0);
+        assert_eq!(sections[1].start_seconds, 10.0);
+    }
+
+    #[test]
+    fn detect_track_sections_returns_non_overlapping_ranges() {
+        let spec = synth_spec(&[
+            (10.0, 0.05, false),
+            (30.0, 1.0, true),
+            (10.0, 1.0, false),
+            (30.0, 1.0, true),
+            (10.0, 0.05, false),
+        ]);
+        let sections = detect_track_sections(&spec, SR, FRAME, HOP).unwrap();
+        for pair in sections.windows(2) {
+            assert!(
+                (pair[0].end_seconds - pair[1].start_seconds).abs() < 1e-5,
+                "expected contiguous sections, got: {sections:#?}"
+            );
+        }
     }
 }
