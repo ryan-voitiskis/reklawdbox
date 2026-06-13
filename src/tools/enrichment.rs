@@ -112,10 +112,13 @@ pub(super) fn lookup_output_with_cache_metadata(
 pub(super) fn auth_remediation_message(remediation: &discogs::AuthRemediation) -> String {
     let mut lines = vec![remediation.message.clone()];
     if let Some(auth_url) = remediation.auth_url.as_deref() {
-        lines.push(format!("Open this URL in a browser: {auth_url}"));
+        lines.push(format!("Auth URL: {auth_url}"));
+        lines.push(format!("On macOS, open it for the user: open '{auth_url}'"));
     }
     if let Some(poll_interval) = remediation.poll_interval_seconds {
-        lines.push(format!("Suggested poll interval: {poll_interval}s"));
+        lines.push(format!(
+            "Poll interval if polling instead of browser: {poll_interval}s"
+        ));
     }
     if let Some(expires_at) = remediation.expires_at {
         lines.push(format!("Auth session expires_at (unix): {expires_at}"));

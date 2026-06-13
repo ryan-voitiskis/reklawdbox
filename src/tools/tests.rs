@@ -884,6 +884,24 @@ fn lookup_output_with_cache_metadata_keeps_object_payload_shape() {
     );
 }
 
+#[test]
+fn auth_remediation_message_marks_discogs_auth_as_agent_actionable() {
+    let remediation = crate::discogs::AuthRemediation {
+        message: "Discogs auth required (not a lookup miss).".to_string(),
+        auth_url: Some("https://discogs.example/auth/device".to_string()),
+        poll_interval_seconds: Some(5),
+        expires_at: Some(1_777_000_000),
+    };
+
+    let message = auth_remediation_message(&remediation);
+
+    assert!(message.contains("not a lookup miss"));
+    assert!(message.contains("Auth URL: https://discogs.example/auth/device"));
+    assert!(message.contains("open 'https://discogs.example/auth/device'"));
+    assert!(message.contains("Poll interval if polling instead of browser: 5s"));
+    assert!(message.contains("Auth session expires_at (unix): 1777000000"));
+}
+
 #[tokio::test]
 async fn analyze_track_audio_reports_essentia_unavailable_when_probe_is_none() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");

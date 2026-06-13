@@ -701,7 +701,14 @@ impl ServerHandler for ReklawdboxServer {
                  SOP produces significantly better results than ad-hoc tool use.\n\
                  \n\
                  Call read_library to see the collection.\n\
-                 Call help() for workflow menu, help(topic) for the full SOP."
+                 Call help() for workflow menu, help(topic) for the full SOP.\n\
+                 \n\
+                 Auth-pending errors are agent-actionable, not user-blockers: if a lookup tool \
+                 returns an `Auth URL`, open it for the user (`open '<url>'` on macOS) so they \
+                 can authorize, then call the same tool again \u{2014} the new session is picked up \
+                 automatically. Do not silently fall back to other enrichment sources for \
+                 label/catalog data on commercial releases; Discogs is materially more \
+                 authoritative there."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

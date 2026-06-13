@@ -176,9 +176,12 @@ pub fn normalize_base_url(raw: &str) -> Option<String> {
 
 pub fn pending_auth_remediation(pending: &PendingDeviceSession) -> AuthRemediation {
     AuthRemediation {
-        message:
-            "Discogs sign-in is still pending. Complete browser auth, then retry lookup_discogs."
-                .to_string(),
+        message: "Discogs auth required (not a lookup miss). Open the auth URL in the user's \
+                  browser so they can authorize on Discogs, then call lookup_discogs again \u{2014} \
+                  the next call picks up the new session automatically. Do not fall back to \
+                  other enrichment sources for label/catalog data on commercial releases; \
+                  Discogs is the authoritative source there."
+            .to_string(),
         auth_url: Some(pending.auth_url.clone()),
         poll_interval_seconds: Some(pending.poll_interval_seconds),
         expires_at: Some(pending.expires_at),
@@ -187,9 +190,10 @@ pub fn pending_auth_remediation(pending: &PendingDeviceSession) -> AuthRemediati
 
 pub fn expired_session_remediation() -> AuthRemediation {
     AuthRemediation {
-        message:
-            "Discogs broker session is missing or expired. Re-run lookup_discogs to start auth."
-                .to_string(),
+        message: "Discogs broker session is missing or expired (not a lookup miss). Call \
+                  lookup_discogs again to start a new auth flow; it will return an auth URL to \
+                  open."
+            .to_string(),
         auth_url: None,
         poll_interval_seconds: None,
         expires_at: None,
