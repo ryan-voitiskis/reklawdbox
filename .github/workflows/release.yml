@@ -20,13 +20,29 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: stable
+          components: clippy, rustfmt
           targets: aarch64-apple-darwin
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
 
+      - name: Check formatting
+        run: |
+          npm exec --yes dprint@0.49.1 -- check
+          cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Run tests
-        run: cargo test -p reklawdbox
+        run: |
+          cargo test -p reklawdbox --no-fail-fast
+          cargo test -p stratum-dsp --no-fail-fast
 
       - name: Build release binary
         run: cargo build --release --target aarch64-apple-darwin

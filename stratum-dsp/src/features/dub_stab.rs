@@ -1,13 +1,13 @@
 //! Chord-stab detector for Dub Techno.
 //!
-//! Currently implements Stages 1 and 2 of the four-stage pipeline:
+//! Implements the first three stages of the dub-stab pipeline:
 //!
 //! - Stage 1 — mid-band onset detection with kick-coincidence masking.
 //! - Stage 2 — beat-relative offset histogram (soft-binned, per-bar).
+//! - Stage 3 — template scoring over canonical beat-relative patterns.
 //!
-//! Stages 3 (template scoring) and 4 (decay confirmation) plus the final
-//! score combination are tracked for a follow-up PR. No `AnalysisResult`
-//! integration yet — this module is internal.
+//! Stage 4 (decay confirmation) plus final score combination are tracked for
+//! follow-up work. Stage 1–3 outputs are integrated into `AnalysisResult`.
 //!
 //! Design rationale and parameter justification:
 //! `docs/tmp/chord-stab-detector-plan.md`,
@@ -948,7 +948,7 @@ mod tests {
     fn synthesise_histogram(offsets: &[f32]) -> [f32; HISTOGRAM_BINS] {
         let two_sigma_sq = 2.0 * SOFT_BIN_SIGMA * SOFT_BIN_SIGMA;
         let mut h = [0.0_f32; HISTOGRAM_BINS];
-        for bin in 0..HISTOGRAM_BINS {
+        for (bin, weight) in h.iter_mut().enumerate() {
             let centre = bin as f32 / HISTOGRAM_BINS as f32;
             for &off in offsets {
                 let mut d = (centre - off).abs();
@@ -957,7 +957,7 @@ mod tests {
                 }
                 // 50× to give realistic absolute weights — scoring is
                 // L2-normalised so the multiplier is irrelevant.
-                h[bin] += 50.0 * (-(d * d) / two_sigma_sq).exp();
+                *weight += 50.0 * (-(d * d) / two_sigma_sq).exp();
             }
         }
         h

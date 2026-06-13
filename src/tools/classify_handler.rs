@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -17,7 +17,8 @@ use crate::genre;
 use crate::normalize;
 use crate::store;
 use crate::tools::params::{
-    AuditGenresParams, CalibrateAudioProfilesParams, ClassifyFormat, ClassifyTracksParams,
+    AuditGenresParams, CalibrateAudioProfilesParams, CalibrationCoverageParams, ClassifyFormat,
+    ClassifyTracksParams,
 };
 use crate::types::TrackChange;
 
@@ -747,9 +748,10 @@ pub(super) fn handle_calibrate_audio_profiles(
                     None,
                 )
             })?;
-        let tracks = crate::db::get_playlist_tracks(&conn, &playlist.id, None).map_err(|e| {
-            McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
-        })?;
+        let tracks =
+            crate::db::get_playlist_tracks_unbounded(&conn, &playlist.id, None).map_err(|e| {
+                McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
+            })?;
         (tracks, playlist.name.clone())
     };
 
@@ -860,6 +862,161 @@ pub(super) fn handle_calibrate_audio_profiles(
         "skipped_no_audio": skipped_no_audio,
         "prototypes_built": registry.prototypes.len(),
         "genres": genre_summaries,
+    });
+
+    ok_json(&result)
+}
+
+#[derive(Debug, Default)]
+struct CalibrationGenreStats {
+    playlist_tracks: u32,
+    tracks_with_audio_features: u32,
+    missing_audio_features: u32,
+}
+
+pub(super) fn handle_calibration_coverage(
+    server: &ReklawdboxServer,
+    params: CalibrationCoverageParams,
+) -> Result<CallToolResult, McpError> {
+    let playlist_name = params.playlist.as_deref().unwrap_or("genre_verified");
+
+    let (tracks, resolved_playlist_name) = {
+        let conn = server.rekordbox_conn()?;
+        let playlists = crate::db::get_playlists(&conn).map_err(|e| {
+            McpError::internal_error(format!("Failed to list playlists: {e}"), None)
+        })?;
+        let playlist = playlists
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(playlist_name))
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    format!(
+                        "Playlist '{playlist_name}' not found. Create it in Rekordbox and add verified tracks."
+                    ),
+                    None,
+                )
+            })?;
+        let tracks =
+            crate::db::get_playlist_tracks_unbounded(&conn, &playlist.id, None).map_err(|e| {
+                McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
+            })?;
+        (tracks, playlist.name.clone())
+    };
+
+    let store_conn = server.cache_store_conn()?;
+    let existing_registry = audio_profile::load_from_db(&store_conn).map_err(super::cache_error)?;
+    let existing_profiles: HashMap<&'static str, u32> = existing_registry
+        .as_ref()
+        .map(|registry| {
+            registry
+                .prototypes
+                .values()
+                .map(|proto| (proto.genre, proto.total_n))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut by_genre: BTreeMap<&'static str, CalibrationGenreStats> = BTreeMap::new();
+    let mut skipped_no_genre = 0u32;
+    let mut skipped_unknown_genre = 0u32;
+
+    for track in &tracks {
+        if track.genre.trim().is_empty() {
+            skipped_no_genre += 1;
+            continue;
+        }
+
+        let Some(canonical) = genre::resolve_genre(&track.genre) else {
+            skipped_unknown_genre += 1;
+            continue;
+        };
+
+        let stats = by_genre.entry(canonical).or_default();
+        stats.playlist_tracks += 1;
+
+        let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
+        let stratum = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_STRATUM)
+            .map_err(super::cache_error)?;
+        let essentia = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_ESSENTIA)
+            .map_err(super::cache_error)?;
+
+        if extract_audio_features(track, stratum.as_ref(), essentia.as_ref()).is_some() {
+            stats.tracks_with_audio_features += 1;
+        } else {
+            stats.missing_audio_features += 1;
+        }
+    }
+
+    let mut ready_to_calibrate = 0u32;
+    let mut below_min_tracks = 0u32;
+    let mut stored_profiles_present = 0u32;
+    let mut total_with_audio_features = 0u32;
+    let mut total_missing_audio_features = 0u32;
+
+    let genres: Vec<serde_json::Value> = by_genre
+        .iter()
+        .map(|(&genre, stats)| {
+            let stored_n = existing_profiles.get(genre).copied();
+            let prototype_ready = stats.tracks_with_audio_features >= audio_profile::MIN_TRACKS;
+            if prototype_ready && stored_n.is_none() {
+                ready_to_calibrate += 1;
+            }
+            if !prototype_ready {
+                below_min_tracks += 1;
+            }
+            if stored_n.is_some() {
+                stored_profiles_present += 1;
+            }
+            total_with_audio_features += stats.tracks_with_audio_features;
+            total_missing_audio_features += stats.missing_audio_features;
+
+            let status = if prototype_ready && stored_n.is_some() {
+                "profile_present"
+            } else if prototype_ready {
+                "ready_to_calibrate"
+            } else {
+                "needs_more_verified_audio"
+            };
+
+            serde_json::json!({
+                "genre": genre,
+                "playlist_tracks": stats.playlist_tracks,
+                "tracks_with_audio_features": stats.tracks_with_audio_features,
+                "missing_audio_features": stats.missing_audio_features,
+                "prototype_ready": prototype_ready,
+                "profile": {
+                    "stored": stored_n.is_some(),
+                    "n_verified": stored_n,
+                },
+                "status": status,
+            })
+        })
+        .collect();
+
+    let playlist_genres: std::collections::HashSet<&str> = by_genre.keys().copied().collect();
+    let mut stored_profiles_not_in_playlist: Vec<&str> = existing_profiles
+        .keys()
+        .filter(|genre| !playlist_genres.contains(**genre))
+        .copied()
+        .collect();
+    stored_profiles_not_in_playlist.sort_unstable();
+
+    let result = serde_json::json!({
+        "status": "ok",
+        "playlist": resolved_playlist_name,
+        "total_tracks": tracks.len(),
+        "tracks_with_canonical_genre": by_genre.values().map(|stats| stats.playlist_tracks).sum::<u32>(),
+        "tracks_with_audio_features": total_with_audio_features,
+        "missing_audio_features": total_missing_audio_features,
+        "skipped_no_genre": skipped_no_genre,
+        "skipped_unknown_genre": skipped_unknown_genre,
+        "min_tracks_per_genre": audio_profile::MIN_TRACKS,
+        "prototypes_existing": existing_profiles.len(),
+        "genres_ready_to_calibrate": ready_to_calibrate,
+        "genres_below_min_tracks": below_min_tracks,
+        "genres_with_stored_profiles": stored_profiles_present,
+        "stored_profiles_not_in_playlist": stored_profiles_not_in_playlist,
+        "genres": genres,
     });
 
     ok_json(&result)

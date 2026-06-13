@@ -20,9 +20,10 @@ echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
 
 TAG="v${VERSION}"
 
-# Ensure clean working tree
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "error: working tree is dirty — commit or stash changes first"
+# Ensure clean working tree, including untracked files.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "error: working tree is dirty — commit, stash, or remove changes first"
+  git status --short
   exit 1
 fi
 
@@ -42,6 +43,13 @@ fi
 # Read current version
 CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 echo "Releasing: $CURRENT -> $VERSION"
+
+echo "Running release preflight checks..."
+cargo fmt --check
+dprint check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p reklawdbox --no-fail-fast
+cargo test -p stratum-dsp --no-fail-fast
 
 # Bump version in Cargo.toml
 sed -i '' "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" Cargo.toml

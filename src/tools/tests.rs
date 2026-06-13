@@ -2377,6 +2377,226 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
 }
 
 #[tokio::test]
+async fn calibration_coverage_reports_verified_playlist_readiness() {
+    let db_conn = create_single_track_test_db("cal-deep-1", "/music/cal-deep-1.flac");
+    db_conn
+        .execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Imaginary Style');
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    for i in 2..=5 {
+        insert_test_track(
+            &db_conn,
+            &format!("cal-deep-{i}"),
+            &format!("Deep Verified {i}"),
+            "g1",
+            &format!("/music/cal-deep-{i}.flac"),
+        );
+    }
+    insert_test_track(
+        &db_conn,
+        "cal-tech-1",
+        "Techno Missing Audio",
+        "g2",
+        "/music/cal-tech-1.flac",
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-no-genre",
+        "No Genre Verified",
+        "",
+        "/music/cal-no-genre.flac",
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-unknown",
+        "Unknown Verified",
+        "g3",
+        "/music/cal-unknown.flac",
+    );
+
+    for (track_no, track_id) in [
+        "cal-deep-1",
+        "cal-deep-2",
+        "cal-deep-3",
+        "cal-deep-4",
+        "cal-deep-5",
+        "cal-tech-1",
+        "cal-no-genre",
+        "cal-unknown",
+    ]
+    .iter()
+    .enumerate()
+    {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    for i in 1..=5 {
+        store::set_audio_analysis(
+            &store_conn,
+            &format!("/music/cal-deep-{i}.flac"),
+            crate::audio::ANALYZER_STRATUM,
+            1234,
+            1_700_000_001,
+            "stratum-dsp-1.0.0",
+            r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
+        )
+        .expect("stratum analysis should be seeded");
+    }
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["playlist"], "genre_verified");
+    assert_eq!(payload["total_tracks"], 8);
+    assert_eq!(payload["tracks_with_canonical_genre"], 6);
+    assert_eq!(payload["tracks_with_audio_features"], 5);
+    assert_eq!(payload["missing_audio_features"], 1);
+    assert_eq!(payload["skipped_no_genre"], 1);
+    assert_eq!(payload["skipped_unknown_genre"], 1);
+    assert_eq!(
+        payload["min_tracks_per_genre"],
+        crate::audio_profile::MIN_TRACKS
+    );
+    assert_eq!(payload["genres_ready_to_calibrate"], 1);
+    assert_eq!(payload["genres_below_min_tracks"], 1);
+
+    let genres = payload["genres"]
+        .as_array()
+        .expect("genres should be an array");
+    let deep_house = genres
+        .iter()
+        .find(|g| g["genre"] == "Deep House")
+        .expect("Deep House coverage should be present");
+    assert_eq!(deep_house["playlist_tracks"], 5);
+    assert_eq!(deep_house["tracks_with_audio_features"], 5);
+    assert_eq!(deep_house["prototype_ready"], true);
+    assert_eq!(deep_house["status"], "ready_to_calibrate");
+
+    let techno = genres
+        .iter()
+        .find(|g| g["genre"] == "Techno")
+        .expect("Techno coverage should be present");
+    assert_eq!(techno["playlist_tracks"], 1);
+    assert_eq!(techno["tracks_with_audio_features"], 0);
+    assert_eq!(techno["missing_audio_features"], 1);
+    assert_eq!(techno["status"], "needs_more_verified_audio");
+}
+
+#[tokio::test]
+async fn calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
+    let db_conn = create_single_track_test_db("cal-cap-1", "/music/cal-cap-1.flac");
+    db_conn
+        .execute_batch(
+            "
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    let mut track_ids = vec!["cal-cap-1".to_string()];
+    for i in 2..=201 {
+        let track_id = format!("cal-cap-{i}");
+        insert_test_track(
+            &db_conn,
+            &track_id,
+            &format!("Calibration Cap {i}"),
+            "g1",
+            &format!("/music/cal-cap-{i}.flac"),
+        );
+        track_ids.push(track_id);
+    }
+
+    for (track_no, track_id) in track_ids.iter().enumerate() {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["total_tracks"], 201);
+    assert_eq!(payload["tracks_with_canonical_genre"], 201);
+    assert_eq!(payload["missing_audio_features"], 201);
+    assert_eq!(
+        payload["genres"][0]["playlist_tracks"], 201,
+        "calibration coverage must not use the ordinary 200-track playlist cap"
+    );
+}
+
+#[tokio::test]
 #[ignore]
 async fn force_refresh_bypasses_enrichment_cache() {
     let offline_http = reqwest::Client::builder()

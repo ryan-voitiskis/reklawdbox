@@ -68,6 +68,30 @@ Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforce
 
 ---
 
+### `calibration_coverage`
+
+Report per-genre readiness for audio-profile calibration from the verified playlist. Read-only — checks canonical genre counts, cached audio-feature availability, and stored prototype presence without recalibrating.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `playlist` | string | | Playlist containing ear-verified tracks (default: `genre_verified`) |
+
+Use this before `calibrate_audio_profiles` to see which genres are ready, which need more analyzed tracks, and which stored profiles no longer appear in the current verified playlist.
+
+---
+
+### `calibrate_audio_profiles`
+
+Build Fisher-weighted audio prototypes from a playlist of ear-verified tracks and store them in the internal SQLite cache. These prototypes provide supplementary votes during classification.
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `playlist` | string | | Playlist containing ear-verified tracks (default: `genre_verified`) |
+
+Run `calibration_coverage` first. Calibration skips tracks with missing genre tags, unknown genres, or missing cached audio features, and only builds a prototype for genres with enough verified audio.
+
+---
+
 ### `backfill_labels`
 
 Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.

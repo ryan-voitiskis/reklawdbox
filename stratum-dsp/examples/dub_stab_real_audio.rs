@@ -358,13 +358,12 @@ fn main() {
     // error rather than silently falling back to HMM. The whole point of
     // running with --grid_json is to compare against the Rekordbox grid;
     // a quiet HMM run would invalidate the comparison without warning.
-    let grids = match args.get(3) {
-        Some(p) => Some(load_grid_json(p).unwrap_or_else(|e| {
+    let grids = args.get(3).map(|p| {
+        load_grid_json(p).unwrap_or_else(|e| {
             eprintln!("Error: failed to load grid JSON: {e}");
             std::process::exit(2);
-        })),
-        None => None,
-    };
+        })
+    });
     let json_grid = grids.as_ref().and_then(|m| m.get(path));
     if grids.is_some() && json_grid.is_none() {
         eprintln!("Error: grid JSON has no entry for {path}");

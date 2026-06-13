@@ -56,6 +56,7 @@ const WORKFLOWS: &[Workflow] = &[
         summary: "Classify genres using Discogs, Beatport, and audio evidence.",
         key_tools: &[
             "cache_coverage",
+            "calibration_coverage",
             "classify_tracks",
             "suggest_normalizations",
             "update_tracks",
@@ -113,7 +114,12 @@ const WORKFLOWS: &[Workflow] = &[
         name: "Genre Audit",
         keywords: &["genre audit", "verify genre", "genre conflict"],
         summary: "Verify existing genre tags against enrichment and audio evidence.",
-        key_tools: &["cache_coverage", "audit_genres", "update_tracks"],
+        key_tools: &[
+            "cache_coverage",
+            "calibration_coverage",
+            "audit_genres",
+            "update_tracks",
+        ],
         sop: SOP_GENRE_AUDIT,
     },
     Workflow {

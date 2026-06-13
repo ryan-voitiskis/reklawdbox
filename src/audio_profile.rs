@@ -21,7 +21,7 @@ const AFFINITY_CAP: f32 = 0.5;
 /// Tracks beyond this many weighted stddev from prototype score 0.
 const SCALE: f64 = 2.5;
 /// Minimum verified tracks to generate a prototype.
-const MIN_TRACKS: u32 = 5;
+pub(crate) const MIN_TRACKS: u32 = 5;
 /// No single feature dominates scoring.
 const FISHER_WEIGHT_CAP: f64 = 0.4;
 /// Mild regularization floor — no feature fully ignored.

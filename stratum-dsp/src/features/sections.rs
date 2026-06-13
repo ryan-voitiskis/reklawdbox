@@ -430,8 +430,7 @@ mod tests {
             for _ in 0..n_frames {
                 // Default: zero in kick band, `energy` everywhere above.
                 let mut frame = vec![0.0_f32; n_bins];
-                for (b, slot) in frame.iter_mut().enumerate().skip(kick_bin_high + 1) {
-                    let _ = b;
+                for slot in frame.iter_mut().skip(kick_bin_high + 1) {
                     *slot = energy;
                 }
                 if has_kicks {
@@ -440,8 +439,8 @@ mod tests {
                         // Loud kick: spike the kick band to 10 × energy
                         // (well above the per-frame max from the mid
                         // band, so band normalisation doesn't flatten it).
-                        for b in kick_bin_low..=kick_bin_high {
-                            frame[b] = energy * 10.0;
+                        for slot in frame.iter_mut().take(kick_bin_high + 1).skip(kick_bin_low) {
+                            *slot = energy * 10.0;
                         }
                     }
                 }

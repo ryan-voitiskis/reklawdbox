@@ -1,42 +1,64 @@
-//! Integration tests for audio analysis engine
+//! Integration tests for audio analysis engine.
+//!
+//! These tests synthesize deterministic audio in memory instead of relying on
+//! private fixture files. Keep them portable enough to run in CI and fresh
+//! clones.
 
-use std::path::PathBuf;
 use stratum_dsp::{analyze_audio, AnalysisConfig};
 
-/// Load a WAV file and return (samples, sample_rate)
-fn load_wav(path: &str) -> Result<(Vec<f32>, u32), Box<dyn std::error::Error>> {
-    let mut reader = hound::WavReader::open(path)?;
-    let spec = reader.spec();
+const SAMPLE_RATE: u32 = 44_100;
 
-    let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
-        hound::SampleFormat::Int => {
-            let max_value = (1 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|s| s as f32 / max_value))
-                .collect::<Result<Vec<_>, _>>()?
+fn synth_kick_track(bpm: f32, bars: usize) -> Vec<f32> {
+    let beat_s = 60.0 / bpm;
+    let duration_s = beat_s * 4.0 * bars as f32;
+    let n = (duration_s * SAMPLE_RATE as f32) as usize;
+    let mut samples = vec![0.0_f32; n];
+
+    // A quiet continuous bed prevents edge trimming from changing the intended
+    // duration while the decaying pulses give onset/BPM detectors clean events.
+    for (i, sample) in samples.iter_mut().enumerate() {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        *sample += 0.05 * (2.0 * std::f32::consts::PI * 55.0 * t).sin();
+    }
+
+    let pulse_interval = (beat_s * SAMPLE_RATE as f32) as usize;
+    let pulse_len = (0.08 * SAMPLE_RATE as f32) as usize;
+    for start in (0..n).step_by(pulse_interval) {
+        for i in 0..pulse_len {
+            if start + i >= n {
+                break;
+            }
+            let t = i as f32 / SAMPLE_RATE as f32;
+            let env = 1.0 - i as f32 / pulse_len as f32;
+            let thump = (2.0 * std::f32::consts::PI * 60.0 * t).sin()
+                + 0.35 * (2.0 * std::f32::consts::PI * 120.0 * t).sin();
+            samples[start + i] += 0.65 * env * thump;
         }
-    };
+    }
 
-    // Convert to mono if stereo
-    let mono_samples = if spec.channels == 2 {
-        samples
-            .chunks(2)
-            .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
-            .collect()
-    } else {
-        samples
-    };
-
-    Ok((mono_samples, spec.sample_rate))
+    samples
 }
 
-fn fixture_path(filename: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(filename)
+fn synth_c_major_chord(duration_s: f32) -> Vec<f32> {
+    let n = (duration_s * SAMPLE_RATE as f32) as usize;
+    let freqs = [261.63_f32, 329.63, 392.0, 523.25];
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / SAMPLE_RATE as f32;
+            let amp = if t < 0.05 { t / 0.05 } else { 1.0 };
+            let v: f32 = freqs
+                .iter()
+                .map(|f| (2.0 * std::f32::consts::PI * f * t).sin())
+                .sum();
+            0.18 * amp * v / freqs.len() as f32
+        })
+        .collect()
+}
+
+fn synth_tone_with_silence() -> Vec<f32> {
+    let silence = vec![0.0_f32; SAMPLE_RATE as usize * 5];
+    let tone = synth_c_major_chord(5.0);
+    [silence.as_slice(), tone.as_slice(), silence.as_slice()].concat()
 }
 
 #[cfg(test)]
@@ -45,20 +67,18 @@ mod tests {
 
     #[test]
     fn test_analyze_120bpm_kick() {
-        let path = fixture_path("120bpm_4bar.wav");
-        let (samples, sample_rate) =
-            load_wav(path.to_str().unwrap()).expect("Failed to load 120bpm_4bar.wav");
+        let samples = synth_kick_track(120.0, 4);
 
         let config = AnalysisConfig::default();
-        let result = analyze_audio(&samples, sample_rate, config).expect("Analysis should succeed");
+        let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
 
         // Verify basic results
         assert!(result.metadata.duration_seconds > 7.0 && result.metadata.duration_seconds < 9.0);
         assert!(result.metadata.processing_time_ms > 0.0);
-        assert_eq!(result.metadata.sample_rate, sample_rate);
+        assert_eq!(result.metadata.sample_rate, SAMPLE_RATE);
 
         // Phase 1B: BPM detection should work
-        // For fixed-tempo test fixtures, we can use tighter tolerance (±2 BPM)
+        // For fixed-tempo synthetic audio, we can use tighter tolerance (±2 BPM)
         if result.bpm > 0.0 {
             assert!(
                 (result.bpm - 120.0).abs() < 2.0,
@@ -125,19 +145,17 @@ mod tests {
 
     #[test]
     fn test_analyze_128bpm_kick() {
-        let path = fixture_path("128bpm_4bar.wav");
-        let (samples, sample_rate) =
-            load_wav(path.to_str().unwrap()).expect("Failed to load 128bpm_4bar.wav");
+        let samples = synth_kick_track(128.0, 4);
 
         let config = AnalysisConfig::default();
-        let result = analyze_audio(&samples, sample_rate, config).expect("Analysis should succeed");
+        let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
 
         // Verify basic results
         assert!(result.metadata.duration_seconds > 7.0 && result.metadata.duration_seconds < 8.0);
         assert!(result.metadata.processing_time_ms > 0.0);
 
         // Phase 1B: BPM detection should work
-        // For fixed-tempo test fixtures, we can use tighter tolerance (±2 BPM)
+        // For fixed-tempo synthetic audio, we can use tighter tolerance (±2 BPM)
         if result.bpm > 0.0 {
             assert!(
                 (result.bpm - 128.0).abs() <= 2.0,
@@ -190,12 +208,10 @@ mod tests {
 
     #[test]
     fn test_analyze_cmajor_scale() {
-        let path = fixture_path("cmajor_scale.wav");
-        let (samples, sample_rate) =
-            load_wav(path.to_str().unwrap()).expect("Failed to load cmajor_scale.wav");
+        let samples = synth_c_major_chord(4.0);
 
         let config = AnalysisConfig::default();
-        let result = analyze_audio(&samples, sample_rate, config).expect("Analysis should succeed");
+        let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
 
         // Verify basic results
         assert!(result.metadata.duration_seconds > 3.0 && result.metadata.duration_seconds < 5.0);
@@ -230,16 +246,14 @@ mod tests {
 
     #[test]
     fn test_silence_detection_and_trimming() {
-        let path = fixture_path("mixed_silence.wav");
-        let (samples, sample_rate) =
-            load_wav(path.to_str().unwrap()).expect("Failed to load mixed_silence.wav");
+        let samples = synth_tone_with_silence();
 
         // Original duration should be ~15 seconds (5s silence + 5s audio + 5s silence)
-        let original_duration = samples.len() as f32 / sample_rate as f32;
+        let original_duration = samples.len() as f32 / SAMPLE_RATE as f32;
         assert!(original_duration > 14.0 && original_duration < 16.0);
 
         let config = AnalysisConfig::default();
-        let result = analyze_audio(&samples, sample_rate, config).expect("Analysis should succeed");
+        let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
 
         // After silence trimming, duration should be ~5 seconds (just the audio content)
         // The analyze_audio function trims silence, so metadata.duration_seconds should reflect trimmed length

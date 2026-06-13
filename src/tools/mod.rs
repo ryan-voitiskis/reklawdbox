@@ -602,6 +602,16 @@ impl ReklawdboxServer {
     }
 
     #[tool(
+        description = "Report per-genre verified-playlist coverage for audio-profile calibration. Read-only: checks canonical genre counts, cached audio-feature availability, and stored prototype presence without recalibrating."
+    )]
+    async fn calibration_coverage(
+        &self,
+        params: Parameters<params::CalibrationCoverageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        handle_calibration_coverage(self, params.0)
+    }
+
+    #[tool(
         description = "Read metadata tags directly from audio files on disk. Supports FLAC, MP3, WAV, M4A, AAC, AIFF. Provide exactly one input selector: paths, track_ids, or directory."
     )]
     async fn read_file_tags(

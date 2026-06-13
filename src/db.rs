@@ -505,7 +505,9 @@ pub fn get_playlist_tracks(
     get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, Some(200), Some(200))
 }
 
-/// Unbounded variant of `get_playlist_tracks` with no safety limit. Intended for `cache_coverage` only.
+/// Unbounded variant of `get_playlist_tracks` with no safety limit.
+/// Intended for full-library diagnostics and calibration paths, not ordinary
+/// agent browsing responses.
 pub fn get_playlist_tracks_unbounded(
     conn: &Connection,
     playlist_id: &str,

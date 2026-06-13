@@ -49,23 +49,20 @@ npm install
 npm run build
 ```
 
-Full workspace checks are currently stricter than CI:
+Full workspace checks:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p stratum-dsp --no-fail-fast
 ```
 
-Known state on 2026-06-13: `reklawdbox` builds/tests cleanly, but full
-workspace clippy is red in `stratum-dsp` (`dub_stab_real_audio.rs`,
-`dub_stab.rs`, `sections.rs`), and `stratum-dsp` integration tests fail because
-`120bpm_4bar.wav`, `128bpm_4bar.wav`, `cmajor_scale.wav`, and
-`mixed_silence.wav` are missing. Do not report a full workspace pass until
-those are fixed.
+Known state on 2026-06-13: `reklawdbox` and `stratum-dsp` both pass the normal
+and full workspace gates above. `stratum-dsp` integration tests use synthetic
+fixtures in memory; do not add mandatory tests that depend on private local
+audio files.
 
-The pre-commit hook runs full workspace clippy when staged Rust files exist. If
-that known-red state still exists, either fix it first or avoid staging Rust in
-unrelated docs commits.
+The local pre-commit hook runs Rust formatting and clippy when staged Rust files
+exist, plus `dprint` for staged supported docs/config files.
 
 ## MCP Local Testing
 
@@ -96,6 +93,7 @@ Essentia uses `.venvs/essentia/bin/python` via `CRATE_DIG_ESSENTIA_PYTHON` in
 - Before release, run the doc-drift workflow in
   `docs/workflows/doc-drift/README.md` if tools, params, SOPs, CLI flags, or
   README claims changed.
-- `./scripts/release.sh <version>` requires clean `main`, bumps version files,
-  commits, tags, pushes, and lets GitHub Actions publish the release plus
-  Homebrew formula update.
+- `./scripts/release.sh <version>` requires clean `main` including no untracked
+  files, runs the release preflight checks, bumps version files, commits, tags,
+  pushes, and lets GitHub Actions publish the release plus Homebrew formula
+  update.
