@@ -62,8 +62,10 @@ So: ship 3–4 more discriminating features, then do one classifier-tuning pass.
 
 Using the local stdio MCP smoke path against `genre_verified`:
 
-- `calibration_coverage`: 604 verified tracks, all 604 with cached audio
-  features, 23 canonical genres.
+- `calibration_coverage`: 604 verified tracks across 23 canonical genres;
+  604 have current audio features overall, but only 4 have current-schema
+  Stratum after the schema 11 bump (Essentia remains 604/604). Rehydrate the
+  playlist before recalibrating Stratum-dependent profiles.
 - Fresh section analysis after schema 11 produced contiguous, non-overlapping
   section ranges on the real-track sample.
 - Dub-stab validation:
@@ -106,10 +108,19 @@ and fast.
       (commit 37a5322). Triggers when `key_confidence < 0.1`. Decision rules
       land Atonal as a near-veto for House family, deep-preference for
       Techno family.
-- [ ] **B2. `LongTail` CharFlag from `decay_mid_tau`** — threshold
+- [x] **B2. `LongTail` CharFlag from `decay_mid_tau`** — threshold
       `decay_mid_tau > 200 ms`. Reinforces deep-preference branch in
       Techno-family. Conjunctive `LongTail + Atonal` boosts Drone Techno.
       Value already extracted; tree-side only. ~20 LOC.
+
+      **Status:** implemented with tree-side flagging, reviewable `long-tail`
+      evidence, same-family Techno depth preference, LowEnergy Techno-family
+      tiebreak support, and the `LongTail + Atonal` Drone Techno candidate
+      boost. HighEnergy still demotes deep Techno variants. Real-library MCP
+      validation found `decay_mid_tau` on only 4 current-schema verified tracks
+      after the schema 11 bump; 3/4 fired LongTail (Dub Techno, Techno,
+      Ambient). Treat this as wired but mostly dormant until the verified
+      playlist is rehydrated.
 - [ ] **B3. `Compressed` CharFlag from `loudness_range`** — threshold
       `loudness_range < 1.0 LU`. Adds club-master signal for Deep Techno
       preference; suppresses the Atmospheric → Ambient veto when set.

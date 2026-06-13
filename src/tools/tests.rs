@@ -2470,11 +2470,21 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
             crate::audio::ANALYZER_STRATUM,
             1234,
             1_700_000_001,
-            "stratum-dsp-1.0.0",
+            crate::audio::STRATUM_SCHEMA_VERSION,
             r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
         )
         .expect("stratum analysis should be seeded");
     }
+    store::set_audio_analysis(
+        &store_conn,
+        "/music/cal-tech-1.flac",
+        crate::audio::ANALYZER_STRATUM,
+        1234,
+        1_700_000_001,
+        "stale-stratum-schema",
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("stale stratum analysis should be seeded");
 
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
@@ -2491,6 +2501,10 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(payload["tracks_with_canonical_genre"], 6);
     assert_eq!(payload["tracks_with_audio_features"], 5);
     assert_eq!(payload["missing_audio_features"], 1);
+    assert_eq!(payload["tracks_with_stratum_features"], 5);
+    assert_eq!(payload["missing_stratum_features"], 1);
+    assert_eq!(payload["tracks_with_essentia_features"], 0);
+    assert_eq!(payload["missing_essentia_features"], 6);
     assert_eq!(payload["skipped_no_genre"], 1);
     assert_eq!(payload["skipped_unknown_genre"], 1);
     assert_eq!(
@@ -2509,6 +2523,8 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         .expect("Deep House coverage should be present");
     assert_eq!(deep_house["playlist_tracks"], 5);
     assert_eq!(deep_house["tracks_with_audio_features"], 5);
+    assert_eq!(deep_house["tracks_with_stratum_features"], 5);
+    assert_eq!(deep_house["tracks_with_essentia_features"], 0);
     assert_eq!(deep_house["prototype_ready"], true);
     assert_eq!(deep_house["status"], "ready_to_calibrate");
 
@@ -2519,6 +2535,8 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(techno["playlist_tracks"], 1);
     assert_eq!(techno["tracks_with_audio_features"], 0);
     assert_eq!(techno["missing_audio_features"], 1);
+    assert_eq!(techno["tracks_with_stratum_features"], 0);
+    assert_eq!(techno["missing_stratum_features"], 1);
     assert_eq!(techno["status"], "needs_more_verified_audio");
 }
 
@@ -2590,6 +2608,8 @@ async fn calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
     assert_eq!(payload["total_tracks"], 201);
     assert_eq!(payload["tracks_with_canonical_genre"], 201);
     assert_eq!(payload["missing_audio_features"], 201);
+    assert_eq!(payload["missing_stratum_features"], 201);
+    assert_eq!(payload["missing_essentia_features"], 201);
     assert_eq!(
         payload["genres"][0]["playlist_tracks"], 201,
         "calibration coverage must not use the ordinary 200-track playlist cap"

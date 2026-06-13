@@ -142,6 +142,8 @@ async function runSmoke() {
       playlist: coverageJson.playlist,
       totalTracks: coverageJson.total_tracks,
       tracksWithAudioFeatures: coverageJson.tracks_with_audio_features,
+      tracksWithStratumFeatures: coverageJson.tracks_with_stratum_features,
+      tracksWithEssentiaFeatures: coverageJson.tracks_with_essentia_features,
       genreCount: Array.isArray(coverageJson.genres)
         ? coverageJson.genres.length
         : undefined,

@@ -727,6 +727,16 @@ fn extract_audio_features(
     })
 }
 
+fn current_audio_analysis(
+    store_conn: &rusqlite::Connection,
+    audio_key: &str,
+    analyzer: &str,
+    schema_version: &str,
+) -> Result<Option<store::CachedAudioAnalysis>, rusqlite::Error> {
+    store::get_audio_analysis(store_conn, audio_key, analyzer)
+        .map(|entry| entry.filter(|entry| entry.analysis_version == schema_version))
+}
+
 pub(super) fn handle_calibrate_audio_profiles(
     server: &ReklawdboxServer,
     params: CalibrateAudioProfilesParams,
@@ -787,12 +797,22 @@ pub(super) fn handle_calibrate_audio_profiles(
 
         // Load audio features
         let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
-        let stratum = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_STRATUM)
-            .ok()
-            .flatten();
-        let essentia = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_ESSENTIA)
-            .ok()
-            .flatten();
+        let stratum = current_audio_analysis(
+            &store_conn,
+            &audio_key,
+            audio::ANALYZER_STRATUM,
+            audio::STRATUM_SCHEMA_VERSION,
+        )
+        .ok()
+        .flatten();
+        let essentia = current_audio_analysis(
+            &store_conn,
+            &audio_key,
+            audio::ANALYZER_ESSENTIA,
+            audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .ok()
+        .flatten();
 
         let stratum_cache = stratum.as_ref();
         let essentia_cache = essentia.as_ref();
@@ -872,6 +892,10 @@ struct CalibrationGenreStats {
     playlist_tracks: u32,
     tracks_with_audio_features: u32,
     missing_audio_features: u32,
+    tracks_with_stratum_features: u32,
+    missing_stratum_features: u32,
+    tracks_with_essentia_features: u32,
+    missing_essentia_features: u32,
 }
 
 pub(super) fn handle_calibration_coverage(
@@ -935,10 +959,31 @@ pub(super) fn handle_calibration_coverage(
         stats.playlist_tracks += 1;
 
         let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
-        let stratum = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_STRATUM)
-            .map_err(super::cache_error)?;
-        let essentia = store::get_audio_analysis(&store_conn, &audio_key, audio::ANALYZER_ESSENTIA)
-            .map_err(super::cache_error)?;
+        let stratum = current_audio_analysis(
+            &store_conn,
+            &audio_key,
+            audio::ANALYZER_STRATUM,
+            audio::STRATUM_SCHEMA_VERSION,
+        )
+        .map_err(super::cache_error)?;
+        let essentia = current_audio_analysis(
+            &store_conn,
+            &audio_key,
+            audio::ANALYZER_ESSENTIA,
+            audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .map_err(super::cache_error)?;
+
+        if stratum.is_some() {
+            stats.tracks_with_stratum_features += 1;
+        } else {
+            stats.missing_stratum_features += 1;
+        }
+        if essentia.is_some() {
+            stats.tracks_with_essentia_features += 1;
+        } else {
+            stats.missing_essentia_features += 1;
+        }
 
         if extract_audio_features(track, stratum.as_ref(), essentia.as_ref()).is_some() {
             stats.tracks_with_audio_features += 1;
@@ -952,6 +997,10 @@ pub(super) fn handle_calibration_coverage(
     let mut stored_profiles_present = 0u32;
     let mut total_with_audio_features = 0u32;
     let mut total_missing_audio_features = 0u32;
+    let mut total_with_stratum_features = 0u32;
+    let mut total_missing_stratum_features = 0u32;
+    let mut total_with_essentia_features = 0u32;
+    let mut total_missing_essentia_features = 0u32;
 
     let genres: Vec<serde_json::Value> = by_genre
         .iter()
@@ -969,6 +1018,10 @@ pub(super) fn handle_calibration_coverage(
             }
             total_with_audio_features += stats.tracks_with_audio_features;
             total_missing_audio_features += stats.missing_audio_features;
+            total_with_stratum_features += stats.tracks_with_stratum_features;
+            total_missing_stratum_features += stats.missing_stratum_features;
+            total_with_essentia_features += stats.tracks_with_essentia_features;
+            total_missing_essentia_features += stats.missing_essentia_features;
 
             let status = if prototype_ready && stored_n.is_some() {
                 "profile_present"
@@ -983,6 +1036,10 @@ pub(super) fn handle_calibration_coverage(
                 "playlist_tracks": stats.playlist_tracks,
                 "tracks_with_audio_features": stats.tracks_with_audio_features,
                 "missing_audio_features": stats.missing_audio_features,
+                "tracks_with_stratum_features": stats.tracks_with_stratum_features,
+                "missing_stratum_features": stats.missing_stratum_features,
+                "tracks_with_essentia_features": stats.tracks_with_essentia_features,
+                "missing_essentia_features": stats.missing_essentia_features,
                 "prototype_ready": prototype_ready,
                 "profile": {
                     "stored": stored_n.is_some(),
@@ -1008,6 +1065,10 @@ pub(super) fn handle_calibration_coverage(
         "tracks_with_canonical_genre": by_genre.values().map(|stats| stats.playlist_tracks).sum::<u32>(),
         "tracks_with_audio_features": total_with_audio_features,
         "missing_audio_features": total_missing_audio_features,
+        "tracks_with_stratum_features": total_with_stratum_features,
+        "missing_stratum_features": total_missing_stratum_features,
+        "tracks_with_essentia_features": total_with_essentia_features,
+        "missing_essentia_features": total_missing_essentia_features,
         "skipped_no_genre": skipped_no_genre,
         "skipped_unknown_genre": skipped_unknown_genre,
         "min_tracks_per_genre": audio_profile::MIN_TRACKS,

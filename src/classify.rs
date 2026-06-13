@@ -190,6 +190,8 @@ enum CharFlag {
     Slow,
     /// `key_confidence` in `(0.0, 0.1)`: no clear tonal centre.
     Atonal,
+    /// `decay_mid_tau > 200ms`: lingering mid-band decay/reverb tail.
+    LongTail,
 }
 
 struct AudioProfile {
@@ -203,7 +205,6 @@ struct AudioProfile {
 struct GenreVote {
     genre: &'static str,
     weight: f32,
-    #[allow(dead_code)]
     source: &'static str,
     bpm_plausible: bool,
 }
@@ -215,6 +216,10 @@ const BPM_TOLERANCE: f64 = 5.0;
 const CENTROID_VERY_LOW: f64 = 600.0;
 /// Spectral centroid threshold: dark timbre (dub techno, deep techno).
 const CENTROID_DARK: f64 = 1200.0;
+/// Mid-band decay threshold for reverb-heavy long-tail material.
+const LONG_TAIL_DECAY_MS: f64 = 200.0;
+/// Low-weight conjunctive boost, aligned with the audio-profile vote cap.
+const AUDIO_RULE_BOOST: f32 = 0.5;
 
 #[cfg(test)]
 pub(crate) fn classify_track(evidence: &TrackEvidence) -> ClassificationResult {
@@ -323,6 +328,9 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
     // not atonal music — exclude it so analysis failures aren't relabelled.
     if audio.key_confidence.is_some_and(|kc| kc > 0.0 && kc < 0.1) {
         flags.push(CharFlag::Atonal);
+    }
+    if audio.decay_mid_tau.is_some_and(|t| t > LONG_TAIL_DECAY_MS) {
+        flags.push(CharFlag::LongTail);
     }
 
     AudioProfile {
@@ -629,6 +637,19 @@ fn gather_votes(
         vec![]
     };
 
+    if let Some(profile) = audio_profile
+        && has_flag(profile, CharFlag::LongTail)
+        && has_flag(profile, CharFlag::Atonal)
+        && votes.iter().any(|v| v.genre == "Drone Techno")
+    {
+        votes.push(GenreVote {
+            genre: "Drone Techno",
+            weight: AUDIO_RULE_BOOST,
+            source: "audio-long-tail-atonal",
+            bpm_plausible: bpm_plausible("Drone Techno", effective_bpm),
+        });
+    }
+
     (votes, affinities)
 }
 
@@ -719,6 +740,10 @@ fn find_consensus(
         ev.push(format!("label: {label_name} → {lg}"));
     }
 
+    if votes.iter().any(|v| v.source == "audio-long-tail-atonal") {
+        ev.push("audio rule: long-tail+atonal → Drone Techno".into());
+    }
+
     if let Some(profile) = audio_profile.as_ref() {
         let bucket_name = match profile.bucket {
             EnergyBucket::NonDancefloor => "non-dancefloor",
@@ -737,6 +762,7 @@ fn find_consensus(
                 CharFlag::Fast => "fast",
                 CharFlag::Slow => "slow",
                 CharFlag::Atonal => "atonal",
+                CharFlag::LongTail => "long-tail",
             })
             .collect();
         let audio_str = if flag_names.is_empty() {
@@ -878,7 +904,8 @@ fn find_consensus(
 
     // HighEnergy always demotes deep variants (e.g. Deep Techno → Techno).
     // Dancefloor demotes only when the shallower variant also has votes,
-    // and not when the track is Atmospheric or Atonal — both signal a deeper read.
+    // and not when the track is Atmospheric, Atonal, or LongTail — each
+    // signals a deeper read.
     if let Some(profile) = audio_profile.as_ref()
         && let Some(shallower) = shallower_alternative(final_genre)
     {
@@ -888,6 +915,7 @@ fn find_consensus(
                 ranked.iter().any(|(g, _, _)| *g == shallower)
                     && !has_flag(profile, CharFlag::Atmospheric)
                     && !has_flag(profile, CharFlag::Atonal)
+                    && !has_flag(profile, CharFlag::LongTail)
             }
             _ => false,
         };
@@ -948,6 +976,7 @@ fn resolve_same_family_specificity(
     if let Some(profile) = audio_profile {
         let family = genre::genre_family(deeper);
         let atonal = has_flag(profile, CharFlag::Atonal);
+        let long_tail = has_flag(profile, CharFlag::LongTail);
 
         if atonal && family == GenreFamily::House {
             evidence.push(format!(
@@ -963,9 +992,12 @@ fn resolve_same_family_specificity(
             return deeper;
         }
 
-        if has_flag(profile, CharFlag::Atmospheric) || profile.bucket == EnergyBucket::LowEnergy {
+        if has_flag(profile, CharFlag::Atmospheric)
+            || profile.bucket == EnergyBucket::LowEnergy
+            || long_tail
+        {
             evidence.push(format!(
-                "depth: audio atmospheric/low-energy → {deeper} over {shallower}"
+                "depth: audio atmospheric/low-energy/long-tail → {deeper} over {shallower}"
             ));
             deeper
         } else if profile.bucket == EnergyBucket::HighEnergy {
@@ -1013,6 +1045,7 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
         }
         GenreFamily::Techno => {
             let dark_timbre = profile.centroid.is_some_and(|c| c < CENTROID_DARK);
+            let long_tail = has_flag(profile, CharFlag::LongTail);
             (profile.bucket >= EnergyBucket::Dancefloor
                 && !has_flag(profile, CharFlag::Broken)
                 && profile.bpm >= 125.0)
@@ -1020,7 +1053,7 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
                     && !has_flag(profile, CharFlag::Broken)
                     && profile.bpm >= 118.0
                     && profile.bpm <= 132.0
-                    && dark_timbre)
+                    && (dark_timbre || long_tail))
         }
         GenreFamily::House => {
             profile.bucket == EnergyBucket::Dancefloor
@@ -1530,6 +1563,33 @@ mod tests {
         a
     }
 
+    fn make_audio_with_decay(
+        bpm: f64,
+        danceability: f64,
+        dc: f64,
+        rr: f64,
+        centroid: f64,
+        decay_mid_tau: f64,
+    ) -> AudioFeatures {
+        let mut a = make_audio(bpm, danceability, dc, rr, centroid);
+        a.decay_mid_tau = Some(decay_mid_tau);
+        a
+    }
+
+    fn make_audio_with_key_conf_and_decay(
+        bpm: f64,
+        danceability: f64,
+        dc: f64,
+        rr: f64,
+        centroid: f64,
+        key_conf: f64,
+        decay_mid_tau: f64,
+    ) -> AudioFeatures {
+        let mut a = make_audio_with_key_conf(bpm, danceability, dc, rr, centroid, key_conf);
+        a.decay_mid_tau = Some(decay_mid_tau);
+        a
+    }
+
     #[test]
     fn atonal_techno_prefers_deep_techno() {
         let mut ev = make_evidence("");
@@ -1617,6 +1677,97 @@ mod tests {
             "key_confidence=0.0 must not set Atonal flag: {:?}",
             result.evidence
         );
+    }
+
+    #[test]
+    fn long_tail_techno_prefers_deep_techno() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_decay(125.0, 2.0, 3.0, 0.92, 1800.0, 250.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep Techno"));
+        assert!(
+            result.evidence.iter().any(|e| e.contains("long-tail")),
+            "evidence should mention long-tail: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn long_tail_atonal_boosts_drone_techno_candidate() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Drone Techno",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Ambient");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_key_conf_and_decay(
+            126.0, 2.0, 3.0, 0.92, 1000.0, 0.05, 275.0,
+        ));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Drone Techno"));
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|e| e.contains("long-tail+atonal")),
+            "evidence should mention conjunctive boost: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn long_tail_low_energy_techno_wins_cross_family_tiebreak() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "Ambient",
+                style_count: 1,
+            },
+            MappedGenre {
+                genre: "Minimal",
+                style_count: 1,
+            },
+        ];
+        ev.has_discogs = true;
+        ev.audio = Some(make_audio_with_decay(125.0, 1.2, 3.0, 0.95, 1500.0, 250.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Minimal"));
+        assert!(
+            result
+                .flags
+                .contains(&"audio-assisted-tiebreak".to_string()),
+            "expected audio tiebreak flag, got flags={:?} evidence={:?}",
+            result.flags,
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn high_energy_long_tail_still_demotes_deep_techno() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_decay(135.0, 2.8, 2.0, 0.95, 2500.0, 260.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
     }
 
     // 1. Marcel Dettmann - Aim: full consensus Techno
