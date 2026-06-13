@@ -689,6 +689,10 @@ fn extract_audio_features(
         rekordbox_bpm: track.bpm,
         stratum_bpm,
         bpm_agreement,
+        duration_seconds: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("duration_seconds"))
+            .and_then(serde_json::Value::as_f64),
         danceability: essentia_data.as_ref().and_then(|e| e.danceability),
         dynamic_complexity: essentia_data.as_ref().and_then(|e| e.dynamic_complexity),
         rhythm_regularity: essentia_data.as_ref().and_then(|e| e.rhythm_regularity),
@@ -715,6 +719,7 @@ fn extract_audio_features(
         // Scalar features from Essentia
         onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
         loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),
+        loudness_range: essentia_data.as_ref().and_then(|e| e.loudness_range),
         spectral_centroid_cv: essentia_data.as_ref().and_then(|e| e.spectral_centroid_cv),
         spectral_flux_mean: essentia_data.as_ref().and_then(|e| e.spectral_flux_mean),
         dissonance_mean: essentia_data.as_ref().and_then(|e| e.dissonance_mean),

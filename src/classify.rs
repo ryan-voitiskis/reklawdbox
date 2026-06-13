@@ -120,6 +120,7 @@ pub(crate) struct AudioFeatures {
     pub(crate) stratum_bpm: Option<f64>,
     #[allow(dead_code)]
     pub(crate) bpm_agreement: Option<bool>,
+    pub(crate) duration_seconds: Option<f64>,
     pub(crate) danceability: Option<f64>,
     pub(crate) dynamic_complexity: Option<f64>,
     pub(crate) rhythm_regularity: Option<f64>,
@@ -133,6 +134,7 @@ pub(crate) struct AudioFeatures {
     pub(crate) onset_rate: Option<f64>,
     #[allow(dead_code)]
     pub(crate) loudness_integrated: Option<f64>,
+    pub(crate) loudness_range: Option<f64>,
     #[allow(dead_code)]
     pub(crate) spectral_centroid_cv: Option<f64>,
     #[allow(dead_code)]
@@ -192,6 +194,8 @@ enum CharFlag {
     Atonal,
     /// `decay_mid_tau > 200ms`: lingering mid-band decay/reverb tail.
     LongTail,
+    /// `loudness_range < 1 LU` on a full-length track: compressed club master.
+    Compressed,
 }
 
 struct AudioProfile {
@@ -218,6 +222,10 @@ const CENTROID_VERY_LOW: f64 = 600.0;
 const CENTROID_DARK: f64 = 1200.0;
 /// Mid-band decay threshold for reverb-heavy long-tail material.
 const LONG_TAIL_DECAY_MS: f64 = 200.0;
+/// Loudness-range threshold for heavily mastered club tracks.
+const COMPRESSED_LOUDNESS_RANGE_LU: f64 = 1.0;
+/// Short clips can report artificially narrow loudness range.
+const COMPRESSED_MIN_DURATION_SECONDS: f64 = 60.0;
 /// Low-weight conjunctive boost, aligned with the audio-profile vote cap.
 const AUDIO_RULE_BOOST: f32 = 0.5;
 
@@ -332,6 +340,15 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
     if audio.decay_mid_tau.is_some_and(|t| t > LONG_TAIL_DECAY_MS) {
         flags.push(CharFlag::LongTail);
     }
+    if audio
+        .duration_seconds
+        .is_some_and(|d| d > COMPRESSED_MIN_DURATION_SECONDS)
+        && audio
+            .loudness_range
+            .is_some_and(|lr| lr < COMPRESSED_LOUDNESS_RANGE_LU)
+    {
+        flags.push(CharFlag::Compressed);
+    }
 
     AudioProfile {
         bucket,
@@ -391,6 +408,7 @@ fn check_audio_vetoes(
     if profile.bucket == EnergyBucket::NonDancefloor
         && has_flag(profile, CharFlag::Atmospheric)
         && !has_flag(profile, CharFlag::Ambient)
+        && !has_flag(profile, CharFlag::Compressed)
     // don't double-fire with the veto above
     {
         let action = compare_to_current(current_canonical, Some("Ambient"));
@@ -763,6 +781,7 @@ fn find_consensus(
                 CharFlag::Slow => "slow",
                 CharFlag::Atonal => "atonal",
                 CharFlag::LongTail => "long-tail",
+                CharFlag::Compressed => "compressed",
             })
             .collect();
         let audio_str = if flag_names.is_empty() {
@@ -904,8 +923,8 @@ fn find_consensus(
 
     // HighEnergy always demotes deep variants (e.g. Deep Techno → Techno).
     // Dancefloor demotes only when the shallower variant also has votes,
-    // and not when the track is Atmospheric, Atonal, or LongTail — each
-    // signals a deeper read.
+    // and not when the track is Atmospheric, Atonal, LongTail, or Compressed
+    // — each signals a deeper read.
     if let Some(profile) = audio_profile.as_ref()
         && let Some(shallower) = shallower_alternative(final_genre)
     {
@@ -916,6 +935,7 @@ fn find_consensus(
                     && !has_flag(profile, CharFlag::Atmospheric)
                     && !has_flag(profile, CharFlag::Atonal)
                     && !has_flag(profile, CharFlag::LongTail)
+                    && !has_flag(profile, CharFlag::Compressed)
             }
             _ => false,
         };
@@ -977,6 +997,7 @@ fn resolve_same_family_specificity(
         let family = genre::genre_family(deeper);
         let atonal = has_flag(profile, CharFlag::Atonal);
         let long_tail = has_flag(profile, CharFlag::LongTail);
+        let compressed = has_flag(profile, CharFlag::Compressed);
 
         if atonal && family == GenreFamily::House {
             evidence.push(format!(
@@ -988,6 +1009,14 @@ fn resolve_same_family_specificity(
         if atonal && family == GenreFamily::Techno {
             evidence.push(format!(
                 "depth: audio atonal → {deeper} over {shallower} (noise/drone-driven)"
+            ));
+            return deeper;
+        }
+
+        if compressed && family == GenreFamily::Techno && profile.bucket == EnergyBucket::Dancefloor
+        {
+            evidence.push(format!(
+                "depth: audio compressed dancefloor → {deeper} over {shallower} (club-master signal)"
             ));
             return deeper;
         }
@@ -1376,6 +1405,7 @@ mod tests {
             rekordbox_bpm: bpm,
             stratum_bpm: Some(bpm),
             bpm_agreement: Some(true),
+            duration_seconds: Some(300.0),
             danceability: Some(danceability),
             dynamic_complexity: Some(dc),
             rhythm_regularity: Some(rr),
@@ -1384,6 +1414,7 @@ mod tests {
             decay_high_tau: None,
             onset_rate: None,
             loudness_integrated: None,
+            loudness_range: None,
             spectral_centroid_cv: None,
             spectral_flux_mean: None,
             dissonance_mean: None,
@@ -1590,6 +1621,19 @@ mod tests {
         a
     }
 
+    fn make_audio_with_loudness_range(
+        bpm: f64,
+        danceability: f64,
+        dc: f64,
+        rr: f64,
+        centroid: f64,
+        loudness_range: f64,
+    ) -> AudioFeatures {
+        let mut a = make_audio(bpm, danceability, dc, rr, centroid);
+        a.loudness_range = Some(loudness_range);
+        a
+    }
+
     #[test]
     fn atonal_techno_prefers_deep_techno() {
         let mut ev = make_evidence("");
@@ -1768,6 +1812,75 @@ mod tests {
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
+    }
+
+    #[test]
+    fn compressed_dancefloor_prefers_deep_techno() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.audio = Some(make_audio_with_loudness_range(
+            128.0, 2.0, 3.0, 0.92, 1800.0, 0.7,
+        ));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep Techno"));
+        assert!(
+            result.evidence.iter().any(|e| e.contains("compressed")),
+            "evidence should mention compressed: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn compressed_atmospheric_skips_expanded_ambient_veto() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Dub Techno");
+        ev.has_beatport = true;
+        // NonDancefloor + Atmospheric normally trips the expanded Ambient veto.
+        let audio = make_audio_with_loudness_range(120.0, 0.8, 7.0, 0.85, 900.0, 0.6);
+        let profile = compute_audio_profile(&audio);
+        assert!(has_flag(&profile, CharFlag::Compressed));
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_ne!(result.genre, Some("Ambient"));
+        assert!(
+            !result
+                .evidence
+                .iter()
+                .any(|e| e.contains("non-dancefloor + atmospheric")),
+            "compressed should suppress expanded Ambient veto: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn compressed_flag_ignores_short_tracks() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        let mut audio = make_audio_with_loudness_range(128.0, 2.0, 3.0, 0.92, 1800.0, 0.7);
+        audio.duration_seconds = Some(45.0);
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert!(
+            !result.evidence.iter().any(|e| e.contains("compressed")),
+            "short tracks should not set compressed: {:?}",
+            result.evidence
+        );
     }
 
     // 1. Marcel Dettmann - Aim: full consensus Techno

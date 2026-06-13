@@ -1,7 +1,7 @@
 # Genre Classification: Feature Development TODO
 
 **Started:** 2026-05-10 (post v0.27.0).
-**Current as of:** 2026-06-13.
+**Current as of:** 2026-06-14.
 **Goal:** Build out several more discriminating features in stratum-dsp, then wire
 them all into the genre classifier in one pass — avoiding per-feature classifier
 tuning churn.
@@ -63,9 +63,8 @@ So: ship 3–4 more discriminating features, then do one classifier-tuning pass.
 Using the local stdio MCP smoke path against `genre_verified`:
 
 - `calibration_coverage`: 604 verified tracks across 23 canonical genres;
-  604 have current audio features overall, but only 4 have current-schema
-  Stratum after the schema 11 bump (Essentia remains 604/604). Rehydrate the
-  playlist before recalibrating Stratum-dependent profiles.
+  604 have current audio features overall, but only 4 had current-schema
+  Stratum after the schema 11 bump (Essentia remained 604/604).
 - Fresh section analysis after schema 11 produced contiguous, non-overlapping
   section ranges on the real-track sample.
 - Dub-stab validation:
@@ -82,6 +81,18 @@ Using the local stdio MCP smoke path against `genre_verified`:
 Techno rule. Treat it as one feature to combine with A2/A4/A5 and profile
 training. False-positive mitigation may need tonal/percussive separation or a
 more chord-specific stab detector, but defer until it hurts classifier diffs.
+
+## Validation snapshot — 2026-06-14
+
+After rehydrating the `genre_verified` playlist with local Stratum analysis:
+
+- `calibration_coverage`: 604 verified tracks across 23 canonical genres;
+  604/604 have current Stratum features, 604/604 have current Essentia
+  features, and no stored profiles point outside the playlist.
+- The rehydration completed without final failures. Stratum emitted a small
+  number of per-track BPM candidate warnings (`No reasonable-range candidates
+  (60-180 BPM)`), which should be treated as track-level review signals rather
+  than cache failures.
 
 ## Phase 1.5 — Track-section detection primitive (foundational)
 
@@ -121,11 +132,21 @@ and fast.
       after the schema 11 bump; 3/4 fired LongTail (Dub Techno, Techno,
       Ambient). Treat this as wired but mostly dormant until the verified
       playlist is rehydrated.
-- [ ] **B3. `Compressed` CharFlag from `loudness_range`** — threshold
+- [x] **B3. `Compressed` CharFlag from `loudness_range`** — threshold
       `loudness_range < 1.0 LU`. Adds club-master signal for Deep Techno
       preference; suppresses the Atmospheric → Ambient veto when set.
       Needs `loudness_range` extraction added to `AudioFeatures`. ~30 LOC.
       Add duration guard (`> 60s`) — short tracks artificially compress.
+
+      **Status:** implemented with `duration_seconds > 60s` guard, Essentia
+      `loudness_range` extraction, reviewable `compressed` evidence, same-family
+      Techno depth preference, and suppression of the expanded
+      Atmospheric → Ambient veto. A read-only cache aggregate over
+      `genre_verified` found 22/604 tracks firing the flag (3.6%): Deep Techno
+      3/20, Dub Techno 3/24, Techno 4/50, Deep House 9/140, House 3/145, and
+      zero Ambient/Downtempo fires. This is plausible enough to keep the 1.0 LU
+      threshold for now; spot-check the House-family fires if classifier diffs
+      look noisy.
 - [ ] **B4. `bpm_agreement` cross-detector fallback** — when
       `bpm_agreement == Some(false)` AND stratum + Essentia consensus on a
       different BPM (within 3% of each other), substitute their mean for
