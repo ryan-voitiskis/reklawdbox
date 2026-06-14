@@ -170,6 +170,10 @@ pub enum AnalysisFlag {
     DubStabStage1Failed,
     /// Stage 2 (beat-relative offset histogram) returned an error.
     DubStabStage2Failed,
+    /// Beat grid had fewer than 2 beats — kick-pattern detection skipped.
+    KickPatternGridTooShort,
+    /// Kick-pattern detection returned an error.
+    KickPatternFailed,
     /// Track-section detector returned an error. The downstream pipeline
     /// continues with sections=None and the dub_stab MainGroove filter is
     /// effectively a no-op. Distinct from `NoMainGrooveDetected`.
@@ -251,11 +255,65 @@ pub struct AnalysisResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dub_stab: Option<DubStabAnalysis>,
 
+    /// Kick-pattern detector result: beat-relative low-band onset placement.
+    /// Populated when a beat grid is available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kick_pattern: Option<KickPatternAnalysis>,
+
     /// Coarse track-level section labels (Intro / MainGroove / Breakdown /
     /// Outro). Used by downstream feature aggregators to filter to
     /// kick-active or main-groove sections.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sections: Option<Vec<crate::features::sections::TrackSection>>,
+}
+
+/// Coarse kick placement category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum KickPattern {
+    /// Strong kick on every quarter-note beat.
+    FourOnFloor,
+    /// Kick placement is syncopated or breakbeat-like.
+    BrokenBeat,
+    /// Kick placement emphasizes beats 1 and 3 at a faster notated tempo.
+    Halftime,
+    /// Too few kick-band onsets to establish a recurring pattern.
+    Sparse,
+    /// Kick-band onsets exist but do not fit a supported template.
+    Irregular,
+}
+
+impl KickPattern {
+    /// Stable lower-snake-case label for cache and MCP consumers.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FourOnFloor => "four_on_floor",
+            Self::BrokenBeat => "broken_beat",
+            Self::Halftime => "halftime",
+            Self::Sparse => "sparse",
+            Self::Irregular => "irregular",
+        }
+    }
+}
+
+/// Kick-pattern detector output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KickPatternAnalysis {
+    /// Detected coarse kick placement category.
+    pub pattern: KickPattern,
+    /// Detector confidence in `[0, 1]`.
+    pub confidence: f32,
+    /// Detected kick-band onsets per analysed bar.
+    pub kicks_per_bar: f32,
+    /// Number of kick-band onsets used after optional section filtering.
+    pub onset_count: u32,
+    /// Flattened `4 × 16` beat-relative histogram. Rows are beats within
+    /// the bar; columns are sixteenth-subdivision offsets inside each beat.
+    pub histogram: Vec<f32>,
+    /// Whether section filtering limited the detector to MainGroove or used
+    /// the whole track.
+    pub rate_basis: RateBasis,
 }
 
 /// Dub-stab Stage 1 + Stage 2 + Stage 3 result, surfaced from the

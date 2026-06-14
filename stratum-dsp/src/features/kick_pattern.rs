@@ -1,0 +1,461 @@
+//! Kick-pattern detector for distinguishing straight 4/4, broken-beat, and
+//! halftime kick placement.
+//!
+//! The detector intentionally stops at feature extraction. Genre-classifier
+//! rules should consume this only after real-track validation.
+
+use crate::analysis::result::{BeatGrid, KickPattern, KickPatternAnalysis, RateBasis};
+use crate::config::AnalysisConfig;
+use crate::error::AnalysisError;
+use crate::features::onset::band::detect_band_onsets;
+use crate::features::sections::{SectionKind, TrackSection};
+
+/// Beat positions per bar in the kick histogram.
+pub const KICK_PATTERN_ROWS: usize = 4;
+
+/// Sixteenth-subdivision bins inside each beat.
+pub const KICK_PATTERN_COLS: usize = 16;
+
+const HISTOGRAM_LEN: usize = KICK_PATTERN_ROWS * KICK_PATTERN_COLS;
+const BIN_SIGMA: f32 = 0.75;
+
+#[derive(Debug, Clone)]
+struct KickHistogram {
+    bins: [f32; HISTOGRAM_LEN],
+    bar_count: f32,
+}
+
+/// Detect kick-band onsets and classify their beat-relative placement.
+///
+/// When `sections` contains at least one `MainGroove` section, onsets and bar
+/// counts are limited to those sections. Otherwise the detector uses the full
+/// analysed track and reports `RateBasis::Track`.
+pub fn detect_kick_pattern(
+    spec: &[Vec<f32>],
+    sample_rate: u32,
+    beat_grid: &BeatGrid,
+    bpm: f32,
+    config: &AnalysisConfig,
+    sections: Option<&[TrackSection]>,
+) -> Result<KickPatternAnalysis, AnalysisError> {
+    let frame_size = config.frame_size;
+    let hop_size = config.hop_size;
+
+    if hop_size == 0 || sample_rate == 0 {
+        return Err(AnalysisError::InvalidInput(
+            "hop_size and sample_rate must be > 0".to_string(),
+        ));
+    }
+
+    validate_beat_grid(beat_grid)?;
+
+    let onsets = detect_band_onsets(
+        spec,
+        sample_rate,
+        frame_size,
+        (
+            config.kick_pattern_band_low_hz,
+            config.kick_pattern_band_high_hz,
+        ),
+        config.kick_pattern_onset_threshold_percentile,
+    )?;
+
+    let main_groove_ranges: Vec<(f32, f32)> = sections
+        .map(|secs| {
+            secs.iter()
+                .filter(|s| s.kind == SectionKind::MainGroove)
+                .map(|s| (s.start_seconds, s.end_seconds))
+                .collect()
+        })
+        .unwrap_or_default();
+    let rate_basis = if main_groove_ranges.is_empty() {
+        RateBasis::Track
+    } else {
+        RateBasis::MainGroove
+    };
+
+    let frames_per_second = sample_rate as f32 / hop_size as f32;
+    let filtered_onsets: Vec<usize> = if main_groove_ranges.is_empty() {
+        onsets
+    } else {
+        onsets
+            .into_iter()
+            .filter(|&frame| {
+                let t = frame as f32 / frames_per_second;
+                main_groove_ranges
+                    .iter()
+                    .any(|&(start, end)| t >= start && t < end)
+            })
+            .collect()
+    };
+
+    let histogram = kick_histogram_from_onsets(
+        &filtered_onsets,
+        hop_size,
+        sample_rate,
+        beat_grid,
+        &main_groove_ranges,
+    )?;
+    let kicks_per_bar = if histogram.bar_count > 0.0 {
+        filtered_onsets.len() as f32 / histogram.bar_count
+    } else {
+        0.0
+    };
+    let (pattern, confidence) = classify_kick_histogram(
+        &histogram.bins,
+        kicks_per_bar,
+        bpm,
+        config.kick_pattern_sparse_threshold,
+        config.kick_pattern_min_template_score,
+        config.kick_pattern_halftime_min_bpm,
+    );
+
+    Ok(KickPatternAnalysis {
+        pattern,
+        confidence,
+        kicks_per_bar,
+        onset_count: filtered_onsets.len() as u32,
+        histogram: histogram.bins.to_vec(),
+        rate_basis,
+    })
+}
+
+fn kick_histogram_from_onsets(
+    onset_frames: &[usize],
+    hop_size: usize,
+    sample_rate: u32,
+    beat_grid: &BeatGrid,
+    ranges: &[(f32, f32)],
+) -> Result<KickHistogram, AnalysisError> {
+    if beat_grid.beats.len() < 2 {
+        return Ok(KickHistogram {
+            bins: [0.0; HISTOGRAM_LEN],
+            bar_count: 0.0,
+        });
+    }
+
+    let mut bins = [0.0_f32; HISTOGRAM_LEN];
+    let sr = sample_rate as f32;
+    let beats = &beat_grid.beats;
+    let bars = &beat_grid.bars;
+
+    for &frame in onset_frames {
+        let onset_time = frame as f32 * hop_size as f32 / sr;
+        let mut beat_idx = match beats
+            .binary_search_by(|b| b.partial_cmp(&onset_time).expect("validated finite"))
+        {
+            Ok(i) => i,
+            Err(0) => continue,
+            Err(i) => i - 1,
+        };
+        if beat_idx + 1 >= beats.len() {
+            continue;
+        }
+
+        let beat_period = beats[beat_idx + 1] - beats[beat_idx];
+        if beat_period <= 0.0 || !beat_period.is_finite() {
+            continue;
+        }
+
+        let mut offset = ((onset_time - beats[beat_idx]) / beat_period).clamp(0.0, 1.0);
+        // STFT frame quantisation can put an exactly-on-beat transient a few
+        // milliseconds before the beat, which otherwise bins as a late
+        // previous-beat event. Snap only the extreme tail; genuine 16th-note
+        // anticipations remain well below this threshold.
+        let mut placement_time = onset_time;
+        if offset > 0.90 && beat_idx + 2 < beats.len() {
+            beat_idx += 1;
+            offset = 0.0;
+            placement_time = beats[beat_idx];
+        }
+
+        let beat_in_bar = beat_in_bar(beat_idx, placement_time, beats, bars);
+        add_soft_bin(&mut bins, beat_in_bar, offset);
+    }
+
+    let bar_count = count_bars(beat_grid, ranges);
+    Ok(KickHistogram { bins, bar_count })
+}
+
+fn add_soft_bin(bins: &mut [f32; HISTOGRAM_LEN], beat_in_bar: usize, offset: f32) {
+    let target = offset * KICK_PATTERN_COLS as f32;
+    let two_sigma_sq = 2.0 * BIN_SIGMA * BIN_SIGMA;
+    for col in 0..KICK_PATTERN_COLS {
+        let mut d = (col as f32 - target).abs();
+        if d > KICK_PATTERN_COLS as f32 / 2.0 {
+            d = KICK_PATTERN_COLS as f32 - d;
+        }
+        bins[beat_in_bar * KICK_PATTERN_COLS + col] += (-(d * d) / two_sigma_sq).exp();
+    }
+}
+
+fn beat_in_bar(beat_idx: usize, onset_time: f32, beats: &[f32], bars: &[f32]) -> usize {
+    if bars.is_empty() || onset_time < bars[0] {
+        return beat_idx % KICK_PATTERN_ROWS;
+    }
+    let bar_pos = bars.partition_point(|&b| b <= onset_time);
+    if bar_pos == 0 {
+        return beat_idx % KICK_PATTERN_ROWS;
+    }
+    let bar_start = bars[bar_pos - 1];
+    let first_beat_in_bar = beats.partition_point(|&b| b < bar_start);
+    beat_idx
+        .saturating_sub(first_beat_in_bar)
+        .min(KICK_PATTERN_ROWS - 1)
+}
+
+fn count_bars(beat_grid: &BeatGrid, ranges: &[(f32, f32)]) -> f32 {
+    if beat_grid.bars.is_empty() {
+        return (beat_grid.beats.len() as f32 / KICK_PATTERN_ROWS as f32).max(0.0);
+    }
+    if ranges.is_empty() {
+        return beat_grid.bars.len() as f32;
+    }
+    let count = beat_grid
+        .bars
+        .iter()
+        .filter(|&&bar_start| {
+            ranges
+                .iter()
+                .any(|&(start, end)| bar_start >= start && bar_start < end)
+        })
+        .count();
+    count as f32
+}
+
+fn classify_kick_histogram(
+    observed: &[f32; HISTOGRAM_LEN],
+    kicks_per_bar: f32,
+    bpm: f32,
+    sparse_threshold: f32,
+    min_template_score: f32,
+    halftime_min_bpm: f32,
+) -> (KickPattern, f32) {
+    if kicks_per_bar < sparse_threshold {
+        let confidence = if sparse_threshold > 0.0 {
+            1.0 - (kicks_per_bar / sparse_threshold).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        return (KickPattern::Sparse, confidence.clamp(0.5, 1.0));
+    }
+
+    let total_mass: f32 = observed.iter().sum();
+    if total_mass <= 0.0 || !total_mass.is_finite() {
+        return (KickPattern::Sparse, 1.0);
+    }
+
+    let templates = [
+        (
+            KickPattern::FourOnFloor,
+            template(&[(0, 0, 1.0), (1, 0, 1.0), (2, 0, 1.0), (3, 0, 1.0)]),
+            4.0,
+        ),
+        (
+            KickPattern::BrokenBeat,
+            template(&[(0, 0, 1.0), (1, 8, 1.0), (2, 0, 1.0), (3, 8, 1.0)]),
+            4.0,
+        ),
+        (
+            KickPattern::Halftime,
+            template(&[(0, 0, 1.0), (2, 0, 1.0)]),
+            2.0,
+        ),
+    ];
+
+    let mut best = (KickPattern::Irregular, 0.0_f32, 0.0_f32);
+    for (pattern, tmpl, expected_kicks_per_bar) in templates {
+        let score = cosine(observed, &tmpl);
+        let density = (kicks_per_bar / expected_kicks_per_bar)
+            .clamp(0.0, 1.0)
+            .sqrt();
+        let confidence = score * density;
+        if score > best.1 {
+            best = (pattern, score, confidence);
+        }
+    }
+
+    let offbeat_mass = observed[idx(1, 8)] + observed[idx(3, 8)];
+    let offbeat_ratio = offbeat_mass / total_mass;
+    if best.0 == KickPattern::FourOnFloor && offbeat_ratio > 0.30 {
+        best = (
+            KickPattern::BrokenBeat,
+            best.1.max(offbeat_ratio),
+            best.2.max(offbeat_ratio),
+        );
+    }
+
+    if best.1 < min_template_score {
+        return (KickPattern::Irregular, (1.0 - best.1).clamp(0.4, 1.0));
+    }
+
+    if best.0 == KickPattern::Halftime && bpm < halftime_min_bpm {
+        return (KickPattern::FourOnFloor, (best.2 * 0.7).clamp(0.0, 1.0));
+    }
+
+    (best.0, best.2.clamp(0.0, 1.0))
+}
+
+fn template(points: &[(usize, usize, f32)]) -> [f32; HISTOGRAM_LEN] {
+    let mut out = [0.0_f32; HISTOGRAM_LEN];
+    for &(row, col, weight) in points {
+        if row < KICK_PATTERN_ROWS && col < KICK_PATTERN_COLS {
+            out[idx(row, col)] = weight;
+        }
+    }
+    out
+}
+
+fn cosine(a: &[f32; HISTOGRAM_LEN], b: &[f32; HISTOGRAM_LEN]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 || !norm_a.is_finite() || !norm_b.is_finite() {
+        return 0.0;
+    }
+    dot / (norm_a * norm_b)
+}
+
+const fn idx(row: usize, col: usize) -> usize {
+    row * KICK_PATTERN_COLS + col
+}
+
+fn validate_beat_grid(beat_grid: &BeatGrid) -> Result<(), AnalysisError> {
+    fn check(name: &str, xs: &[f32]) -> Result<(), AnalysisError> {
+        if let Some(idx) = xs.iter().position(|x| !x.is_finite()) {
+            return Err(AnalysisError::InvalidInput(format!(
+                "beat_grid.{name} must be finite, got {} at index {idx}",
+                xs[idx]
+            )));
+        }
+        if let Some(idx) = xs.windows(2).position(|w| w[0] >= w[1]) {
+            return Err(AnalysisError::InvalidInput(format!(
+                "beat_grid.{name} must be strictly ascending, got {name}[{idx}]={} >= {name}[{}]={}",
+                xs[idx],
+                idx + 1,
+                xs[idx + 1]
+            )));
+        }
+        Ok(())
+    }
+    check("beats", &beat_grid.beats)?;
+    check("bars", &beat_grid.bars)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SR: u32 = 44_100;
+    const HOP: usize = 512;
+
+    fn beat_grid_4on4(bpm: f32, bars: usize) -> BeatGrid {
+        let beat_period = 60.0 / bpm;
+        let total_beats = bars * 4 + 1;
+        let beats: Vec<f32> = (0..total_beats).map(|i| i as f32 * beat_period).collect();
+        let bar_starts: Vec<f32> = (0..bars)
+            .map(|bar| bar as f32 * beat_period * 4.0)
+            .collect();
+        BeatGrid {
+            downbeats: bar_starts.clone(),
+            beats,
+            bars: bar_starts,
+        }
+    }
+
+    fn frame(t: f32) -> usize {
+        (t * SR as f32 / HOP as f32).round() as usize
+    }
+
+    fn analyze_times(times: &[f32], bpm: f32, bars: usize) -> KickPatternAnalysis {
+        let grid = beat_grid_4on4(bpm, bars);
+        let onset_frames: Vec<usize> = times.iter().copied().map(frame).collect();
+        let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &[]).unwrap();
+        let kicks_per_bar = onset_frames.len() as f32 / hist.bar_count;
+        let (pattern, confidence) =
+            classify_kick_histogram(&hist.bins, kicks_per_bar, bpm, 0.5, 0.4, 100.0);
+        KickPatternAnalysis {
+            pattern,
+            confidence,
+            kicks_per_bar,
+            onset_count: onset_frames.len() as u32,
+            histogram: hist.bins.to_vec(),
+            rate_basis: RateBasis::Track,
+        }
+    }
+
+    fn repeated_pattern(bpm: f32, bars: usize, offsets: &[f32]) -> Vec<f32> {
+        let beat_period = 60.0 / bpm;
+        let bar_period = beat_period * 4.0;
+        let mut times = Vec::new();
+        for bar in 0..bars {
+            let bar_start = bar as f32 * bar_period;
+            for &offset_beats in offsets {
+                times.push(bar_start + offset_beats * beat_period);
+            }
+        }
+        times
+    }
+
+    #[test]
+    fn classifies_four_on_floor() {
+        let times = repeated_pattern(128.0, 8, &[0.0, 1.0, 2.0, 3.0]);
+        let result = analyze_times(&times, 128.0, 8);
+        assert_eq!(result.pattern, KickPattern::FourOnFloor);
+        assert!(result.confidence > 0.6);
+        assert!((result.kicks_per_bar - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn classifies_broken_beat() {
+        let times = repeated_pattern(128.0, 8, &[0.0, 1.5, 2.0, 3.5]);
+        let result = analyze_times(&times, 128.0, 8);
+        assert_eq!(result.pattern, KickPattern::BrokenBeat);
+        assert!(result.confidence > 0.6);
+    }
+
+    #[test]
+    fn classifies_halftime_above_minimum_bpm() {
+        let times = repeated_pattern(140.0, 8, &[0.0, 2.0]);
+        let result = analyze_times(&times, 140.0, 8);
+        assert_eq!(result.pattern, KickPattern::Halftime);
+        assert!(result.confidence > 0.6);
+    }
+
+    #[test]
+    fn collapses_low_bpm_halftime_to_four_on_floor() {
+        let times = repeated_pattern(90.0, 8, &[0.0, 2.0]);
+        let result = analyze_times(&times, 90.0, 8);
+        assert_eq!(result.pattern, KickPattern::FourOnFloor);
+        assert!(result.confidence < 0.8);
+    }
+
+    #[test]
+    fn classifies_sparse() {
+        let times = repeated_pattern(128.0, 8, &[0.0]);
+        let result = analyze_times(&times[..2], 128.0, 8);
+        assert_eq!(result.pattern, KickPattern::Sparse);
+        assert!(result.confidence >= 0.5);
+    }
+
+    #[test]
+    fn classifies_irregular_when_no_template_fits() {
+        let times = repeated_pattern(128.0, 8, &[0.25, 1.25, 2.75, 3.25]);
+        let result = analyze_times(&times, 128.0, 8);
+        assert_eq!(result.pattern, KickPattern::Irregular);
+        assert!(result.confidence >= 0.4);
+    }
+
+    #[test]
+    fn limits_onsets_to_main_groove_sections() {
+        let bpm = 128.0;
+        let beat_period = 60.0 / bpm;
+        let grid = beat_grid_4on4(bpm, 8);
+        let times = repeated_pattern(bpm, 8, &[0.0, 1.0, 2.0, 3.0]);
+        let onset_frames: Vec<usize> = times.iter().copied().map(frame).collect();
+        let ranges = [(2.0 * 4.0 * beat_period, 4.0 * 4.0 * beat_period)];
+        let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &ranges).unwrap();
+        assert_eq!(hist.bar_count, 2.0);
+    }
+}

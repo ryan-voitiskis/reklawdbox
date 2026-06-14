@@ -717,6 +717,39 @@ fn extract_audio_features(
             .as_ref()
             .and_then(|sj| sj.get("key_confidence"))
             .and_then(serde_json::Value::as_f64),
+        kick_pattern: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_pattern"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        kick_pattern_confidence: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_pattern_confidence"))
+            .and_then(serde_json::Value::as_f64),
+        kick_kicks_per_bar: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_kicks_per_bar"))
+            .and_then(serde_json::Value::as_f64),
+        kick_onset_count: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_onset_count"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok()),
+        kick_rate_basis: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_rate_basis"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        kick_histogram: stratum_json
+            .as_ref()
+            .and_then(|sj| sj.get("kick_histogram"))
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_f64)
+                    .collect()
+            }),
         // Scalar features from Essentia
         onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
         loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),

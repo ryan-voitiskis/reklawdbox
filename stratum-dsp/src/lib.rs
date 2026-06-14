@@ -53,7 +53,7 @@ pub mod ml;
 pub use analysis::confidence::{compute_confidence, AnalysisConfidence};
 pub use analysis::result::{
     AnalysisMetadata, AnalysisResult, BeatGrid, DubStabAnalysis, DubStabTemplateMatch, Key,
-    KeyType, RateBasis,
+    KeyType, KickPattern, KickPatternAnalysis, RateBasis,
 };
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
@@ -1792,6 +1792,31 @@ pub fn analyze_audio(
         None
     };
 
+    // Kick-pattern detector: low-band onset placement over the beat grid.
+    // This is surfaced for validation only; genre-classifier rules should
+    // consume it only after real-track listening checks.
+    let kick_pattern = if beat_grid.beats.len() >= 2 {
+        match features::kick_pattern::detect_kick_pattern(
+            &magnitude_spec_frames,
+            sample_rate,
+            &beat_grid,
+            bpm,
+            &config,
+            sections.as_deref(),
+        ) {
+            Ok(result) => Some(result),
+            Err(e) => {
+                log::warn!("kick-pattern detection failed: {}", e);
+                flags.push(crate::analysis::result::AnalysisFlag::KickPatternFailed);
+                None
+            }
+        }
+    } else {
+        log::debug!("Skipping kick-pattern: beat grid has < 2 beats");
+        flags.push(crate::analysis::result::AnalysisFlag::KickPatternGridTooShort);
+        None
+    };
+
     let result = AnalysisResult {
         bpm,
         bpm_confidence,
@@ -1804,6 +1829,7 @@ pub fn analyze_audio(
         harmonic_proportion,
         decay,
         dub_stab,
+        kick_pattern,
         sections,
         metadata: AnalysisMetadata {
             duration_seconds: trimmed_samples.len() as f32 / sample_rate as f32,

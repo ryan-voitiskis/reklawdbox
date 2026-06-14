@@ -78,6 +78,21 @@ pub struct StratumResult {
     /// best-matching template (regardless of whether that template's name
     /// is surfaced or replaced by `unmatched`).
     pub dub_stab_template_score: Option<f64>,
+    /// Kick-pattern detector label. One of `four_on_floor`,
+    /// `broken_beat`, `halftime`, `sparse`, or `irregular`.
+    pub kick_pattern: Option<String>,
+    /// Detector confidence in `[0, 1]`.
+    pub kick_pattern_confidence: Option<f64>,
+    /// Kick-band onsets per analysed bar.
+    pub kick_kicks_per_bar: Option<f64>,
+    /// Number of kick-band onsets used after optional section filtering.
+    pub kick_onset_count: Option<u32>,
+    /// Either `"main_groove"` or `"track"` — the section regime used for
+    /// kick-pattern aggregation.
+    pub kick_rate_basis: Option<String>,
+    /// Flattened `4 × 16` kick-placement histogram. Rows are beats within
+    /// the bar; columns are sixteenth-subdivision offsets inside each beat.
+    pub kick_histogram: Option<Vec<f64>>,
     /// Coarse track structure: ordered list of sections with start/end
     /// times and labels (Intro / MainGroove / Breakdown / Outro). Used by
     /// downstream feature aggregators (kick-pattern, sub-rumble, sidechain
@@ -112,7 +127,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "11";
+pub const STRATUM_SCHEMA_VERSION: &str = "12";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -571,6 +586,25 @@ pub fn analyze_with_stratum(
             .as_ref()
             .and_then(|d| d.template_match.as_ref())
             .map(|t| t.score as f64),
+        kick_pattern: result
+            .kick_pattern
+            .as_ref()
+            .map(|k| k.pattern.as_str().to_string()),
+        kick_pattern_confidence: result.kick_pattern.as_ref().map(|k| k.confidence as f64),
+        kick_kicks_per_bar: result.kick_pattern.as_ref().map(|k| k.kicks_per_bar as f64),
+        kick_onset_count: result.kick_pattern.as_ref().map(|k| k.onset_count),
+        kick_rate_basis: result.kick_pattern.as_ref().map(|k| {
+            match k.rate_basis {
+                stratum_dsp::RateBasis::MainGroove => "main_groove",
+                stratum_dsp::RateBasis::Track => "track",
+                _ => "unknown",
+            }
+            .to_string()
+        }),
+        kick_histogram: result
+            .kick_pattern
+            .as_ref()
+            .map(|k| k.histogram.iter().map(|&v| v as f64).collect()),
         sections: result.sections.as_ref().map(|secs| {
             secs.iter()
                 .map(|s| TrackSectionView {
@@ -632,6 +666,12 @@ mod tests {
             dub_stab_histogram: Some(vec![0.0; 32]),
             dub_stab_template: Some("offbeat_eighth".to_string()),
             dub_stab_template_score: Some(0.92),
+            kick_pattern: Some("four_on_floor".to_string()),
+            kick_pattern_confidence: Some(0.91),
+            kick_kicks_per_bar: Some(4.0),
+            kick_onset_count: Some(128),
+            kick_rate_basis: Some("main_groove".to_string()),
+            kick_histogram: Some(vec![0.0; 64]),
             sections: Some(vec![TrackSectionView {
                 start_seconds: 0.0,
                 end_seconds: 30.0,

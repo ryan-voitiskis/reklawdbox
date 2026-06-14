@@ -249,11 +249,17 @@ Pick **one at a time**, with validation against `genre_verified` corpus before
 moving to the next. Each ships behind its own commit but classifier wiring
 waits until phase 4.
 
-- [ ] **A2. Kick-pattern detector.**
+- [x] **A2. Kick-pattern detector.**
       Plan: [`kick-pattern-detector-plan.md`](kick-pattern-detector-plan.md).
       Discriminates Electro and broken-beat from straight 4/4 Techno. Sibling
       of A1 — shares the `detect_band_onsets` primitive. Highest expected
       classifier-accuracy lift per the master doc.
+
+      **Status:** implemented detector-only with Stratum schema `12`.
+      `StratumResult` now surfaces `kick_pattern`, confidence, kicks-per-bar,
+      onset count, rate basis, and a flattened 4x16 histogram. Classifier rules
+      do **not** consume the detector yet; `AudioFeatures` only carries the
+      cached values for validation.
 
       **Acceptance:** validation on a hand-picked corpus of Electro,
       broken-beat, and 4/4 Techno tracks. Detector should classify each

@@ -586,6 +586,34 @@ pub struct AnalysisConfig {
     /// Default: 0.8.
     pub key_minor_leading_tone_bonus_weight: f32,
 
+    // Kick-pattern detector
+    /// Lower edge of the kick band in Hz.
+    /// Default: 40.0.
+    pub kick_pattern_band_low_hz: f32,
+
+    /// Upper edge of the kick band in Hz.
+    /// Default: 120.0.
+    pub kick_pattern_band_high_hz: f32,
+
+    /// Percentile threshold used by kick-band onset detection.
+    /// Default: 0.85.
+    pub kick_pattern_onset_threshold_percentile: f32,
+
+    /// Kicks per bar below which the detector reports `Sparse`.
+    /// Default: 0.5.
+    pub kick_pattern_sparse_threshold: f32,
+
+    /// Minimum template cosine score required before reporting a non-irregular
+    /// placement category.
+    /// Default: 0.4.
+    pub kick_pattern_min_template_score: f32,
+
+    /// Minimum BPM at which a two-kick-per-bar pattern may be reported as
+    /// halftime. Below this, it collapses toward straight four-on-floor with
+    /// reduced confidence.
+    /// Default: 100.0.
+    pub kick_pattern_halftime_min_bpm: f32,
+
     // ML refinement
     /// Enable ML refinement (requires ml feature)
     #[cfg(feature = "ml")]
@@ -744,6 +772,12 @@ impl Default for AnalysisConfig {
             // Experimental: can easily over-bias the result on real-world mixes.
             enable_key_minor_harmonic_bonus: false,
             key_minor_leading_tone_bonus_weight: 0.2,
+            kick_pattern_band_low_hz: 40.0,
+            kick_pattern_band_high_hz: 120.0,
+            kick_pattern_onset_threshold_percentile: 0.85,
+            kick_pattern_sparse_threshold: 0.5,
+            kick_pattern_min_template_score: 0.4,
+            kick_pattern_halftime_min_bpm: 100.0,
             #[cfg(feature = "ml")]
             enable_ml_refinement: false,
             external_beat_grid: None,

@@ -1,12 +1,17 @@
 # Kick-Pattern Classifier: Implementation Plan
 
 **Date:** 2026-04-26
-**Status:** Design proposal. No implementation yet. Validation strategy included; **wire-into-classification gated on validation pass**.
+**Status:** Detector implemented, classifier wiring still gated on validation pass.
 **Related:** [deep-techno-classification-ideas.md](deep-techno-classification-ideas.md) — this is feature A2 from that doc, the discriminator that pulls Electro and broken-beat genres out of the Techno-family decision space. Sibling of [chord-stab-detector-plan.md](chord-stab-detector-plan.md), with which it shares a `detect_band_onsets` primitive.
 
 ## Goal
 
 Add a stratum-dsp feature that classifies the kick-drum metric pattern of a track and reports it as a discrete enum plus a confidence score. Output `kick_pattern: KickPattern` and `kick_pattern_confidence: f32 ∈ [0, 1]`. Cost target: under 5% of total analysis time, reusing the existing shared STFT.
+
+Implementation note: the shipped cache output is intentionally a little richer
+than the original proposal so validation can inspect failure modes:
+`kick_pattern`, `kick_pattern_confidence`, `kick_kicks_per_bar`,
+`kick_onset_count`, `kick_rate_basis`, and a flattened 4x16 `kick_histogram`.
 
 ```rust
 pub enum KickPattern {
@@ -197,11 +202,19 @@ pub struct KickPatternResult {
 
 1. **Shared primitive (PR 1):** `stratum-dsp/src/features/onset/band.rs` (new file, ~150 LOC). Defines `pub fn detect_band_onsets(stft, sample_rate, band_hz, threshold_percentile) -> Result<Vec<usize>, AnalysisError>`. Tests for synthetic band-localised onsets. *Coordinated with chord-stab plan: whichever lands first owns this PR; the other consumes it.*
 
+   **Implemented:** this primitive already existed from the chord-stab work and
+   A2 consumes it directly.
+
 2. **New module:** `stratum-dsp/src/features/kick_pattern.rs` (~300 LOC). Contains:
    - `pub fn detect_kick_pattern(stft, beat_grid, sample_rate, config) -> KickPatternResult`
    - `pub enum KickPattern { FourOnFloor, BrokenBeat, Halftime, Sparse, Irregular }`
    - `pub struct KickPatternResult { pattern, confidence, kicks_per_bar, debug }`
    - Helpers: `compute_beat_relative_histogram`, `score_templates`, `disambiguate`
+
+   **Implemented:** the enum/result live in `analysis::result`; the detector
+   module returns `KickPatternAnalysis` and includes synthetic tests for
+   four-on-floor, broken-beat, halftime, sparse, irregular, low-BPM halftime
+   collapse, and MainGroove bar counting.
 
 3. **Module registration:** `stratum-dsp/src/features/mod.rs` — add `pub mod kick_pattern;`.
 
@@ -238,7 +251,7 @@ pub struct KickPatternResult {
 
 8. **`StratumResult`:** `src/audio.rs:30–48` — add `pub kick_pattern: Option<String>` and `pub kick_pattern_confidence: Option<f64>`. String rather than enum on the Rust side to avoid coupling reklawdbox to stratum-dsp's enum (the cache JSON already contains the variant name; reklawdbox parses it back into its own enum if needed).
 
-9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"4"` to `"5"` (or `"6"` if chord-stab landed first and bumped to `"5"`). This auto-evicts cached results without the new field on next load.
+9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"11"` to `"12"`. This auto-evicts cached results without the new field on next load.
 
 10. **Mapping:** `src/tools/classify_handler.rs:647–722` (`extract_audio_features`). Add field extraction to `AudioFeatures`:
     ```rust

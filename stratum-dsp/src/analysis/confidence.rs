@@ -325,6 +325,7 @@ mod tests {
             harmonic_proportion: None,
             decay: None,
             dub_stab: None,
+            kick_pattern: None,
             sections: None,
             metadata: AnalysisMetadata {
                 duration_seconds: 30.0,

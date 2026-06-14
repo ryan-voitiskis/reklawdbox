@@ -12,6 +12,7 @@ pub mod chroma;
 pub mod decay;
 pub mod dub_stab;
 pub mod key;
+pub mod kick_pattern;
 pub mod modulation;
 pub mod onset;
 pub mod period;

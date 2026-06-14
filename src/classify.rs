@@ -145,6 +145,18 @@ pub(crate) struct AudioFeatures {
     /// Stratum's tonal-content confidence. `0.0` is a sentinel for "detection
     /// failed"; values in `(0.0, 0.1)` indicate atonal/noise-dominated material.
     pub(crate) key_confidence: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) kick_pattern: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) kick_pattern_confidence: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) kick_kicks_per_bar: Option<f64>,
+    #[allow(dead_code)]
+    pub(crate) kick_onset_count: Option<u32>,
+    #[allow(dead_code)]
+    pub(crate) kick_rate_basis: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) kick_histogram: Option<Vec<f64>>,
     // Vector features for timbral distances (Item 6).
     #[allow(dead_code)]
     pub(crate) mfcc_mean: Option<Vec<f64>>,
@@ -1522,6 +1534,12 @@ mod tests {
             dissonance_mean: None,
             key_clarity: None,
             key_confidence: None,
+            kick_pattern: None,
+            kick_pattern_confidence: None,
+            kick_kicks_per_bar: None,
+            kick_onset_count: None,
+            kick_rate_basis: None,
+            kick_histogram: None,
             mfcc_mean: None,
             mfcc_std: None,
             spectral_contrast_mean: None,
