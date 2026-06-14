@@ -44,7 +44,7 @@ The 2026-04-10 research invalidated `bpm_confidence`, `grid_stability`, `harmoni
 ### B4 — `bpm_agreement` for plausibility-check fallback
 
 - **Trigger:** `bpm_agreement == Some(false)`, i.e. `|stratum_bpm - rekordbox_bpm| > 2.0` per the existing computation at `src/tools/classify_handler.rs:685`. Tighten downstream to >3% relative when both detectors agree against Rekordbox.
-- **Behaviour:** When triggered and both stratum + Essentia consensus on a different BPM (within 3% of each other), use `(stratum_bpm + essentia_bpm) / 2` as the effective BPM for the plausibility check at `src/classify.rs:625`. Add a flag `"bpm-rekordbox-disagrees"` so the disagreement is visible in evidence/flags output.
+- **Behaviour:** When triggered and both stratum + Essentia consensus on a different BPM (within 3% of each other), use `(stratum_bpm + essentia_bpm) / 2` as the effective BPM for the plausibility check at `src/classify.rs:625`. Add a flag `"bpm-rekordbox-disagrees"` so the disagreement is visible in evidence/flags output. Conservative guard from implementation validation: only apply this on Dancefloor/HighEnergy audio and reject near-2x tempo relationships, because low-energy/non-dancefloor tracks commonly produce detector consensus at misleading half/double-time tempos.
 - **Currently extracted?** Yes, as `Option<bool>` at `src/classify.rs:122` with `#[allow(dead_code)]`. The relative-disagreement check is the new logic.
 - **Distinct from:** `bpm_confidence` (invalidated single-detector). `bpm_agreement` is a cross-source consistency check — same source-of-truth validation pattern as enrichment cross-confirmation.
 
@@ -94,7 +94,7 @@ Each check is a single `if let` — under 10 lines added.
 
 1. **In `gather_votes` around `src/classify.rs:625` (the `bpm_plausible` calls):** compute an `effective_bpm`:
    - Default: `audio_profile.bpm` (Rekordbox BPM, current behaviour)
-   - When `bpm_agreement == Some(false)` AND `essentia_bpm` is present AND `|essentia_bpm - stratum_bpm| / stratum_bpm < 0.03`: set `effective_bpm = (stratum_bpm + essentia_bpm) / 2`
+   - When `bpm_agreement == Some(false)` AND `essentia_bpm` is present AND `|essentia_bpm - stratum_bpm| / stratum_bpm < 0.03` AND the audio bucket is Dancefloor/HighEnergy AND the detector consensus is not near 2x Rekordbox BPM: set `effective_bpm = (stratum_bpm + essentia_bpm) / 2`
    - Otherwise: keep Rekordbox BPM
 2. **Pass `effective_bpm` to all `bpm_plausible(...)` calls** in `gather_votes`. The same value is used at line 614 for the audio-profile-vote plausibility check.
 3. **Add an evidence line** when fallback fires: `"bpm-fallback: rekordbox 130.8 → detector consensus 125.0"`. Add flag `"bpm-rekordbox-disagrees"`.
@@ -184,7 +184,7 @@ No fixture-set work needed; the verified playlist already exists.
 
 3. **B3 Essentia `loudness_range` semantics.** Loudness range from EBU R128 measures perceived spread; very-short tracks (<30 s) can yield artificially low values. **Mitigation:** add a duration guard (`duration > 60s`) before setting `Compressed`. The duration field is already available via stratum's `duration_seconds` (`src/audio.rs:38`).
 
-4. **B4 detector-disagreement direction.** The fallback assumes when Rekordbox disagrees with detector consensus, Rekordbox is wrong. This is consistent with the pilot (Untitled 26596) but not always true — Rekordbox sometimes corrects double-time / half-time cases that detectors get wrong. **Mitigation:** require >3% relative disagreement (not just the existing 2 BPM absolute), and require *both* detectors to agree against Rekordbox. Halftime/doubletime cases will fail the cross-detector consensus check.
+4. **B4 detector-disagreement direction.** The fallback assumes when Rekordbox disagrees with detector consensus, Rekordbox is wrong. This is consistent with the pilot (Untitled 26596) but not always true — Rekordbox sometimes corrects double-time / half-time cases that detectors get wrong. **Mitigation:** require >3% relative disagreement (not just the existing 2 BPM absolute), require *both* detectors to agree against Rekordbox, reject near-2x tempo relationships explicitly, and only apply the fallback when the audio profile is Dancefloor/HighEnergy. Validation on the rehydrated `genre_verified` cache showed these extra guards are necessary: without them the fallback mostly fired on Ambient/Dancehall half-time or low-energy cases.
 
 5. **Averaging vs picking the more-confident detector (B4).** Averaging stratum and Essentia is simpler but may dilute when one detector is right and the other is wrong. **Mitigation:** ship averaging first (deterministic, simple). If validation surfaces consistent-bias cases, switch to "prefer stratum when stratum_bpm_confidence is high" — but `bpm_confidence` is invalidated, so a heuristic like "prefer the detector whose BPM is closer to a common dance-music range (110–140)" may be needed instead. Defer to a follow-up if needed.
 

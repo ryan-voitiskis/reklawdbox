@@ -689,6 +689,7 @@ fn extract_audio_features(
         rekordbox_bpm: track.bpm,
         stratum_bpm,
         bpm_agreement,
+        essentia_bpm: essentia_data.as_ref().and_then(|e| e.bpm_essentia),
         duration_seconds: stratum_json
             .as_ref()
             .and_then(|sj| sj.get("duration_seconds"))

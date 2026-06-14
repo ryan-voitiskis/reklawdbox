@@ -147,11 +147,20 @@ and fast.
       zero Ambient/Downtempo fires. This is plausible enough to keep the 1.0 LU
       threshold for now; spot-check the House-family fires if classifier diffs
       look noisy.
-- [ ] **B4. `bpm_agreement` cross-detector fallback** — when
+- [x] **B4. `bpm_agreement` cross-detector fallback** — when
       `bpm_agreement == Some(false)` AND stratum + Essentia consensus on a
       different BPM (within 3% of each other), substitute their mean for
       the Rekordbox BPM in plausibility checks. Adds `"bpm-rekordbox-disagrees"`
       flag. ~50 LOC.
+
+      **Status:** implemented with detector consensus evidence and
+      `bpm-rekordbox-disagrees` flagging. Real-cache validation initially found
+      many Ambient/Dancehall half-time and non-dancefloor detector agreements,
+      so the shipped fallback is intentionally conservative: only
+      Dancefloor/HighEnergy audio can use detector consensus, and near-2x tempo
+      relationships are rejected. With those guards, the fallback fires on
+      1/604 verified tracks (Techno), which is in the expected single-digit
+      percent range.
 
       **Acceptance per item:** flag fires on the verified playlist with
       expected per-genre rates (see `cached-feature-flags-plan.md`

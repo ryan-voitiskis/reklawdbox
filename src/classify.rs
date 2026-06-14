@@ -116,10 +116,9 @@ pub(crate) struct MappedGenre {
 /// Pre-extracted audio features from cache.
 pub(crate) struct AudioFeatures {
     pub(crate) rekordbox_bpm: f64,
-    #[allow(dead_code)]
     pub(crate) stratum_bpm: Option<f64>,
-    #[allow(dead_code)]
     pub(crate) bpm_agreement: Option<bool>,
+    pub(crate) essentia_bpm: Option<f64>,
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) danceability: Option<f64>,
     pub(crate) dynamic_complexity: Option<f64>,
@@ -205,6 +204,18 @@ struct AudioProfile {
     centroid: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BpmContext {
+    effective_bpm: f64,
+    fallback: Option<BpmFallback>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BpmFallback {
+    rekordbox_bpm: f64,
+    detector_bpm: f64,
+}
+
 /// A single vote for a genre from one evidence source.
 struct GenreVote {
     genre: &'static str,
@@ -226,6 +237,8 @@ const LONG_TAIL_DECAY_MS: f64 = 200.0;
 const COMPRESSED_LOUDNESS_RANGE_LU: f64 = 1.0;
 /// Short clips can report artificially narrow loudness range.
 const COMPRESSED_MIN_DURATION_SECONDS: f64 = 60.0;
+/// Maximum relative difference for Stratum/Essentia BPM detector consensus.
+const BPM_DETECTOR_CONSENSUS_TOLERANCE: f64 = 0.03;
 /// Low-weight conjunctive boost, aligned with the audio-profile vote cap.
 const AUDIO_RULE_BOOST: f32 = 0.5;
 
@@ -239,6 +252,11 @@ pub(crate) fn classify_track_with_profiles(
     profile_registry: Option<&ProfileRegistry>,
 ) -> ClassificationResult {
     let audio_profile = evidence.audio.as_ref().map(compute_audio_profile);
+    let bpm_context = compute_bpm_context(
+        evidence.audio.as_ref(),
+        audio_profile.as_ref(),
+        evidence.bpm,
+    );
 
     if let Some(profile) = audio_profile.as_ref()
         && let Some(result) = check_audio_vetoes(evidence, profile)
@@ -246,12 +264,17 @@ pub(crate) fn classify_track_with_profiles(
         return result;
     }
 
-    let (votes, affinities) = gather_votes(evidence, audio_profile.as_ref(), profile_registry);
+    let (votes, affinities) = gather_votes(
+        evidence,
+        audio_profile.as_ref(),
+        profile_registry,
+        bpm_context,
+    );
 
     let (genre, confidence, mut ev_lines, mut flags) = if votes.is_empty() {
         audio_only_inference(evidence, audio_profile.as_ref())
     } else {
-        find_consensus(evidence, &votes, audio_profile.as_ref())
+        find_consensus(evidence, &votes, audio_profile.as_ref(), bpm_context)
     };
 
     // Add audio-profile evidence strings for affinities that contributed
@@ -356,6 +379,74 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
         bpm,
         centroid: audio.spectral_centroid_mean,
     }
+}
+
+fn compute_bpm_context(
+    audio: Option<&AudioFeatures>,
+    audio_profile: Option<&AudioProfile>,
+    fallback_bpm: f64,
+) -> BpmContext {
+    let default_bpm = audio_profile.map_or(fallback_bpm, |p| p.bpm);
+    if audio_profile.is_none_or(|profile| profile.bucket < EnergyBucket::Dancefloor) {
+        return BpmContext {
+            effective_bpm: default_bpm,
+            fallback: None,
+        };
+    }
+
+    let Some(audio) = audio else {
+        return BpmContext {
+            effective_bpm: default_bpm,
+            fallback: None,
+        };
+    };
+
+    let (Some(false), Some(stratum_bpm), Some(essentia_bpm)) = (
+        audio.bpm_agreement,
+        audio.stratum_bpm.filter(|bpm| *bpm > 0.0),
+        audio.essentia_bpm.filter(|bpm| *bpm > 0.0),
+    ) else {
+        return BpmContext {
+            effective_bpm: default_bpm,
+            fallback: None,
+        };
+    };
+
+    let detector_delta = relative_delta(stratum_bpm, essentia_bpm);
+    let consensus_bpm = (stratum_bpm + essentia_bpm) / 2.0;
+    let rekordbox_delta = relative_delta(default_bpm, consensus_bpm);
+    if detector_delta < BPM_DETECTOR_CONSENSUS_TOLERANCE
+        && rekordbox_delta > BPM_DETECTOR_CONSENSUS_TOLERANCE
+        && !is_near_double_time(default_bpm, consensus_bpm)
+    {
+        BpmContext {
+            effective_bpm: consensus_bpm,
+            fallback: Some(BpmFallback {
+                rekordbox_bpm: default_bpm,
+                detector_bpm: consensus_bpm,
+            }),
+        }
+    } else {
+        BpmContext {
+            effective_bpm: default_bpm,
+            fallback: None,
+        }
+    }
+}
+
+fn relative_delta(a: f64, b: f64) -> f64 {
+    if a <= 0.0 || b <= 0.0 {
+        return f64::INFINITY;
+    }
+    (a - b).abs() / a.min(b)
+}
+
+fn is_near_double_time(a: f64, b: f64) -> bool {
+    if a <= 0.0 || b <= 0.0 {
+        return false;
+    }
+    let ratio = a.max(b) / a.min(b);
+    ((ratio - 2.0).abs() / 2.0) < BPM_DETECTOR_CONSENSUS_TOLERANCE
 }
 
 fn has_flag(profile: &AudioProfile, flag: CharFlag) -> bool {
@@ -551,9 +642,10 @@ fn gather_votes(
     evidence: &TrackEvidence,
     audio_profile: Option<&AudioProfile>,
     profile_registry: Option<&ProfileRegistry>,
+    bpm_context: BpmContext,
 ) -> (Vec<GenreVote>, Vec<audio_profile::AudioAffinity>) {
     let mut votes = Vec::new();
-    let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
+    let effective_bpm = bpm_context.effective_bpm;
 
     // Beatport: weight 1.0, halved if BPM-implausible
     if let Some(bp) = evidence.beatport_genre {
@@ -687,6 +779,7 @@ fn find_consensus(
     evidence: &TrackEvidence,
     votes: &[GenreVote],
     audio_profile: Option<&AudioProfile>,
+    bpm_context: BpmContext,
 ) -> (
     Option<&'static str>,
     ClassificationConfidence,
@@ -723,12 +816,20 @@ fn find_consensus(
     let mut ev = Vec::new();
     let mut flags = Vec::new();
 
+    if let Some(fallback) = bpm_context.fallback {
+        ev.push(format!(
+            "bpm-fallback: rekordbox {:.1} → detector consensus {:.1}",
+            fallback.rekordbox_bpm, fallback.detector_bpm
+        ));
+        flags.push("bpm-rekordbox-disagrees".into());
+    }
+
     if !evidence.discogs_mapped.is_empty() {
         let parts: Vec<String> = evidence
             .discogs_mapped
             .iter()
             .map(|mg| {
-                let bpm_note = if !bpm_plausible(mg.genre, audio_profile.map_or(0.0, |p| p.bpm)) {
+                let bpm_note = if !bpm_plausible(mg.genre, bpm_context.effective_bpm) {
                     " [bpm-implausible]"
                 } else {
                     ""
@@ -741,7 +842,7 @@ fn find_consensus(
 
     if let Some(bp) = evidence.beatport_genre {
         let raw = evidence.beatport_raw.as_deref().unwrap_or(bp);
-        let bpm_note = if !bpm_plausible(bp, audio_profile.map_or(0.0, |p| p.bpm)) {
+        let bpm_note = if !bpm_plausible(bp, bpm_context.effective_bpm) {
             " [bpm-implausible]"
         } else {
             ""
@@ -892,7 +993,7 @@ fn find_consensus(
     let mut final_genre = top_genre;
 
     // Swap to a BPM-plausible alternative if the winner is implausible
-    let effective_bpm = audio_profile.map_or(evidence.bpm, |p| p.bpm);
+    let effective_bpm = bpm_context.effective_bpm;
     if !bpm_plausible(final_genre, effective_bpm)
         && let Some((alt_genre, _, _)) = ranked
             .iter()
@@ -1405,6 +1506,7 @@ mod tests {
             rekordbox_bpm: bpm,
             stratum_bpm: Some(bpm),
             bpm_agreement: Some(true),
+            essentia_bpm: Some(bpm),
             duration_seconds: Some(300.0),
             danceability: Some(danceability),
             dynamic_complexity: Some(dc),
@@ -1631,6 +1733,18 @@ mod tests {
     ) -> AudioFeatures {
         let mut a = make_audio(bpm, danceability, dc, rr, centroid);
         a.loudness_range = Some(loudness_range);
+        a
+    }
+
+    fn make_audio_with_detector_bpms(
+        rekordbox_bpm: f64,
+        stratum_bpm: f64,
+        essentia_bpm: f64,
+    ) -> AudioFeatures {
+        let mut a = make_audio(rekordbox_bpm, 2.0, 3.0, 0.92, 1800.0);
+        a.stratum_bpm = Some(stratum_bpm);
+        a.bpm_agreement = Some((stratum_bpm - rekordbox_bpm).abs() <= 2.0);
+        a.essentia_bpm = Some(essentia_bpm);
         a
     }
 
@@ -1880,6 +1994,108 @@ mod tests {
             !result.evidence.iter().any(|e| e.contains("compressed")),
             "short tracks should not set compressed: {:?}",
             result.evidence
+        );
+    }
+
+    #[test]
+    fn bpm_disagreement_uses_detector_consensus() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Deep House");
+        ev.has_beatport = true;
+        // Rekordbox 132 is just outside Deep House plausibility after tolerance;
+        // Stratum + Essentia agree that the track is really around 125 BPM.
+        ev.audio = Some(make_audio_with_detector_bpms(132.0, 125.0, 125.2));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep House"));
+        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert!(
+            result
+                .flags
+                .contains(&"bpm-rekordbox-disagrees".to_string()),
+            "expected BPM disagreement flag: {:?}",
+            result.flags
+        );
+        assert!(
+            result.evidence.iter().any(|e| e.contains("bpm-fallback")),
+            "expected fallback evidence: {:?}",
+            result.evidence
+        );
+        assert!(
+            !result
+                .evidence
+                .iter()
+                .any(|e| e.contains("bpm-implausible")),
+            "fallback should make Deep House BPM-plausible: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn bpm_disagreement_no_detector_consensus_uses_rekordbox() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Deep House");
+        ev.has_beatport = true;
+        // Stratum disagrees with Rekordbox, but Essentia does not agree with
+        // Stratum, so keep Rekordbox for plausibility.
+        ev.audio = Some(make_audio_with_detector_bpms(132.0, 125.0, 132.0));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep House"));
+        assert!(
+            !result
+                .flags
+                .contains(&"bpm-rekordbox-disagrees".to_string()),
+            "detector disagreement should not set fallback flag: {:?}",
+            result.flags
+        );
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|e| e.contains("bpm-implausible")),
+            "Rekordbox BPM should remain in use: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn bpm_disagreement_rejects_double_time_consensus() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Ambient");
+        ev.has_beatport = true;
+        // Both detectors agree near double Rekordbox tempo. That is common for
+        // half-time material and should stay reviewable, not override Rekordbox.
+        ev.audio = Some(make_audio_with_detector_bpms(74.0, 148.0, 147.8));
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Ambient"));
+        assert!(
+            !result
+                .flags
+                .contains(&"bpm-rekordbox-disagrees".to_string()),
+            "double-time consensus should not set fallback flag: {:?}",
+            result.flags
+        );
+    }
+
+    #[test]
+    fn bpm_disagreement_requires_dancefloor_audio() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Deep House");
+        ev.has_beatport = true;
+        let mut audio = make_audio_with_detector_bpms(90.0, 122.0, 122.2);
+        audio.danceability = Some(1.2);
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Deep House"));
+        assert!(
+            !result
+                .flags
+                .contains(&"bpm-rekordbox-disagrees".to_string()),
+            "low-energy audio should not use detector BPM fallback: {:?}",
+            result.flags
         );
     }
 
