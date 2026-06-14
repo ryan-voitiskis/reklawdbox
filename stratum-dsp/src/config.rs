@@ -592,7 +592,7 @@ pub struct AnalysisConfig {
     pub kick_pattern_band_low_hz: f32,
 
     /// Upper edge of the kick band in Hz.
-    /// Default: 120.0.
+    /// Default: 200.0.
     pub kick_pattern_band_high_hz: f32,
 
     /// Percentile threshold used by kick-band onset detection.
@@ -773,7 +773,7 @@ impl Default for AnalysisConfig {
             enable_key_minor_harmonic_bonus: false,
             key_minor_leading_tone_bonus_weight: 0.2,
             kick_pattern_band_low_hz: 40.0,
-            kick_pattern_band_high_hz: 120.0,
+            kick_pattern_band_high_hz: 200.0,
             kick_pattern_onset_threshold_percentile: 0.85,
             kick_pattern_sparse_threshold: 0.5,
             kick_pattern_min_template_score: 0.4,

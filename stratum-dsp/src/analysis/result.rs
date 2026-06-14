@@ -304,9 +304,9 @@ pub struct KickPatternAnalysis {
     pub pattern: KickPattern,
     /// Detector confidence in `[0, 1]`.
     pub confidence: f32,
-    /// Detected kick-band onsets per analysed bar.
+    /// Detected kick-band beat anchors per analysed bar.
     pub kicks_per_bar: f32,
-    /// Number of kick-band onsets used after optional section filtering.
+    /// Number of kick-band beat anchors used after optional section filtering.
     pub onset_count: u32,
     /// Flattened `4 × 16` beat-relative histogram. Rows are beats within
     /// the bar; columns are sixteenth-subdivision offsets inside each beat.

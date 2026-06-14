@@ -9,6 +9,7 @@ use crate::config::AnalysisConfig;
 use crate::error::AnalysisError;
 use crate::features::onset::band::detect_band_onsets;
 use crate::features::sections::{SectionKind, TrackSection};
+use std::collections::BTreeSet;
 
 /// Beat positions per bar in the kick histogram.
 pub const KICK_PATTERN_ROWS: usize = 4;
@@ -23,6 +24,10 @@ const BIN_SIGMA: f32 = 0.75;
 struct KickHistogram {
     bins: [f32; HISTOGRAM_LEN],
     bar_count: f32,
+    /// Beat-level kick candidates after collapsing dense low-band subdivision
+    /// activity. The detailed histogram still keeps subdivision placement for
+    /// template scoring, but density should describe musical kick anchors.
+    event_count: usize,
 }
 
 /// Detect kick-band onsets and classify their beat-relative placement.
@@ -96,11 +101,7 @@ pub fn detect_kick_pattern(
         beat_grid,
         &main_groove_ranges,
     )?;
-    let kicks_per_bar = if histogram.bar_count > 0.0 {
-        filtered_onsets.len() as f32 / histogram.bar_count
-    } else {
-        0.0
-    };
+    let kicks_per_bar = capped_kicks_per_bar(histogram.event_count, histogram.bar_count);
     let (pattern, confidence) = classify_kick_histogram(
         &histogram.bins,
         kicks_per_bar,
@@ -114,7 +115,7 @@ pub fn detect_kick_pattern(
         pattern,
         confidence,
         kicks_per_bar,
-        onset_count: filtered_onsets.len() as u32,
+        onset_count: histogram.event_count as u32,
         histogram: histogram.bins.to_vec(),
         rate_basis,
     })
@@ -131,10 +132,13 @@ fn kick_histogram_from_onsets(
         return Ok(KickHistogram {
             bins: [0.0; HISTOGRAM_LEN],
             bar_count: 0.0,
+            event_count: 0,
         });
     }
 
     let mut bins = [0.0_f32; HISTOGRAM_LEN];
+    let mut occupied_cells = BTreeSet::new();
+    let mut occupied_beats = BTreeSet::new();
     let sr = sample_rate as f32;
     let beats = &beat_grid.beats;
     let bars = &beat_grid.bars;
@@ -170,23 +174,38 @@ fn kick_histogram_from_onsets(
         }
 
         let beat_in_bar = beat_in_bar(beat_idx, placement_time, beats, bars);
-        add_soft_bin(&mut bins, beat_in_bar, offset);
+        let bar_idx = bar_index(beat_idx, placement_time, bars);
+        let col = quantized_col(offset);
+        occupied_cells.insert((bar_idx, beat_in_bar, col));
+        occupied_beats.insert((bar_idx, beat_in_bar));
+    }
+
+    for &(_, beat_in_bar, col) in &occupied_cells {
+        add_soft_bin_at_col(&mut bins, beat_in_bar, col);
     }
 
     let bar_count = count_bars(beat_grid, ranges);
-    Ok(KickHistogram { bins, bar_count })
+    Ok(KickHistogram {
+        bins,
+        bar_count,
+        event_count: occupied_beats.len(),
+    })
 }
 
-fn add_soft_bin(bins: &mut [f32; HISTOGRAM_LEN], beat_in_bar: usize, offset: f32) {
-    let target = offset * KICK_PATTERN_COLS as f32;
+fn add_soft_bin_at_col(bins: &mut [f32; HISTOGRAM_LEN], beat_in_bar: usize, col: usize) {
+    let target = col as f32;
     let two_sigma_sq = 2.0 * BIN_SIGMA * BIN_SIGMA;
-    for col in 0..KICK_PATTERN_COLS {
-        let mut d = (col as f32 - target).abs();
+    for target_col in 0..KICK_PATTERN_COLS {
+        let mut d = (target_col as f32 - target).abs();
         if d > KICK_PATTERN_COLS as f32 / 2.0 {
             d = KICK_PATTERN_COLS as f32 - d;
         }
-        bins[beat_in_bar * KICK_PATTERN_COLS + col] += (-(d * d) / two_sigma_sq).exp();
+        bins[beat_in_bar * KICK_PATTERN_COLS + target_col] += (-(d * d) / two_sigma_sq).exp();
     }
+}
+
+fn quantized_col(offset: f32) -> usize {
+    ((offset * KICK_PATTERN_COLS as f32).round() as usize) % KICK_PATTERN_COLS
 }
 
 fn beat_in_bar(beat_idx: usize, onset_time: f32, beats: &[f32], bars: &[f32]) -> usize {
@@ -204,6 +223,18 @@ fn beat_in_bar(beat_idx: usize, onset_time: f32, beats: &[f32], bars: &[f32]) ->
         .min(KICK_PATTERN_ROWS - 1)
 }
 
+fn bar_index(beat_idx: usize, onset_time: f32, bars: &[f32]) -> usize {
+    if bars.is_empty() || onset_time < bars[0] {
+        return beat_idx / KICK_PATTERN_ROWS;
+    }
+    let bar_pos = bars.partition_point(|&b| b <= onset_time);
+    if bar_pos == 0 {
+        beat_idx / KICK_PATTERN_ROWS
+    } else {
+        bar_pos - 1
+    }
+}
+
 fn count_bars(beat_grid: &BeatGrid, ranges: &[(f32, f32)]) -> f32 {
     if beat_grid.bars.is_empty() {
         return (beat_grid.beats.len() as f32 / KICK_PATTERN_ROWS as f32).max(0.0);
@@ -214,13 +245,28 @@ fn count_bars(beat_grid: &BeatGrid, ranges: &[(f32, f32)]) -> f32 {
     let count = beat_grid
         .bars
         .iter()
-        .filter(|&&bar_start| {
+        .enumerate()
+        .filter(|(idx, &bar_start)| {
+            let bar_end = beat_grid
+                .bars
+                .get(idx + 1)
+                .copied()
+                .or_else(|| beat_grid.beats.last().copied())
+                .unwrap_or(bar_start);
             ranges
                 .iter()
-                .any(|&(start, end)| bar_start >= start && bar_start < end)
+                .any(|&(start, end)| bar_end > start && bar_start < end)
         })
         .count();
     count as f32
+}
+
+fn capped_kicks_per_bar(event_count: usize, bar_count: f32) -> f32 {
+    if bar_count > 0.0 {
+        (event_count as f32 / bar_count).min(KICK_PATTERN_ROWS as f32)
+    } else {
+        0.0
+    }
 }
 
 fn classify_kick_histogram(
@@ -372,7 +418,7 @@ mod tests {
         let grid = beat_grid_4on4(bpm, bars);
         let onset_frames: Vec<usize> = times.iter().copied().map(frame).collect();
         let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &[]).unwrap();
-        let kicks_per_bar = onset_frames.len() as f32 / hist.bar_count;
+        let kicks_per_bar = capped_kicks_per_bar(hist.event_count, hist.bar_count);
         let (pattern, confidence) =
             classify_kick_histogram(&hist.bins, kicks_per_bar, bpm, 0.5, 0.4, 100.0);
         KickPatternAnalysis {
@@ -405,6 +451,49 @@ mod tests {
         assert_eq!(result.pattern, KickPattern::FourOnFloor);
         assert!(result.confidence > 0.6);
         assert!((result.kicks_per_bar - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn duplicate_onsets_in_same_metric_cell_count_once() {
+        let bpm = 128.0;
+        let grid = beat_grid_4on4(bpm, 4);
+        let beat_period = 60.0 / bpm;
+        let mut times = Vec::new();
+        for bar in 0..4 {
+            let bar_start = bar as f32 * beat_period * 4.0;
+            for beat in 0..4 {
+                let t = bar_start + beat as f32 * beat_period;
+                times.extend([t, t + 0.004, t + 0.008]);
+            }
+        }
+        let onset_frames: Vec<usize> = times.iter().copied().map(frame).collect();
+        let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &[]).unwrap();
+        assert_eq!(hist.event_count, 16);
+        assert_eq!(hist.bar_count, 4.0);
+    }
+
+    #[test]
+    fn subdivision_activity_counts_once_per_beat() {
+        let bpm = 128.0;
+        let grid = beat_grid_4on4(bpm, 2);
+        let beat_period = 60.0 / bpm;
+        let mut times = Vec::new();
+        for bar in 0..2 {
+            let bar_start = bar as f32 * beat_period * 4.0;
+            for beat in 0..4 {
+                let beat_start = bar_start + beat as f32 * beat_period;
+                times.extend([
+                    beat_start,
+                    beat_start + 0.25 * beat_period,
+                    beat_start + 0.50 * beat_period,
+                    beat_start + 0.75 * beat_period,
+                ]);
+            }
+        }
+        let onset_frames: Vec<usize> = times.iter().copied().map(frame).collect();
+        let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &[]).unwrap();
+        assert_eq!(hist.event_count, 8);
+        assert_eq!(hist.bar_count, 2.0);
     }
 
     #[test]
@@ -457,5 +546,21 @@ mod tests {
         let ranges = [(2.0 * 4.0 * beat_period, 4.0 * 4.0 * beat_period)];
         let hist = kick_histogram_from_onsets(&onset_frames, HOP, SR, &grid, &ranges).unwrap();
         assert_eq!(hist.bar_count, 2.0);
+    }
+
+    #[test]
+    fn counts_bars_that_overlap_section_ranges() {
+        let bpm = 120.0;
+        let beat_period = 60.0 / bpm;
+        let bar_period = beat_period * 4.0;
+        let grid = beat_grid_4on4(bpm, 4);
+        let ranges = [(0.25 * bar_period, 2.25 * bar_period)];
+        assert_eq!(count_bars(&grid, &ranges), 3.0);
+    }
+
+    #[test]
+    fn caps_reported_density_at_four_beat_anchors() {
+        assert_eq!(capped_kicks_per_bar(401, 100.0), 4.0);
+        assert_eq!(capped_kicks_per_bar(0, 0.0), 0.0);
     }
 }

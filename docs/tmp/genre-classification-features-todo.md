@@ -255,11 +255,15 @@ waits until phase 4.
       of A1 — shares the `detect_band_onsets` primitive. Highest expected
       classifier-accuracy lift per the master doc.
 
-      **Status:** implemented detector-only with Stratum schema `12`.
+      **Status:** implemented detector-only with Stratum schema `17`.
       `StratumResult` now surfaces `kick_pattern`, confidence, kicks-per-bar,
       onset count, rate basis, and a flattened 4x16 histogram. Classifier rules
       do **not** consume the detector yet; `AudioFeatures` only carries the
-      cached values for validation.
+      cached values for validation. The detector deduplicates raw low-band
+      onsets into one beat-level anchor per bar/beat before reporting density,
+      so bassline movement and kick tails do not inflate kicks-per-bar.
+      Validation widened the default kick band to 40-200 Hz after 40-120 Hz
+      missed acoustic/disco kicks and produced confident false `Sparse` labels.
 
       **Acceptance:** validation on a hand-picked corpus of Electro,
       broken-beat, and 4/4 Techno tracks. Detector should classify each

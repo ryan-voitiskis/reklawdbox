@@ -12,6 +12,14 @@ Implementation note: the shipped cache output is intentionally a little richer
 than the original proposal so validation can inspect failure modes:
 `kick_pattern`, `kick_pattern_confidence`, `kick_kicks_per_bar`,
 `kick_onset_count`, `kick_rate_basis`, and a flattened 4x16 `kick_histogram`.
+As of schema 17, `kick_kicks_per_bar` and `kick_onset_count` are computed from
+deduplicated beat-level kick anchors — at most one event per bar/beat — rather
+than raw low-band onset count or dense subdivision activity. The reported
+`kick_kicks_per_bar` is hard-capped at four beat anchors per bar.
+
+Real-library validation widened the default kick band from 40–120 Hz to
+40–200 Hz after the narrow fundamental band produced confident false `Sparse`
+labels on acoustic/disco kicks.
 
 ```rust
 pub enum KickPattern {
@@ -29,16 +37,16 @@ This is the cleanest single discriminator separating Electro from Techno-family 
 
 A kick drum onset, for the purpose of this detector, has these properties:
 
-1. **Frequency band**: dominant energy in 40–120 Hz (kick fundamental). Wider band (40–200 Hz) is considered in the validation harness as an alternative — see Risk #2. The default starts narrow (40–120 Hz) to avoid bassline pluck contamination, with a config knob to widen if validation shows missed kicks.
+1. **Frequency band**: dominant energy in 40–200 Hz (kick fundamental plus upper punch). The original default started narrow at 40–120 Hz to avoid bassline pluck contamination, but validation showed missed acoustic/disco kicks. The detector now relies on beat-anchor deduplication and template scoring to keep the wider band from turning dense bass motion into impossible kick counts.
 2. **Onset envelope**: short attack (under ~20 ms typical), with a transient spectral flux step in the kick band. Sustained sub-bass with no transient is *not* a kick.
 3. **Phase relative to beat grid**: the *position* on the beat grid is the discriminative signal (not just presence). The histogram structure is the classifier input.
 4. **Persistence**: kicks present across most of the track, not a brief intro flourish. Sparse-by-design tracks (drone) are detected by the *absence* of dense kick onsets, not by a positive template.
 
 Negative classes the detector must reject as kicks:
-- **Snare/clap on backbeats 2 and 4** (wrong band — most snares concentrate above 200 Hz, so 40–120 Hz onsets reject them; verified by the band choice).
+- **Snare/clap on backbeats 2 and 4** (mostly wrong band — the 200 Hz ceiling keeps most snare energy out, but validation must watch for bass-heavy claps leaking into the widened band).
 - **Bassline pluck onsets** (overlap with kick band but typically have longer decay and less transient flux step). Mitigated by transient-step thresholding rather than long-window energy; risk discussed in #2 below.
 - **Sub-bass drone** (no transient onset — fails stage 1 spectral flux threshold).
-- **Hi-hats and cymbals** (wrong band — frequency cutoff at 120 Hz hard-rejects).
+- **Hi-hats and cymbals** (wrong band — frequency cutoff at 200 Hz hard-rejects).
 
 Negative outputs (cases the detector should *not* over-confidently label):
 - Tracks with no detectable kick at all: report `Sparse` if onset count is below a per-bar threshold, *not* `FourOnFloor` with low confidence.
@@ -63,11 +71,11 @@ fn detect_band_onsets(
 
 Implementation: compute spectral flux limited to bins in `band_hz`, apply percentile thresholding, and peak-pick. Mirrors `detect_spectral_flux_onsets` at `stratum-dsp/src/features/onset/spectral_flux.rs:69` but parameterised to a band.
 
-For the kick detector, call with `band_hz = (40.0, 120.0)` (configurable) and `threshold_percentile = config.kick_onset_threshold_percentile` (default 0.85, slightly higher than the global `onset_threshold_percentile = 0.80` since kick onsets dominate the kick band's flux distribution and we want only the strong ones).
+For the kick detector, call with `band_hz = (40.0, 200.0)` (configurable) and `threshold_percentile = config.kick_onset_threshold_percentile` (default 0.85, slightly higher than the global `onset_threshold_percentile = 0.80` since kick onsets dominate the kick band's flux distribution and we want only the strong ones).
 
 Output: vector of frame indices where a kick-band onset was detected.
 
-Cost: O(n_frames × bins_in_band). For 40–120 Hz at sr=44100, frame_size=2048, the band covers roughly 4–6 FFT bins — vanishingly cheap relative to the existing STFT cost.
+Cost: O(n_frames × bins_in_band). For 40–200 Hz at sr=44100, frame_size=2048, the band covers only a few FFT bins — vanishingly cheap relative to the existing STFT cost.
 
 **Note:** PR 1 from the chord-stab plan extracts this primitive. If the chord-stab detector ships first, this kick-pattern PR is a pure consumer. If kick-pattern ships first, PR 1 of this plan does the extraction; chord-stab consumes it later.
 
@@ -233,7 +241,7 @@ pub struct KickPatternResult {
    ```rust
    /// Kick-band lower frequency cutoff (Hz). Default: 40.0.
    pub kick_band_low_hz: f32,
-   /// Kick-band upper frequency cutoff (Hz). Default: 120.0.
+   /// Kick-band upper frequency cutoff (Hz). Default: 200.0.
    pub kick_band_high_hz: f32,
    /// Threshold percentile for kick-band onset detection. Default: 0.85.
    pub kick_onset_threshold_percentile: f32,
@@ -251,7 +259,7 @@ pub struct KickPatternResult {
 
 8. **`StratumResult`:** `src/audio.rs:30–48` — add `pub kick_pattern: Option<String>` and `pub kick_pattern_confidence: Option<f64>`. String rather than enum on the Rust side to avoid coupling reklawdbox to stratum-dsp's enum (the cache JSON already contains the variant name; reklawdbox parses it back into its own enum if needed).
 
-9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"11"` to `"12"`. This auto-evicts cached results without the new field on next load.
+9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"11"` to `"17"`. This auto-evicts cached results without the new field on next load and avoids mixing raw-onset / subdivision-dedup detector density with beat-anchor detector density.
 
 10. **Mapping:** `src/tools/classify_handler.rs:647–722` (`extract_audio_features`). Add field extraction to `AudioFeatures`:
     ```rust
@@ -359,9 +367,9 @@ Default vote weights: `0.5` for the BrokenBeat veto (similar to existing `AFFINI
 
 1. **FourOnFloor + missed kicks vs BrokenBeat.** Some Techno tracks have intentional kick drops where 1–2 beats are silent. The histogram for these reads as fewer kicks but still on-beat — the disambiguation ratio (rows 1+3 / rows 0+2 column 0) handles this correctly because the *missing* kicks reduce both numerator and denominator. The risk is the *opposite*: a broken-beat track where the column-0 mass coincidentally dominates because the off-beat hits are quieter than the on-beat kicks. Mitigation: the broken-beat veto at stage 3 (column-8 mass > 30% of total) catches the case where off-beats are merely present, not necessarily loudest. Validation criterion (3) is explicitly about this.
 
-2. **Sub-bass-layered kicks.** Tracks with a kick layered against a sustained sub-bass note in the same band (40–120 Hz) can confuse the spectral flux step — the sub-bass dominates the band magnitude and the kick transient becomes a smaller relative step. Mitigation 1: the percentile-thresholding peak-pick in `detect_band_onsets` is robust to a slowly-varying baseline by design (only fast changes pass). Mitigation 2: if validation surfaces this, widen the band to 40–200 Hz or split into two bands (40–80 Hz sub vs 80–160 Hz kick attack) and require an onset in both to count.
+2. **Sub-bass-layered kicks.** Tracks with a kick layered against a sustained sub-bass note in the same band (40–200 Hz) can confuse the spectral flux step — the sub-bass dominates the band magnitude and the kick transient becomes a smaller relative step. Mitigation 1: the percentile-thresholding peak-pick in `detect_band_onsets` is robust to a slowly-varying baseline by design (only fast changes pass). Mitigation 2: if validation surfaces this again, split into two bands (40–80 Hz sub vs 80–160 Hz kick attack) and require an onset in both to count.
 
-3. **Snare/clap on backbeats 2 and 4 dominating the kick onsets.** This is the canonical concern: if the snare's lower harmonics leak into the 80–120 Hz range, the histogram will show column 0 in rows 1 and 3 as well — looking like FourOnFloor instead of "1+3 kicks + 2+4 snare". The 40–120 Hz band cutoff *should* exclude most snare energy. Verify empirically: the FourOnFloor-bucket fixtures all have backbeat snares, so if criterion (1) passes, this risk is empirically managed. If it fails on tracks with particularly bass-heavy claps (some Tech House), narrow the band to 40–100 Hz.
+3. **Snare/clap on backbeats 2 and 4 dominating the kick onsets.** This is the canonical concern: if the snare's lower harmonics leak into the 80–200 Hz range, the histogram can show column 0 in rows 1 and 3 as well — looking like FourOnFloor instead of "1+3 kicks + 2+4 snare". The widened band is a recall tradeoff after real-library disco false negatives. Verify empirically: the FourOnFloor-bucket fixtures all have backbeat snares, so if criterion (1) passes, this risk is empirically managed. If it fails on tracks with particularly bass-heavy claps (some Tech House), narrow the band or split kick body/attack bands.
 
 4. **Halftime detection vs "real" tempo at 70–90 BPM.** Stage 4 `kick_halftime_min_bpm` (default 100) handles this, but it's an arbitrary cutoff. Real risk: a 95-BPM slow Techno track with a halftime feel could be misclassified either way. Acceptable: tag it FourOnFloor at 95 BPM (it functions as 4/4 in mixing context), accept the false-Halftime cost as small.
 

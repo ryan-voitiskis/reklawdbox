@@ -83,9 +83,10 @@ pub struct StratumResult {
     pub kick_pattern: Option<String>,
     /// Detector confidence in `[0, 1]`.
     pub kick_pattern_confidence: Option<f64>,
-    /// Kick-band onsets per analysed bar.
+    /// Deduplicated kick-band beat anchors per analysed bar.
     pub kick_kicks_per_bar: Option<f64>,
-    /// Number of kick-band onsets used after optional section filtering.
+    /// Number of deduplicated kick-band beat anchors after optional section
+    /// filtering.
     pub kick_onset_count: Option<u32>,
     /// Either `"main_groove"` or `"track"` — the section regime used for
     /// kick-pattern aggregation.
@@ -127,7 +128,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "12";
+pub const STRATUM_SCHEMA_VERSION: &str = "17";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
