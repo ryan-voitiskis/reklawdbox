@@ -303,6 +303,16 @@ fn classify_kick_histogram(
             4.0,
         ),
         (
+            KickPattern::BrokenBeat,
+            template(&[(0, 0, 1.0), (1, 3, 1.0), (2, 0, 1.0), (3, 3, 1.0)]),
+            4.0,
+        ),
+        (
+            KickPattern::BrokenBeat,
+            template(&[(0, 0, 1.0), (1, 4, 1.0), (2, 0, 1.0), (3, 4, 1.0)]),
+            4.0,
+        ),
+        (
             KickPattern::Halftime,
             template(&[(0, 0, 1.0), (2, 0, 1.0)]),
             2.0,
@@ -310,6 +320,7 @@ fn classify_kick_histogram(
     ];
 
     let mut best = (KickPattern::Irregular, 0.0_f32, 0.0_f32);
+    let mut best_non_halftime = (KickPattern::Irregular, 0.0_f32, 0.0_f32);
     for (pattern, tmpl, expected_kicks_per_bar) in templates {
         let score = cosine(observed, &tmpl);
         let density = (kicks_per_bar / expected_kicks_per_bar)
@@ -318,6 +329,9 @@ fn classify_kick_histogram(
         let confidence = score * density;
         if score > best.1 {
             best = (pattern, score, confidence);
+        }
+        if pattern != KickPattern::Halftime && score > best_non_halftime.1 {
+            best_non_halftime = (pattern, score, confidence);
         }
     }
 
@@ -329,6 +343,18 @@ fn classify_kick_histogram(
             best.1.max(offbeat_ratio),
             best.2.max(offbeat_ratio),
         );
+    }
+
+    if best.0 == KickPattern::Halftime && kicks_per_bar > 3.0 {
+        best = if best_non_halftime.1 >= min_template_score {
+            best_non_halftime
+        } else {
+            (
+                KickPattern::Irregular,
+                best.1,
+                (1.0 - best.1).clamp(0.4, 1.0),
+            )
+        };
     }
 
     if best.1 < min_template_score {
@@ -505,11 +531,28 @@ mod tests {
     }
 
     #[test]
+    fn classifies_early_syncopated_breakbeat() {
+        let times = repeated_pattern(123.0, 8, &[0.0, 1.25, 2.0, 3.25]);
+        let result = analyze_times(&times, 123.0, 8);
+        assert_eq!(result.pattern, KickPattern::BrokenBeat);
+        assert!(result.confidence > 0.6);
+        assert!((result.kicks_per_bar - 4.0).abs() < 0.01);
+    }
+
+    #[test]
     fn classifies_halftime_above_minimum_bpm() {
         let times = repeated_pattern(140.0, 8, &[0.0, 2.0]);
         let result = analyze_times(&times, 140.0, 8);
         assert_eq!(result.pattern, KickPattern::Halftime);
         assert!(result.confidence > 0.6);
+    }
+
+    #[test]
+    fn dense_syncopation_blocks_halftime_label() {
+        let times = repeated_pattern(140.0, 8, &[0.0, 1.75, 2.0, 3.75]);
+        let result = analyze_times(&times, 140.0, 8);
+        assert_ne!(result.pattern, KickPattern::Halftime);
+        assert!((result.kicks_per_bar - 4.0).abs() < 0.01);
     }
 
     #[test]
@@ -530,7 +573,7 @@ mod tests {
 
     #[test]
     fn classifies_irregular_when_no_template_fits() {
-        let times = repeated_pattern(128.0, 8, &[0.25, 1.25, 2.75, 3.25]);
+        let times = repeated_pattern(128.0, 8, &[0.25, 1.75, 2.25, 3.5]);
         let result = analyze_times(&times, 128.0, 8);
         assert_eq!(result.pattern, KickPattern::Irregular);
         assert!(result.confidence >= 0.4);

@@ -17,6 +17,10 @@ deduplicated beat-level kick anchors — at most one event per bar/beat — rath
 than raw low-band onset count or dense subdivision activity. The reported
 `kick_kicks_per_bar` is hard-capped at four beat anchors per bar.
 
+As of schema 18, `BrokenBeat` includes both eighth-offbeat and early-16th
+syncopation templates, and `Halftime` cannot win when the detector sees dense,
+near-four-anchor-per-bar low-end activity.
+
 Real-library validation widened the default kick band from 40–120 Hz to
 40–200 Hz after the narrow fundamental band produced confident false `Sparse`
 labels on acoustic/disco kicks.
@@ -109,7 +113,7 @@ For each kick-band onset frame f:
 
 `beat_grid.beats` and `beat_grid.bars` come from the existing `BeatGrid` struct at `stratum-dsp/src/analysis/result.rs:144–154`. Both are `Vec<f32>` in seconds.
 
-Output: a 4×16 histogram (4 beat positions in bar × 16 sixteenth-note offsets per beat) plus the total onset count and the duration in bars (`beat_grid.bars.len() - 1`). This 4×16 shape is what enables halftime and broken-beat detection: 4-on-floor concentrates in column 0 of all 4 rows; halftime concentrates in column 0 of rows 0 and 2 only; broken-beat shows column 0 in rows 0 and 2 (kicks) plus column 8 in rows 1 and 3 (off-beat hits).
+Output: a 4×16 histogram (4 beat positions in bar × 16 sixteenth-note offsets per beat) plus the total onset count and the duration in bars (`beat_grid.bars.len() - 1`). This 4×16 shape is what enables halftime and broken-beat detection: 4-on-floor concentrates in column 0 of all 4 rows; halftime concentrates in column 0 of rows 0 and 2 only; broken-beat shows column 0 in rows 0 and 2 (kicks) plus syncopated hits in rows 1 and 3, currently around early-16th columns 3–4 or eighth-offbeat column 8.
 
 Onsets outside the beat grid (before the first detected beat or after the last) are discarded.
 
@@ -259,7 +263,7 @@ pub struct KickPatternResult {
 
 8. **`StratumResult`:** `src/audio.rs:30–48` — add `pub kick_pattern: Option<String>` and `pub kick_pattern_confidence: Option<f64>`. String rather than enum on the Rust side to avoid coupling reklawdbox to stratum-dsp's enum (the cache JSON already contains the variant name; reklawdbox parses it back into its own enum if needed).
 
-9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"11"` to `"17"`. This auto-evicts cached results without the new field on next load and avoids mixing raw-onset / subdivision-dedup detector density with beat-anchor detector density.
+9. **Schema version:** `src/audio.rs:60` — bump `STRATUM_SCHEMA_VERSION` from `"11"` to `"18"`. This auto-evicts cached results without the new field on next load, avoids mixing raw-onset / subdivision-dedup detector density with beat-anchor detector density, and avoids mixing the first single-template `broken_beat` pass with the broader syncopation templates.
 
 10. **Mapping:** `src/tools/classify_handler.rs:647–722` (`extract_audio_features`). Add field extraction to `AudioFeatures`:
     ```rust
@@ -317,7 +321,9 @@ classifier wiring:
 - Forest Drive West — "Phosphenes" was labelled `halftime` with low confidence
   (`0.405`) but is plausibly Breakbeat by listening judgement. This boundary
   needs a dedicated Halftime-vs-Breakbeat fixture set before any classifier
-  consumption.
+  consumption. A corrected Rekordbox beat grid showed near-four-anchor density
+  with early 16th syncopation, so schema 18 treats this as detector logic rather
+  than a taxonomy decision.
 - Fred P — "Portal 5" is a correct `sparse` ambient/no-kick case.
 - Sister Sledge — "Pretty Baby" is classic Disco with significant beat drift;
   `irregular` here means the detector failed to find a stable template, not
