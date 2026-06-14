@@ -306,6 +306,23 @@ Total: ~28 tracks. The user's collection should cover most of these.
 
 Source the fixtures from the user's `genre_verified` Rekordbox playlist where possible. Halftime and BrokenBeat-as-non-Electro buckets are the trickiest to source from a Techno-heavy library; if N falls below 4 in a bucket, validation passes/fails on the buckets that *do* meet N and the missing buckets are deferred to a later top-up round. **Do not** ship classification wiring against undertested buckets.
 
+### Early listening notes from `genre_verified`
+
+First-pass listening on the schema 17 detector output changed the intended
+classifier wiring:
+
+- Shifted — "She Dressed In Grey (Static Mix)" and Qemist — "Peaking (OG Mix)"
+  are both Techno despite being labelled `broken_beat`. Treat `broken_beat` as
+  syncopated kick-pattern evidence, not as a genre veto.
+- Forest Drive West — "Phosphenes" was labelled `halftime` with low confidence
+  (`0.405`) but is plausibly Breakbeat by listening judgement. This boundary
+  needs a dedicated Halftime-vs-Breakbeat fixture set before any classifier
+  consumption.
+- Fred P — "Portal 5" is a correct `sparse` ambient/no-kick case.
+- Sister Sledge — "Pretty Baby" is classic Disco with significant beat drift;
+  `irregular` here means the detector failed to find a stable template, not
+  that Disco should be downweighted.
+
 ### Validation acceptance criteria
 
 The detector ships into classification only if:
@@ -353,15 +370,33 @@ Once validation passes, the feature wires in at three layers, each independently
    ```
    In `compute_audio_profile` at `src/classify.rs:280`, set the appropriate flag based on `audio.kick_pattern` *only if* `audio.kick_pattern_confidence > 0.5`. Below that threshold, no flag is set — classification falls back to existing logic.
 
-2. **Audio veto for BrokenBeat:** In `check_audio_vetoes` at `src/classify.rs:353`, add a high-priority veto: if `BrokenBeat` flag is set with confidence > 0.7, veto all 4/4-required genres (Techno, House, Tech House, Deep Techno, Trance, Disco) and propose Electro / Breakbeat / UK Garage. This implements template C4 from the parent ideas doc ([deep-techno-classification-ideas.md §C4](deep-techno-classification-ideas.md)).
+2. **Soft rhythm evidence for BrokenBeat:** Do **not** add a hard veto against
+   Techno, House, Tech House, Deep Techno, Trance, or Disco. Real-library
+   validation found Techno tracks with legitimate syncopated/darker rhythmic
+   movement that match the `broken_beat` template. Instead, use high-confidence
+   `BrokenBeat` only as positive supporting evidence for Electro, Breakbeat, UK
+   Garage, Jungle, and related non-straight rhythm candidates. It may reduce a
+   candidate's score only when another evidence source already supports a
+   non-4/4 family; it must not force a genre switch by itself.
 
-3. **Conjunctive template C1 enrichment:** In the Deep Techno template, require `FourOnFloor` flag (or absence of `BrokenBeat`) — see deep-techno-classification-ideas.md §C1. Without `FourOnFloor`, Deep Techno candidacy is downgraded.
+3. **Conjunctive template C1 enrichment:** In the Deep Techno template, prefer
+   `FourOnFloor` when present, but absence of `FourOnFloor` or presence of
+   `BrokenBeat` is not enough to downgrade Deep Techno. Use it only as a small
+   confidence adjustment after enrichment/audio profile evidence has already
+   selected a Techno-family candidate.
 
-4. **Halftime steering:** If `Halftime` flag is set, boost Dubstep / Halftime DnB candidates and downweight Techno-family candidates. Specific weights TBD after validation.
+4. **Halftime steering:** Keep `Halftime` as a rhythm flag, not a genre-taxonomy
+   entry, until the library has a dedicated fixture set. The current detector is
+   kick-band only: it sees sparse on-grid low-frequency anchors on a fast grid;
+   it does not detect snare/backbeat placement. Use it only to support
+   Dubstep/DnB/Breakbeat candidates when other evidence already points there.
+   Do not downweight Techno-family candidates from `Halftime` alone.
 
 5. **Sparse → Ambient**: If `SparseKick` is set with confidence > 0.7 and energy bucket is `NonDancefloor`, escalate the existing Ambient veto at `src/classify.rs:359` to high-confidence rather than its current low-medium.
 
-Default vote weights: `0.5` for the BrokenBeat veto (similar to existing `AFFINITY_CAP`), `0.3` for the other steering effects. Tuned after validation.
+Default vote weights: start at `0.2` to `0.3` for rhythm evidence and tune only
+after listening validation. `SparseKick` may be stronger for non-dancefloor
+Ambient because the first listening pass produced a clean positive example.
 
 ## Risks and Open Questions
 

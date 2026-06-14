@@ -264,6 +264,10 @@ waits until phase 4.
       so bassline movement and kick tails do not inflate kicks-per-bar.
       Validation widened the default kick band to 40-200 Hz after 40-120 Hz
       missed acoustic/disco kicks and produced confident false `Sparse` labels.
+      Early listening shows `broken_beat` is a rhythmic-shape flag, not a hard
+      genre veto: some darker/upbeat Techno tracks legitimately match it.
+      `Halftime` stays detector-only until we validate it against Breakbeat by
+      ear; do not add it to the genre taxonomy yet.
 
       **Acceptance:** validation on a hand-picked corpus of Electro,
       broken-beat, and 4/4 Techno tracks. Detector should classify each
