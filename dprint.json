@@ -21,6 +21,7 @@
     "**/Cargo.lock",
     "**/package-lock.json",
     "**/broker/src/branding.ts",
+    "site/vendor/**",
     "docs/**"
   ],
   "plugins": [

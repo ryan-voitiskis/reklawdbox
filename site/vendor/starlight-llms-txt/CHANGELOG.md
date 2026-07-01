@@ -1,0 +1,140 @@
+# starlight-llms-txt
+
+## 0.10.0
+
+### Minor Changes
+
+- [#105](https://github.com/delucis/starlight-llms-txt/pull/105) [`aa7f8cf`](https://github.com/delucis/starlight-llms-txt/commit/aa7f8cfa3b06a0bfb6e4787d056913097901cdc6) Thanks [@IEvangelist](https://github.com/IEvangelist)! - Extend the `customSelectors` option to support per-output control.
+
+  The option is now exposed at the top level of the plugin configuration and accepts either of two shapes:
+
+  - **Array** (legacy) — selectors apply to `llms-small.txt` only, matching the existing scope of `minify.customSelectors`.
+  - **Object** with optional `small`, `full`, and `all` arrays — `small` applies to `llms-small.txt`, `full` applies to `llms-full.txt` and any `customSets` outputs, and `all` applies to both (merged with `small` and `full`).
+
+  The deprecated `minify.customSelectors` option keeps working: selectors listed there are merged additively into the `small` bucket so existing configurations are unaffected.
+
+  Use the new object shape to strip transient HTML injected by docs-site rendering plugins (for example, hover popovers from [`expressive-code-twoslash`](https://www.npmjs.com/package/expressive-code-twoslash)) from every generated output:
+
+  ```ts
+  starlightLlmsTxt({
+    customSelectors: {
+      all: ['.twoslash-popup-container', '.twoslash-error-box'],
+    },
+  }),
+  ```
+
+## 0.9.0
+
+### Minor Changes
+
+- [#104](https://github.com/delucis/starlight-llms-txt/pull/104) [`3f6c45b`](https://github.com/delucis/starlight-llms-txt/commit/3f6c45bac5fca1a0d5d819f1a96ce4354f72b334) Thanks [@davidfowl](https://github.com/davidfowl)! - Preserves the contents of code blocks when collapsing whitespace in `llms-small.txt`.
+
+  Previously, the `minify.whitespace` option collapsed every whitespace run — including newlines inside fenced code blocks — into a single space, so multi-line code samples ended up on one line. Now, fenced code blocks keep their original newlines and indentation while whitespace in prose still collapses for token efficiency.
+
+  A new `minify.collapseCodeBlocks` option controls this behavior. Set it to `true` to restore the previous flatten-everything output.
+
+## 0.8.1
+
+### Patch Changes
+
+- [`29e5efb`](https://github.com/delucis/starlight-llms-txt/commit/29e5efb3a7d4d8b2167696e87b7f4d60db1ac93a) Thanks [@mvanhorn](https://github.com/mvanhorn)! - Strips HTML comments from llms.txt files. `<!-- ...  -->` style comments in `.md` files are no longer emitted in the generated files.
+
+## 0.8.0
+
+### Minor Changes
+
+- [#80](https://github.com/delucis/starlight-llms-txt/pull/80) [`dea7b22`](https://github.com/delucis/starlight-llms-txt/commit/dea7b22b6821168b9982fa9d8840163c6f55b70e) Thanks [@nonoakij](https://github.com/nonoakij)! - Adds support for Astro v6 and Starlight v0.38, drops support for lower versions.
+
+## 0.7.0
+
+### Minor Changes
+
+- [#43](https://github.com/delucis/starlight-llms-txt/pull/43) [`1db4591`](https://github.com/delucis/starlight-llms-txt/commit/1db45917d329e7e2ec00630a0c517b973c08fe5f) Thanks [@sanscontext](https://github.com/sanscontext)! - Enforces llms.txt files to be prerendered at build time.
+  Previously, sites using Astro’s `output: server` configuration would generate llms.txt files on-demand, which can be slow, and additionally was incompatible with the [custom sets](https://delucis.github.io/starlight-llms-txt/configuration/#customsets) feature.
+  This change means that llms.txt files are statically generated even for sites using `output: server`.
+
+  ⚠️ **Potentially breaking change:** If you were relying on on-demand rendered llms.txt files, for example by using middleware to gate access, this may be a breaking change. Please [share your use case](https://github.com/delucis/starlight-llms-txt/issues) to let us know if you need this.
+
+## 0.6.1
+
+### Patch Changes
+
+- [#49](https://github.com/delucis/starlight-llms-txt/pull/49) [`56b8233`](https://github.com/delucis/starlight-llms-txt/commit/56b823325bd42374300597a82b0f04e289be4b25) Thanks [@delucis](https://github.com/delucis)! - No code changes. This release is the first published using OIDC trusted publisher configuration for improved security.
+
+## 0.6.0
+
+### Minor Changes
+
+- [#30](https://github.com/delucis/starlight-llms-txt/pull/30) [`a1650c9`](https://github.com/delucis/starlight-llms-txt/commit/a1650c92b16377d9abdcccc8b2a68b34bc695796) Thanks [@alvinometric](https://github.com/alvinometric)! - Adds a new `rawContent` option to skip the Markdown processing pipeline
+
+## 0.5.1
+
+### Patch Changes
+
+- [#22](https://github.com/delucis/starlight-llms-txt/pull/22) [`2a8102a`](https://github.com/delucis/starlight-llms-txt/commit/2a8102a2554ac80495568b89acba2bb5a437d206) Thanks [@florian-lefebvre](https://github.com/florian-lefebvre)! - Fixes output of Expressive Code `diff` codeblocks with a `lang` attribute
+
+## 0.5.0
+
+### Minor Changes
+
+- [#18](https://github.com/delucis/starlight-llms-txt/pull/18) [`52838f6`](https://github.com/delucis/starlight-llms-txt/commit/52838f63fc5280436982880744921dac923d4be2) Thanks [@pelikhan](https://github.com/pelikhan)! - Add page separator configuration object
+
+## 0.4.1
+
+### Patch Changes
+
+- [#13](https://github.com/delucis/starlight-llms-txt/pull/13) [`629fa9b`](https://github.com/delucis/starlight-llms-txt/commit/629fa9b00444a70ebf9aac3e15375f400f8a10cc) Thanks [@jumski](https://github.com/jumski)! - Filters out draft pages from output
+
+## 0.4.0
+
+### Minor Changes
+
+- [#10](https://github.com/delucis/starlight-llms-txt/pull/10) [`7f914f5`](https://github.com/delucis/starlight-llms-txt/commit/7f914f526dbe504ed3e3763864fd9ec1d5150d0d) Thanks [@delucis](https://github.com/delucis)! - Adds a new `customSets` option to support breaking up large docs into multiple custom document sets
+
+### Patch Changes
+
+- [`0c0678d`](https://github.com/delucis/starlight-llms-txt/commit/0c0678da19f1f9981f808a1fa0e1a01c77a26b4d) Thanks [@delucis](https://github.com/delucis)! - Improves rendering of Starlight’s `<FileTree>` component by removing “Directory” labels
+
+## 0.3.0
+
+### Minor Changes
+
+- [#7](https://github.com/delucis/starlight-llms-txt/pull/7) [`cba125e`](https://github.com/delucis/starlight-llms-txt/commit/cba125ed259601895ba78f6da95a55564b914470) Thanks [@hippotastic](https://github.com/hippotastic)! - Adds options to promote or demote pages in the order of the `llms-full.txt` and `llms-small.txt` output files
+
+## 0.2.1
+
+### Patch Changes
+
+- [`39760e7`](https://github.com/delucis/starlight-llms-txt/commit/39760e70e921b685bc6dc6a5338f8f80bf79e57e) Thanks [@delucis](https://github.com/delucis)! - Removes Expressive Code’s “Terminal Window” labels from output
+
+- [`26fa616`](https://github.com/delucis/starlight-llms-txt/commit/26fa616793798bda41911bfe7dc229475f89db26) Thanks [@delucis](https://github.com/delucis)! - Fixes a bug where pages excluded using the `exclude` configuration option were excluded in `llms-full.txt` instead of only in `llms-small.txt`
+
+## 0.2.0
+
+### Minor Changes
+
+- [#4](https://github.com/delucis/starlight-llms-txt/pull/4) [`a4a77ca`](https://github.com/delucis/starlight-llms-txt/commit/a4a77ca433b7cee7cbeb3c603498e760cd037867) Thanks [@delucis](https://github.com/delucis)! - Adds support for generating a smaller `llms-small.txt` file for smaller context windows
+
+- [`618fa88`](https://github.com/delucis/starlight-llms-txt/commit/618fa882d29bc4b7ce054392c9b65d97ce1ceb82) Thanks [@delucis](https://github.com/delucis)! - Adds support for including additional optional links in the main `llms.txt` entrypoint
+
+### Patch Changes
+
+- [#4](https://github.com/delucis/starlight-llms-txt/pull/4) [`a4a77ca`](https://github.com/delucis/starlight-llms-txt/commit/a4a77ca433b7cee7cbeb3c603498e760cd037867) Thanks [@delucis](https://github.com/delucis)! - Sort pages in llms.txt output
+
+## 0.1.2
+
+### Patch Changes
+
+- [`d5ca030`](https://github.com/delucis/starlight-llms-txt/commit/d5ca0307192585f141164dd8328f244f32db5a90) Thanks [@delucis](https://github.com/delucis)! - Improves rendering of Starlight Tabs component in output
+
+## 0.1.1
+
+### Patch Changes
+
+- [`04f641c`](https://github.com/delucis/starlight-llms-txt/commit/04f641c48dd70acf480c80df26d9e2f774510428) Thanks [@delucis](https://github.com/delucis)! - Preserves language metadata on code blocks
+
+## 0.1.0
+
+### Minor Changes
+
+- [`249438b`](https://github.com/delucis/starlight-llms-txt/commit/249438b23d2998ef79a1bbb19ac7a532938f7ade) Thanks [@delucis](https://github.com/delucis)! - Initial release
