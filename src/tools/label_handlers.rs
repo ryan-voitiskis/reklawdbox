@@ -404,7 +404,7 @@ pub(super) async fn handle_backfill_labels(
                 *by_artist.entry(&t.artist).or_insert(0) += 1;
             }
             let mut artist_counts: Vec<_> = by_artist.into_iter().collect();
-            artist_counts.sort_by(|a, b| b.1.cmp(&a.1));
+            artist_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
             let top_artists: Vec<_> = artist_counts
                 .iter()
                 .take(20)

@@ -253,10 +253,10 @@ fn build_preview_summary(diffs: &[crate::types::TrackDiff]) -> serde_json::Value
     let total_field_changes: usize = by_field.values().sum();
 
     let mut by_field_sorted: Vec<_> = by_field.into_iter().collect();
-    by_field_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    by_field_sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let mut by_genre_sorted: Vec<_> = by_genre.into_iter().collect();
-    by_genre_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    by_genre_sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let by_field_arr: Vec<_> = by_field_sorted
         .into_iter()
