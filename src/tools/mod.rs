@@ -179,7 +179,7 @@ impl ReklawdboxServer {
     }
 }
 
-#[tool_router]
+#[tool_router(router = tool_router)]
 impl ReklawdboxServer {
     pub fn new(db_path: Option<String>) -> Self {
         let http = reqwest::Client::builder()
@@ -699,12 +699,11 @@ impl ReklawdboxServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ReklawdboxServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "Rekordbox library management server. Read-only DB access, staged XML export.\n\
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Rekordbox library management server. Read-only DB access, staged XML export.\n\
                  \n\
                  Before using any workflow tools, call help() to load the matching SOP. Each \
                  workflow has prerequisite steps and a specific tool sequence \u{2014} following the \
@@ -718,12 +717,8 @@ impl ServerHandler for ReklawdboxServer {
                  can authorize, then call the same tool again \u{2014} the new session is picked up \
                  automatically. Do not silently fall back to other enrichment sources for \
                  label/catalog data on commercial releases; Discogs is materially more \
-                 authoritative there."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+                 authoritative there.",
+        )
     }
 }
 
