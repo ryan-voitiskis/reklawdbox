@@ -147,7 +147,13 @@ If still missing data (common with self-released and digital-only music), try Ba
 lookup_bandcamp(artist="Artist Name", title="First Track Title")
 ```
 
-Bandcamp is the authoritative source for Bandcamp-sourced downloads and is often the **only** source for self-released music. The tool handles search and metadata extraction with caching automatically.
+If you have already found the Bandcamp release page, prefer passing it directly:
+
+```
+lookup_bandcamp(artist="Artist Name", title="First Track Title", url="https://artist.bandcamp.com/album/release-slug")
+```
+
+Bandcamp is the authoritative source for Bandcamp-sourced downloads and is often the **only** source for self-released music. Direct Bandcamp URLs bypass fragile global search and refresh the cache for the artist/title pair. Use the album page where the release year is listed; the tool selects the matching track from the page metadata.
 
 If still missing year or label, try MusicBrainz as a final fallback:
 
@@ -227,7 +233,7 @@ embed_cover_art(image_path="/path/to/album/cover.jpg", targets=["/path/to/album/
 
 **No images:** Source a cover. Always embed when a cover can be obtained.
 
-1. Try `lookup_bandcamp(artist="...", title="...")`.
+1. Try `lookup_bandcamp(artist="...", title="...", url="https://artist.bandcamp.com/album/...")` when a Bandcamp page is known, otherwise use `lookup_bandcamp(artist="...", title="...")`.
    - If the result includes a `cover_image` URL, use it.
    - Otherwise, if the result includes a `bandcamp_url`, fetch that page and extract the `og:image` URL (this is the full-size artwork).
 2. If no Bandcamp result, try `lookup_discogs(...)`.
@@ -330,7 +336,7 @@ embed_cover_art(image_path="/path/to/cover.jpg", targets=["/path/to/track.flac"]
 
 If no local cover file exists, source one:
 
-1. Try `lookup_bandcamp(artist="...", title="...")`.
+1. Try `lookup_bandcamp(artist="...", title="...", url="https://artist.bandcamp.com/album/...")` when a Bandcamp page is known, otherwise use `lookup_bandcamp(artist="...", title="...")`.
    - If the result includes a `cover_image` URL, use it.
    - Otherwise, if the result includes a `bandcamp_url`, fetch that page and extract the `og:image` URL (this is the full-size artwork).
 2. If no Bandcamp result, try `lookup_discogs(...)`.

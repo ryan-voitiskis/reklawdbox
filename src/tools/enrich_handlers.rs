@@ -277,6 +277,7 @@ pub(super) async fn handle_lookup_bandcamp(
     params: LookupBandcampParams,
 ) -> Result<CallToolResult, McpError> {
     let force_refresh = params.force_refresh.unwrap_or(false);
+    let url = params.url;
 
     let (artist, title, _) = resolve_lookup_identity(
         server,
@@ -289,7 +290,7 @@ pub(super) async fn handle_lookup_bandcamp(
     let norm_artist = crate::normalize::normalize_for_matching(&artist);
     let norm_title = crate::normalize::normalize_for_matching(&title);
 
-    if !force_refresh {
+    if !force_refresh && url.is_none() {
         let store_conn = server.cache_store_conn()?;
         if let Some(cached) = store::get_enrichment(
             &store_conn,
@@ -312,9 +313,15 @@ pub(super) async fn handle_lookup_bandcamp(
         }
     }
 
-    let result = lookup_bandcamp_remote(server, &artist, &title)
-        .await
-        .map_err(|e| mcp_internal_error(format!("Bandcamp error: {e}")))?;
+    let result = if let Some(url) = url {
+        bandcamp::lookup_url(&server.state.http, &url, &artist, &title)
+            .await
+            .map_err(|e| mcp_internal_error(format!("Bandcamp error: {e}")))?
+    } else {
+        lookup_bandcamp_remote(server, &artist, &title)
+            .await
+            .map_err(|e| mcp_internal_error(format!("Bandcamp error: {e}")))?
+    };
 
     let (match_quality, response_json) = match &result {
         Some(r) => {

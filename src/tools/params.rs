@@ -260,6 +260,10 @@ pub struct LookupBandcampParams {
     pub artist: Option<String>,
     #[schemars(description = "Track title (required if no track_id)")]
     pub title: Option<String>,
+    #[schemars(
+        description = "Direct Bandcamp /track/ or /album/ URL. Bypasses search and refreshes the artist/title cache entry."
+    )]
+    pub url: Option<String>,
     #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
     pub force_refresh: Option<bool>,
 }

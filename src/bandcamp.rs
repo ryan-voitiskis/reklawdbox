@@ -1,7 +1,7 @@
 use std::sync::{LazyLock, OnceLock};
 
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 
 use crate::normalize::urlencoding;
@@ -12,7 +12,8 @@ static URL_RE: OnceLock<Regex> = OnceLock::new();
 
 fn url_re() -> &'static Regex {
     URL_RE.get_or_init(|| {
-        Regex::new(r#"<a\b[^>]*\bhref="(https?://[^"]+\.bandcamp\.com/track/[^"?]+)"#).unwrap()
+        Regex::new(r#"<a\b[^>]*\bhref="(https?://[^"/]+\.bandcamp\.com/(?:track|album)/[^"?#]+)"#)
+            .unwrap()
     })
 }
 
@@ -37,6 +38,7 @@ pub struct BandcampResult {
     pub label: Option<String>,
     pub tags: Vec<String>,
     pub album: Option<String>,
+    pub cover_image: Option<String>,
     pub bandcamp_url: String,
     pub score: i32,
 }
@@ -49,37 +51,47 @@ pub async fn lookup(
     wait_for_rate_limit().await;
 
     let search_query = build_search_query(artist, title);
-    let url = format!(
-        "https://bandcamp.com/search?q={}&item_type=t",
-        urlencoding(&search_query)
-    );
-
-    let resp = client
-        .get(&url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "text/html")
-        .header("Accept-Language", "en-US,en;q=0.5")
-        .send()
-        .await?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(BandcampError::Http { status });
-    }
-
-    let html = resp.text().await?;
-    let candidates = parse_search_results(&html);
-
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
     let mut best: Option<(SearchResult, i32)> = None;
-    for candidate in candidates {
-        let score = score_match(artist, title, &candidate.artist, &candidate.title);
-        if score >= 65 && best.as_ref().is_none_or(|(_, s)| score > *s) {
-            best = Some((candidate, score));
+
+    for item_type in ["t", "a"] {
+        let url = format!(
+            "https://bandcamp.com/search?q={}&item_type={item_type}",
+            urlencoding(&search_query)
+        );
+
+        let resp = client
+            .get(&url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "text/html")
+            .header("Accept-Language", "en-US,en;q=0.5")
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(BandcampError::Http { status });
         }
+
+        let html = resp.text().await?;
+        if is_client_challenge(&html) {
+            tracing::warn!(
+                "Bandcamp search returned a client challenge; pass a direct Bandcamp URL"
+            );
+            return Ok(None);
+        }
+
+        for candidate in parse_search_results(&html) {
+            let score = score_match(artist, title, &candidate.artist, &candidate.title);
+            if score >= 65 && best.as_ref().is_none_or(|(_, s)| score > *s) {
+                best = Some((candidate, score));
+            }
+        }
+
+        if best.is_some() {
+            break;
+        }
+
+        wait_for_rate_limit().await;
     }
 
     let Some((matched, score)) = best else {
@@ -88,16 +100,11 @@ pub async fn lookup(
 
     wait_for_rate_limit().await;
 
-    let detail = match fetch_detail(client, &matched.url).await {
+    let detail = match fetch_detail(client, &matched.url, Some(title)).await {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(url = %matched.url, "Bandcamp detail fetch failed, returning search-only data: {e}");
-            DetailResult {
-                artist: None,
-                label: None,
-                date_published: None,
-                tags: None,
-            }
+            DetailResult::default()
         }
     };
 
@@ -108,15 +115,94 @@ pub async fn lookup(
         .and_then(normalize_date_to_iso);
 
     Ok(Some(BandcampResult {
-        track_title: matched.title,
+        track_title: detail.track_title.unwrap_or(matched.title),
         artist_name: detail.artist.unwrap_or(matched.artist),
         release_date,
         label: detail.label,
         tags: detail.tags.unwrap_or_default(),
-        album: matched.album,
+        album: detail.album.or(matched.album),
+        cover_image: detail.cover_image,
         bandcamp_url: matched.url,
         score,
     }))
+}
+
+pub async fn lookup_url(
+    client: &Client,
+    url: &str,
+    artist: &str,
+    title: &str,
+) -> Result<Option<BandcampResult>, BandcampError> {
+    let url = normalize_direct_url(url)?;
+
+    wait_for_rate_limit().await;
+
+    let detail = fetch_detail(client, &url, Some(title)).await?;
+
+    let artist_name = detail.artist.clone().unwrap_or_else(|| artist.to_string());
+    let scored_title = detail
+        .track_title
+        .as_deref()
+        .or(detail.album.as_deref())
+        .unwrap_or(title);
+    let score = score_match(artist, title, &artist_name, scored_title);
+
+    if detail.artist.is_none()
+        && detail.track_title.is_none()
+        && detail.album.is_none()
+        && detail.date_published.is_none()
+        && detail.cover_image.is_none()
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(BandcampResult {
+        track_title: detail.track_title.unwrap_or_else(|| title.to_string()),
+        artist_name,
+        release_date: detail
+            .date_published
+            .as_deref()
+            .and_then(normalize_date_to_iso),
+        label: detail.label,
+        tags: detail.tags.unwrap_or_default(),
+        album: detail.album,
+        cover_image: detail.cover_image,
+        bandcamp_url: url,
+        score,
+    }))
+}
+
+fn normalize_direct_url(raw_url: &str) -> Result<String, BandcampError> {
+    let mut url = Url::parse(raw_url.trim())
+        .map_err(|e| BandcampError::Parse(format!("Invalid Bandcamp URL: {e}")))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(BandcampError::Parse(format!(
+                "Bandcamp URL must use http or https, got {scheme}"
+            )));
+        }
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| BandcampError::Parse("Bandcamp URL is missing a host".to_string()))?;
+    if !host.ends_with(".bandcamp.com") {
+        return Err(BandcampError::Parse(
+            "URL must be an artist-hosted bandcamp.com track or album page".to_string(),
+        ));
+    }
+
+    let path = url.path();
+    if !path.starts_with("/track/") && !path.starts_with("/album/") {
+        return Err(BandcampError::Parse(
+            "Bandcamp URL must be a /track/ or /album/ page".to_string(),
+        ));
+    }
+
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 /// Bandcamp uses "DD Mon YYYY ..." (JSON-LD) and "Month DD, YYYY" (search).
@@ -336,15 +422,22 @@ fn strip_html_tags(s: &str) -> String {
     result.trim().to_string()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct DetailResult {
     artist: Option<String>,
     label: Option<String>,
     date_published: Option<String>,
     tags: Option<Vec<String>>,
+    album: Option<String>,
+    track_title: Option<String>,
+    cover_image: Option<String>,
 }
 
-async fn fetch_detail(client: &Client, url: &str) -> Result<DetailResult, BandcampError> {
+async fn fetch_detail(
+    client: &Client,
+    url: &str,
+    title_hint: Option<&str>,
+) -> Result<DetailResult, BandcampError> {
     let resp = client
         .get(url)
         .header("User-Agent", USER_AGENT)
@@ -359,41 +452,35 @@ async fn fetch_detail(client: &Client, url: &str) -> Result<DetailResult, Bandca
     }
 
     let html = resp.text().await?;
-    parse_detail_json_ld(&html)
+    parse_detail_json_ld_with_hint(&html, title_hint)
 }
 
+#[cfg(test)]
 fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
+    parse_detail_json_ld_with_hint(html, None)
+}
+
+fn parse_detail_json_ld_with_hint(
+    html: &str,
+    title_hint: Option<&str>,
+) -> Result<DetailResult, BandcampError> {
     let json_str = match extract_json_ld(html) {
         Some(s) => s,
         None => {
             tracing::warn!(
                 "Bandcamp detail page has no JSON-LD block — page structure may have changed"
             );
-            return Ok(DetailResult {
-                artist: None,
-                label: None,
-                date_published: None,
-                tags: None,
-            });
+            return Ok(DetailResult::default());
         }
     };
 
     let data: serde_json::Value = serde_json::from_str(json_str)
         .map_err(|e| BandcampError::Parse(format!("Bandcamp JSON-LD malformed: {e}")))?;
+    let data = primary_json_ld_value(&data);
 
-    let artist = data
-        .get("byArtist")
-        .and_then(|v| v.get("name"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
+    let artist = data.get("byArtist").and_then(named_entity_name);
 
-    let label = data
-        .get("publisher")
-        .and_then(|v| v.get("name"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        // publisher == artist means self-released; no useful label signal
-        .filter(|l| artist.as_deref() != Some(l.as_str()));
+    let label = extract_label(data, artist.as_deref());
 
     let date_published = data
         .get("datePublished")
@@ -401,32 +488,184 @@ fn parse_detail_json_ld(html: &str) -> Result<DetailResult, BandcampError> {
         .map(str::to_string);
 
     // keywords may be a comma-separated string or a JSON array
-    let tags = data.get("keywords").and_then(|v| {
-        if let Some(arr) = v.as_array() {
-            let tags: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(str::to_string)
-                .collect();
-            if tags.is_empty() { None } else { Some(tags) }
-        } else if let Some(s) = v.as_str() {
-            let tags: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if tags.is_empty() { None } else { Some(tags) }
-        } else {
-            None
-        }
-    });
+    let tags = data.get("keywords").and_then(extract_tags);
+    let cover_image = data
+        .get("image")
+        .and_then(extract_image_url)
+        .or_else(|| extract_og_image(html));
+
+    let album_tracks = extract_album_tracks(data);
+    let album = if album_tracks.is_empty() {
+        data.get("inAlbum").and_then(named_entity_name)
+    } else {
+        data.get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+
+    let track_title = if album_tracks.is_empty() {
+        data.get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    } else {
+        select_album_track(&album_tracks, title_hint).map(|track| track.title)
+    };
 
     Ok(DetailResult {
         artist,
         label,
         date_published,
         tags,
+        album,
+        track_title,
+        cover_image,
     })
+}
+
+fn primary_json_ld_value(data: &serde_json::Value) -> &serde_json::Value {
+    data.as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("byArtist").is_some() || item.get("track").is_some())
+                .or_else(|| items.first())
+        })
+        .unwrap_or(data)
+}
+
+fn named_entity_name(value: &serde_json::Value) -> Option<String> {
+    if let Some(name) = value.get("name").and_then(|v| v.as_str()) {
+        return Some(name.trim().to_string()).filter(|s| !s.is_empty());
+    }
+    if let Some(items) = value.as_array() {
+        return items.iter().find_map(named_entity_name);
+    }
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_label(data: &serde_json::Value, artist: Option<&str>) -> Option<String> {
+    let mut candidates = Vec::new();
+    if let Some(label) = data.get("publisher").and_then(named_entity_name) {
+        candidates.push(label);
+    }
+    if let Some(label) = data.get("recordLabel").and_then(named_entity_name) {
+        candidates.push(label);
+    }
+    if let Some(release) = data.get("albumRelease") {
+        collect_album_release_labels(release, &mut candidates);
+    }
+
+    candidates.into_iter().find(|label| {
+        !label.trim().is_empty()
+            && artist.is_none_or(|artist| {
+                normalize_for_comparison(label) != normalize_for_comparison(artist)
+            })
+    })
+}
+
+fn collect_album_release_labels(value: &serde_json::Value, labels: &mut Vec<String>) {
+    if let Some(items) = value.as_array() {
+        for item in items {
+            collect_album_release_labels(item, labels);
+        }
+        return;
+    }
+
+    if let Some(label) = value.get("recordLabel").and_then(named_entity_name) {
+        labels.push(label);
+    }
+}
+
+fn extract_tags(value: &serde_json::Value) -> Option<Vec<String>> {
+    if let Some(arr) = value.as_array() {
+        let tags: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+        if tags.is_empty() { None } else { Some(tags) }
+    } else if let Some(s) = value.as_str() {
+        let tags: Vec<String> = s
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if tags.is_empty() { None } else { Some(tags) }
+    } else {
+        None
+    }
+}
+
+fn extract_image_url(value: &serde_json::Value) -> Option<String> {
+    if let Some(url) = value.as_str() {
+        return Some(url.trim().to_string()).filter(|s| !s.is_empty());
+    }
+    value
+        .as_array()
+        .and_then(|items| items.iter().find_map(extract_image_url))
+}
+
+fn extract_og_image(html: &str) -> Option<String> {
+    html.split("<meta")
+        .skip(1)
+        .filter_map(|chunk| chunk.split_once('>').map(|(tag, _)| tag))
+        .find(|tag| tag.contains(r#"property="og:image""#))
+        .and_then(extract_content_attr)
+}
+
+fn extract_content_attr(tag: &str) -> Option<String> {
+    let marker = r#"content=""#;
+    let start = tag.find(marker)? + marker.len();
+    let end = tag[start..].find('"')? + start;
+    Some(tag[start..end].trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[derive(Debug, Clone)]
+struct AlbumTrack {
+    title: String,
+}
+
+fn extract_album_tracks(data: &serde_json::Value) -> Vec<AlbumTrack> {
+    data.get("track")
+        .and_then(|track| track.get("itemListElement"))
+        .and_then(|items| items.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let title = item
+                        .get("item")
+                        .and_then(|item| item.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())?;
+                    Some(AlbumTrack {
+                        title: title.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn select_album_track(tracks: &[AlbumTrack], title_hint: Option<&str>) -> Option<AlbumTrack> {
+    if tracks.len() == 1 {
+        return tracks.first().cloned();
+    }
+
+    let title_hint = title_hint?;
+    tracks
+        .iter()
+        .map(|track| (track, score_title_match(title_hint, &track.title)))
+        .filter(|(_, score)| *score >= 65)
+        .max_by_key(|(_, score)| *score)
+        .map(|(track, _)| track.clone())
 }
 
 fn extract_json_ld(html: &str) -> Option<&str> {
@@ -439,6 +678,12 @@ fn extract_json_ld(html: &str) -> Option<&str> {
     Some(html[open_tag_end..script_end].trim())
 }
 
+fn is_client_challenge(html: &str) -> bool {
+    html.contains("<title>Client Challenge</title>")
+        || html.contains("cdn-cgi/challenge-platform")
+        || html.contains("window._cf_chl_opt")
+}
+
 fn score_match(
     query_artist: &str,
     query_title: &str,
@@ -448,26 +693,44 @@ fn score_match(
     let norm_qa = normalize_for_comparison(query_artist);
     let norm_ra = normalize_for_comparison(result_artist);
 
-    let norm_qt = normalize_for_comparison(&strip_paren_suffix(query_title));
-    let norm_rt = normalize_for_comparison(&strip_paren_suffix(result_title));
+    let norm_qt = normalize_title_for_comparison(query_title);
+    let norm_rt = normalize_title_for_comparison(result_title);
 
     if norm_qa.is_empty() || norm_qt.is_empty() || norm_ra.is_empty() || norm_rt.is_empty() {
         return 0;
     }
 
     let artist_score = normalized_levenshtein(&norm_qa, &norm_ra);
+    let title_score = title_similarity(&norm_qt, &norm_rt);
 
-    let title_lev = normalized_levenshtein(&norm_qt, &norm_rt);
-    let title_prefix = if norm_rt.starts_with(&norm_qt) || norm_qt.starts_with(&norm_rt) {
+    ((artist_score * 0.4 + title_score * 0.6) * 100.0) as i32
+}
+
+fn score_title_match(query_title: &str, result_title: &str) -> i32 {
+    let norm_qt = normalize_title_for_comparison(query_title);
+    let norm_rt = normalize_title_for_comparison(result_title);
+
+    if norm_qt.is_empty() || norm_rt.is_empty() {
+        return 0;
+    }
+
+    (title_similarity(&norm_qt, &norm_rt) * 100.0) as i32
+}
+
+fn normalize_title_for_comparison(title: &str) -> String {
+    normalize_for_comparison(&strip_paren_suffix(&strip_title_noise(title)))
+}
+
+fn title_similarity(norm_qt: &str, norm_rt: &str) -> f64 {
+    let title_lev = normalized_levenshtein(norm_qt, norm_rt);
+    let title_prefix = if norm_rt.starts_with(norm_qt) || norm_qt.starts_with(norm_rt) {
         let shorter = norm_qt.len().min(norm_rt.len()) as f64;
         let longer = norm_qt.len().max(norm_rt.len()) as f64;
         (shorter / longer).max(0.85)
     } else {
         0.0
     };
-    let title_score = title_lev.max(title_prefix);
-
-    ((artist_score * 0.4 + title_score * 0.6) * 100.0) as i32
+    title_lev.max(title_prefix)
 }
 
 fn strip_paren_suffix(s: &str) -> String {
@@ -726,7 +989,8 @@ mod tests {
                 "byArtist": {"name": "Fred P"},
                 "publisher": {"name": "Ibadan Records"},
                 "datePublished": "28 Oct 2016",
-                "keywords": ["deep house", "techno"]
+                "keywords": ["deep house", "techno"],
+                "image": "https://f4.bcbits.com/img/a123_10.jpg"
             }</script>
             </head></html>"#;
         let detail = parse_detail_json_ld(html).unwrap();
@@ -734,6 +998,10 @@ mod tests {
         assert_eq!(detail.label.as_deref(), Some("Ibadan Records"));
         assert_eq!(detail.date_published.as_deref(), Some("28 Oct 2016"));
         assert_eq!(detail.tags.unwrap(), vec!["deep house", "techno"]);
+        assert_eq!(
+            detail.cover_image.as_deref(),
+            Some("https://f4.bcbits.com/img/a123_10.jpg")
+        );
     }
 
     #[test]
@@ -808,6 +1076,87 @@ mod tests {
     }
 
     #[test]
+    fn parse_album_detail_selects_matching_track() {
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://f4.bcbits.com/img/a2687078986_5.jpg">
+            <script type="application/ld+json">{
+                "@type": "MusicAlbum",
+                "name": "POM POM 36",
+                "byArtist": {"name": "POM POM"},
+                "publisher": {"name": "POM POM"},
+                "datePublished": "27 Sep 2018 00:00:00 GMT",
+                "keywords": ["Electronic", "dub techno"],
+                "track": {
+                    "@type": "ItemList",
+                    "itemListElement": [
+                        {"@type": "ListItem", "position": 1, "item": {
+                            "@type": "MusicRecording",
+                            "name": "POM POM 36 - a1",
+                            "mainEntityOfPage": "https://pom-pom.bandcamp.com/track/pom-pom-36-a1"
+                        }},
+                        {"@type": "ListItem", "position": 2, "item": {
+                            "@type": "MusicRecording",
+                            "name": "POM POM 36 - a2"
+                        }}
+                    ]
+                }
+            }</script>
+            </head></html>"#;
+
+        let detail = parse_detail_json_ld_with_hint(html, Some("POM POM 36 - a1")).unwrap();
+
+        assert_eq!(detail.artist.as_deref(), Some("POM POM"));
+        assert_eq!(detail.album.as_deref(), Some("POM POM 36"));
+        assert_eq!(detail.track_title.as_deref(), Some("POM POM 36 - a1"));
+        assert_eq!(
+            detail.date_published.as_deref(),
+            Some("27 Sep 2018 00:00:00 GMT")
+        );
+        assert_eq!(detail.tags.unwrap(), vec!["Electronic", "dub techno"]);
+        assert!(detail.label.is_none());
+        assert_eq!(
+            detail.cover_image.as_deref(),
+            Some("https://f4.bcbits.com/img/a2687078986_5.jpg")
+        );
+    }
+
+    #[test]
+    fn parse_album_detail_extracts_record_label() {
+        let html = r#"<html><head>
+            <script type="application/ld+json">{
+                "@type": "MusicAlbum",
+                "name": "Elektronisches Zeitecho / Mathematische Modelle",
+                "byArtist": {"name": "Der Zyklus"},
+                "publisher": {"name": "Der Zyklus"},
+                "albumRelease": [{
+                    "@type": ["MusicRelease", "Product"],
+                    "recordLabel": {"@type": "MusicGroup", "name": "Clone Records"}
+                }],
+                "track": {
+                    "itemListElement": [
+                        {"item": {"name": "Elektronisches Zeitechno"}},
+                        {"item": {"name": "Mathematische Modelle"}}
+                    ]
+                },
+                "image": ["https://f4.bcbits.com/img/a1369164990_10.jpg"]
+            }</script>
+            </head></html>"#;
+
+        let detail =
+            parse_detail_json_ld_with_hint(html, Some("Elektronisches Zeitechno")).unwrap();
+
+        assert_eq!(detail.label.as_deref(), Some("Clone Records"));
+        assert_eq!(
+            detail.track_title.as_deref(),
+            Some("Elektronisches Zeitechno")
+        );
+        assert_eq!(
+            detail.cover_image.as_deref(),
+            Some("https://f4.bcbits.com/img/a1369164990_10.jpg")
+        );
+    }
+
+    #[test]
     fn parse_detail_no_json_ld_returns_empty() {
         let html = "<html><body>plain page</body></html>";
         let detail = parse_detail_json_ld(html).unwrap();
@@ -859,8 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_search_results_ignores_album_items() {
-        // Non-track URLs (album pages) should not match the track URL regex
+    fn parse_search_results_extracts_album_items() {
         let html = r#"
             <div class="searchresult">
                 <div class="result-info">
@@ -872,10 +1220,31 @@ mod tests {
             </div>
         "#;
         let results = parse_search_results(html);
-        assert!(
-            results.is_empty(),
-            "album URLs should not match track regex"
-        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "My Album");
+        assert_eq!(results[0].artist, "Some Artist");
+        assert_eq!(results[0].url, "https://artist.bandcamp.com/album/my-album");
+    }
+
+    #[test]
+    fn normalizes_direct_bandcamp_url() {
+        let url =
+            normalize_direct_url("https://artist.bandcamp.com/album/my-album?from=search#buy")
+                .unwrap();
+        assert_eq!(url, "https://artist.bandcamp.com/album/my-album");
+    }
+
+    #[test]
+    fn rejects_non_release_bandcamp_url() {
+        let err = normalize_direct_url("https://artist.bandcamp.com/music").unwrap_err();
+        assert!(err.to_string().contains("/track/ or /album/"));
+    }
+
+    #[test]
+    fn detects_client_challenge() {
+        assert!(is_client_challenge(
+            "<html><head><title>Client Challenge</title></head></html>"
+        ));
     }
 
     #[tokio::test]

@@ -62,13 +62,14 @@ Look up a track on MusicBrainz for year/label data. Returns year from first-rele
 
 ### `lookup_bandcamp`
 
-Look up a track on Bandcamp for year/label/tags data. Searches Bandcamp, then fetches the detail page for structured metadata. Particularly effective for underground/independent electronic music. Results are cached.
+Look up a track on Bandcamp for year/label/tags/cover data. Pass a direct Bandcamp `/track/` or `/album/` `url` when you already found the release page; this bypasses Bandcamp search and refreshes the artist/title cache entry. Album pages use the provided `title` to select the track from Bandcamp JSON-LD. Particularly effective for underground/independent electronic music.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | | Track ID — auto-fills artist/title from library |
 | `artist` | string | | Artist name (required if no `track_id`) |
 | `title` | string | | Track title (required if no `track_id`) |
+| `url` | string | | Direct Bandcamp `/track/` or `/album/` URL; bypasses search |
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
 
 ---

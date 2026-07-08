@@ -397,7 +397,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Look up a track on Bandcamp for year/label/tags data. Searches Bandcamp, then fetches the detail page for structured metadata. Particularly effective for underground/independent electronic music. Results are cached. Pass track_id to auto-fill artist/title from the library."
+        description = "Look up a track on Bandcamp for year/label/tags/cover data. Pass url with a direct Bandcamp /track/ or /album/ page to bypass Bandcamp search; album pages use the provided title to select the track. Particularly effective for underground/independent electronic music. Results are cached. Pass track_id to auto-fill artist/title from the library."
     )]
     async fn lookup_bandcamp(
         &self,
