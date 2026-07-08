@@ -312,14 +312,14 @@ pub(super) fn handle_cache_coverage(
         let discogs_label_set =
             store::batch_enrichment_with_label(&store, "discogs", &unique_artists)
                 .map_err(cache_error)?;
-        let stratum_map = store::batch_get_fresh_audio_analysis(
+        let stratum_set = store::batch_fresh_audio_analysis_existence(
             &store,
             &audio_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(cache_error)?;
-        let essentia_map = store::batch_get_fresh_audio_analysis(
+        let essentia_set = store::batch_fresh_audio_analysis_existence(
             &store,
             &audio_identities,
             audio::ANALYZER_ESSENTIA,
@@ -354,8 +354,8 @@ pub(super) fn handle_cache_coverage(
             let has_beatport = beatport_ref.contains(&key);
             let has_discogs_result = discogs_result_ref.contains(&key);
             let has_beatport_result = beatport_result_ref.contains(&key);
-            let has_stratum = stratum_map.contains_key(audio_key);
-            let has_essentia = essentia_map.contains_key(audio_key);
+            let has_stratum = stratum_set.contains(audio_key);
+            let has_essentia = essentia_set.contains(audio_key);
 
             if has_stratum {
                 stratum_cached += 1;

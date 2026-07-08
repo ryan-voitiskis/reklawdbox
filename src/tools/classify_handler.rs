@@ -784,27 +784,6 @@ fn extract_audio_features(
     })
 }
 
-fn current_audio_analysis(
-    store_conn: &rusqlite::Connection,
-    audio_identity: Option<&super::analysis::AudioCacheIdentity>,
-    analyzer: &str,
-    schema_version: &str,
-) -> Result<Option<store::CachedAudioAnalysis>, rusqlite::Error> {
-    let Some(audio_identity) = audio_identity else {
-        return Ok(None);
-    };
-    store::get_audio_analysis(store_conn, &audio_identity.cache_key, analyzer).map(|entry| {
-        entry.filter(|entry| {
-            store::is_audio_analysis_fresh(
-                Some(entry),
-                schema_version,
-                audio_identity.file_size,
-                audio_identity.file_mtime,
-            )
-        })
-    })
-}
-
 pub(super) fn handle_calibrate_audio_profiles(
     server: &ReklawdboxServer,
     params: CalibrateAudioProfilesParams,
@@ -846,6 +825,7 @@ pub(super) fn handle_calibrate_audio_profiles(
     let mut skipped_no_genre = 0u32;
     let mut skipped_no_audio = 0u32;
     let mut skipped_unknown_genre = 0u32;
+    let mut eligible_tracks = Vec::new();
 
     for track in &tracks {
         // Must have a genre tag
@@ -863,27 +843,39 @@ pub(super) fn handle_calibrate_audio_profiles(
             }
         };
 
-        // Load audio features
         let audio_identity = super::analysis::audio_cache_identity(&track.file_path);
-        let stratum = current_audio_analysis(
-            &store_conn,
-            audio_identity.as_ref(),
-            audio::ANALYZER_STRATUM,
-            audio::STRATUM_SCHEMA_VERSION,
-        )
-        .ok()
-        .flatten();
-        let essentia = current_audio_analysis(
-            &store_conn,
-            audio_identity.as_ref(),
-            audio::ANALYZER_ESSENTIA,
-            audio::ESSENTIA_SCHEMA_VERSION,
-        )
-        .ok()
-        .flatten();
+        eligible_tracks.push((track, canonical, audio_identity));
+    }
 
-        let stratum_cache = stratum.as_ref();
-        let essentia_cache = essentia.as_ref();
+    let audio_identities: Vec<_> = eligible_tracks
+        .iter()
+        .filter_map(|(_, _, identity)| {
+            identity
+                .as_ref()
+                .map(super::analysis::AudioCacheIdentity::as_store_identity)
+        })
+        .collect();
+    let stratum_map = store::batch_get_fresh_audio_analysis(
+        &store_conn,
+        &audio_identities,
+        audio::ANALYZER_STRATUM,
+        audio::STRATUM_SCHEMA_VERSION,
+    )
+    .map_err(super::cache_error)?;
+    let essentia_map = store::batch_get_fresh_audio_analysis(
+        &store_conn,
+        &audio_identities,
+        audio::ANALYZER_ESSENTIA,
+        audio::ESSENTIA_SCHEMA_VERSION,
+    )
+    .map_err(super::cache_error)?;
+
+    for (track, canonical, audio_identity) in eligible_tracks {
+        let audio_key = audio_identity
+            .as_ref()
+            .map(|identity| identity.cache_key.as_str());
+        let stratum_cache = audio_key.and_then(|key| stratum_map.get(key));
+        let essentia_cache = audio_key.and_then(|key| essentia_map.get(key));
 
         match extract_audio_features(track, stratum_cache, essentia_cache) {
             Some(features) => samples.push((canonical, features)),
@@ -1011,6 +1003,7 @@ pub(super) fn handle_calibration_coverage(
     let mut by_genre: BTreeMap<&'static str, CalibrationGenreStats> = BTreeMap::new();
     let mut skipped_no_genre = 0u32;
     let mut skipped_unknown_genre = 0u32;
+    let mut eligible_tracks = Vec::new();
 
     for track in &tracks {
         if track.genre.trim().is_empty() {
@@ -1027,20 +1020,41 @@ pub(super) fn handle_calibration_coverage(
         stats.playlist_tracks += 1;
 
         let audio_identity = super::analysis::audio_cache_identity(&track.file_path);
-        let stratum = current_audio_analysis(
-            &store_conn,
-            audio_identity.as_ref(),
-            audio::ANALYZER_STRATUM,
-            audio::STRATUM_SCHEMA_VERSION,
-        )
-        .map_err(super::cache_error)?;
-        let essentia = current_audio_analysis(
-            &store_conn,
-            audio_identity.as_ref(),
-            audio::ANALYZER_ESSENTIA,
-            audio::ESSENTIA_SCHEMA_VERSION,
-        )
-        .map_err(super::cache_error)?;
+        eligible_tracks.push((track, canonical, audio_identity));
+    }
+
+    let audio_identities: Vec<_> = eligible_tracks
+        .iter()
+        .filter_map(|(_, _, identity)| {
+            identity
+                .as_ref()
+                .map(super::analysis::AudioCacheIdentity::as_store_identity)
+        })
+        .collect();
+    let stratum_map = store::batch_get_fresh_audio_analysis(
+        &store_conn,
+        &audio_identities,
+        audio::ANALYZER_STRATUM,
+        audio::STRATUM_SCHEMA_VERSION,
+    )
+    .map_err(super::cache_error)?;
+    let essentia_map = store::batch_get_fresh_audio_analysis(
+        &store_conn,
+        &audio_identities,
+        audio::ANALYZER_ESSENTIA,
+        audio::ESSENTIA_SCHEMA_VERSION,
+    )
+    .map_err(super::cache_error)?;
+
+    for (track, canonical, audio_identity) in eligible_tracks {
+        let stats = by_genre
+            .get_mut(canonical)
+            .expect("eligible track genre stats should already exist");
+        let audio_key = audio_identity
+            .as_ref()
+            .map(|identity| identity.cache_key.as_str());
+        let stratum = audio_key.and_then(|key| stratum_map.get(key));
+        let essentia = audio_key.and_then(|key| essentia_map.get(key));
 
         if stratum.is_some() {
             stats.tracks_with_stratum_features += 1;
@@ -1053,7 +1067,7 @@ pub(super) fn handle_calibration_coverage(
             stats.missing_essentia_features += 1;
         }
 
-        if extract_audio_features(track, stratum.as_ref(), essentia.as_ref()).is_some() {
+        if extract_audio_features(track, stratum, essentia).is_some() {
             stats.tracks_with_audio_features += 1;
         } else {
             stats.missing_audio_features += 1;

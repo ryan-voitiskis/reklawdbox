@@ -1011,6 +1011,50 @@ fn analyze_track_audio_cache_miss_when_file_unstatable() {
 }
 
 #[tokio::test]
+async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("stale-existing-track.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("stale-existing-1", &audio_path_str);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    store::set_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size + 1,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"stratum-dsp-1.0.0"}"#,
+    )
+    .expect("stale stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server
+        .state
+        .essentia_python
+        .set(None)
+        .expect("essentia probe state should be seeded once");
+
+    server
+        .analyze_track_audio(Parameters(AnalyzeTrackAudioParams {
+            track_id: "stale-existing-1".to_string(),
+            skip_cached: Some(true),
+        }))
+        .await
+        .expect_err("stale current-schema cache must not bypass decode for an existing file");
+}
+
+#[tokio::test]
 #[ignore]
 async fn analyze_track_audio_essentia_cache_round_trip_real_track() {
     let Some((server, _store_dir)) =
@@ -2183,7 +2227,55 @@ async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
 }
 
 #[tokio::test]
-async fn resolve_tracks_data_ignores_stale_audio_file_identity() {
+async fn resolve_track_data_audio_cache_ignores_existing_file_stale_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("resolve-stale-single.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("resolve-stale-single", &audio_path_str);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    store::set_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime + 1,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"18"}"#,
+    )
+    .expect("stale-mtime stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .resolve_track_data(Parameters(ResolveTrackDataParams {
+            track_id: "resolve-stale-single".to_string(),
+        }))
+        .await
+        .expect("resolve_track_data should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(
+        payload["data_completeness"]["stratum_dsp"], false,
+        "current-schema row with stale file mtime must not count"
+    );
+    assert!(
+        payload["audio_analysis"]["stratum_dsp"].is_null(),
+        "stale stratum row must be excluded from single-track resolve payload"
+    );
+}
+
+#[tokio::test]
+async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let fresh_path = audio_dir.path().join("resolve-fresh.flac");
     let stale_path = audio_dir.path().join("resolve-stale.flac");
@@ -2303,7 +2395,7 @@ async fn resolve_tracks_data_ignores_stale_audio_file_identity() {
 }
 
 #[tokio::test]
-async fn classify_tracks_ignores_stale_audio_file_identity() {
+async fn classify_tracks_audio_cache_ignores_stale_file_identity() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let stale_size_path = audio_dir.path().join("classify-stale-size.flac");
     let stale_mtime_path = audio_dir.path().join("classify-stale-mtime.flac");
@@ -2677,6 +2769,126 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
     assert!(playlist_payload["scope"]["total_tracks"].as_u64().unwrap() >= 2);
     assert_eq!(playlist_payload["scope"]["matched_tracks"], 1);
     assert_eq!(playlist_payload["gaps"]["no_data_at_all"], 1);
+}
+
+#[tokio::test]
+async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let mut deep_paths = Vec::new();
+    for i in 1..=5 {
+        let path = audio_dir.path().join(format!("calibrate-deep-{i}.flac"));
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + i);
+        deep_paths.push((path.to_string_lossy().to_string(), file_size, file_mtime));
+    }
+    let techno_path = audio_dir.path().join("calibrate-techno-stale.flac");
+    let (techno_size, techno_mtime) = write_test_audio_file(&techno_path, 1200);
+    let techno_path_str = techno_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("calibrate-deep-1", &deep_paths[0].0);
+    db_conn
+        .execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration schema should initialize");
+
+    for i in 2..=5 {
+        insert_test_track(
+            &db_conn,
+            &format!("calibrate-deep-{i}"),
+            &format!("Calibrate Deep {i}"),
+            "g1",
+            &deep_paths[i as usize - 1].0,
+        );
+    }
+    insert_test_track(
+        &db_conn,
+        "calibrate-techno-stale",
+        "Calibrate Techno Stale",
+        "g2",
+        &techno_path_str,
+    );
+
+    for (track_no, track_id) in [
+        "calibrate-deep-1",
+        "calibrate-deep-2",
+        "calibrate-deep-3",
+        "calibrate-deep-4",
+        "calibrate-deep-5",
+        "calibrate-techno-stale",
+    ]
+    .iter()
+    .enumerate()
+    {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    for (path, file_size, file_mtime) in &deep_paths {
+        store::set_audio_analysis(
+            &store_conn,
+            path,
+            crate::audio::ANALYZER_STRATUM,
+            *file_size,
+            *file_mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
+        )
+        .expect("fresh stratum analysis should seed");
+    }
+    store::set_audio_analysis(
+        &store_conn,
+        &techno_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        techno_size + 1,
+        techno_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("stale-identity stratum analysis should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibrate_audio_profiles(Parameters(CalibrateAudioProfilesParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibrate_audio_profiles should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["status"], "calibrated");
+    assert_eq!(payload["total_tracks"], 6);
+    assert_eq!(payload["tracks_with_features"], 5);
+    assert_eq!(payload["skipped_no_audio"], 1);
 }
 
 #[tokio::test]

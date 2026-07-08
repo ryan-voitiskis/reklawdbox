@@ -560,10 +560,6 @@ pub fn batch_get_fresh_audio_analysis(
     if identities.is_empty() {
         return Ok(HashMap::new());
     }
-    let file_paths: Vec<&str> = identities
-        .iter()
-        .map(|identity| identity.file_path)
-        .collect();
     let expected: HashMap<&str, (i64, i64)> = identities
         .iter()
         .map(|identity| {
@@ -573,6 +569,7 @@ pub fn batch_get_fresh_audio_analysis(
             )
         })
         .collect();
+    let file_paths: Vec<&str> = expected.keys().copied().collect();
     let mut entries = batch_get_audio_analysis(conn, &file_paths, analyzer, analysis_version)?;
     entries.retain(|file_path, entry| {
         expected
@@ -582,6 +579,82 @@ pub fn batch_get_fresh_audio_analysis(
             })
     });
     Ok(entries)
+}
+
+pub fn batch_fresh_audio_analysis_existence(
+    conn: &Connection,
+    identities: &[AudioAnalysisIdentity<'_>],
+    analyzer: &str,
+    analysis_version: &str,
+) -> Result<HashSet<String>, rusqlite::Error> {
+    if identities.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let expected: HashMap<&str, (i64, i64)> = identities
+        .iter()
+        .map(|identity| {
+            (
+                identity.file_path,
+                (identity.file_size, identity.file_mtime),
+            )
+        })
+        .collect();
+    let unique_identities: Vec<_> = expected
+        .iter()
+        .map(
+            |(&file_path, &(file_size, file_mtime))| AudioAnalysisIdentity {
+                file_path,
+                file_size,
+                file_mtime,
+            },
+        )
+        .collect();
+    // 1 bind var per path + 2 for analyzer and version; 896 + 2 = 898, under 999.
+    const MAX_PATHS: usize = 896;
+    let mut result = HashSet::with_capacity(unique_identities.len());
+    for chunk in unique_identities.chunks(MAX_PATHS) {
+        use std::fmt::Write as _;
+        let mut placeholders = String::new();
+        for i in 0..chunk.len() {
+            if i > 0 {
+                placeholders.push(',');
+            }
+            write!(placeholders, "?{}", i + 1).unwrap();
+        }
+        let analyzer_pos = chunk.len() + 1;
+        let version_pos = chunk.len() + 2;
+        let sql = format!(
+            "SELECT file_path, file_size, file_mtime \
+             FROM audio_analysis_cache \
+             WHERE file_path IN ({placeholders}) \
+               AND analyzer = ?{analyzer_pos} \
+               AND analysis_version = ?{version_pos}"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk.len() + 2);
+        for identity in chunk {
+            bind_values.push(&identity.file_path);
+        }
+        bind_values.push(&analyzer);
+        bind_values.push(&analysis_version);
+        let rows = stmt.query_map(bind_values.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (file_path, file_size, file_mtime) = row?;
+            if expected
+                .get(file_path.as_str())
+                .is_some_and(|expected| *expected == (file_size, file_mtime))
+            {
+                result.insert(file_path);
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub fn set_audio_analysis(
