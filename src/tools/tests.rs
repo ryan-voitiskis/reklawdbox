@@ -2183,6 +2183,224 @@ async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
 }
 
 #[tokio::test]
+async fn resolve_tracks_data_ignores_stale_audio_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let fresh_path = audio_dir.path().join("resolve-fresh.flac");
+    let stale_path = audio_dir.path().join("resolve-stale.flac");
+    let (fresh_size, fresh_mtime) = write_test_audio_file(&fresh_path, 1000);
+    let (stale_size, stale_mtime) = write_test_audio_file(&stale_path, 1001);
+    let fresh_path_str = fresh_path.to_string_lossy().to_string();
+    let stale_path_str = stale_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("resolve-fresh", &fresh_path_str);
+    insert_test_track(
+        &db_conn,
+        "resolve-stale",
+        "Resolve Stale",
+        "g1",
+        &stale_path_str,
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    store::set_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        fresh_size,
+        fresh_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"18"}"#,
+    )
+    .expect("fresh stratum cache should seed");
+    store::set_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        crate::audio::ANALYZER_ESSENTIA,
+        fresh_size,
+        fresh_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":1.5}"#,
+    )
+    .expect("fresh essentia cache should seed");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_size + 1,
+        stale_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":140.0,"key":"Cm","analyzer_version":"18"}"#,
+    )
+    .expect("stale-size stratum cache should seed");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_path_str,
+        crate::audio::ANALYZER_ESSENTIA,
+        stale_size,
+        stale_mtime + 1,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":2.5}"#,
+    )
+    .expect("stale-mtime essentia cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "resolve-fresh".to_string(),
+                "resolve-stale".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: Some(2),
+            format: None,
+        }))
+        .await
+        .expect("resolve_tracks_data should succeed");
+    let payload = extract_json(&result);
+    let items = payload
+        .as_array()
+        .expect("batch resolve should return array");
+    let fresh = items
+        .iter()
+        .find(|item| item["track_id"] == "resolve-fresh")
+        .expect("fresh track should be present");
+    let stale = items
+        .iter()
+        .find(|item| item["track_id"] == "resolve-stale")
+        .expect("stale track should be present");
+
+    assert_eq!(fresh["data_completeness"]["stratum_dsp"], true);
+    assert!(fresh["audio_analysis"]["stratum_dsp"].is_object());
+    assert_eq!(fresh["data_completeness"]["essentia"], true);
+    assert!(fresh["audio_analysis"]["essentia"].is_object());
+
+    assert_eq!(
+        stale["data_completeness"]["stratum_dsp"], false,
+        "current-schema stratum row with stale file size must not count"
+    );
+    assert!(
+        stale["audio_analysis"]["stratum_dsp"].is_null(),
+        "stale stratum row must be excluded from batch resolve payload"
+    );
+    assert_eq!(
+        stale["data_completeness"]["essentia"], false,
+        "current-schema essentia row with stale file mtime must not count"
+    );
+    assert!(
+        stale["audio_analysis"]["essentia"].is_null(),
+        "stale essentia row must be excluded from batch resolve payload"
+    );
+}
+
+#[tokio::test]
+async fn classify_tracks_ignores_stale_audio_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let stale_size_path = audio_dir.path().join("classify-stale-size.flac");
+    let stale_mtime_path = audio_dir.path().join("classify-stale-mtime.flac");
+    let (stale_size_file_size, stale_size_file_mtime) =
+        write_test_audio_file(&stale_size_path, 1000);
+    let (stale_mtime_file_size, stale_mtime_file_mtime) =
+        write_test_audio_file(&stale_mtime_path, 1001);
+    let stale_size_path_str = stale_size_path.to_string_lossy().to_string();
+    let stale_mtime_path_str = stale_mtime_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("classify-stale-size", &stale_size_path_str);
+    insert_test_track(
+        &db_conn,
+        "classify-stale-mtime",
+        "Classify Stale Mtime",
+        "g1",
+        &stale_mtime_path_str,
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let stale_audio_json = r#"{
+        "bpm": 128.0,
+        "duration_seconds": 240.0,
+        "decay_mid_tau": 240.0,
+        "key_clarity": 0.72,
+        "key_confidence": 0.88,
+        "kick_pattern": "four_on_floor"
+    }"#;
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_size_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_size_file_size + 1,
+        stale_size_file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        stale_audio_json,
+    )
+    .expect("stale-size stratum cache should seed");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_mtime_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_mtime_file_size,
+        stale_mtime_file_mtime + 1,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        stale_audio_json,
+    )
+    .expect("stale-mtime stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .classify_tracks(Parameters(ClassifyTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "classify-stale-size".to_string(),
+                "classify-stale-mtime".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: Some(2),
+            offset: None,
+            genre_overrides: None,
+            format: Some(ClassifyFormat::Full),
+            auto_stage: None,
+        }))
+        .await
+        .expect("classify_tracks should succeed");
+    let payload = extract_json(&result);
+    let results = payload["results"]
+        .as_array()
+        .expect("classification results should be an array");
+    assert_eq!(results.len(), 2);
+
+    for track_id in ["classify-stale-size", "classify-stale-mtime"] {
+        let item = results
+            .iter()
+            .find(|item| item["track_id"] == track_id)
+            .unwrap_or_else(|| panic!("{track_id} should be present"));
+        let flags = item["flags"]
+            .as_array()
+            .expect("classification flags should be an array");
+        assert!(
+            flags.iter().any(|flag| flag == "no-audio"),
+            "current-schema stale identity row for {track_id} must be excluded from classification evidence"
+        );
+    }
+}
+
+#[tokio::test]
 async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let with_genre_path = audio_dir.path().join("coverage-1.flac");
@@ -2581,12 +2799,12 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         &store_conn,
         &tech_path_str,
         crate::audio::ANALYZER_STRATUM,
-        tech_size,
+        tech_size + 1,
         tech_mtime,
-        "stale-stratum-schema",
+        crate::audio::STRATUM_SCHEMA_VERSION,
         r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
     )
-    .expect("stale stratum analysis should be seeded");
+    .expect("stale-identity stratum analysis should be seeded");
 
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
