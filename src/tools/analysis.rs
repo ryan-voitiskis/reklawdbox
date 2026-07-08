@@ -2,8 +2,43 @@ use rusqlite::Connection;
 
 use crate::{audio, store};
 
+#[derive(Clone, Debug)]
+pub(super) struct AudioCacheIdentity {
+    pub(super) cache_key: String,
+    pub(super) file_size: i64,
+    pub(super) file_mtime: i64,
+}
+
+impl AudioCacheIdentity {
+    pub(super) fn as_store_identity(&self) -> store::AudioAnalysisIdentity<'_> {
+        store::AudioAnalysisIdentity {
+            file_path: &self.cache_key,
+            file_size: self.file_size,
+            file_mtime: self.file_mtime,
+        }
+    }
+}
+
+fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 pub(super) fn resolved_audio_cache_key(raw_file_path: &str) -> String {
     super::resolve_file_path(raw_file_path).unwrap_or_else(|_| raw_file_path.to_string())
+}
+
+pub(super) fn audio_cache_identity(raw_file_path: &str) -> Option<AudioCacheIdentity> {
+    let cache_key = super::resolve_file_path(raw_file_path).ok()?;
+    let metadata = std::fs::metadata(&cache_key).ok()?;
+    Some(AudioCacheIdentity {
+        cache_key,
+        file_size: metadata.len() as i64,
+        file_mtime: file_mtime_unix(&metadata),
+    })
 }
 
 pub(super) fn get_fresh_analysis_entry(
@@ -12,12 +47,20 @@ pub(super) fn get_fresh_analysis_entry(
     analyzer: &str,
     schema_version: &str,
 ) -> Result<Option<store::CachedAudioAnalysis>, String> {
-    let file_path = resolved_audio_cache_key(raw_file_path);
-    let cached = store::get_audio_analysis(store, &file_path, analyzer)
+    let Some(identity) = audio_cache_identity(raw_file_path) else {
+        return Ok(None);
+    };
+    let cached = store::get_audio_analysis(store, &identity.cache_key, analyzer)
         .map_err(|e| format!("Cache read error: {e}"))?;
-    match cached {
-        Some(entry) if entry.analysis_version == schema_version => Ok(Some(entry)),
-        _ => Ok(None),
+    if store::is_audio_analysis_fresh(
+        cached.as_ref(),
+        schema_version,
+        identity.file_size,
+        identity.file_mtime,
+    ) {
+        Ok(cached)
+    } else {
+        Ok(None)
     }
 }
 
@@ -27,12 +70,20 @@ pub(super) fn check_analysis_cache(
     analyzer: &str,
     schema_version: &str,
 ) -> Result<Option<String>, String> {
-    let file_path = resolved_audio_cache_key(raw_file_path);
-    let cached = store::get_audio_analysis(store, &file_path, analyzer)
+    let Some(identity) = audio_cache_identity(raw_file_path) else {
+        return Ok(None);
+    };
+    let cached = store::get_audio_analysis(store, &identity.cache_key, analyzer)
         .map_err(|e| format!("Cache read error: {e}"))?;
-    match cached {
-        Some(entry) if entry.analysis_version == schema_version => Ok(Some(entry.features_json)),
-        _ => Ok(None),
+    if store::is_audio_analysis_fresh(
+        cached.as_ref(),
+        schema_version,
+        identity.file_size,
+        identity.file_mtime,
+    ) {
+        Ok(cached.map(|entry| entry.features_json))
+    } else {
+        Ok(None)
     }
 }
 

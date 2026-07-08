@@ -98,41 +98,57 @@ pub(super) fn handle_resolve_tracks_data(
     let essentia_installed = server.essentia_python_path().is_some();
 
     // Pre-compute normalized keys and resolved audio paths.
-    let norm_keys: Vec<(String, String, Option<String>, String)> = tracks
+    let norm_keys: Vec<_> = tracks
         .iter()
         .map(|t| {
             let a = crate::normalize::normalize_for_matching(&t.artist);
             let ti = crate::normalize::normalize_for_matching(&t.title);
             let al = crate::normalize::normalize_for_matching(&t.album);
-            let audio_key = super::analysis::resolved_audio_cache_key(&t.file_path);
-            (a, ti, (!al.is_empty()).then_some(al), audio_key)
+            let audio_identity = super::analysis::audio_cache_identity(&t.file_path);
+            let audio_key = audio_identity
+                .as_ref()
+                .map(|identity| identity.cache_key.clone())
+                .unwrap_or_else(|| super::analysis::resolved_audio_cache_key(&t.file_path));
+            (
+                a,
+                ti,
+                (!al.is_empty()).then_some(al),
+                audio_key,
+                audio_identity,
+            )
         })
         .collect();
 
     // Build batch keys.
     let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
-    let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
-    for (a, t, al, audio_key) in &norm_keys {
+    let audio_identities: Vec<_> = norm_keys
+        .iter()
+        .filter_map(|(_, _, _, _, identity)| {
+            identity
+                .as_ref()
+                .map(super::analysis::AudioCacheIdentity::as_store_identity)
+        })
+        .collect();
+    for (a, t, al, _, _) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
         enrich_keys.push(("beatport", a, t, ""));
-        audio_paths.push(audio_key);
     }
 
     // Batch load — 3 queries total instead of 4N.
     let (enrich_map, stratum_map, essentia_map) = {
         let store = server.cache_store_conn()?;
         let enrich_map = store::batch_get_enrichment(&store, &enrich_keys).map_err(cache_error)?;
-        let stratum_map = store::batch_get_audio_analysis(
+        let stratum_map = store::batch_get_fresh_audio_analysis(
             &store,
-            &audio_paths,
+            &audio_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(cache_error)?;
-        let essentia_map = store::batch_get_audio_analysis(
+        let essentia_map = store::batch_get_fresh_audio_analysis(
             &store,
-            &audio_paths,
+            &audio_identities,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
@@ -141,7 +157,9 @@ pub(super) fn handle_resolve_tracks_data(
     };
 
     let mut results = Vec::with_capacity(tracks.len());
-    for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
+    for (track, (norm_artist, norm_title, norm_album, audio_key, _)) in
+        tracks.iter().zip(&norm_keys)
+    {
         let album = norm_album.as_deref().unwrap_or("");
         let discogs_key = (
             "discogs".to_string(),
@@ -242,14 +260,17 @@ pub(super) fn handle_cache_coverage(
     let mut enrichment_has_label = 0usize;
 
     {
-        let track_keys: Vec<(String, String, String)> = tracks
+        let track_keys: Vec<_> = tracks
             .iter()
             .map(|t| {
                 let norm_artist = crate::normalize::normalize_for_matching(&t.artist);
                 let norm_title = crate::normalize::normalize_for_matching(&t.title);
-                let audio_key =
-                    resolve_file_path(&t.file_path).unwrap_or_else(|_| t.file_path.clone());
-                (norm_artist, norm_title, audio_key)
+                let audio_identity = super::analysis::audio_cache_identity(&t.file_path);
+                let audio_key = audio_identity
+                    .as_ref()
+                    .map(|identity| identity.cache_key.clone())
+                    .unwrap_or_else(|| super::analysis::resolved_audio_cache_key(&t.file_path));
+                (norm_artist, norm_title, audio_key, audio_identity)
             })
             .collect();
 
@@ -257,7 +278,7 @@ pub(super) fn handle_cache_coverage(
             let mut seen = std::collections::HashSet::new();
             track_keys
                 .iter()
-                .filter_map(|(a, _, _)| {
+                .filter_map(|(a, _, _, _)| {
                     if seen.insert(a.as_str()) {
                         Some(a.as_str())
                     } else {
@@ -267,19 +288,14 @@ pub(super) fn handle_cache_coverage(
                 .collect()
         };
 
-        let unique_paths: Vec<&str> = {
-            let mut seen = std::collections::HashSet::new();
-            track_keys
-                .iter()
-                .filter_map(|(_, _, p)| {
-                    if seen.insert(p.as_str()) {
-                        Some(p.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
+        let audio_identities: Vec<_> = track_keys
+            .iter()
+            .filter_map(|(_, _, _, identity)| {
+                identity
+                    .as_ref()
+                    .map(super::analysis::AudioCacheIdentity::as_store_identity)
+            })
+            .collect();
 
         let store = server.cache_store_conn()?;
 
@@ -296,8 +312,20 @@ pub(super) fn handle_cache_coverage(
         let discogs_label_set =
             store::batch_enrichment_with_label(&store, "discogs", &unique_artists)
                 .map_err(cache_error)?;
-        let audio_set =
-            store::batch_audio_analysis_existence(&store, &unique_paths).map_err(cache_error)?;
+        let stratum_map = store::batch_get_fresh_audio_analysis(
+            &store,
+            &audio_identities,
+            audio::ANALYZER_STRATUM,
+            audio::STRATUM_SCHEMA_VERSION,
+        )
+        .map_err(cache_error)?;
+        let essentia_map = store::batch_get_fresh_audio_analysis(
+            &store,
+            &audio_identities,
+            audio::ANALYZER_ESSENTIA,
+            audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .map_err(cache_error)?;
 
         // Build borrowed-key sets to avoid per-track clones during counting.
         let discogs_ref: std::collections::HashSet<(&str, &str)> = discogs_set
@@ -320,19 +348,14 @@ pub(super) fn handle_cache_coverage(
             .iter()
             .map(|(a, t)| (a.as_str(), t.as_str()))
             .collect();
-        let audio_ref: std::collections::HashSet<(&str, &str)> = audio_set
-            .iter()
-            .map(|(p, a)| (p.as_str(), a.as_str()))
-            .collect();
-
-        for (idx, (norm_artist, norm_title, audio_key)) in track_keys.iter().enumerate() {
+        for (idx, (norm_artist, norm_title, audio_key, _)) in track_keys.iter().enumerate() {
             let key = (norm_artist.as_str(), norm_title.as_str());
             let has_discogs = discogs_ref.contains(&key);
             let has_beatport = beatport_ref.contains(&key);
             let has_discogs_result = discogs_result_ref.contains(&key);
             let has_beatport_result = beatport_result_ref.contains(&key);
-            let has_stratum = audio_ref.contains(&(audio_key.as_str(), audio::ANALYZER_STRATUM));
-            let has_essentia = audio_ref.contains(&(audio_key.as_str(), audio::ANALYZER_ESSENTIA));
+            let has_stratum = stratum_map.contains_key(audio_key);
+            let has_essentia = essentia_map.contains_key(audio_key);
 
             if has_stratum {
                 stratum_cached += 1;

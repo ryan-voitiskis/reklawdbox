@@ -137,10 +137,10 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let mut cached_count = 0;
 
     for track in &tracks {
-        let cache_key = cache_probe_for_path(&track.file_path, skip_cached);
+        let cache_probe = cache_probe_for_path(&track.file_path, skip_cached);
         let (has_stratum, has_essentia) = cache_status_for_track(
             &store_conn,
-            cache_key.as_deref(),
+            cache_probe.as_ref(),
             skip_cached,
             essentia_python.is_some(),
         )?;

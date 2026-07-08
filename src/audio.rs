@@ -702,6 +702,57 @@ mod tests {
     }
 
     #[test]
+    fn stratum_result_shape_matches_schema_version() {
+        assert_eq!(STRATUM_SCHEMA_VERSION, "18");
+
+        let value =
+            serde_json::to_value(StratumResult::default()).expect("serialize should succeed");
+        let object = value
+            .as_object()
+            .expect("stratum result should serialize as object");
+        let mut fields: Vec<&str> = object.keys().map(String::as_str).collect();
+        fields.sort_unstable();
+
+        assert_eq!(
+            fields,
+            vec![
+                "analyzer_version",
+                "bpm",
+                "bpm_confidence",
+                "decay_high_r2",
+                "decay_high_tau",
+                "decay_mid_r2",
+                "decay_mid_tau",
+                "dub_stab_histogram",
+                "dub_stab_onset_count",
+                "dub_stab_onset_rate",
+                "dub_stab_rate_basis",
+                "dub_stab_template",
+                "dub_stab_template_score",
+                "duration_seconds",
+                "flags",
+                "grid_source",
+                "grid_stability",
+                "harmonic_proportion",
+                "key",
+                "key_camelot",
+                "key_clarity",
+                "key_confidence",
+                "kick_histogram",
+                "kick_kicks_per_bar",
+                "kick_onset_count",
+                "kick_pattern",
+                "kick_pattern_confidence",
+                "kick_rate_basis",
+                "mod_centroid",
+                "processing_time_ms",
+                "sections",
+                "warnings",
+            ]
+        );
+    }
+
+    #[test]
     fn stratum_notation_to_camelot_converts_all_major_keys() {
         assert_eq!(stratum_notation_to_camelot("1A"), "8B"); // C
         assert_eq!(stratum_notation_to_camelot("2A"), "9B"); // G

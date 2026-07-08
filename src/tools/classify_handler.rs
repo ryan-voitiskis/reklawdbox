@@ -410,25 +410,41 @@ fn classify_batch(
     overrides: &[(String, String)],
 ) -> Result<(Vec<ClassificationResult>, u32), McpError> {
     // Pre-compute normalized keys and resolved audio paths.
-    let norm_keys: Vec<(String, String, Option<String>, String)> = tracks
+    let norm_keys: Vec<_> = tracks
         .iter()
         .map(|t| {
             let a = normalize::normalize_for_matching(&t.artist);
             let ti = normalize::normalize_for_matching(&t.title);
             let al = normalize::normalize_for_matching(&t.album);
-            let audio_key = super::analysis::resolved_audio_cache_key(&t.file_path);
-            (a, ti, (!al.is_empty()).then_some(al), audio_key)
+            let audio_identity = super::analysis::audio_cache_identity(&t.file_path);
+            let audio_key = audio_identity
+                .as_ref()
+                .map(|identity| identity.cache_key.clone())
+                .unwrap_or_else(|| super::analysis::resolved_audio_cache_key(&t.file_path));
+            (
+                a,
+                ti,
+                (!al.is_empty()).then_some(al),
+                audio_key,
+                audio_identity,
+            )
         })
         .collect();
 
     // Build batch keys.
     let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
-    let mut audio_paths: Vec<&str> = Vec::with_capacity(tracks.len());
-    for (a, t, al, audio_key) in &norm_keys {
+    let audio_identities: Vec<_> = norm_keys
+        .iter()
+        .filter_map(|(_, _, _, _, identity)| {
+            identity
+                .as_ref()
+                .map(super::analysis::AudioCacheIdentity::as_store_identity)
+        })
+        .collect();
+    for (a, t, al, _, _) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
         enrich_keys.push(("beatport", a, t, ""));
-        audio_paths.push(audio_key);
     }
 
     // Batch load — 3 queries total instead of 4N.
@@ -436,16 +452,16 @@ fn classify_batch(
         let store_conn = server.cache_store_conn()?;
         let enrich_map =
             store::batch_get_enrichment(&store_conn, &enrich_keys).map_err(super::cache_error)?;
-        let stratum_map = store::batch_get_audio_analysis(
+        let stratum_map = store::batch_get_fresh_audio_analysis(
             &store_conn,
-            &audio_paths,
+            &audio_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(super::cache_error)?;
-        let essentia_map = store::batch_get_audio_analysis(
+        let essentia_map = store::batch_get_fresh_audio_analysis(
             &store_conn,
-            &audio_paths,
+            &audio_identities,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
@@ -456,7 +472,9 @@ fn classify_batch(
 
     let mut results = Vec::with_capacity(tracks.len());
 
-    for (track, (norm_artist, norm_title, norm_album, audio_key)) in tracks.iter().zip(&norm_keys) {
+    for (track, (norm_artist, norm_title, norm_album, audio_key, _)) in
+        tracks.iter().zip(&norm_keys)
+    {
         let album = norm_album.as_deref().unwrap_or("");
         let discogs_key = (
             "discogs".to_string(),
@@ -768,12 +786,23 @@ fn extract_audio_features(
 
 fn current_audio_analysis(
     store_conn: &rusqlite::Connection,
-    audio_key: &str,
+    audio_identity: Option<&super::analysis::AudioCacheIdentity>,
     analyzer: &str,
     schema_version: &str,
 ) -> Result<Option<store::CachedAudioAnalysis>, rusqlite::Error> {
-    store::get_audio_analysis(store_conn, audio_key, analyzer)
-        .map(|entry| entry.filter(|entry| entry.analysis_version == schema_version))
+    let Some(audio_identity) = audio_identity else {
+        return Ok(None);
+    };
+    store::get_audio_analysis(store_conn, &audio_identity.cache_key, analyzer).map(|entry| {
+        entry.filter(|entry| {
+            store::is_audio_analysis_fresh(
+                Some(entry),
+                schema_version,
+                audio_identity.file_size,
+                audio_identity.file_mtime,
+            )
+        })
+    })
 }
 
 pub(super) fn handle_calibrate_audio_profiles(
@@ -835,10 +864,10 @@ pub(super) fn handle_calibrate_audio_profiles(
         };
 
         // Load audio features
-        let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
+        let audio_identity = super::analysis::audio_cache_identity(&track.file_path);
         let stratum = current_audio_analysis(
             &store_conn,
-            &audio_key,
+            audio_identity.as_ref(),
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
@@ -846,7 +875,7 @@ pub(super) fn handle_calibrate_audio_profiles(
         .flatten();
         let essentia = current_audio_analysis(
             &store_conn,
-            &audio_key,
+            audio_identity.as_ref(),
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
@@ -997,17 +1026,17 @@ pub(super) fn handle_calibration_coverage(
         let stats = by_genre.entry(canonical).or_default();
         stats.playlist_tracks += 1;
 
-        let audio_key = super::analysis::resolved_audio_cache_key(&track.file_path);
+        let audio_identity = super::analysis::audio_cache_identity(&track.file_path);
         let stratum = current_audio_analysis(
             &store_conn,
-            &audio_key,
+            audio_identity.as_ref(),
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(super::cache_error)?;
         let essentia = current_audio_analysis(
             &store_conn,
-            &audio_key,
+            audio_identity.as_ref(),
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )

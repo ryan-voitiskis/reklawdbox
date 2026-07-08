@@ -446,6 +446,28 @@ pub struct CachedAudioAnalysis {
     pub created_at: String,
 }
 
+pub fn is_audio_analysis_fresh(
+    cached: Option<&CachedAudioAnalysis>,
+    analysis_version: &str,
+    file_size: i64,
+    file_mtime: i64,
+) -> bool {
+    matches!(
+        cached,
+        Some(entry)
+            if entry.analysis_version == analysis_version
+                && entry.file_size == file_size
+                && entry.file_mtime == file_mtime
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AudioAnalysisIdentity<'a> {
+    pub file_path: &'a str,
+    pub file_size: i64,
+    pub file_mtime: i64,
+}
+
 pub fn get_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -468,37 +490,6 @@ pub fn get_audio_analysis(
         })
     })?;
     rows.next().transpose()
-}
-
-pub fn batch_audio_analysis_existence(
-    conn: &Connection,
-    file_paths: &[&str],
-) -> Result<HashSet<(String, String)>, rusqlite::Error> {
-    if file_paths.is_empty() {
-        return Ok(HashSet::new());
-    }
-    const MAX_BIND_VARS: usize = 900;
-    let mut result = HashSet::new();
-    for chunk in file_paths.chunks(MAX_BIND_VARS) {
-        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "SELECT file_path, analyzer FROM audio_analysis_cache \
-             WHERE file_path IN ({})",
-            placeholders.join(", ")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let bind_values: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|s| s as &dyn rusqlite::types::ToSql)
-            .collect();
-        let rows = stmt.query_map(bind_values.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            result.insert(row?);
-        }
-    }
-    Ok(result)
 }
 
 /// Batch-load full audio analysis cache entries for a set of file paths,
@@ -558,6 +549,39 @@ pub fn batch_get_audio_analysis(
         }
     }
     Ok(result)
+}
+
+pub fn batch_get_fresh_audio_analysis(
+    conn: &Connection,
+    identities: &[AudioAnalysisIdentity<'_>],
+    analyzer: &str,
+    analysis_version: &str,
+) -> Result<HashMap<String, CachedAudioAnalysis>, rusqlite::Error> {
+    if identities.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let file_paths: Vec<&str> = identities
+        .iter()
+        .map(|identity| identity.file_path)
+        .collect();
+    let expected: HashMap<&str, (i64, i64)> = identities
+        .iter()
+        .map(|identity| {
+            (
+                identity.file_path,
+                (identity.file_size, identity.file_mtime),
+            )
+        })
+        .collect();
+    let mut entries = batch_get_audio_analysis(conn, &file_paths, analyzer, analysis_version)?;
+    entries.retain(|file_path, entry| {
+        expected
+            .get(file_path.as_str())
+            .is_some_and(|(file_size, file_mtime)| {
+                is_audio_analysis_fresh(Some(&*entry), analysis_version, *file_size, *file_mtime)
+            })
+    });
+    Ok(entries)
 }
 
 pub fn set_audio_analysis(
@@ -2052,64 +2076,6 @@ mod tests {
 
         let unknown = batch_enrichment_existence(&conn, "discogs", &["nobody"]).unwrap();
         assert!(unknown.is_empty());
-    }
-
-    #[test]
-    fn test_batch_audio_analysis_existence() {
-        let (_dir, conn) = open_temp_store();
-        set_audio_analysis(
-            &conn,
-            "/music/a.flac",
-            "stratum-dsp",
-            100,
-            1000,
-            "1.0",
-            "{}",
-        )
-        .unwrap();
-        set_audio_analysis(&conn, "/music/a.flac", "essentia", 100, 1000, "1.0", "{}").unwrap();
-        set_audio_analysis(
-            &conn,
-            "/music/b.flac",
-            "stratum-dsp",
-            200,
-            2000,
-            "1.0",
-            "{}",
-        )
-        .unwrap();
-
-        let result = batch_audio_analysis_existence(
-            &conn,
-            &["/music/a.flac", "/music/b.flac", "/music/c.flac"],
-        )
-        .unwrap();
-        assert_eq!(result.len(), 3);
-        assert!(result.contains(&("/music/a.flac".to_string(), "stratum-dsp".to_string())));
-        assert!(result.contains(&("/music/a.flac".to_string(), "essentia".to_string())));
-        assert!(result.contains(&("/music/b.flac".to_string(), "stratum-dsp".to_string())));
-        assert!(!result.contains(&("/music/c.flac".to_string(), "stratum-dsp".to_string())));
-
-        let empty = batch_audio_analysis_existence(&conn, &[]).unwrap();
-        assert!(empty.is_empty());
-    }
-
-    #[test]
-    fn test_batch_audio_analysis_existence_chunking() {
-        let (_dir, conn) = open_temp_store();
-        let paths: Vec<String> = (0..1000)
-            .map(|i| format!("/music/track_{i}.flac"))
-            .collect();
-        for p in &paths {
-            set_audio_analysis(&conn, p, "stratum-dsp", 100, 1000, "1.0", "{}").unwrap();
-        }
-
-        let path_refs: Vec<&str> = paths.iter().map(std::string::String::as_str).collect();
-        let result = batch_audio_analysis_existence(&conn, &path_refs).unwrap();
-        assert_eq!(result.len(), 1000);
-        for p in &paths {
-            assert!(result.contains(&(p.clone(), "stratum-dsp".to_string())));
-        }
     }
 
     #[test]

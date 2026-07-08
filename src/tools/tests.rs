@@ -980,6 +980,36 @@ async fn analyze_track_audio_reports_essentia_unavailable_when_probe_is_none() {
     );
 }
 
+#[test]
+fn analyze_track_audio_cache_miss_when_file_unstatable() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let missing_path = audio_dir.path().join("missing-track.flac");
+    let missing_path_str = missing_path.to_string_lossy().to_string();
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+
+    store::set_audio_analysis(
+        &store_conn,
+        &missing_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        123,
+        456,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0}"#,
+    )
+    .expect("stale stratum cache should seed");
+
+    let cached = check_analysis_cache(
+        &store_conn,
+        &missing_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+    )
+    .expect("cache read should succeed");
+    assert!(cached.is_none(), "unstatable files must be cache misses");
+}
+
 #[tokio::test]
 #[ignore]
 async fn analyze_track_audio_essentia_cache_round_trip_real_track() {
@@ -2154,27 +2184,42 @@ async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
 
 #[tokio::test]
 async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
-    let db_conn = create_single_track_test_db("coverage-with-genre", "/music/coverage-1.flac");
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let with_genre_path = audio_dir.path().join("coverage-1.flac");
+    let fresh_path = audio_dir.path().join("coverage-2.flac");
+    let stale_schema_path = audio_dir.path().join("coverage-3.flac");
+    let stale_identity_path = audio_dir.path().join("coverage-4.flac");
+    write_test_audio_file(&with_genre_path, 1000);
+    let (fresh_size, fresh_mtime) = write_test_audio_file(&fresh_path, 1001);
+    let (stale_schema_size, stale_schema_mtime) = write_test_audio_file(&stale_schema_path, 1002);
+    let (stale_identity_size, stale_identity_mtime) =
+        write_test_audio_file(&stale_identity_path, 1003);
+    let with_genre_path_str = with_genre_path.to_string_lossy().to_string();
+    let fresh_path_str = fresh_path.to_string_lossy().to_string();
+    let stale_schema_path_str = stale_schema_path.to_string_lossy().to_string();
+    let stale_identity_path_str = stale_identity_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("coverage-with-genre", &with_genre_path_str);
     insert_test_track(
         &db_conn,
         "coverage-no-genre-1",
         "No Genre One",
         "",
-        "/music/coverage-2.flac",
+        &fresh_path_str,
     );
     insert_test_track(
         &db_conn,
         "coverage-no-genre-2",
         "No Genre Two",
         "",
-        "/music/coverage-3.flac",
+        &stale_schema_path_str,
     );
     insert_test_track(
         &db_conn,
         "coverage-no-genre-3",
         "No Genre Three",
         "",
-        "/music/coverage-4.flac",
+        &stale_identity_path_str,
     );
 
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
@@ -2192,24 +2237,64 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
 
     store::set_audio_analysis(
         &store_conn,
-        "/music/coverage-2.flac",
+        &fresh_path_str,
         "stratum-dsp",
-        1234,
-        1_700_000_001,
-        "stratum-dsp-1.0.0",
+        fresh_size,
+        fresh_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
         r#"{"bpm":127.1,"key":"Am"}"#,
     )
     .expect("stratum cache should be seeded");
     store::set_audio_analysis(
         &store_conn,
-        "/music/coverage-2.flac",
+        &fresh_path_str,
         "essentia",
-        1234,
-        1_700_000_001,
-        "essentia-2.1",
+        fresh_size,
+        fresh_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
         r#"{"danceability":0.81}"#,
     )
     .expect("essentia cache should be seeded");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_schema_path_str,
+        "stratum-dsp",
+        stale_schema_size,
+        stale_schema_mtime,
+        "outdated",
+        r#"{"bpm":128.0,"key":"Am"}"#,
+    )
+    .expect("stale-schema stratum cache should be seeded");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_schema_path_str,
+        "essentia",
+        stale_schema_size,
+        stale_schema_mtime,
+        "outdated",
+        r#"{"danceability":0.70}"#,
+    )
+    .expect("stale-schema essentia cache should be seeded");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_identity_path_str,
+        "stratum-dsp",
+        stale_identity_size + 1,
+        stale_identity_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":129.0,"key":"Am"}"#,
+    )
+    .expect("stale-size stratum cache should be seeded");
+    store::set_audio_analysis(
+        &store_conn,
+        &stale_identity_path_str,
+        "essentia",
+        stale_identity_size,
+        stale_identity_mtime + 1,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":0.75}"#,
+    )
+    .expect("stale-mtime essentia cache should be seeded");
     store::set_enrichment(
         &store_conn,
         "discogs",
@@ -2378,7 +2463,24 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
 
 #[tokio::test]
 async fn calibration_coverage_reports_verified_playlist_readiness() {
-    let db_conn = create_single_track_test_db("cal-deep-1", "/music/cal-deep-1.flac");
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let mut deep_paths = Vec::new();
+    for i in 1..=5 {
+        let path = audio_dir.path().join(format!("cal-deep-{i}.flac"));
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + i);
+        deep_paths.push((path.to_string_lossy().to_string(), file_size, file_mtime));
+    }
+    let tech_path = audio_dir.path().join("cal-tech-1.flac");
+    let (tech_size, tech_mtime) = write_test_audio_file(&tech_path, 1100);
+    let tech_path_str = tech_path.to_string_lossy().to_string();
+    let no_genre_path = audio_dir.path().join("cal-no-genre.flac");
+    write_test_audio_file(&no_genre_path, 1101);
+    let no_genre_path_str = no_genre_path.to_string_lossy().to_string();
+    let unknown_path = audio_dir.path().join("cal-unknown.flac");
+    write_test_audio_file(&unknown_path, 1102);
+    let unknown_path_str = unknown_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("cal-deep-1", &deep_paths[0].0);
     db_conn
         .execute_batch(
             "
@@ -2408,7 +2510,7 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
             &format!("cal-deep-{i}"),
             &format!("Deep Verified {i}"),
             "g1",
-            &format!("/music/cal-deep-{i}.flac"),
+            &deep_paths[i as usize - 1].0,
         );
     }
     insert_test_track(
@@ -2416,21 +2518,21 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         "cal-tech-1",
         "Techno Missing Audio",
         "g2",
-        "/music/cal-tech-1.flac",
+        &tech_path_str,
     );
     insert_test_track(
         &db_conn,
         "cal-no-genre",
         "No Genre Verified",
         "",
-        "/music/cal-no-genre.flac",
+        &no_genre_path_str,
     );
     insert_test_track(
         &db_conn,
         "cal-unknown",
         "Unknown Verified",
         "g3",
-        "/music/cal-unknown.flac",
+        &unknown_path_str,
     );
 
     for (track_no, track_id) in [
@@ -2463,13 +2565,13 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     )
     .expect("temp internal store should open");
 
-    for i in 1..=5 {
+    for (path, file_size, file_mtime) in &deep_paths {
         store::set_audio_analysis(
             &store_conn,
-            &format!("/music/cal-deep-{i}.flac"),
+            path,
             crate::audio::ANALYZER_STRATUM,
-            1234,
-            1_700_000_001,
+            *file_size,
+            *file_mtime,
             crate::audio::STRATUM_SCHEMA_VERSION,
             r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
         )
@@ -2477,10 +2579,10 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     }
     store::set_audio_analysis(
         &store_conn,
-        "/music/cal-tech-1.flac",
+        &tech_path_str,
         crate::audio::ANALYZER_STRATUM,
-        1234,
-        1_700_000_001,
+        tech_size,
+        tech_mtime,
         "stale-stratum-schema",
         r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
     )
