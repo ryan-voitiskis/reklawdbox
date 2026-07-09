@@ -23,7 +23,7 @@ lofty = "0.24"
 percent-encoding = "2"
 regex = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-rmcp = { version = "0.15", features = ["server", "transport-io"] }
+rmcp = { version = "1.4.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rusqlite = { version = "0.34", features = ["bundled-sqlcipher-vendored-openssl"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
@@ -47,7 +47,7 @@ unicode-normalization = "0.1"
 security-framework = "3"
 
 [dev-dependencies]
-rmcp = { version = "0.15", features = ["client", "transport-io"] }
+rmcp = { version = "1.4.0", default-features = false, features = ["client", "transport-io"] }
 
 [profile.release]
 lto = "thin"

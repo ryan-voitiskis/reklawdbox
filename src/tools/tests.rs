@@ -35,14 +35,13 @@ async fn call_tool_via_router(
     );
     let mut server = server_result.expect("server should start over in-memory transport");
     let mut client = client_result.expect("client should connect over in-memory transport");
+    let mut params = CallToolRequestParams::new(tool_name.to_owned());
+    if let Some(arguments) = arguments {
+        params = params.with_arguments(arguments);
+    }
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: tool_name.to_owned().into(),
-            arguments,
-            task: None,
-        })
+        .call_tool(params)
         .await
         .expect("tool call through router should succeed");
 
