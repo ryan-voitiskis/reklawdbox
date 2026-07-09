@@ -22,6 +22,11 @@ Set with `wrangler secret put`:
 - `DISCOGS_CONSUMER_SECRET`
 - `BROKER_CLIENT_TOKEN` (required unless explicitly running unauthenticated local-dev mode)
 
+`BROKER_CLIENT_TOKEN` protects custom or maintained broker endpoints from casual
+unauthenticated access. The maintained CLI distribution uses a compiled public
+client token for the default broker, so this token posture is not per-install
+authentication and should not be treated as a private user credential.
+
 ## Runtime vars
 
 Set in `wrangler.toml` `[vars]`:

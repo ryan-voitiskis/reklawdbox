@@ -11,6 +11,10 @@ const TOKEN_HEADER = 'x-reklawdbox-broker-token'
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:'
 const DISCOGS_AUTH_NOT_CONFIGURED_MESSAGE = 'discogs auth is not configured'
 const DISCOGS_UPSTREAM_FAILURE_MESSAGE = 'discogs upstream request failed'
+const MAX_JSON_BODY_BYTES = 8 * 1024
+const MAX_SEARCH_FIELD_LENGTH = 256
+const MAX_UPSTREAM_RESPONSE_BYTES = 1024 * 1024
+const MAX_SEARCH_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 
 beforeEach(async () => {
   await env.DB.prepare('DELETE FROM device_sessions').run()
@@ -107,6 +111,52 @@ describe('broker test runner baseline', () => {
     expect(body.message).toBe('request body must be valid JSON')
   })
 
+  it('returns payload_too_large for oversized finalize bodies', async () => {
+    const response = await request('/v1/device/session/finalize', {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        device_id: 'd'.repeat(MAX_JSON_BODY_BYTES),
+        pending_token: 'pending-token',
+      }),
+    })
+
+    expect(response.status).toBe(413)
+    const body = await response.json<{
+      error: string
+    }>()
+    expect(body.error).toBe('payload_too_large')
+  })
+
+  it('returns invalid_params for non-object or non-string finalize payloads', async () => {
+    const cases = [
+      '[]',
+      'null',
+      JSON.stringify({ device_id: 123, pending_token: 'pending-token' }),
+      JSON.stringify({ device_id: 'device-id', pending_token: null }),
+    ]
+
+    for (const bodyText of cases) {
+      const response = await request('/v1/device/session/finalize', {
+        method: 'POST',
+        headers: {
+          [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+          'content-type': 'application/json',
+        },
+        body: bodyText,
+      })
+
+      expect(response.status).toBe(400)
+      const body = await response.json<{
+        error: string
+      }>()
+      expect(body.error).toBe('invalid_params')
+    }
+  })
+
   it('replays the same finalize token for an already-finalized session', async () => {
     const deviceId = 'device-finalized'
     const pendingToken = 'pending-finalized'
@@ -173,6 +223,148 @@ describe('broker test runner baseline', () => {
     }>()
     expect(body.session_token).toBe(expectedSessionToken)
     expect(body.expires_at).toBe(sessionExpiresAt)
+  })
+
+  it('replays finalized sessions after device ttl while broker session ttl is active', async () => {
+    const deviceId = 'device-finalized-after-device-ttl'
+    const pendingToken = 'pending-finalized-after-device-ttl'
+    const oauthToken = 'oauth-access-token'
+    const oauthSecret = 'oauth-access-secret'
+    const expectedSessionToken = await deriveFinalizeSessionToken(
+      deviceId,
+      pendingToken,
+      oauthToken,
+      oauthSecret,
+    )
+    const expectedSessionTokenHash = await sha256Hex(expectedSessionToken)
+    const now = Math.floor(Date.now() / 1000)
+    const sessionExpiresAt = now + 3600
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id,
+        pending_token,
+        status,
+        poll_interval_seconds,
+        created_at,
+        updated_at,
+        expires_at,
+        authorized_at,
+        oauth_access_token,
+        oauth_access_token_secret,
+        oauth_identity,
+        session_token_hash,
+        session_expires_at,
+        finalized_at
+      ) VALUES (
+        ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, ?5, ?6, 'tester', ?7, ?8, ?3
+      )`,
+    )
+      .bind(
+        deviceId,
+        pendingToken,
+        now - 120,
+        now - 10,
+        oauthToken,
+        oauthSecret,
+        expectedSessionTokenHash,
+        sessionExpiresAt,
+      )
+      .run()
+
+    const response = await request('/v1/device/session/finalize', {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        device_id: deviceId,
+        pending_token: pendingToken,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json<{
+      session_token: string
+      expires_at: number
+    }>()
+    expect(body.session_token).toBe(expectedSessionToken)
+    expect(body.expires_at).toBe(sessionExpiresAt)
+
+    const row = await env.DB.prepare(
+      `SELECT status
+       FROM device_sessions
+       WHERE device_id = ?1`,
+    )
+      .bind(deviceId)
+      .first<{ status: string }>()
+    expect(row?.status).toBe('finalized')
+  })
+
+  it('does not replay finalized sessions after broker session ttl expires', async () => {
+    const deviceId = 'device-finalized-expired-session-ttl'
+    const pendingToken = 'pending-finalized-expired-session-ttl'
+    const oauthToken = 'oauth-access-token'
+    const oauthSecret = 'oauth-access-secret'
+    const expectedSessionToken = await deriveFinalizeSessionToken(
+      deviceId,
+      pendingToken,
+      oauthToken,
+      oauthSecret,
+    )
+    const expectedSessionTokenHash = await sha256Hex(expectedSessionToken)
+    const now = Math.floor(Date.now() / 1000)
+
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id,
+        pending_token,
+        status,
+        poll_interval_seconds,
+        created_at,
+        updated_at,
+        expires_at,
+        authorized_at,
+        oauth_access_token,
+        oauth_access_token_secret,
+        oauth_identity,
+        session_token_hash,
+        session_expires_at,
+        finalized_at
+      ) VALUES (
+        ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, ?5, ?6, 'tester', ?7, ?8, ?3
+      )`,
+    )
+      .bind(
+        deviceId,
+        pendingToken,
+        now - 120,
+        now - 10,
+        oauthToken,
+        oauthSecret,
+        expectedSessionTokenHash,
+        now - 1,
+      )
+      .run()
+
+    const response = await request('/v1/device/session/finalize', {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        device_id: deviceId,
+        pending_token: pendingToken,
+      }),
+    })
+
+    expect(response.status).toBe(409)
+    const body = await response.json<{
+      error: string
+    }>()
+    expect(body.error).toBe('already_finalized')
   })
 
   it('stores oauth request token secrets encrypted at rest', async () => {
@@ -736,6 +928,117 @@ describe('broker test runner baseline', () => {
       expect(body.error).toBe('discogs_unavailable')
       expect(body.message).toBe(DISCOGS_UPSTREAM_FAILURE_MESSAGE)
       expect(body.message).not.toContain('super secret upstream detail')
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('sanitizes oversized Discogs request-token responses and stores no oauth row', async () => {
+    const start = await request('/v1/device/session/start', {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN,
+      },
+    })
+    const startBody = await start.json<{
+      auth_url: string
+    }>()
+    const authUrl = new URL(startBody.auth_url)
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('x'.repeat(MAX_UPSTREAM_RESPONSE_BYTES + 1), {
+        status: 200,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      }),
+    )
+
+    try {
+      const response = await request(authUrl.pathname + authUrl.search, {
+        method: 'GET',
+      })
+
+      expect(response.status).toBe(502)
+      const body = await response.json<{
+        error: string
+        message: string
+      }>()
+      expect(body.error).toBe('discogs_unavailable')
+      expect(body.message).toBe(DISCOGS_UPSTREAM_FAILURE_MESSAGE)
+
+      const rows = await env.DB.prepare(
+        `SELECT COUNT(*) as count
+         FROM oauth_request_tokens`,
+      ).first<{ count: number }>()
+      expect(Number(rows?.count ?? 0)).toBe(0)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('sanitizes oversized Discogs access-token responses', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO device_sessions (
+        device_id,
+        pending_token,
+        status,
+        poll_interval_seconds,
+        created_at,
+        updated_at,
+        expires_at
+      ) VALUES (?1, ?2, 'pending', 5, ?3, ?3, ?4)`,
+    )
+      .bind(
+        'device-access-too-large',
+        'pending-access-too-large',
+        now,
+        now + 600,
+      )
+      .run()
+    await env.DB.prepare(
+      `INSERT INTO oauth_request_tokens (
+        oauth_token,
+        oauth_token_secret,
+        device_id,
+        pending_token,
+        created_at,
+        expires_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    )
+      .bind(
+        'request-token-too-large',
+        'request-secret',
+        'device-access-too-large',
+        'pending-access-too-large',
+        now,
+        now + 600,
+      )
+      .run()
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('x'.repeat(MAX_UPSTREAM_RESPONSE_BYTES + 1), {
+        status: 200,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      }),
+    )
+
+    try {
+      const response = await request(
+        '/v1/discogs/oauth/callback?device_id=device-access-too-large&pending_token=pending-access-too-large&oauth_token=request-token-too-large&oauth_verifier=verifier',
+        { method: 'GET' },
+      )
+
+      expect(response.status).toBe(502)
+      const body = await response.json<{
+        error: string
+        message: string
+      }>()
+      expect(body.error).toBe('discogs_unavailable')
+      expect(body.message).toBe(DISCOGS_UPSTREAM_FAILURE_MESSAGE)
     } finally {
       fetchSpy.mockRestore()
     }
@@ -1723,6 +2026,230 @@ describe('oauth callback error paths', () => {
 })
 
 describe('discogs proxy search caching', () => {
+  it('returns invalid_json for malformed proxy search payloads', async () => {
+    const sessionToken = 'session-malformed-proxy-json'
+    await insertFinalizedSession(sessionToken)
+
+    const response = await request('/v1/discogs/proxy/search', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      },
+      body: '{"artist":"Malformed"',
+    })
+
+    expect(response.status).toBe(400)
+    const body = await response.json<{
+      error: string
+    }>()
+    expect(body.error).toBe('invalid_json')
+  })
+
+  it('returns payload_too_large for oversized proxy bodies without calling Discogs', async () => {
+    const sessionToken = 'session-oversized-proxy-body'
+    await insertFinalizedSession(sessionToken)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+
+    try {
+      const response = await request('/v1/discogs/proxy/search', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          artist: 'A'.repeat(MAX_JSON_BODY_BYTES),
+          title: 'Track',
+        }),
+      })
+
+      expect(response.status).toBe(413)
+      const body = await response.json<{
+        error: string
+      }>()
+      expect(body.error).toBe('payload_too_large')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('returns invalid_params for non-object or non-string proxy search payloads', async () => {
+    const sessionToken = 'session-invalid-proxy-params'
+    await insertFinalizedSession(sessionToken)
+    const cases = [
+      '[]',
+      'null',
+      JSON.stringify({ artist: ['Artist'], title: 'Track' }),
+      JSON.stringify({ artist: 'Artist', title: 123 }),
+      JSON.stringify({ artist: 'Artist', title: 'Track', album: null }),
+    ]
+
+    for (const bodyText of cases) {
+      const response = await request('/v1/discogs/proxy/search', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: bodyText,
+      })
+
+      expect(response.status).toBe(400)
+      const body = await response.json<{
+        error: string
+      }>()
+      expect(body.error).toBe('invalid_params')
+    }
+  })
+
+  it('returns invalid_params for overlong proxy search fields', async () => {
+    const overlong = 'x'.repeat(MAX_SEARCH_FIELD_LENGTH + 1)
+    const cases = [
+      { suffix: 'artist', body: { artist: overlong, title: 'Track' } },
+      { suffix: 'title', body: { artist: 'Artist', title: overlong } },
+      {
+        suffix: 'album',
+        body: { artist: 'Artist', title: 'Track', album: overlong },
+      },
+    ]
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+
+    try {
+      for (const { suffix, body: searchBody } of cases) {
+        const sessionToken = `session-overlong-${suffix}`
+        await insertFinalizedSession(sessionToken)
+        const response = await request('/v1/discogs/proxy/search', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${sessionToken}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(searchBody),
+        })
+
+        expect(response.status).toBe(400)
+        const body = await response.json<{
+          error: string
+        }>()
+        expect(body.error).toBe('invalid_params')
+      }
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('sanitizes oversized Discogs search responses and stores no cache row', async () => {
+    const sessionToken = 'session-huge-search-response'
+    await insertFinalizedSession(sessionToken)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('x'.repeat(MAX_UPSTREAM_RESPONSE_BYTES + 1), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+
+    try {
+      const response = await request('/v1/discogs/proxy/search', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          artist: 'Huge Artist',
+          title: 'Huge Track',
+        }),
+      })
+
+      expect(response.status).toBe(502)
+      const body = await response.json<{
+        error: string
+        message: string
+      }>()
+      expect(body.error).toBe('discogs_unavailable')
+      expect(body.message).toBe(DISCOGS_UPSTREAM_FAILURE_MESSAGE)
+
+      const rows = await env.DB.prepare(
+        `SELECT COUNT(*) as count
+         FROM discogs_search_cache`,
+      ).first<{ count: number }>()
+      expect(Number(rows?.count ?? 0)).toBe(0)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('clamps configured search cache ttl', async () => {
+    const sessionToken = 'session-cache-ttl-clamp'
+    await insertFinalizedSession(sessionToken)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: 'TTL Artist - TTL Track',
+              year: 2024,
+              label: ['TTL Label'],
+              genre: ['Electronic'],
+              style: ['House'],
+              uri: '/release/ttl-1',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+
+    try {
+      const response = await request(
+        '/v1/discogs/proxy/search',
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${sessionToken}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            artist: 'TTL Artist',
+            title: 'TTL Track',
+          }),
+        },
+        {
+          SEARCH_CACHE_TTL_SECONDS: `${MAX_SEARCH_CACHE_TTL_SECONDS * 2}`,
+        } as Partial<typeof env>,
+      )
+
+      expect(response.status).toBe(200)
+      const row = await env.DB.prepare(
+        `SELECT cached_at, expires_at
+         FROM discogs_search_cache`,
+      ).first<{ cached_at: number; expires_at: number }>()
+      expect(row).toBeTruthy()
+      if (!row) {
+        throw new Error('expected cache row')
+      }
+      expect(row.expires_at - row.cached_at).toBe(MAX_SEARCH_CACHE_TTL_SECONDS)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   it('returns cache_hit true on second identical search', async () => {
     const sessionToken = 'session-cache-hit-token'
     const sessionTokenHash = await sha256Hex(sessionToken)
@@ -1823,6 +2350,52 @@ function request(
   const req = new Request(`${BASE_URL}${path}`, init)
   const runtimeEnv = overrides ? ({ ...env, ...overrides } as typeof env) : env
   return worker.fetch(req, runtimeEnv)
+}
+
+async function insertFinalizedSession(
+  sessionToken: string,
+  options: {
+    deviceId?: string
+    pendingToken?: string
+    oauthToken?: string
+    oauthSecret?: string
+    expiresAt?: number
+    sessionExpiresAt?: number
+  } = {},
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+  const sessionTokenHash = await sha256Hex(sessionToken)
+  await env.DB.prepare(
+    `INSERT INTO device_sessions (
+      device_id,
+      pending_token,
+      status,
+      poll_interval_seconds,
+      created_at,
+      updated_at,
+      expires_at,
+      authorized_at,
+      oauth_access_token,
+      oauth_access_token_secret,
+      oauth_identity,
+      session_token_hash,
+      session_expires_at,
+      finalized_at
+    ) VALUES (
+      ?1, ?2, 'finalized', 5, ?3, ?3, ?4, ?3, ?5, ?6, 'tester', ?7, ?8, ?3
+    )`,
+  )
+    .bind(
+      options.deviceId ?? `device-${sessionToken}`,
+      options.pendingToken ?? `pending-${sessionToken}`,
+      now,
+      options.expiresAt ?? now + 3600,
+      options.oauthToken ?? 'oauth-token',
+      options.oauthSecret ?? 'oauth-secret',
+      sessionTokenHash,
+      options.sessionExpiresAt ?? now + 3600,
+    )
+    .run()
 }
 
 async function deriveFinalizeSessionToken(

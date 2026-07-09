@@ -243,7 +243,7 @@ fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Err
         return Err(format!("Invalid URL: {url}").into());
     }
 
-    // Broker token — only needed for custom broker URLs
+    // Broker token — only configured interactively for custom broker URLs.
     let is_default_url = cfg
         .discogs
         .broker
@@ -255,7 +255,9 @@ fn configure_broker(accept_defaults: bool) -> Result<(), Box<dyn std::error::Err
 
     if !is_default_url && !accept_defaults {
         println!();
-        println!("Custom broker URL detected. A broker token may be required.");
+        println!(
+            "Custom broker URL detected. Set the token required by that broker if it enforces client-token auth."
+        );
         let show_token = if cfg.discogs.broker.token.is_some() {
             "(configured)"
         } else {

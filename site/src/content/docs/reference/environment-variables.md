@@ -17,12 +17,12 @@ The auto-detection path works for standard macOS Rekordbox installations. Only s
 
 ## Discogs enrichment
 
-| Variable                          | Description                       | Default                        |
-| --------------------------------- | --------------------------------- | ------------------------------ |
-| `REKLAWDBOX_DISCOGS_BROKER_URL`   | URL of the Discogs broker service | Built-in production broker URL |
-| `REKLAWDBOX_DISCOGS_BROKER_TOKEN` | Auth token for the broker         | Built-in default               |
+| Variable                          | Description                               | Default                                                |
+| --------------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| `REKLAWDBOX_DISCOGS_BROKER_URL`   | URL of the Discogs broker service         | Built-in production broker URL                         |
+| `REKLAWDBOX_DISCOGS_BROKER_TOKEN` | Client token for a custom broker endpoint | Built-in public client token for the maintained broker |
 
-The broker is a Cloudflare Workers service that handles Discogs OAuth and rate limiting. Both the URL and token have compiled-in defaults pointing to the production broker — no configuration needed for standard use. Only set these if you are self-hosting a broker. Run `reklawdbox setup --broker` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml`).
+The broker is a Cloudflare Workers service that handles Discogs OAuth and rate limiting. The maintained broker URL and a public client token are compiled in, so no configuration is needed for standard use. Set `REKLAWDBOX_DISCOGS_BROKER_TOKEN` only when you point `REKLAWDBOX_DISCOGS_BROKER_URL` at a self-hosted or custom broker that requires its own client token. Run `reklawdbox setup --broker` for a guided setup that writes a config file (`~/Library/Application Support/reklawdbox/config.toml`).
 
 ## Audio analysis
 

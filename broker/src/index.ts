@@ -98,7 +98,17 @@ const BROKER_USER_AGENT = 'reklawdbox-broker/0.1'
 const MAX_RETRY_AFTER_SECONDS = 60
 const MAX_RATE_LIMIT_CAS_RETRIES = 20
 const DISCOGS_FETCH_TIMEOUT_MS = 20_000
+const MAX_JSON_BODY_BYTES = 8 * 1024
+const MAX_SESSION_FIELD_LENGTH = 256
+const MAX_SEARCH_FIELD_LENGTH = 256
+const MAX_CACHE_KEY_CHARS = 1024
+const MAX_CACHE_KEY_BYTES = 2 * 1024
+const MAX_CACHED_PAYLOAD_BYTES = 64 * 1024
+const MAX_UPSTREAM_RESPONSE_BYTES = 1024 * 1024
+const MAX_SEARCH_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:'
+
+const TEXT_ENCODER = new TextEncoder()
 
 type SecretReadResult = {
   plaintext: string
@@ -307,21 +317,7 @@ async function handleDeviceSessionFinalize(
     return unauthorizedBrokerClientResponse(env)
   }
 
-  const body = await parseJsonBody<
-    { device_id?: string; pending_token?: string }
-  >(request)
-  const deviceId = body.device_id?.trim()
-  const pendingToken = body.pending_token?.trim()
-
-  if (!deviceId || !pendingToken) {
-    return json(
-      {
-        error: 'invalid_params',
-        message: 'device_id and pending_token are required',
-      },
-      400,
-    )
-  }
+  const { deviceId, pendingToken } = await parseFinalizePayload(request)
 
   const row = await getSessionByDeviceAndPending(env, deviceId, pendingToken)
   if (!row) {
@@ -359,17 +355,6 @@ async function handleDeviceSessionFinalize(
   }
 
   const now = nowSeconds()
-  if (now >= row.expires_at) {
-    await markSessionStatus(env, row.device_id, 'expired', now)
-    return json(
-      {
-        error: 'expired',
-        message: 'device session expired; restart auth',
-      },
-      410,
-    )
-  }
-
   if (row.status === 'finalized') {
     const replay = await finalizedReplayForPending(
       env,
@@ -390,6 +375,17 @@ async function handleDeviceSessionFinalize(
         message: 'device session has already been finalized',
       },
       409,
+    )
+  }
+
+  if (now >= row.expires_at) {
+    await markSessionStatus(env, row.device_id, 'expired', now)
+    return json(
+      {
+        error: 'expired',
+        message: 'device session expired; restart auth',
+      },
+      410,
     )
   }
 
@@ -791,24 +787,17 @@ async function handleDiscogsProxySearch(
     )
   }
 
-  const body = await parseJsonBody<DiscogsSearchBody>(request)
-  const artist = body.artist?.trim()
-  const title = body.title?.trim()
-  const album = body.album?.trim()
-
-  if (!artist || !title) {
-    return json(
-      {
-        error: 'invalid_params',
-        message: 'artist and title are required',
-      },
-      400,
-    )
-  }
+  const { artist, title, album } = await parseDiscogsSearchPayload(request)
 
   const cacheKey = `${normalize(artist)}|${normalize(title)}|${
     normalize(album ?? '')
   }`
+  if (
+    cacheKey.length > MAX_CACHE_KEY_CHARS
+    || byteLength(cacheKey) > MAX_CACHE_KEY_BYTES
+  ) {
+    throw invalidParams('search cache key is too long')
+  }
   const cached = await env.DB.prepare(
     `SELECT response_json
      FROM discogs_search_cache
@@ -835,10 +824,19 @@ async function handleDiscogsProxySearch(
     oauthTokenSecret: sessionCredentials.oauthTokenSecret,
   })
 
-  const cacheTtlSeconds = envInt(
+  const cacheTtlSeconds = envIntClamped(
     env.SEARCH_CACHE_TTL_SECONDS,
     DEFAULT_CACHE_TTL_SECONDS,
+    MAX_SEARCH_CACHE_TTL_SECONDS,
   )
+  const responseJson = JSON.stringify(payload)
+  if (byteLength(responseJson) > MAX_CACHED_PAYLOAD_BYTES) {
+    throw new BrokerHttpError(
+      'discogs_unavailable',
+      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+      502,
+    )
+  }
   await env.DB.prepare(
     `INSERT INTO discogs_search_cache (cache_key, response_json, cached_at, expires_at)
      VALUES (?1, ?2, ?3, ?4)
@@ -847,7 +845,7 @@ async function handleDiscogsProxySearch(
        cached_at = excluded.cached_at,
        expires_at = excluded.expires_at`,
   )
-    .bind(cacheKey, JSON.stringify(payload), now, now + cacheTtlSeconds)
+    .bind(cacheKey, responseJson, now, now + cacheTtlSeconds)
     .run()
 
   return json(payload)
@@ -937,8 +935,13 @@ async function lookupDiscogsViaApi(
 
   let data: DiscogsApiSearchResponse
   try {
-    data = (await response.json()) as DiscogsApiSearchResponse
+    data = JSON.parse(
+      await readBoundedUpstreamText(response),
+    ) as DiscogsApiSearchResponse
   } catch (err) {
+    if (err instanceof BrokerHttpError) {
+      throw err
+    }
     console.error('discogs search returned invalid JSON', err)
     throw new BrokerHttpError(
       'discogs_unavailable',
@@ -1142,7 +1145,6 @@ async function requestDiscogsRequestToken(
     )
   })
 
-  const body = await response.text()
   if (!response.ok) {
     console.error(
       'discogs request_token returned non-success status',
@@ -1155,6 +1157,7 @@ async function requestDiscogsRequestToken(
     )
   }
 
+  const body = await readBoundedUpstreamText(response)
   const params = new URLSearchParams(body)
   const oauthToken = params.get('oauth_token') ?? ''
   const oauthTokenSecret = params.get('oauth_token_secret') ?? ''
@@ -1210,7 +1213,6 @@ async function requestDiscogsAccessToken(
     )
   })
 
-  const body = await response.text()
   if (!response.ok) {
     console.error(
       'discogs access_token returned non-success status',
@@ -1223,6 +1225,7 @@ async function requestDiscogsAccessToken(
     )
   }
 
+  const body = await readBoundedUpstreamText(response)
   const params = new URLSearchParams(body)
   const accessToken = params.get('oauth_token') ?? ''
   const accessTokenSecret = params.get('oauth_token_secret') ?? ''
@@ -1256,6 +1259,9 @@ async function finalizedReplayForPending(
     row.status !== 'finalized' || !row.session_token_hash
     || !row.session_expires_at
   ) {
+    return null
+  }
+  if (row.session_expires_at <= nowSeconds()) {
     return null
   }
 
@@ -1751,9 +1757,50 @@ async function hmacSha256Hex(key: string, input: string): Promise<string> {
   return arr.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function parseJsonBody<T>(request: Request): Promise<T> {
+async function parseFinalizePayload(
+  request: Request,
+): Promise<{ deviceId: string; pendingToken: string }> {
+  const body = asJsonObject(await parseJsonBody(request))
+  return {
+    deviceId: requiredStringField(
+      body,
+      'device_id',
+      MAX_SESSION_FIELD_LENGTH,
+    ),
+    pendingToken: requiredStringField(
+      body,
+      'pending_token',
+      MAX_SESSION_FIELD_LENGTH,
+    ),
+  }
+}
+
+async function parseDiscogsSearchPayload(
+  request: Request,
+): Promise<DiscogsSearchBody> {
+  const body = asJsonObject(await parseJsonBody(request))
+  return {
+    artist: requiredStringField(body, 'artist', MAX_SEARCH_FIELD_LENGTH),
+    title: requiredStringField(body, 'title', MAX_SEARCH_FIELD_LENGTH),
+    album: optionalStringField(body, 'album', MAX_SEARCH_FIELD_LENGTH),
+  }
+}
+
+async function parseJsonBody(request: Request): Promise<unknown> {
+  const contentLength = parseContentLength(
+    request.headers.get('content-length'),
+  )
+  if (contentLength !== null && contentLength > MAX_JSON_BODY_BYTES) {
+    throw new BrokerHttpError(
+      'payload_too_large',
+      'request body is too large',
+      413,
+    )
+  }
+
+  let text: string
   try {
-    return (await request.json()) as T
+    text = await request.text()
   } catch {
     throw new BrokerHttpError(
       'invalid_json',
@@ -1761,6 +1808,110 @@ async function parseJsonBody<T>(request: Request): Promise<T> {
       400,
     )
   }
+
+  if (byteLength(text) > MAX_JSON_BODY_BYTES) {
+    throw new BrokerHttpError(
+      'payload_too_large',
+      'request body is too large',
+      413,
+    )
+  }
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new BrokerHttpError(
+      'invalid_json',
+      'request body must be valid JSON',
+      400,
+    )
+  }
+}
+
+function asJsonObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidParams('request body must be a JSON object')
+  }
+  return value as Record<string, unknown>
+}
+
+function requiredStringField(
+  body: Record<string, unknown>,
+  field: string,
+  maxLength: number,
+): string {
+  const value = body[field]
+  if (typeof value !== 'string') {
+    throw invalidParams(`${field} must be a string`)
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    throw invalidParams(`${field} is required`)
+  }
+  if (trimmed.length > maxLength) {
+    throw invalidParams(`${field} is too long`)
+  }
+  return trimmed
+}
+
+function optionalStringField(
+  body: Record<string, unknown>,
+  field: string,
+  maxLength: number,
+): string | undefined {
+  const value = body[field]
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    throw invalidParams(`${field} must be a string`)
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
+  }
+  if (trimmed.length > maxLength) {
+    throw invalidParams(`${field} is too long`)
+  }
+  return trimmed
+}
+
+function invalidParams(message: string): BrokerHttpError {
+  return new BrokerHttpError('invalid_params', message, 400)
+}
+
+async function readBoundedUpstreamText(response: Response): Promise<string> {
+  const contentLength = parseContentLength(
+    response.headers.get('content-length'),
+  )
+  if (contentLength !== null && contentLength > MAX_UPSTREAM_RESPONSE_BYTES) {
+    throw new BrokerHttpError(
+      'discogs_unavailable',
+      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+      502,
+    )
+  }
+  const text = await response.text()
+  if (byteLength(text) > MAX_UPSTREAM_RESPONSE_BYTES) {
+    throw new BrokerHttpError(
+      'discogs_unavailable',
+      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+      502,
+    )
+  }
+  return text
+}
+
+function parseContentLength(header: string | null): number | null {
+  if (!header) {
+    return null
+  }
+  const parsed = Number.parseInt(header, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function byteLength(value: string): number {
+  return TEXT_ENCODER.encode(value).length
 }
 
 function bearerToken(request: Request): string | null {
@@ -1782,6 +1933,14 @@ function envInt(input: string | undefined, fallback: number): number {
   }
   const parsed = Number.parseInt(input, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function envIntClamped(
+  input: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  return Math.min(envInt(input, fallback), max)
 }
 
 function parseRetryAfterSeconds(header: string | null): number | null {
