@@ -47,6 +47,12 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target aarch64-apple-darwin
 
+      - name: Smoke release binary
+        run: |
+          target/aarch64-apple-darwin/release/reklawdbox --version
+          target/aarch64-apple-darwin/release/reklawdbox --help
+          node scripts/mcp-smoke.mjs --bin target/aarch64-apple-darwin/release/reklawdbox --skip-db --timeout-ms 60000
+
       - name: Package tarball
         id: package
         run: |
