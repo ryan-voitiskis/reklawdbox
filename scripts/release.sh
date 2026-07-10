@@ -61,7 +61,8 @@ run_docs_gate_if_needed() {
 run_broker_gate_if_needed() {
   if changed_since_base broker .github/workflows/broker-ci.yml; then
     echo "Broker changed since $BASE_TAG; running broker gate."
-    (cd broker && npm ci && npm run typecheck && npm run build && npm test)
+    # Keep sharp on its locked prebuilt binary instead of workstation-global libvips.
+    (cd broker && SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm ci && npm run typecheck && npm run build && npm test)
   else
     echo "Broker unchanged since $BASE_TAG; skipping broker gate."
   fi

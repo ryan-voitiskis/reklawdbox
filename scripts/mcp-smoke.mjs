@@ -59,8 +59,9 @@ rl.on('line', (line) => {
   }
 
   if (message.id != null && pending.has(message.id)) {
-    const { resolve } = pending.get(message.id)
+    const { resolve, timer } = pending.get(message.id)
     pending.delete(message.id)
+    clearTimeout(timer)
     resolve(message.error ? { transportError: message.error } : message.result)
   }
 })
@@ -71,7 +72,8 @@ child.stderr.on('data', (chunk) => {
 
 child.on('exit', (code, signal) => {
   exited = true
-  for (const { resolve } of pending.values()) {
+  for (const { resolve, timer } of pending.values()) {
+    clearTimeout(timer)
     resolve({ childExit: code ?? signal })
   }
   pending.clear()
@@ -186,17 +188,17 @@ function request(method, params) {
   nextId += 1
   const message = { jsonrpc: '2.0', id, method }
   if (params !== undefined) message.params = params
-  child.stdin.write(`${JSON.stringify(message)}\n`)
 
   return new Promise((resolve) => {
-    pending.set(id, { resolve })
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (!pending.delete(id)) return
       resolve({
         timeout: method,
         stderr: stderr.slice(-2_000),
       })
     }, timeoutMs)
+    pending.set(id, { resolve, timer })
+    child.stdin.write(`${JSON.stringify(message)}\n`)
   })
 }
 
