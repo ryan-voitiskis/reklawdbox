@@ -268,9 +268,11 @@ fn has_year_suffix(name: &str) -> bool {
     }
     if let Some(open) = trimmed.rfind('(') {
         let inside = &trimmed[open + 1..trimmed.len() - 1];
-        if inside.len() >= 4
-            && inside[..4].bytes().all(|b| b.is_ascii_digit())
-            && let Ok(year) = inside[..4].parse::<u16>()
+        let Some(year_prefix) = inside.get(..4) else {
+            return false;
+        };
+        if year_prefix.bytes().all(|byte| byte.is_ascii_digit())
+            && let Ok(year) = year_prefix.parse::<u16>()
         {
             return (1900..=2099).contains(&year);
         }
@@ -1623,6 +1625,14 @@ mod tests {
         assert!(!has_year_suffix("Album Name"));
         assert!(!has_year_suffix("Album (Deluxe)"));
         assert!(!has_year_suffix("(20)"));
+    }
+
+    #[test]
+    fn year_suffix_unicode_boundaries_are_safe() {
+        assert!(!has_year_suffix("Album (日本2024)"));
+        assert!(!has_year_suffix("Album (🎵2024)"));
+        assert!(has_year_suffix("日本語のアルバム (2024)"));
+        assert!(has_year_suffix("Album (2024 日本盤)"));
     }
 
     // -- has_year_range --
