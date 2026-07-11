@@ -1635,6 +1635,142 @@ fn audio_file_mutation_state(path: &std::path::Path) -> Result<(Option<String>, 
     }
 }
 
+fn assert_cover_art_invalid_params(error: &McpError, rejected: &str) {
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains(&format!("{rejected:?}")));
+    assert!(error.message.contains("front_cover"));
+    assert!(error.message.contains("back_cover"));
+}
+
+#[tokio::test]
+async fn cover_art_invalid_picture_type_extract_is_invalid_params_before_io() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let output_path = temp_dir.path().join("should-not-exist.png");
+    let server = ReklawdboxServer::new(None);
+
+    let error = server
+        .extract_cover_art(Parameters(ExtractCoverArtParams {
+            path: temp_dir.path().join("missing.wav").display().to_string(),
+            output_path: Some(output_path.display().to_string()),
+            picture_type: Some("garbage".to_string()),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_cover_art_invalid_params(&error, "garbage");
+    assert!(!output_path.exists());
+}
+
+#[tokio::test]
+async fn cover_art_invalid_picture_type_embed_starts_no_file_work() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let audio_path = temp_dir.path().join("unchanged.wav");
+    let missing_target = temp_dir.path().join("missing.wav");
+    let missing_image = temp_dir.path().join("missing.png");
+    write_audio_file_mutation_wav(&audio_path);
+    let original_audio = std::fs::read(&audio_path).expect("synthetic WAV should read");
+    let server = ReklawdboxServer::new(None);
+
+    let error = server
+        .embed_cover_art(Parameters(EmbedCoverArtParams {
+            image_path: missing_image.display().to_string(),
+            target_audio_files: vec![
+                audio_path.display().to_string(),
+                missing_target.display().to_string(),
+            ],
+            picture_type: Some("Front_Cover".to_string()),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_cover_art_invalid_params(&error, "Front_Cover");
+    assert_eq!(
+        std::fs::read(&audio_path).expect("synthetic WAV should remain readable"),
+        original_audio
+    );
+    assert_eq!(server.audio_file_mutation_registry_len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cover_art_valid_aliases_work_through_mcp_handlers() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let audio_path = temp_dir.path().join("alias.wav");
+    let image_path = temp_dir.path().join("alias.png");
+    let output_path = temp_dir.path().join("alias-extracted.png");
+    write_audio_file_mutation_wav(&audio_path);
+    write_audio_file_mutation_png(&image_path);
+    let server = ReklawdboxServer::new(None);
+
+    let embed = server
+        .embed_cover_art(Parameters(EmbedCoverArtParams {
+            image_path: image_path.display().to_string(),
+            target_audio_files: vec![audio_path.display().to_string()],
+            picture_type: Some("cover_front".to_string()),
+        }))
+        .await
+        .expect("cover_front embed alias should succeed");
+    assert_eq!(extract_json(&embed)["summary"]["files_embedded"], 1);
+
+    let extract = server
+        .extract_cover_art(Parameters(ExtractCoverArtParams {
+            path: audio_path.display().to_string(),
+            output_path: Some(output_path.display().to_string()),
+            picture_type: Some("cover_front".to_string()),
+        }))
+        .await
+        .expect("cover_front extract alias should succeed");
+    let payload = extract_json(&extract);
+    assert_eq!(payload["picture_type"], "front_cover");
+    assert_eq!(
+        std::fs::read(output_path).expect("extracted art should read"),
+        std::fs::read(image_path).expect("source art should read")
+    );
+}
+
+fn cover_art_picture_type_schema_description<T: schemars::JsonSchema>() -> String {
+    let schema = schemars::schema_for!(T);
+    schema
+        .as_value()
+        .pointer("/properties/picture_type/description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("{} picture_type description is missing", T::schema_name()))
+        .to_string()
+}
+
+fn cover_art_accepted_picture_type_tokens(description: &str) -> Vec<&str> {
+    let (_, accepted) = description
+        .split_once("Accepted exact values:")
+        .expect("schema should introduce accepted picture types");
+    let (accepted, _) = accepted
+        .split_once(". Unknown values are rejected")
+        .expect("schema should terminate the accepted picture type list");
+    accepted
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+#[test]
+fn cover_art_picture_type_schema_descriptions_match_parser_contract() {
+    for (surface, description) in [
+        (
+            "extract_cover_art",
+            cover_art_picture_type_schema_description::<ExtractCoverArtParams>(),
+        ),
+        (
+            "embed_cover_art",
+            cover_art_picture_type_schema_description::<EmbedCoverArtParams>(),
+        ),
+    ] {
+        assert_eq!(
+            cover_art_accepted_picture_type_tokens(&description),
+            crate::tags::ACCEPTED_PICTURE_TYPES,
+            "{surface} schema picture types drifted: {description}"
+        );
+        assert!(description.contains("Unknown values are rejected"));
+    }
+}
+
 async fn wait_at_audio_file_mutation_barrier(
     barrier: &tokio::sync::Barrier,
     phase: &str,

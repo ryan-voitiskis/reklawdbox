@@ -238,7 +238,7 @@ reklawdbox extract-art <path> [options]
 |------|------|---------|-------------|
 | `<path>` | string | required | Audio file |
 | `--output` | string | `cover.{ext}` | Output path |
-| `--picture-type` | string | `front_cover` | Picture type to extract |
+| `--picture-type` | string | `front_cover` | Exact [accepted picture type](#accepted-cover-art-picture-types); unknown values are rejected |
 | `--json` | flag | | Output as JSON |
 
 ### Example
@@ -246,6 +246,10 @@ reklawdbox extract-art <path> [options]
 ```bash
 reklawdbox extract-art track.flac --output artwork.jpg
 ```
+
+### Accepted cover-art picture types
+
+Both cover-art commands accept these exact, case-sensitive, untrimmed values: `other`, `icon`, `other_icon`, `front_cover`, `cover_front`, `back_cover`, `cover_back`, `leaflet`, `media`, `lead_artist`, `artist`, `conductor`, `band`, `composer`, `lyricist`, `recording_location`, `during_recording`, `during_performance`, `screen_capture`, `bright_fish`, `illustration`, `band_logo`, and `publisher_logo`. `cover_front` and `cover_back` are compatibility aliases for the canonical `front_cover` and `back_cover` names. Unknown values are rejected. When a valid requested extraction type is absent, extraction falls back to the first embedded picture.
 
 ---
 
@@ -261,7 +265,7 @@ reklawdbox embed-art <image> <targets...> [options]
 |------|------|---------|-------------|
 | `<image>` | string | required | Image file (JPEG or PNG) |
 | `<targets>` | string[] | required | Audio files to embed into |
-| `--picture-type` | string | `front_cover` | Picture type |
+| `--picture-type` | string | `front_cover` | Exact [accepted picture type](#accepted-cover-art-picture-types); unknown values are rejected |
 | `--json` | flag | | Output as JSON |
 
 ### Example

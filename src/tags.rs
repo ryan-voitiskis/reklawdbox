@@ -60,6 +60,33 @@ pub const ALL_FIELDS: &[&str] = &[
 /// write and return `None` on read.
 const RIFF_INFO_FIELDS: &[&str] = &["artist", "title", "album", "genre", "year", "comment"];
 
+/// Exact, case-sensitive picture type names accepted by cover-art operations.
+pub(crate) const ACCEPTED_PICTURE_TYPES: &[&str] = &[
+    "other",
+    "icon",
+    "other_icon",
+    "front_cover",
+    "cover_front",
+    "back_cover",
+    "cover_back",
+    "leaflet",
+    "media",
+    "lead_artist",
+    "artist",
+    "conductor",
+    "band",
+    "composer",
+    "lyricist",
+    "recording_location",
+    "during_recording",
+    "during_performance",
+    "screen_capture",
+    "bright_fish",
+    "illustration",
+    "band_logo",
+    "publisher_logo",
+];
+
 // ---------------------------------------------------------------------------
 // Field ↔ ItemKey mapping
 // ---------------------------------------------------------------------------
@@ -392,9 +419,9 @@ fn resolve_fields(filter: Option<&[String]>) -> Vec<&str> {
     }
 }
 
-/// Defaults to `CoverFront` for unrecognised names.
-pub fn parse_picture_type(name: &str) -> PictureType {
-    match name {
+/// Parse an exact, case-sensitive cover-art picture type name.
+pub fn parse_picture_type(name: &str) -> Result<PictureType, TagError> {
+    let picture_type = match name {
         "other" => PictureType::Other,
         "icon" => PictureType::Icon,
         "other_icon" => PictureType::OtherIcon,
@@ -412,11 +439,18 @@ pub fn parse_picture_type(name: &str) -> PictureType {
         "during_recording" => PictureType::DuringRecording,
         "during_performance" => PictureType::DuringPerformance,
         "screen_capture" => PictureType::ScreenCapture,
+        "bright_fish" => PictureType::BrightFish,
         "illustration" => PictureType::Illustration,
         "band_logo" => PictureType::BandLogo,
         "publisher_logo" => PictureType::PublisherLogo,
-        _ => PictureType::CoverFront,
-    }
+        _ => {
+            return Err(TagError::Validation(format!(
+                "Unknown picture type {name:?}. Accepted values: {}",
+                ACCEPTED_PICTURE_TYPES.join(", ")
+            )));
+        }
+    };
+    Ok(picture_type)
 }
 
 fn picture_type_name(pt: PictureType) -> &'static str {
@@ -1051,7 +1085,7 @@ pub fn extract_cover_art(
     picture_type: &str,
 ) -> Result<ExtractArtResult, TagError> {
     let path_str = path.display().to_string();
-    let pic_type = parse_picture_type(picture_type);
+    let pic_type = parse_picture_type(picture_type)?;
 
     let tagged_file = Probe::open(path)
         .map_err(|e| TagError::Io(format!("Failed to open: {e}")))?
@@ -1133,7 +1167,7 @@ fn embed_cover_art_inner(
     target_path: &Path,
     picture_type_str: &str,
 ) -> Result<(), TagError> {
-    let pic_type = parse_picture_type(picture_type_str);
+    let pic_type = parse_picture_type(picture_type_str)?;
 
     let image_data =
         fs::read(image_path).map_err(|e| TagError::Io(format!("Failed to read image: {e}")))?;
@@ -1208,6 +1242,35 @@ fn embed_cover_art_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_cover_art_test_wav(path: &Path) {
+        let data_size: u32 = 2;
+        let file_size = 36 + data_size;
+        let mut header = Vec::new();
+        header.extend_from_slice(b"RIFF");
+        header.extend_from_slice(&file_size.to_le_bytes());
+        header.extend_from_slice(b"WAVE");
+        header.extend_from_slice(b"fmt ");
+        header.extend_from_slice(&16u32.to_le_bytes());
+        header.extend_from_slice(&1u16.to_le_bytes());
+        header.extend_from_slice(&1u16.to_le_bytes());
+        header.extend_from_slice(&44_100u32.to_le_bytes());
+        header.extend_from_slice(&88_200u32.to_le_bytes());
+        header.extend_from_slice(&2u16.to_le_bytes());
+        header.extend_from_slice(&16u16.to_le_bytes());
+        header.extend_from_slice(b"data");
+        header.extend_from_slice(&data_size.to_le_bytes());
+        header.extend_from_slice(&[0u8; 2]);
+        std::fs::write(path, header).expect("synthetic WAV should write");
+    }
+
+    fn cover_art_test_png() -> Vec<u8> {
+        vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15,
+            0, 1, 5, 1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ]
+    }
 
     #[test]
     fn field_to_key_roundtrip() {
@@ -1332,16 +1395,115 @@ mod tests {
     }
 
     #[test]
-    fn parse_picture_type_known() {
-        assert_eq!(parse_picture_type("front_cover"), PictureType::CoverFront);
-        assert_eq!(parse_picture_type("cover_front"), PictureType::CoverFront);
-        assert_eq!(parse_picture_type("back_cover"), PictureType::CoverBack);
-        assert_eq!(parse_picture_type("band_logo"), PictureType::BandLogo);
+    fn parse_picture_type_accepts_exact_documented_values() {
+        let cases = [
+            ("other", PictureType::Other),
+            ("icon", PictureType::Icon),
+            ("other_icon", PictureType::OtherIcon),
+            ("front_cover", PictureType::CoverFront),
+            ("cover_front", PictureType::CoverFront),
+            ("back_cover", PictureType::CoverBack),
+            ("cover_back", PictureType::CoverBack),
+            ("leaflet", PictureType::Leaflet),
+            ("media", PictureType::Media),
+            ("lead_artist", PictureType::LeadArtist),
+            ("artist", PictureType::Artist),
+            ("conductor", PictureType::Conductor),
+            ("band", PictureType::Band),
+            ("composer", PictureType::Composer),
+            ("lyricist", PictureType::Lyricist),
+            ("recording_location", PictureType::RecordingLocation),
+            ("during_recording", PictureType::DuringRecording),
+            ("during_performance", PictureType::DuringPerformance),
+            ("screen_capture", PictureType::ScreenCapture),
+            ("bright_fish", PictureType::BrightFish),
+            ("illustration", PictureType::Illustration),
+            ("band_logo", PictureType::BandLogo),
+            ("publisher_logo", PictureType::PublisherLogo),
+        ];
+
+        assert_eq!(
+            cases.map(|(name, _)| name).as_slice(),
+            ACCEPTED_PICTURE_TYPES
+        );
+        for (name, expected) in cases {
+            assert_eq!(parse_picture_type(name).unwrap(), expected, "{name}");
+        }
+        assert_eq!(
+            parse_picture_type("front_cover").unwrap(),
+            parse_picture_type("cover_front").unwrap()
+        );
+        assert_eq!(
+            parse_picture_type("back_cover").unwrap(),
+            parse_picture_type("cover_back").unwrap()
+        );
+        assert_eq!(
+            picture_type_name(parse_picture_type("bright_fish").unwrap()),
+            "bright_fish"
+        );
     }
 
     #[test]
-    fn parse_picture_type_default() {
-        assert_eq!(parse_picture_type("garbage"), PictureType::CoverFront);
+    fn parse_picture_type_rejects_unknown_unmodified_values() {
+        for invalid in ["garbage", "", "Front_Cover", " front_cover "] {
+            let error = parse_picture_type(invalid).unwrap_err();
+            let TagError::Validation(message) = error else {
+                panic!("invalid picture type should return validation: {error:?}");
+            };
+            assert!(message.contains(&format!("{invalid:?}")));
+            assert!(message.contains("front_cover"));
+            assert!(message.contains("back_cover"));
+        }
+    }
+
+    #[test]
+    fn cover_art_invalid_picture_type_extract_precedes_io() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let missing_audio = dir.path().join("missing.wav");
+
+        for invalid in ["garbage", "", "Front_Cover", " front_cover "] {
+            let result = extract_cover_art(&missing_audio, None, invalid);
+            assert!(
+                matches!(result, Err(TagError::Validation(_))),
+                "invalid picture type {invalid:?} should fail validation before audio I/O"
+            );
+        }
+    }
+
+    #[test]
+    fn cover_art_invalid_picture_type_embed_precedes_io() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let missing_image = dir.path().join("missing.png");
+        let missing_audio = dir.path().join("missing.wav");
+
+        for invalid in ["garbage", "", "Front_Cover", " front_cover "] {
+            let result = embed_cover_art_inner(&missing_image, &missing_audio, invalid);
+            assert!(
+                matches!(result, Err(TagError::Validation(_))),
+                "invalid picture type {invalid:?} should fail validation before image/audio I/O, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cover_art_valid_missing_type_falls_back_to_first_picture() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let image_path = dir.path().join("cover.png");
+        let audio_path = dir.path().join("track.wav");
+        let output_path = dir.path().join("extracted.png");
+        let image = cover_art_test_png();
+        std::fs::write(&image_path, &image).expect("synthetic PNG should write");
+        write_cover_art_test_wav(&audio_path);
+
+        assert!(matches!(
+            embed_cover_art(&image_path, &audio_path, "front_cover"),
+            FileEmbedResult::Ok { .. }
+        ));
+        let extracted = extract_cover_art(&audio_path, Some(&output_path), "back_cover")
+            .expect("valid missing type should fall back to the first picture");
+
+        assert_eq!(extracted.picture_type, "front_cover");
+        assert_eq!(std::fs::read(output_path).unwrap(), image);
     }
 
     #[test]

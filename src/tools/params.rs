@@ -931,7 +931,9 @@ pub(super) struct ExtractCoverArtParams {
     )]
     pub output_path: Option<String>,
 
-    #[schemars(description = "Which art to extract (default: front_cover)")]
+    #[schemars(
+        description = "Which art to extract (default: front_cover). Accepted exact values: other, icon, other_icon, front_cover, cover_front, back_cover, cover_back, leaflet, media, lead_artist, artist, conductor, band, composer, lyricist, recording_location, during_recording, during_performance, screen_capture, bright_fish, illustration, band_logo, publisher_logo. Unknown values are rejected. cover_front and cover_back are compatibility aliases for front_cover and back_cover."
+    )]
     pub picture_type: Option<String>,
 }
 
@@ -944,7 +946,9 @@ pub(super) struct EmbedCoverArtParams {
     #[serde(rename = "targets")]
     pub target_audio_files: Vec<String>,
 
-    #[schemars(description = "Picture type (default: front_cover)")]
+    #[schemars(
+        description = "Picture type (default: front_cover). Accepted exact values: other, icon, other_icon, front_cover, cover_front, back_cover, cover_back, leaflet, media, lead_artist, artist, conductor, band, composer, lyricist, recording_location, during_recording, during_performance, screen_capture, bright_fish, illustration, band_logo, publisher_logo. Unknown values are rejected. cover_front and cover_back are compatibility aliases for front_cover and back_cover."
+    )]
     pub picture_type: Option<String>,
 }
 

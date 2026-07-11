@@ -295,11 +295,13 @@ pub(super) async fn handle_write_file_tags(
 pub(super) async fn handle_extract_cover_art(
     params: ExtractCoverArtParams,
 ) -> Result<CallToolResult, McpError> {
-    let path = PathBuf::from(&params.path);
-    let output_path = params.output_path.map(PathBuf::from);
     let picture_type = params
         .picture_type
         .unwrap_or_else(|| "front_cover".to_string());
+    tags::parse_picture_type(&picture_type)
+        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+    let path = PathBuf::from(&params.path);
+    let output_path = params.output_path.map(PathBuf::from);
 
     let result = tokio::task::spawn_blocking(move || {
         tags::extract_cover_art(&path, output_path.as_deref(), &picture_type)
@@ -315,10 +317,12 @@ pub(super) async fn handle_embed_cover_art(
     server: &ReklawdboxServer,
     params: EmbedCoverArtParams,
 ) -> Result<CallToolResult, McpError> {
-    let image_path = PathBuf::from(&params.image_path);
     let picture_type = params
         .picture_type
         .unwrap_or_else(|| "front_cover".to_string());
+    tags::parse_picture_type(&picture_type)
+        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+    let image_path = PathBuf::from(&params.image_path);
 
     let image_size_bytes = tokio::fs::metadata(&image_path)
         .await

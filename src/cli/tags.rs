@@ -80,7 +80,7 @@ pub(crate) struct ExtractArtArgs {
     /// Output path (default: cover.{ext} in same directory)
     #[arg(long)]
     output: Option<String>,
-    /// Picture type (default: front_cover)
+    /// Picture type (default: front_cover). Accepted exact values: other, icon, other_icon, front_cover, cover_front, back_cover, cover_back, leaflet, media, lead_artist, artist, conductor, band, composer, lyricist, recording_location, during_recording, during_performance, screen_capture, bright_fish, illustration, band_logo, publisher_logo. Unknown values are rejected.
     #[arg(long, default_value = "front_cover")]
     picture_type: String,
     /// Output as JSON
@@ -96,7 +96,7 @@ pub(crate) struct EmbedArtArgs {
     /// Audio files to embed art into
     #[arg(required = true)]
     targets: Vec<String>,
-    /// Picture type (default: front_cover)
+    /// Picture type (default: front_cover). Accepted exact values: other, icon, other_icon, front_cover, cover_front, back_cover, cover_back, leaflet, media, lead_artist, artist, conductor, band, composer, lyricist, recording_location, during_recording, during_performance, screen_capture, bright_fish, illustration, band_logo, publisher_logo. Unknown values are rejected.
     #[arg(long, default_value = "front_cover")]
     picture_type: String,
     /// Output as JSON
@@ -417,4 +417,43 @@ pub(crate) fn run_embed_art(args: EmbedArtArgs) -> Result<(), Box<dyn std::error
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accepted_picture_type_tokens(help: &str) -> Vec<&str> {
+        let (_, accepted) = help
+            .split_once("Accepted exact values:")
+            .expect("help should introduce accepted picture types");
+        let (accepted, _) = accepted
+            .split_once(". Unknown values are rejected")
+            .expect("help should terminate the accepted picture type list");
+        accepted
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn cover_art_picture_type_help_matches_parser_contract() {
+        let extract_help =
+            <ExtractArtArgs as clap::Args>::augment_args(clap::Command::new("extract-art"))
+                .render_long_help()
+                .to_string();
+        let embed_help =
+            <EmbedArtArgs as clap::Args>::augment_args(clap::Command::new("embed-art"))
+                .render_long_help()
+                .to_string();
+
+        for (surface, help) in [("extract-art", extract_help), ("embed-art", embed_help)] {
+            assert_eq!(
+                accepted_picture_type_tokens(&help),
+                tags::ACCEPTED_PICTURE_TYPES,
+                "{surface} help picture types drifted: {help}"
+            );
+            assert!(help.contains("Unknown values are rejected"));
+        }
+    }
 }

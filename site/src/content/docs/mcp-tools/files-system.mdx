@@ -72,7 +72,11 @@ Extract embedded cover art from an audio file and save it to disk.
 |-----------|------|:--------:|-------------|
 | `path` | string | **yes** | Path to audio file |
 | `output_path` | string | | Save location (default: `cover.{ext}` in same directory) |
-| `picture_type` | string | | Which art to extract (default: `"front_cover"`) |
+| `picture_type` | string | | Exact [accepted picture type](#accepted-cover-art-picture-types) (default: `"front_cover"`); unknown values are rejected |
+
+#### Accepted cover-art picture types
+
+Both cover-art tools accept these exact, case-sensitive, untrimmed values: `other`, `icon`, `other_icon`, `front_cover`, `cover_front`, `back_cover`, `cover_back`, `leaflet`, `media`, `lead_artist`, `artist`, `conductor`, `band`, `composer`, `lyricist`, `recording_location`, `during_recording`, `during_performance`, `screen_capture`, `bright_fish`, `illustration`, `band_logo`, and `publisher_logo`. `cover_front` and `cover_back` are compatibility aliases for the canonical `front_cover` and `back_cover` names. Unknown values are rejected. When a valid requested extraction type is absent, extraction falls back to the first embedded picture.
 
 ---
 
@@ -84,7 +88,7 @@ Embed cover art into one or more audio files.
 |-----------|------|:--------:|-------------|
 | `image_path` | string | **yes** | Path to image file (JPEG or PNG) |
 | `targets` | string[] | **yes** | Audio files to embed art into |
-| `picture_type` | string | | Picture type (default: `"front_cover"`) |
+| `picture_type` | string | | Exact [accepted picture type](#accepted-cover-art-picture-types) (default: `"front_cover"`); unknown values are rejected |
 
 ---
 
