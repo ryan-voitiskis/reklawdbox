@@ -201,12 +201,15 @@ reklawdbox write-tags <path> [options]
 | `--key` | string | | Set musical key |
 | `--composer` | string | | Set composer |
 | `--remixer` | string | | Set remixer |
-| `--dry-run` | flag | | Preview changes without writing |
+| `--dry-run` | flag | | Preview changes without writing; WAV output is grouped by tag layer |
 | `--wav-targets` | list | both | WAV targets: `id3v2`, `riff_info` |
 | `--json-input` | flag | | Read tags from stdin as JSON |
 | `--json` | flag | | Output as JSON |
 
-Set a field to `""` to delete it. Use `--dry-run` to preview.
+Set a field to `""` to delete it. Use `--dry-run` to preview. For WAV files,
+human-readable previews show separate `ID3v2` and `RIFF INFO` headings for the
+requested targets, including an indented `No changes.` when a layer is already
+up to date.
 
 ### Examples
 

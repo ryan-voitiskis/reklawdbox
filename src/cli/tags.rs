@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::tags;
@@ -282,35 +282,87 @@ fn print_write_human(result: &tags::FileWriteResult) {
     }
 }
 
-fn print_dry_run_human(result: &tags::FileDryRunResult) {
+fn write_dry_run_field_map<'a, W, I>(
+    output: &mut W,
+    changes: I,
+    indent: usize,
+) -> std::io::Result<()>
+where
+    W: Write,
+    I: IntoIterator<Item = (&'a String, &'a tags::DryRunChange)>,
+{
+    let changes: HashMap<&str, &tags::DryRunChange> = changes
+        .into_iter()
+        .map(|(field, change)| (field.as_str(), change))
+        .collect();
+    let pad = " ".repeat(indent);
+
+    if changes.is_empty() {
+        writeln!(output, "{pad}No changes.")?;
+        return Ok(());
+    }
+
+    for &field in tags::ALL_FIELDS {
+        if let Some(change) = changes.get(field) {
+            let old = change.old.as_deref().unwrap_or("(missing)");
+            let new = change.new.as_deref().unwrap_or("(delete)");
+            writeln!(
+                output,
+                "{pad}{:<14}{} -> {}",
+                display_field_name(field),
+                old,
+                new
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_dry_run_human(
+    output: &mut impl Write,
+    result: &tags::FileDryRunResult,
+) -> std::io::Result<()> {
     match result {
         tags::FileDryRunResult::Preview {
-            path,
             changes,
+            changes_by_layer,
             wav_targets,
             ..
         } => {
-            tracing::info!("=== {} (dry run) ===", path);
-            if changes.is_empty() {
-                println!("No changes.");
-                return;
-            }
-            for &field in tags::ALL_FIELDS {
-                if let Some(change) = changes.get(field) {
-                    let old = change.old.as_deref().unwrap_or("(missing)");
-                    let new = change.new.as_deref().unwrap_or("(delete)");
-                    println!("  {:<14}{} -> {}", display_field_name(field), old, new);
+            if let Some(changes_by_layer) = changes_by_layer {
+                for (key, heading) in [("id3v2", "ID3v2"), ("riff_info", "RIFF INFO")] {
+                    if let Some(layer_changes) = changes_by_layer.get(key) {
+                        writeln!(output, "{heading}:")?;
+                        write_dry_run_field_map(output, layer_changes, 2)?;
+                    }
                 }
+            } else if changes.is_empty() {
+                writeln!(output, "No changes.")?;
+            } else {
+                write_dry_run_field_map(output, changes, 2)?;
             }
             if let Some(targets) = wav_targets {
-                println!("WAV targets: {}", targets.join(", "));
+                writeln!(output, "WAV targets: {}", targets.join(", "))?;
             }
+        }
+        tags::FileDryRunResult::Error { .. } => {}
+    }
+    Ok(())
+}
+
+fn print_dry_run_human(result: &tags::FileDryRunResult) -> std::io::Result<()> {
+    match result {
+        tags::FileDryRunResult::Preview { path, .. } => {
+            tracing::info!("=== {} (dry run) ===", path);
         }
         tags::FileDryRunResult::Error { path, error, .. } => {
             tracing::error!("=== {} ===", path);
             tracing::error!("Error: {}", error);
         }
     }
+
+    let stdout = std::io::stdout();
+    write_dry_run_human(&mut stdout.lock(), result)
 }
 
 pub(crate) fn run_write_tags(args: WriteTagsArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -343,7 +395,7 @@ pub(crate) fn run_write_tags(args: WriteTagsArgs) -> Result<(), Box<dyn std::err
         if args.json {
             println!("{}", serde_json::to_string(&result)?);
         } else {
-            print_dry_run_human(&result);
+            print_dry_run_human(&result)?;
         }
     } else {
         let result = tags::write_file_tags(&entry);
@@ -422,6 +474,14 @@ pub(crate) fn run_embed_art(args: EmbedArtArgs) -> Result<(), Box<dyn std::error
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    fn dry_run_change(old: Option<&str>, new: Option<&str>) -> tags::DryRunChange {
+        tags::DryRunChange {
+            old: old.map(str::to_string),
+            new: new.map(str::to_string),
+        }
+    }
 
     fn accepted_picture_type_tokens(help: &str) -> Vec<&str> {
         let (_, accepted) = help
@@ -455,5 +515,105 @@ mod tests {
             );
             assert!(help.contains("Unknown values are rejected"));
         }
+    }
+
+    #[test]
+    fn cli_wav_dry_run_renders_layers_in_stable_field_order_without_legacy_duplicate() {
+        let id3v2 = BTreeMap::from([
+            (
+                "album".to_string(),
+                dry_run_change(Some("ID3 album"), Some("new album")),
+            ),
+            (
+                "artist".to_string(),
+                dry_run_change(Some("ID3 old"), Some("new")),
+            ),
+            (
+                "title".to_string(),
+                dry_run_change(Some("ID3 title"), Some("new title")),
+            ),
+        ]);
+        let riff_info = BTreeMap::from([(
+            "artist".to_string(),
+            dry_run_change(Some("RIFF old"), Some("new")),
+        )]);
+        let result = tags::FileDryRunResult::Preview {
+            path: "synthetic.wav".to_string(),
+            status: "preview".to_string(),
+            changes: HashMap::from([(
+                "artist".to_string(),
+                dry_run_change(Some("ID3 old"), Some("new")),
+            )]),
+            changes_by_layer: Some(BTreeMap::from([
+                ("id3v2".to_string(), id3v2),
+                ("riff_info".to_string(), riff_info),
+            ])),
+            wav_targets: Some(vec!["id3v2".to_string(), "riff_info".to_string()]),
+        };
+        let mut output = Vec::new();
+
+        write_dry_run_human(&mut output, &result).unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.find("ID3v2:").unwrap() < output.find("RIFF INFO:").unwrap());
+        assert!(output.find("Title").unwrap() < output.find("Album").unwrap());
+        assert!(output.contains("ID3 old -> new"));
+        assert!(output.contains("RIFF old -> new"));
+        assert_eq!(output.matches("Artist").count(), 2);
+        assert!(output.contains("WAV targets: id3v2, riff_info"));
+    }
+
+    #[test]
+    fn cli_wav_dry_run_renders_empty_requested_layers_and_targets() {
+        let result = tags::FileDryRunResult::Preview {
+            path: "synthetic.wav".to_string(),
+            status: "preview".to_string(),
+            changes: HashMap::new(),
+            changes_by_layer: Some(BTreeMap::from([
+                ("id3v2".to_string(), BTreeMap::new()),
+                ("riff_info".to_string(), BTreeMap::new()),
+            ])),
+            wav_targets: Some(vec!["id3v2".to_string(), "riff_info".to_string()]),
+        };
+        let mut output = Vec::new();
+
+        write_dry_run_human(&mut output, &result).unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert_eq!(output.matches("  No changes.\n").count(), 2);
+        assert!(output.starts_with("ID3v2:\n  No changes.\nRIFF INFO:\n  No changes.\n"));
+        assert!(output.ends_with("WAV targets: id3v2, riff_info\n"));
+    }
+
+    #[test]
+    fn cli_wav_dry_run_preserves_non_wav_legacy_rendering() {
+        let changed = tags::FileDryRunResult::Preview {
+            path: "synthetic.aiff".to_string(),
+            status: "preview".to_string(),
+            changes: HashMap::from([("artist".to_string(), dry_run_change(None, Some("new")))]),
+            changes_by_layer: None,
+            wav_targets: None,
+        };
+        let unchanged = tags::FileDryRunResult::Preview {
+            path: "synthetic.aiff".to_string(),
+            status: "preview".to_string(),
+            changes: HashMap::new(),
+            changes_by_layer: None,
+            wav_targets: None,
+        };
+        let mut changed_output = Vec::new();
+        let mut unchanged_output = Vec::new();
+
+        write_dry_run_human(&mut changed_output, &changed).unwrap();
+        write_dry_run_human(&mut unchanged_output, &unchanged).unwrap();
+
+        assert_eq!(
+            String::from_utf8(changed_output).unwrap(),
+            "  Artist        (missing) -> new\n"
+        );
+        assert_eq!(
+            String::from_utf8(unchanged_output).unwrap(),
+            "No changes.\n"
+        );
     }
 }

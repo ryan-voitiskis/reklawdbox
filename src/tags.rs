@@ -4,7 +4,7 @@
 //! and CLI subcommands. All functions are synchronous — callers use
 //! `spawn_blocking` for async contexts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -260,7 +260,7 @@ pub enum FileWriteResult {
 }
 
 /// A single field change in a dry-run result.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DryRunChange {
     pub old: Option<String>,
     pub new: Option<String>,
@@ -274,6 +274,8 @@ pub enum FileDryRunResult {
         path: String,
         status: String,
         changes: HashMap<String, DryRunChange>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        changes_by_layer: Option<BTreeMap<String, BTreeMap<String, DryRunChange>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         wav_targets: Option<Vec<String>>,
     },
@@ -980,6 +982,46 @@ pub fn write_file_tags_dry_run(entry: &WriteEntry) -> FileDryRunResult {
     }
 }
 
+fn dry_run_layer_diff(
+    entry: &WriteEntry,
+    tag: Option<&Tag>,
+    riff_info_layer: bool,
+) -> BTreeMap<String, DryRunChange> {
+    let mut changes = BTreeMap::new();
+
+    for (field, new_value) in &entry.tags {
+        if riff_info_layer && !is_riff_info_field(field) {
+            continue;
+        }
+
+        let old_value = tag.and_then(|tag| get_field_from_tag(tag, field));
+        let effective_new = match new_value {
+            None => None,
+            Some(value) if value.is_empty() => None,
+            Some(value) if field == "comment" && entry.comment_mode != CommentMode::Replace => {
+                Some(merge_comment(
+                    value,
+                    old_value.as_deref(),
+                    entry.comment_mode,
+                ))
+            }
+            Some(value) => Some(value.clone()),
+        };
+
+        if old_value != effective_new {
+            changes.insert(
+                field.clone(),
+                DryRunChange {
+                    old: old_value,
+                    new: effective_new,
+                },
+            );
+        }
+    }
+
+    changes
+}
+
 fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult, TagError> {
     let path = &entry.path;
     let path_str = path.display().to_string();
@@ -1003,58 +1045,49 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
         vec![]
     };
 
-    // For the dry-run diff, read from the tag layer that will be written.
-    // WAV with riff_info-only target: diff against RIFF INFO.
-    // WAV with id3v2-only or both: diff against ID3v2.
-    // Non-WAV: use primary tag.
-    let riff_only = is_wav && wav_targets.len() == 1 && wav_targets[0] == WavTarget::RiffInfo;
-    let primary_tag = if is_wav {
-        if riff_only {
-            tagged_file.tag(TagType::RiffInfo)
-        } else {
-            tagged_file.tag(TagType::Id3v2)
-        }
-    } else {
-        tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag())
-    };
-    let mut changes = HashMap::new();
-
-    for (field, new_value) in &entry.tags {
-        if riff_only && !is_riff_info_field(field) {
-            continue;
-        }
-
-        let old_value = primary_tag.and_then(|t| get_field_from_tag(t, field));
-
-        let effective_new: Option<String> = match new_value {
-            None => None,
-            Some(v) if v.is_empty() => None,
-            Some(v) => {
-                if field == "comment" && entry.comment_mode != CommentMode::Replace {
-                    Some(merge_comment(v, old_value.as_deref(), entry.comment_mode))
-                } else {
-                    Some(v.clone())
-                }
-            }
-        };
-
-        if old_value != effective_new {
-            changes.insert(
-                field.clone(),
-                DryRunChange {
-                    old: old_value,
-                    new: effective_new,
-                },
+    let (changes, changes_by_layer) = if is_wav {
+        let mut changes_by_layer = BTreeMap::new();
+        for target in &wav_targets {
+            let (key, tag_type, riff_info_layer) = match target {
+                WavTarget::Id3v2 => ("id3v2", TagType::Id3v2, false),
+                WavTarget::RiffInfo => ("riff_info", TagType::RiffInfo, true),
+            };
+            changes_by_layer.insert(
+                key.to_string(),
+                dry_run_layer_diff(entry, tagged_file.tag(tag_type), riff_info_layer),
             );
         }
-    }
+
+        // Preserve the legacy map's source layer exactly: a single RIFF target
+        // mirrors RIFF INFO, while ID3-only, both, and duplicate-target inputs
+        // retain the historical ID3v2 comparison.
+        let riff_only = wav_targets.len() == 1 && wav_targets[0] == WavTarget::RiffInfo;
+        let compatibility_key = if riff_only { "riff_info" } else { "id3v2" };
+        let compatibility_diff = changes_by_layer
+            .get(compatibility_key)
+            .cloned()
+            .unwrap_or_else(|| dry_run_layer_diff(entry, tagged_file.tag(TagType::Id3v2), false));
+        (
+            compatibility_diff.into_iter().collect(),
+            Some(changes_by_layer),
+        )
+    } else {
+        let primary_tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
+        (
+            dry_run_layer_diff(entry, primary_tag, false)
+                .into_iter()
+                .collect(),
+            None,
+        )
+    };
 
     Ok(FileDryRunResult::Preview {
         path: path_str,
         status: "preview".to_string(),
         changes,
+        changes_by_layer,
         wav_targets: if is_wav {
             Some(
                 wav_targets
@@ -1243,7 +1276,7 @@ fn embed_cover_art_inner(
 mod tests {
     use super::*;
 
-    fn write_cover_art_test_wav(path: &Path) {
+    fn write_tag_test_wav(path: &Path) {
         let data_size: u32 = 2;
         let file_size = 36 + data_size;
         let mut header = Vec::new();
@@ -1264,6 +1297,65 @@ mod tests {
         std::fs::write(path, header).expect("synthetic WAV should write");
     }
 
+    fn write_tag_test_aiff(path: &Path) {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"FORM");
+        file.extend_from_slice(&48u32.to_be_bytes());
+        file.extend_from_slice(b"AIFF");
+        file.extend_from_slice(b"COMM");
+        file.extend_from_slice(&18u32.to_be_bytes());
+        file.extend_from_slice(&1u16.to_be_bytes());
+        file.extend_from_slice(&1u32.to_be_bytes());
+        file.extend_from_slice(&16u16.to_be_bytes());
+        file.extend_from_slice(&[0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0]);
+        file.extend_from_slice(b"SSND");
+        file.extend_from_slice(&10u32.to_be_bytes());
+        file.extend_from_slice(&0u32.to_be_bytes());
+        file.extend_from_slice(&0u32.to_be_bytes());
+        file.extend_from_slice(&[0u8; 2]);
+        std::fs::write(path, file).expect("synthetic AIFF should write");
+    }
+
+    fn write_test_wav_layer(path: &Path, target: WavTarget, tags: HashMap<String, Option<String>>) {
+        let result = write_file_tags(&WriteEntry {
+            path: path.to_path_buf(),
+            tags,
+            wav_targets: vec![target],
+            comment_mode: CommentMode::Replace,
+        });
+        assert!(
+            matches!(result, FileWriteResult::Ok { .. }),
+            "synthetic WAV layer should seed successfully: {result:?}"
+        );
+    }
+
+    fn wav_dry_run_json(
+        path: &Path,
+        tags: HashMap<String, Option<String>>,
+        wav_targets: Vec<WavTarget>,
+        comment_mode: CommentMode,
+    ) -> serde_json::Value {
+        let result = write_file_tags_dry_run(&WriteEntry {
+            path: path.to_path_buf(),
+            tags,
+            wav_targets,
+            comment_mode,
+        });
+        serde_json::to_value(result).expect("dry-run result should serialize")
+    }
+
+    fn dry_run_test_entry(
+        tags: HashMap<String, Option<String>>,
+        comment_mode: CommentMode,
+    ) -> WriteEntry {
+        WriteEntry {
+            path: PathBuf::from("synthetic.wav"),
+            tags,
+            wav_targets: vec![],
+            comment_mode,
+        }
+    }
+
     fn cover_art_test_png() -> Vec<u8> {
         vec![
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
@@ -1281,6 +1373,92 @@ mod tests {
                 item_key_to_field(&key).unwrap_or_else(|| panic!("No field for ItemKey {key:?}"));
             assert_eq!(back, field, "Roundtrip failed for {field}");
         }
+    }
+
+    #[test]
+    fn dry_run_layer_diff_reports_deletion() {
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::TrackArtist, "old".to_string());
+
+        for deletion in [None, Some(String::new())] {
+            let entry = dry_run_test_entry(
+                HashMap::from([("artist".to_string(), deletion)]),
+                CommentMode::Replace,
+            );
+            assert_eq!(
+                dry_run_layer_diff(&entry, Some(&tag), false).get("artist"),
+                Some(&DryRunChange {
+                    old: Some("old".to_string()),
+                    new: None,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn dry_run_layer_diff_omits_equal_values() {
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::TrackArtist, "same".to_string());
+        let entry = dry_run_test_entry(
+            HashMap::from([("artist".to_string(), Some("same".to_string()))]),
+            CommentMode::Replace,
+        );
+
+        assert!(dry_run_layer_diff(&entry, Some(&tag), false).is_empty());
+    }
+
+    #[test]
+    fn dry_run_layer_diff_applies_comment_modes() {
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::Comment, "old".to_string());
+
+        for (mode, expected) in [
+            (CommentMode::Replace, "new"),
+            (CommentMode::Prepend, "new | old"),
+            (CommentMode::Append, "old | new"),
+        ] {
+            let entry = dry_run_test_entry(
+                HashMap::from([("comment".to_string(), Some("new".to_string()))]),
+                mode,
+            );
+            assert_eq!(
+                dry_run_layer_diff(&entry, Some(&tag), false)["comment"]
+                    .new
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn dry_run_layer_diff_handles_missing_tag() {
+        let entry = dry_run_test_entry(
+            HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+            CommentMode::Replace,
+        );
+
+        assert_eq!(
+            dry_run_layer_diff(&entry, None, false).get("artist"),
+            Some(&DryRunChange {
+                old: None,
+                new: Some("new".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn dry_run_layer_diff_filters_riff_unsupported_fields() {
+        let entry = dry_run_test_entry(
+            HashMap::from([
+                ("artist".to_string(), Some("new artist".to_string())),
+                ("key".to_string(), Some("Am".to_string())),
+            ]),
+            CommentMode::Replace,
+        );
+
+        let changes = dry_run_layer_diff(&entry, None, true);
+        assert!(changes.contains_key("artist"));
+        assert!(!changes.contains_key("key"));
     }
 
     #[test]
@@ -1493,7 +1671,7 @@ mod tests {
         let output_path = dir.path().join("extracted.png");
         let image = cover_art_test_png();
         std::fs::write(&image_path, &image).expect("synthetic PNG should write");
-        write_cover_art_test_wav(&audio_path);
+        write_tag_test_wav(&audio_path);
 
         assert!(matches!(
             embed_cover_art(&image_path, &audio_path, "front_cover"),
@@ -1521,33 +1699,9 @@ mod tests {
 
     #[test]
     fn dry_run_riff_only_excludes_unsupported_fields() {
-        // Create a minimal valid WAV file for testing.
-        // It has no real tag payload; this test validates RIFF-only dry-run
-        // field filtering for unsupported fields.
         let dir = tempfile::tempdir().unwrap();
         let wav_path = dir.path().join("test.wav");
-
-        let wav_header: Vec<u8> = {
-            let data_size: u32 = 2; // 1 sample, 16-bit mono
-            let file_size = 36 + data_size;
-            let mut h = Vec::new();
-            h.extend_from_slice(b"RIFF");
-            h.extend_from_slice(&file_size.to_le_bytes());
-            h.extend_from_slice(b"WAVE");
-            h.extend_from_slice(b"fmt ");
-            h.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-            h.extend_from_slice(&1u16.to_le_bytes()); // PCM
-            h.extend_from_slice(&1u16.to_le_bytes()); // mono
-            h.extend_from_slice(&44100u32.to_le_bytes()); // sample rate
-            h.extend_from_slice(&88200u32.to_le_bytes()); // byte rate
-            h.extend_from_slice(&2u16.to_le_bytes()); // block align
-            h.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-            h.extend_from_slice(b"data");
-            h.extend_from_slice(&data_size.to_le_bytes());
-            h.extend_from_slice(&[0u8; 2]); // 1 silent sample
-            h
-        };
-        std::fs::write(&wav_path, &wav_header).unwrap();
+        write_tag_test_wav(&wav_path);
 
         let entry = WriteEntry {
             path: wav_path,
@@ -1582,6 +1736,179 @@ mod tests {
                 panic!("dry-run should succeed, got error: {error}");
             }
         }
+    }
+
+    #[test]
+    fn wav_dry_run_default_both_reports_distinct_layer_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("distinct-artist.wav");
+        write_tag_test_wav(&wav_path);
+        write_test_wav_layer(
+            &wav_path,
+            WavTarget::Id3v2,
+            HashMap::from([("artist".to_string(), Some("ID3 old".to_string()))]),
+        );
+        write_test_wav_layer(
+            &wav_path,
+            WavTarget::RiffInfo,
+            HashMap::from([("artist".to_string(), Some("RIFF old".to_string()))]),
+        );
+
+        let preview = wav_dry_run_json(
+            &wav_path,
+            HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+            vec![],
+            CommentMode::Replace,
+        );
+
+        assert_eq!(
+            preview["changes_by_layer"]["id3v2"]["artist"]["old"],
+            "ID3 old"
+        );
+        assert_eq!(
+            preview["changes_by_layer"]["riff_info"]["artist"]["old"],
+            "RIFF old"
+        );
+        assert_eq!(preview["changes"], preview["changes_by_layer"]["id3v2"]);
+        assert_eq!(
+            preview["wav_targets"],
+            serde_json::json!(["id3v2", "riff_info"])
+        );
+    }
+
+    #[test]
+    fn wav_dry_run_comment_modes_merge_each_layer_independently() {
+        for (mode, id3_new, riff_new) in [
+            (CommentMode::Append, "ID3 old | new", "RIFF old | new"),
+            (CommentMode::Prepend, "new | ID3 old", "new | RIFF old"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let wav_path = dir.path().join("distinct-comments.wav");
+            write_tag_test_wav(&wav_path);
+            write_test_wav_layer(
+                &wav_path,
+                WavTarget::Id3v2,
+                HashMap::from([("comment".to_string(), Some("ID3 old".to_string()))]),
+            );
+            write_test_wav_layer(
+                &wav_path,
+                WavTarget::RiffInfo,
+                HashMap::from([("comment".to_string(), Some("RIFF old".to_string()))]),
+            );
+
+            let preview = wav_dry_run_json(
+                &wav_path,
+                HashMap::from([("comment".to_string(), Some("new".to_string()))]),
+                vec![],
+                mode,
+            );
+
+            assert_eq!(
+                preview["changes_by_layer"]["id3v2"]["comment"]["new"],
+                id3_new
+            );
+            assert_eq!(
+                preview["changes_by_layer"]["riff_info"]["comment"]["new"],
+                riff_new
+            );
+        }
+    }
+
+    #[test]
+    fn wav_dry_run_id3_only_field_appears_only_in_id3v2() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("id3-only-field.wav");
+        write_tag_test_wav(&wav_path);
+
+        let preview = wav_dry_run_json(
+            &wav_path,
+            HashMap::from([("key".to_string(), Some("Am".to_string()))]),
+            vec![],
+            CommentMode::Replace,
+        );
+
+        assert!(preview["changes_by_layer"]["id3v2"].get("key").is_some());
+        assert!(
+            preview["changes_by_layer"]["riff_info"]
+                .get("key")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn wav_dry_run_single_target_contains_exactly_requested_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("single-target.wav");
+        write_tag_test_wav(&wav_path);
+
+        for (target, key) in [
+            (WavTarget::Id3v2, "id3v2"),
+            (WavTarget::RiffInfo, "riff_info"),
+        ] {
+            let preview = wav_dry_run_json(
+                &wav_path,
+                HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+                vec![target],
+                CommentMode::Replace,
+            );
+            let layers = preview["changes_by_layer"]
+                .as_object()
+                .expect("WAV preview should contain layer maps");
+            assert_eq!(layers.keys().collect::<Vec<_>>(), vec![key]);
+            assert_eq!(preview["changes"], preview["changes_by_layer"][key]);
+        }
+    }
+
+    #[test]
+    fn wav_dry_run_noop_includes_empty_requested_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("no-op.wav");
+        write_tag_test_wav(&wav_path);
+        for target in [WavTarget::Id3v2, WavTarget::RiffInfo] {
+            write_test_wav_layer(
+                &wav_path,
+                target,
+                HashMap::from([("artist".to_string(), Some("same".to_string()))]),
+            );
+        }
+
+        let preview = wav_dry_run_json(
+            &wav_path,
+            HashMap::from([("artist".to_string(), Some("same".to_string()))]),
+            vec![],
+            CommentMode::Replace,
+        );
+
+        assert_eq!(
+            preview["changes_by_layer"],
+            serde_json::json!({
+                "id3v2": {},
+                "riff_info": {},
+            })
+        );
+        assert_eq!(preview["changes"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn wav_dry_run_non_wav_omits_layer_map_and_preserves_legacy_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let aiff_path = dir.path().join("single-layer.aiff");
+        write_tag_test_aiff(&aiff_path);
+
+        let result = write_file_tags_dry_run(&WriteEntry {
+            path: aiff_path,
+            tags: HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+            wav_targets: vec![WavTarget::RiffInfo],
+            comment_mode: CommentMode::Replace,
+        });
+        let preview = serde_json::to_value(result).expect("dry-run result should serialize");
+
+        assert!(preview.get("changes_by_layer").is_none());
+        assert_eq!(
+            preview["changes"],
+            serde_json::json!({"artist": {"old": null, "new": "new"}})
+        );
+        assert!(preview.get("wav_targets").is_none());
     }
 
     #[test]

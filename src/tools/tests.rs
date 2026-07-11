@@ -1600,6 +1600,23 @@ fn write_audio_file_mutation_wav(path: &std::path::Path) {
     std::fs::write(path, header).expect("synthetic WAV should write");
 }
 
+fn seed_audio_file_wav_layer(
+    path: &std::path::Path,
+    target: crate::tags::WavTarget,
+    tags: HashMap<String, Option<String>>,
+) {
+    let result = crate::tags::write_file_tags(&crate::tags::WriteEntry {
+        path: path.to_path_buf(),
+        tags,
+        wav_targets: vec![target],
+        comment_mode: crate::tags::CommentMode::Replace,
+    });
+    assert!(
+        matches!(result, crate::tags::FileWriteResult::Ok { .. }),
+        "synthetic WAV layer should seed successfully: {result:?}"
+    );
+}
+
 fn write_audio_file_mutation_png(path: &std::path::Path) {
     let png = [
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
@@ -1640,6 +1657,76 @@ fn assert_cover_art_invalid_params(error: &McpError, rejected: &str) {
     assert!(error.message.contains(&format!("{rejected:?}")));
     assert!(error.message.contains("front_cover"));
     assert!(error.message.contains("back_cover"));
+}
+
+#[tokio::test]
+async fn dry_run_response_reports_wav_layers_without_mutation() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("dry-run.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    seed_audio_file_wav_layer(
+        &audio_path,
+        crate::tags::WavTarget::Id3v2,
+        HashMap::from([("artist".to_string(), Some("ID3 old".to_string()))]),
+    );
+    seed_audio_file_wav_layer(
+        &audio_path,
+        crate::tags::WavTarget::RiffInfo,
+        HashMap::from([("artist".to_string(), Some("RIFF old".to_string()))]),
+    );
+    let fields = ["artist".to_string()];
+    let before_tags = serde_json::to_value(crate::tags::read_file_tags(
+        &audio_path,
+        Some(&fields),
+        false,
+    ))
+    .expect("pre-dry-run tags should serialize");
+    let before_bytes = std::fs::read(&audio_path).expect("synthetic WAV should read");
+
+    let server = ReklawdboxServer::new(None);
+    let output = server
+        .write_file_tags(Parameters(WriteFileTagsParams {
+            writes: vec![WriteFileTagsEntry {
+                path: audio_path.display().to_string(),
+                tags: HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+                wav_targets: None,
+                comment_mode: None,
+            }],
+            dry_run: Some(true),
+        }))
+        .await
+        .expect("MCP WAV dry-run should succeed");
+    let payload = extract_json(&output);
+    let preview = &payload["results"][0];
+
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["summary"]["files_previewed"], 1);
+    assert_eq!(payload["summary"]["files_failed"], 0);
+    assert_eq!(
+        preview["changes_by_layer"]["id3v2"]["artist"]["old"],
+        "ID3 old"
+    );
+    assert_eq!(
+        preview["changes_by_layer"]["riff_info"]["artist"]["old"],
+        "RIFF old"
+    );
+    assert_eq!(preview["changes"], preview["changes_by_layer"]["id3v2"]);
+    assert_eq!(
+        preview["wav_targets"],
+        serde_json::json!(["id3v2", "riff_info"])
+    );
+
+    let after_tags = serde_json::to_value(crate::tags::read_file_tags(
+        &audio_path,
+        Some(&fields),
+        false,
+    ))
+    .expect("post-dry-run tags should serialize");
+    assert_eq!(after_tags, before_tags);
+    assert_eq!(
+        std::fs::read(&audio_path).expect("synthetic WAV should still read"),
+        before_bytes
+    );
 }
 
 #[tokio::test]

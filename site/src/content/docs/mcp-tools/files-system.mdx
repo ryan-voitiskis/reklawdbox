@@ -58,6 +58,39 @@ Each write entry:
 | `prepend` | Insert before existing, separated by ` \| ` |
 | `append` | Insert after existing, separated by ` \| ` |
 
+For WAV dry runs, each requested tag layer is reported independently so its
+existing values and comment merges are visible before writing:
+
+```json
+{
+  "dry_run": true,
+  "summary": { "files_previewed": 1, "files_failed": 0 },
+  "results": [
+    {
+      "path": "/music/track.wav",
+      "status": "preview",
+      "changes": {
+        "artist": { "old": "ID3 old", "new": "new" }
+      },
+      "changes_by_layer": {
+        "id3v2": {
+          "artist": { "old": "ID3 old", "new": "new" }
+        },
+        "riff_info": {
+          "artist": { "old": "RIFF old", "new": "new" }
+        }
+      },
+      "wav_targets": ["id3v2", "riff_info"]
+    }
+  ]
+}
+```
+
+Every requested WAV layer appears in `changes_by_layer`, including as an empty
+object when it needs no changes. The legacy `changes` object remains for
+compatibility: it mirrors `riff_info` for a RIFF-only request and `id3v2` for
+an ID3-only or both-layer request. Non-WAV previews omit `changes_by_layer`.
+
 <Aside type="caution">
   Rekordbox reads only RIFF INFO from WAV files. Always write both layers (the default) to keep tags in sync. Dual-layer WAV writes use atomic copy-write-rename to prevent split-state files from partial failures.
 </Aside>
