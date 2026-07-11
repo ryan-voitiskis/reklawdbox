@@ -2702,6 +2702,343 @@ fn enrich_tracks_invalid_provider_rejected_by_serde() {
     );
 }
 
+fn beatport_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
+    EnrichTracksParams {
+        filters: SearchFilterParams::default(),
+        track_ids: Some(
+            track_ids
+                .iter()
+                .map(|track_id| (*track_id).to_string())
+                .collect(),
+        ),
+        playlist_id: None,
+        max_tracks: Some(u32::try_from(track_ids.len()).expect("test track count should fit u32")),
+        offset: None,
+        providers: Some(vec![crate::types::Provider::Beatport]),
+        skip_cached: Some(false),
+        force_refresh: Some(true),
+        concurrency: Some(2),
+    }
+}
+
+async fn run_beatport_batch_with_timeout(
+    server: &ReklawdboxServer,
+    track_ids: &[&str],
+    context: &str,
+) -> CallToolResult {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.enrich_tracks(Parameters(beatport_batch_params(track_ids))),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{context} should finish within five seconds"))
+    .unwrap_or_else(|error| panic!("{context} should return a batch payload: {error:?}"))
+}
+
+fn set_enrich_test_track_title(conn: &Connection, track_id: &str, title: &str) {
+    conn.execute(
+        "UPDATE djmdContent SET Title = ?2 WHERE ID = ?1",
+        params![track_id, title],
+    )
+    .expect("enrichment test track title should update");
+}
+
+fn create_enrich_cache_writer_test_server(
+    db_conn: Connection,
+) -> (ReklawdboxServer, TempDir, String) {
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str.clone()),
+    );
+    (server, store_dir, store_path_str)
+}
+
+fn install_enrichment_insert_failure(server: &ReklawdboxServer, raw_title: &str) {
+    let normalized_title = crate::normalize::normalize_for_matching(raw_title);
+    let escaped_title = normalized_title.replace('\'', "''");
+    let sql = format!(
+        "CREATE TRIGGER fail_selected_enrichment
+         BEFORE INSERT ON enrichment_cache
+         WHEN NEW.query_title = '{escaped_title}'
+         BEGIN
+             SELECT RAISE(FAIL, 'selected cache write failure');
+         END;"
+    );
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available for trigger setup");
+    conn.execute_batch(&sql)
+        .expect("selective cache-write trigger should install");
+}
+
+fn beatport_match(title: &str) -> crate::beatport::BeatportResult {
+    crate::beatport::BeatportResult {
+        genre: "Techno".to_string(),
+        bpm: Some(128),
+        key: "A minor".to_string(),
+        track_name: title.to_string(),
+        artists: vec!["Aníbal".to_string()],
+        release_date: Some("2026-01-01".to_string()),
+        label: Some("Cache Ack Records".to_string()),
+        fuzzy_match: false,
+    }
+}
+
+fn assert_cache_write_summary(
+    payload: &serde_json::Value,
+    attempted: u64,
+    succeeded: u64,
+    failed: u64,
+) {
+    assert_eq!(payload["summary"]["cache_writes"]["attempted"], attempted);
+    assert_eq!(payload["summary"]["cache_writes"]["succeeded"], succeeded);
+    assert_eq!(payload["summary"]["cache_writes"]["failed"], failed);
+    assert_eq!(attempted, succeeded + failed);
+}
+
+fn assert_cache_write_failure_context(
+    payload: &serde_json::Value,
+    track_id: &str,
+    title: &str,
+    error_prefix: &str,
+) {
+    let failure = payload["failures"]
+        .as_array()
+        .expect("failures should be an array")
+        .iter()
+        .find(|failure| failure["track_id"] == track_id)
+        .unwrap_or_else(|| panic!("failure for {track_id} should be present"));
+    assert_eq!(failure["artist"], "Aníbal");
+    assert_eq!(failure["title"], title);
+    assert_eq!(failure["provider"], "beatport");
+    assert!(
+        failure["error"]
+            .as_str()
+            .expect("cache-write failure should include an error string")
+            .starts_with(error_prefix),
+        "cache-write error should start with {error_prefix}: {failure:?}"
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_persists_no_match_before_skipped() {
+    let db_conn = create_single_track_test_db("ack-no-match", "/tmp/ack-no-match.flac");
+    let title = "Ack No Match";
+    set_enrich_test_track_title(&db_conn, "ack-no-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-no-match"],
+        "acknowledged no-match enrichment",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 1);
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 1, 1, 0);
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
+        .expect("cache read should succeed")
+        .expect("skipped no-match should have a durable negative cache row");
+    assert_eq!(entry.match_quality.as_deref(), Some("none"));
+    assert!(entry.response_json.is_none());
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_failed_no_match_counts_only_failed() {
+    let db_conn = create_single_track_test_db("ack-failed-no-match", "/tmp/ack-failed.flac");
+    let title = "Ack Failed No Match";
+    set_enrich_test_track_title(&db_conn, "ack-failed-no-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    install_enrichment_insert_failure(&server, title);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-failed-no-match"],
+        "failed no-match cache write",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 1, 0, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-failed-no-match",
+        title,
+        "cache write failed:",
+    );
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
+            .expect("cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_open_failure_is_per_attempt() {
+    let db_conn = create_single_track_test_db("ack-open-failure", "/tmp/ack-open-failure.flac");
+    let title = "Ack Writer Open Failure";
+    set_enrich_test_track_title(&db_conn, "ack-open-failure", title);
+    let initialized_store_dir = tempfile::tempdir().expect("initialized store dir should create");
+    let initialized_store_path = initialized_store_dir.path().join("internal.sqlite3");
+    let initialized_store_path_str = initialized_store_path.to_string_lossy().to_string();
+    let store_conn =
+        store::open(&initialized_store_path_str).expect("initialized store should open");
+    let writer_directory = tempfile::tempdir().expect("writer directory should create");
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(writer_directory.path().to_string_lossy().to_string()),
+    );
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-open-failure"],
+        "writer-open cache failure",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 1, 0, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-open-failure",
+        title,
+        "cache writer open failed:",
+    );
+
+    let conn =
+        store::open(&initialized_store_path_str).expect("initialized store should remain readable");
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
+            .expect("cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_mixed_success_and_failure_are_exact() {
+    let db_conn = create_single_track_test_db("ack-mixed-success", "/tmp/ack-mixed-success.flac");
+    let successful_raw_title = "Ack Mixed Success";
+    set_enrich_test_track_title(&db_conn, "ack-mixed-success", successful_raw_title);
+    insert_test_track(
+        &db_conn,
+        "ack-mixed-failure",
+        "Matched But Uncached",
+        "g1",
+        "/tmp/ack-mixed-failure.flac",
+    );
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    install_enrichment_insert_failure(&server, "Matched But Uncached");
+    set_test_beatport_lookup_override("Aníbal", successful_raw_title, Ok(None));
+    set_test_beatport_lookup_override(
+        "Aníbal",
+        "Matched But Uncached",
+        Ok(Some(beatport_match("Matched But Uncached"))),
+    );
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-mixed-success", "ack-mixed-failure"],
+        "mixed cache-write outcomes",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 1);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 2, 1, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-mixed-failure",
+        "Matched But Uncached",
+        "cache write failed:",
+    );
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let success_title = crate::normalize::normalize_for_matching(successful_raw_title);
+    let failed_title = crate::normalize::normalize_for_matching("Matched But Uncached");
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &success_title, None, false,)
+            .expect("successful cache read should succeed")
+            .is_some()
+    );
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &failed_title, None, false,)
+            .expect("failed cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_persists_match_before_enriched() {
+    let db_conn = create_single_track_test_db("ack-match", "/tmp/ack-match.flac");
+    let title = "Ack Persisted Match";
+    set_enrich_test_track_title(&db_conn, "ack-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(Some(beatport_match(title))));
+
+    let result =
+        run_beatport_batch_with_timeout(&server, &["ack-match"], "acknowledged match enrichment")
+            .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 1);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 1, 1, 0);
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
+        .expect("cache read should succeed")
+        .expect("enriched match should have a durable cache row");
+    assert_eq!(entry.match_quality.as_deref(), Some("exact"));
+    assert!(entry.response_json.is_some());
+}
+
 #[tokio::test]
 async fn lookup_discogs_no_match_payload_is_consistent_across_live_and_cache_paths() {
     let db_conn =
@@ -2958,6 +3295,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
     assert_eq!(first_payload["summary"]["cached"], 2);
     assert_eq!(first_payload["summary"]["skipped"], 0);
     assert_eq!(first_payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&first_payload, 0, 0, 0);
     assert_eq!(
         first_payload["failures"]
             .as_array()
@@ -2989,6 +3327,7 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
     assert_eq!(second_payload["summary"]["cached"], 2);
     assert_eq!(second_payload["summary"]["skipped"], 0);
     assert_eq!(second_payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&second_payload, 0, 0, 0);
 
     let store = server
         .cache_store_conn()
@@ -3089,6 +3428,7 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
     assert_eq!(payload["summary"]["enriched"], 0);
     assert_eq!(payload["summary"]["skipped"], 0);
     assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 0, 0, 0);
 }
 
 #[tokio::test]

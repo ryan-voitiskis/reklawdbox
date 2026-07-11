@@ -3,7 +3,6 @@ use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::bandcamp;
-use crate::beatport;
 use crate::db;
 use crate::musicbrainz;
 use crate::store;
@@ -371,7 +370,117 @@ enum EnrichCacheWriteMsg {
         norm_album: Option<String>,
         match_quality: Option<String>,
         response_json: Option<String>,
+        acknowledgement: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
+}
+
+struct EnrichCacheWrite {
+    provider: String,
+    norm_artist: String,
+    norm_title: String,
+    norm_album: Option<String>,
+    match_quality: Option<String>,
+    response_json: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct EnrichCacheWriterReport {
+    attempted: usize,
+    succeeded: usize,
+    failed: usize,
+    dropped_ack_receivers: usize,
+}
+
+async fn write_enrichment_cache(
+    cache_tx: &tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>,
+    write: EnrichCacheWrite,
+) -> Result<(), String> {
+    let (acknowledgement, acknowledged) = tokio::sync::oneshot::channel();
+    cache_tx
+        .send(EnrichCacheWriteMsg::Enrichment {
+            provider: write.provider,
+            norm_artist: write.norm_artist,
+            norm_title: write.norm_title,
+            norm_album: write.norm_album,
+            match_quality: write.match_quality,
+            response_json: write.response_json,
+            acknowledgement,
+        })
+        .await
+        .map_err(|_| "cache write queue closed".to_string())?;
+
+    acknowledged
+        .await
+        .map_err(|_| "cache writer acknowledgement canceled".to_string())?
+}
+
+fn run_enrich_cache_writer(
+    store_path: &str,
+    mut cache_rx: tokio::sync::mpsc::Receiver<EnrichCacheWriteMsg>,
+) -> EnrichCacheWriterReport {
+    let connection =
+        store::open(store_path).map_err(|error| format!("cache writer open failed: {error}"));
+    if let Err(error) = &connection {
+        tracing::error!("Enrich cache writer: {error}");
+    }
+
+    let mut report = EnrichCacheWriterReport::default();
+    while let Some(msg) = cache_rx.blocking_recv() {
+        match msg {
+            EnrichCacheWriteMsg::Enrichment {
+                provider,
+                norm_artist,
+                norm_title,
+                norm_album,
+                match_quality,
+                response_json,
+                acknowledgement,
+            } => {
+                report.attempted += 1;
+                let result = match &connection {
+                    Ok(conn) => store::set_enrichment(
+                        conn,
+                        &provider,
+                        &norm_artist,
+                        &norm_title,
+                        norm_album.as_deref(),
+                        match_quality.as_deref(),
+                        response_json.as_deref(),
+                    )
+                    .map_err(|error| format!("cache write failed: {error}")),
+                    Err(error) => Err(error.clone()),
+                };
+
+                if result.is_ok() {
+                    report.succeeded += 1;
+                } else {
+                    report.failed += 1;
+                }
+                if acknowledgement.send(result).is_err() {
+                    report.dropped_ack_receivers += 1;
+                }
+            }
+        }
+    }
+
+    debug_assert_eq!(report.attempted, report.succeeded + report.failed);
+    report
+}
+
+fn cache_write_failure(
+    track_id: &str,
+    artist: &str,
+    title: &str,
+    provider: &str,
+    error: String,
+) -> serde_json::Value {
+    serde_json::json!({
+        "track_id": track_id,
+        "artist": artist,
+        "title": title,
+        "provider": provider,
+        "error": error,
+    })
 }
 
 /// Shared enrichment future for Beatport and Bandcamp: acquire semaphore, run
@@ -435,36 +544,52 @@ where
                     );
                 }
             };
-            if let Err(e) = cache_tx
-                .send(EnrichCacheWriteMsg::Enrichment {
+            match write_enrichment_cache(
+                cache_tx,
+                EnrichCacheWrite {
                     provider: provider.to_string(),
                     norm_artist,
                     norm_title,
                     norm_album: None,
                     match_quality: Some(quality.to_string()),
                     response_json: Some(json_str),
-                })
-                .await
+                },
+            )
+            .await
             {
-                tracing::warn!(provider, "cache channel send failed: {e}");
+                Ok(()) => (1, 0, Vec::new()),
+                Err(error) => (
+                    0,
+                    0,
+                    vec![cache_write_failure(
+                        track_id, artist, title, provider, error,
+                    )],
+                ),
             }
-            (1, 0, Vec::new())
         }
         Ok(None) => {
-            if let Err(e) = cache_tx
-                .send(EnrichCacheWriteMsg::Enrichment {
+            match write_enrichment_cache(
+                cache_tx,
+                EnrichCacheWrite {
                     provider: provider.to_string(),
                     norm_artist,
                     norm_title,
                     norm_album: None,
                     match_quality: Some("none".to_string()),
                     response_json: None,
-                })
-                .await
+                },
+            )
+            .await
             {
-                tracing::warn!(provider, "cache channel send failed: {e}");
+                Ok(()) => (0, 1, Vec::new()),
+                Err(error) => (
+                    0,
+                    0,
+                    vec![cache_write_failure(
+                        track_id, artist, title, provider, error,
+                    )],
+                ),
             }
-            (0, 1, Vec::new())
         }
         Err(e) => (
             0,
@@ -635,36 +760,54 @@ async fn enrich_single_track(
                             );
                         }
                     };
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
+                    match write_enrichment_cache(
+                        &cache_tx,
+                        EnrichCacheWrite {
                             provider: "discogs".to_string(),
                             norm_artist,
                             norm_title,
                             norm_album,
                             match_quality: Some(quality),
                             response_json: Some(json_str),
-                        })
-                        .await
+                        },
+                    )
+                    .await
                     {
-                        tracing::warn!(provider = "discogs", "cache channel send failed: {e}");
+                        Ok(()) => (1, 0, Vec::new(), None),
+                        Err(error) => (
+                            0,
+                            0,
+                            vec![cache_write_failure(
+                                &track_id, &artist, &title, "discogs", error,
+                            )],
+                            None,
+                        ),
                     }
-                    (1, 0, Vec::new(), None)
                 }
                 Ok(None) => {
-                    if let Err(e) = cache_tx
-                        .send(EnrichCacheWriteMsg::Enrichment {
+                    match write_enrichment_cache(
+                        &cache_tx,
+                        EnrichCacheWrite {
                             provider: "discogs".to_string(),
                             norm_artist,
                             norm_title,
                             norm_album,
                             match_quality: Some("none".to_string()),
                             response_json: None,
-                        })
-                        .await
+                        },
+                    )
+                    .await
                     {
-                        tracing::warn!(provider = "discogs", "cache channel send failed: {e}");
+                        Ok(()) => (0, 1, Vec::new(), None),
+                        Err(error) => (
+                            0,
+                            0,
+                            vec![cache_write_failure(
+                                &track_id, &artist, &title, "discogs", error,
+                            )],
+                            None,
+                        ),
                     }
-                    (0, 1, Vec::new(), None)
                 }
                 Err(e) => {
                     if let Some(remediation) = e.auth_remediation() {
@@ -722,7 +865,7 @@ async fn enrich_single_track(
                 norm_title,
                 beatport_sem,
                 &cache_tx,
-                beatport::lookup(&server.state.http, &artist, &title),
+                lookup_beatport_remote(&server, &artist, &title),
                 |r| if r.fuzzy_match { "fuzzy" } else { "exact" },
             )
             .await
@@ -811,44 +954,10 @@ pub(super) async fn handle_enrich_tracks(
         let _conn = server.cache_store_conn()?;
     }
 
-    let (cache_tx, mut cache_rx) =
-        tokio::sync::mpsc::channel::<EnrichCacheWriteMsg>(concurrency * 4);
+    let (cache_tx, cache_rx) = tokio::sync::mpsc::channel::<EnrichCacheWriteMsg>(concurrency * 4);
     let writer_store_path = store_path.clone();
-    let writer_handle = tokio::task::spawn_blocking(move || {
-        let conn = match store::open(&writer_store_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Enrich cache writer: failed to open store: {e}");
-                return;
-            }
-        };
-        while let Some(msg) = cache_rx.blocking_recv() {
-            match msg {
-                EnrichCacheWriteMsg::Enrichment {
-                    provider,
-                    norm_artist,
-                    norm_title,
-                    norm_album,
-                    match_quality,
-                    response_json,
-                } => {
-                    if let Err(e) = store::set_enrichment(
-                        &conn,
-                        &provider,
-                        &norm_artist,
-                        &norm_title,
-                        norm_album.as_deref(),
-                        match_quality.as_deref(),
-                        response_json.as_deref(),
-                    ) {
-                        tracing::error!(
-                            "Enrich cache writer: failed to write {provider} for {norm_artist}/{norm_title}: {e}"
-                        );
-                    }
-                }
-            }
-        }
-    });
+    let writer_handle =
+        tokio::task::spawn_blocking(move || run_enrich_cache_writer(&writer_store_path, cache_rx));
 
     let (auth_fail_tx, auth_fail_rx) = tokio::sync::watch::channel(false);
     let auth_fail_tx = std::sync::Arc::new(auth_fail_tx);
@@ -928,12 +1037,19 @@ pub(super) async fn handle_enrich_tracks(
     }
 
     drop(cache_tx);
-    if let Err(e) = writer_handle.await {
-        progress.failures.push(serde_json::json!({
-            "provider": "cache_writer",
-            "error": format!("Cache writer task failed: {e}"),
-        }));
-    }
+    let cache_write_report = match writer_handle.await {
+        Ok(report) => {
+            debug_assert_eq!(report.attempted, report.succeeded + report.failed);
+            report
+        }
+        Err(e) => {
+            progress.failures.push(serde_json::json!({
+                "provider": "cache_writer",
+                "error": format!("Cache writer task failed: {e}"),
+            }));
+            EnrichCacheWriterReport::default()
+        }
+    };
 
     let result = serde_json::json!({
         "summary": {
@@ -944,8 +1060,364 @@ pub(super) async fn handle_enrich_tracks(
             "skipped": progress.skipped,
             "failed": progress.failures.len(),
             "concurrency": concurrency,
+            "cache_writes": {
+                "attempted": cache_write_report.attempted,
+                "succeeded": cache_write_report.succeeded,
+                "failed": cache_write_report.failed,
+            },
         },
         "failures": progress.failures,
     });
     ok_json(&result)
+}
+
+#[cfg(test)]
+mod cache_write_tests {
+    use super::*;
+    use std::future::Future;
+    use std::time::Duration;
+
+    const OUTER_TIMEOUT: Duration = Duration::from_secs(5);
+    const STEP_TIMEOUT: Duration = Duration::from_secs(2);
+
+    fn test_write(title: &str) -> EnrichCacheWrite {
+        EnrichCacheWrite {
+            provider: "beatport".to_string(),
+            norm_artist: "test artist".to_string(),
+            norm_title: title.to_string(),
+            norm_album: None,
+            match_quality: Some("none".to_string()),
+            response_json: None,
+        }
+    }
+
+    async fn bounded<T>(phase: &str, future: impl Future<Output = T>) -> Result<T, String> {
+        tokio::time::timeout(STEP_TIMEOUT, future)
+            .await
+            .map_err(|_| format!("{phase} timed out"))
+    }
+
+    struct AckTaskGuard {
+        sender: Option<tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>>,
+        writer: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    }
+
+    impl AckTaskGuard {
+        fn new(
+            sender: tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>,
+            writer: tokio::task::JoinHandle<Result<(), String>>,
+        ) -> Self {
+            Self {
+                sender: Some(sender),
+                writer: Some(writer),
+            }
+        }
+
+        fn sender(&self) -> &tokio::sync::mpsc::Sender<EnrichCacheWriteMsg> {
+            self.sender
+                .as_ref()
+                .expect("ack test sender should remain until cleanup")
+        }
+
+        async fn finish(&mut self) -> Result<(), String> {
+            self.sender.take();
+            let mut writer = self
+                .writer
+                .take()
+                .ok_or_else(|| "ack test writer handle is missing".to_string())?;
+            match tokio::time::timeout(STEP_TIMEOUT, &mut writer).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => Err(format!("ack test writer join failed: {error}")),
+                Err(_) => {
+                    writer.abort();
+                    let _ = tokio::time::timeout(STEP_TIMEOUT, &mut writer).await;
+                    Err("ack test writer join timed out".to_string())
+                }
+            }
+        }
+    }
+
+    impl Drop for AckTaskGuard {
+        fn drop(&mut self) {
+            self.sender.take();
+            if let Some(writer) = self.writer.take() {
+                writer.abort();
+            }
+        }
+    }
+
+    async fn exercise_ack(
+        acknowledgement: Option<Result<(), String>>,
+    ) -> Result<Result<(), String>, String> {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let writer = tokio::spawn(async move {
+            let message = bounded("ack channel receive", receiver.recv())
+                .await?
+                .ok_or_else(|| "ack channel closed before a message arrived".to_string())?;
+            match message {
+                EnrichCacheWriteMsg::Enrichment {
+                    acknowledgement: sender,
+                    ..
+                } => {
+                    if let Some(result) = acknowledgement {
+                        sender
+                            .send(result)
+                            .map_err(|_| "ack receiver dropped unexpectedly".to_string())?;
+                    }
+                }
+            }
+            Ok(())
+        });
+        let mut guard = AckTaskGuard::new(sender, writer);
+        let result = bounded(
+            "oneshot acknowledgement",
+            write_enrichment_cache(guard.sender(), test_write("ack test")),
+        )
+        .await;
+        let cleanup = guard.finish().await;
+        cleanup?;
+        result
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_ack_success() {
+        let result = tokio::time::timeout(OUTER_TIMEOUT, exercise_ack(Some(Ok(()))))
+            .await
+            .expect("ack success scenario should finish within five seconds")
+            .expect("ack success harness should finish cleanly");
+        assert_eq!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_ack_explicit_writer_error() {
+        let result = tokio::time::timeout(
+            OUTER_TIMEOUT,
+            exercise_ack(Some(Err("cache write failed: sentinel".to_string()))),
+        )
+        .await
+        .expect("ack error scenario should finish within five seconds")
+        .expect("ack error harness should finish cleanly");
+        assert_eq!(result, Err("cache write failed: sentinel".to_string()));
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_ack_closed_queue() {
+        let result = tokio::time::timeout(OUTER_TIMEOUT, async {
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            drop(receiver);
+            bounded(
+                "closed queue send",
+                write_enrichment_cache(&sender, test_write("closed queue")),
+            )
+            .await
+        })
+        .await
+        .expect("closed queue scenario should finish within five seconds")
+        .expect("closed queue bounded wait should finish");
+        assert_eq!(result, Err("cache write queue closed".to_string()));
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_ack_canceled_sender() {
+        let result = tokio::time::timeout(OUTER_TIMEOUT, exercise_ack(None))
+            .await
+            .expect("ack cancellation scenario should finish within five seconds")
+            .expect("ack cancellation harness should finish cleanly");
+        assert_eq!(
+            result,
+            Err("cache writer acknowledgement canceled".to_string())
+        );
+    }
+
+    struct WriterHarness {
+        sender: Option<tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>>,
+        writer: Option<tokio::task::JoinHandle<EnrichCacheWriterReport>>,
+    }
+
+    impl WriterHarness {
+        fn new(store_path: String) -> Self {
+            let (sender, receiver) = tokio::sync::mpsc::channel(2);
+            let writer =
+                tokio::task::spawn_blocking(move || run_enrich_cache_writer(&store_path, receiver));
+            Self {
+                sender: Some(sender),
+                writer: Some(writer),
+            }
+        }
+
+        fn sender(&self) -> &tokio::sync::mpsc::Sender<EnrichCacheWriteMsg> {
+            self.sender
+                .as_ref()
+                .expect("writer test sender should remain until cleanup")
+        }
+
+        async fn write(&self, write: EnrichCacheWrite) -> Result<(), String> {
+            bounded(
+                "writer acknowledgement",
+                write_enrichment_cache(self.sender(), write),
+            )
+            .await?
+        }
+
+        async fn send_with_dropped_ack(&self, write: EnrichCacheWrite) -> Result<(), String> {
+            let (acknowledgement, acknowledged) = tokio::sync::oneshot::channel();
+            drop(acknowledged);
+            bounded(
+                "dropped-ack channel send",
+                self.sender().send(EnrichCacheWriteMsg::Enrichment {
+                    provider: write.provider,
+                    norm_artist: write.norm_artist,
+                    norm_title: write.norm_title,
+                    norm_album: write.norm_album,
+                    match_quality: write.match_quality,
+                    response_json: write.response_json,
+                    acknowledgement,
+                }),
+            )
+            .await?
+            .map_err(|_| "writer queue closed during dropped-ack test".to_string())
+        }
+
+        async fn finish(&mut self) -> Result<EnrichCacheWriterReport, String> {
+            self.sender.take();
+            let mut writer = self
+                .writer
+                .take()
+                .ok_or_else(|| "writer test handle is missing".to_string())?;
+            match tokio::time::timeout(STEP_TIMEOUT, &mut writer).await {
+                Ok(Ok(report)) => Ok(report),
+                Ok(Err(error)) => Err(format!("writer test join failed: {error}")),
+                Err(_) => {
+                    writer.abort();
+                    let _ = tokio::time::timeout(STEP_TIMEOUT, &mut writer).await;
+                    Err("writer test join timed out".to_string())
+                }
+            }
+        }
+    }
+
+    impl Drop for WriterHarness {
+        fn drop(&mut self) {
+            self.sender.take();
+            if let Some(writer) = self.writer.take() {
+                writer.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_writer_persists_and_reports_success() {
+        let (result, report) = tokio::time::timeout(OUTER_TIMEOUT, async {
+            let store_dir = tempfile::tempdir().expect("writer store dir should create");
+            let store_path = store_dir.path().join("internal.sqlite3");
+            let mut harness = WriterHarness::new(store_path.to_string_lossy().to_string());
+            let result = harness.write(test_write("writer success")).await;
+            let report = harness.finish().await?;
+            Ok::<_, String>((result, report))
+        })
+        .await
+        .expect("writer success scenario should finish within five seconds")
+        .expect("writer success harness should finish cleanly");
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            report,
+            EnrichCacheWriterReport {
+                attempted: 1,
+                succeeded: 1,
+                failed: 0,
+                dropped_ack_receivers: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_writer_continues_after_selective_failure() {
+        let (rejected, accepted, report) = tokio::time::timeout(OUTER_TIMEOUT, async {
+            let store_dir = tempfile::tempdir().expect("writer store dir should create");
+            let store_path = store_dir.path().join("internal.sqlite3");
+            let conn = store::open(&store_path.to_string_lossy())
+                .expect("writer test store should initialize");
+            conn.execute_batch(
+                "CREATE TRIGGER fail_selected_enrichment
+                 BEFORE INSERT ON enrichment_cache
+                 WHEN NEW.query_title = 'reject this'
+                 BEGIN
+                     SELECT RAISE(FAIL, 'selected cache write failure');
+                 END;",
+            )
+            .expect("selective failure trigger should install");
+            drop(conn);
+
+            let mut harness = WriterHarness::new(store_path.to_string_lossy().to_string());
+            let rejected = harness.write(test_write("reject this")).await;
+            let accepted = harness.write(test_write("accept this")).await;
+            let report = harness.finish().await?;
+            Ok::<_, String>((rejected, accepted, report))
+        })
+        .await
+        .expect("selective writer scenario should finish within five seconds")
+        .expect("selective writer harness should finish cleanly");
+
+        assert!(
+            rejected
+                .expect_err("selected cache write should fail")
+                .starts_with("cache write failed:")
+        );
+        assert_eq!(accepted, Ok(()));
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.succeeded, 1);
+        assert_eq!(report.failed, 1);
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_writer_open_failure_drains_all_messages() {
+        let (first, second, report) = tokio::time::timeout(OUTER_TIMEOUT, async {
+            let store_dir = tempfile::tempdir().expect("writer store dir should create");
+            let mut harness = WriterHarness::new(store_dir.path().to_string_lossy().to_string());
+            let first = harness.write(test_write("open failure one")).await;
+            let second = harness.write(test_write("open failure two")).await;
+            let report = harness.finish().await?;
+            Ok::<_, String>((first, second, report))
+        })
+        .await
+        .expect("writer-open scenario should finish within five seconds")
+        .expect("writer-open harness should finish cleanly");
+
+        for result in [first, second] {
+            assert!(
+                result
+                    .expect_err("writer-open failure should reject every message")
+                    .starts_with("cache writer open failed:")
+            );
+        }
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.failed, 2);
+    }
+
+    #[tokio::test]
+    async fn enrich_cache_writer_records_dropped_ack_and_continues() {
+        let (next, report) = tokio::time::timeout(OUTER_TIMEOUT, async {
+            let store_dir = tempfile::tempdir().expect("writer store dir should create");
+            let store_path = store_dir.path().join("internal.sqlite3");
+            let mut harness = WriterHarness::new(store_path.to_string_lossy().to_string());
+            let dropped = harness
+                .send_with_dropped_ack(test_write("dropped ack"))
+                .await;
+            let next = harness.write(test_write("after dropped ack")).await;
+            let report = harness.finish().await?;
+            dropped?;
+            Ok::<_, String>((next, report))
+        })
+        .await
+        .expect("dropped-ack scenario should finish within five seconds")
+        .expect("dropped-ack harness should finish cleanly");
+
+        assert_eq!(next, Ok(()));
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.succeeded, 2);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.dropped_ack_receivers, 1);
+    }
 }

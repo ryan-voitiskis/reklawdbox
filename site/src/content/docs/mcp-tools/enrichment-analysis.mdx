@@ -89,6 +89,19 @@ Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filter
 | `force_refresh` | boolean | | Bypass cache entirely (default: `false`) |
 | `concurrency` | integer | | Max concurrent enrichments (default: `4`, max: `8`) |
 
+The response summary reports cache persistence under `summary.cache_writes`:
+
+| Field | Description |
+|-------|-------------|
+| `attempted` | Cache writes received by the single persistence writer |
+| `succeeded` | Writes acknowledged after the enrichment row was stored durably |
+| `failed` | Writes rejected because the cache store could not be opened or updated |
+
+`summary.enriched` and `summary.skipped` advance only after the matching
+positive or negative cache row is acknowledged as durable. A cache-write
+failure increments `summary.failed`, appears in `failures` with track and
+provider context, and is never also reported as enriched or skipped.
+
 <Aside type="tip">
   For large libraries, use the CLI `hydrate` command instead — it runs unattended with progress bars and graceful shutdown. See [CLI](/cli/).
 </Aside>
