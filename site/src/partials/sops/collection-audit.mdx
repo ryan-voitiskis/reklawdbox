@@ -39,9 +39,11 @@ These are independent of the tag audit and can be run at any time. Address any f
 audit_state(scan, scope="/path/", skip_issue_types=["GENRE_SET"])
 ```
 
-Review summary: `files_in_scope`, `new_issues` by type, `total_open`.
+Review summary: `files_in_scope`, `failed_reads`, `new_issues` by type, `total_open`, and `warnings`.
 
-If `total_open` = 0 → skip to Final Report.
+If `failed_reads` > 0, surface the unreadable paths from `warnings` and retry the scan. If a path remains unreadable, report an **incomplete audit** and do not take the clean-result path.
+
+Only when both `total_open` = 0 and `failed_reads` = 0 → skip to Final Report.
 
 ### 2. Review and triage
 
@@ -128,6 +130,8 @@ audit_state(resolve_issues, issue_ids=[...], resolution="wont_fix", note="...")
 audit_state(scan, scope="/path/")
 ```
 
+Check `failed_reads` before reviewing issue totals. If it is nonzero, surface the warning paths and retry the scan. Persistent failures mean the audit is incomplete, even when `total_open` = 0.
+
 If `total_open` > 0, return to Step 2 or confirm remaining items are intentionally deferred.
 
 ### 6. Final report
@@ -136,7 +140,9 @@ If `total_open` > 0, return to Step 2 or confirm remaining items are intentional
 audit_state(get_summary, scope="/path/")
 ```
 
-Present: scope, files scanned, pass rate, fixes by type, deferred items, next steps (Rekordbox import, genre classification SOP).
+Carry `failed_reads` forward from the most recent scan response; `get_summary` reports persisted issue state, not read-attempt counters.
+
+Present: scope, files scanned, `failed_reads`, pass rate, fixes by type, deferred items, and next steps (Rekordbox import, genre classification SOP). Declare the audit clean only when `total_open` = 0 and `failed_reads` = 0; otherwise label it an incomplete audit and list the unreadable paths.
 
 ---
 

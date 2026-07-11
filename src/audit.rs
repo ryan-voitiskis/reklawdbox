@@ -937,6 +937,7 @@ const BATCH_SIZE: usize = 500;
 pub struct ScanSummary {
     pub files_in_scope: usize,
     pub scanned: usize,
+    pub failed_reads: usize,
     pub skipped_unchanged: usize,
     pub missing_from_disk: usize,
     pub skipped_issue_types: Vec<String>,
@@ -1035,16 +1036,65 @@ fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
     })
 }
 
-fn file_mtime_iso(metadata: &std::fs::Metadata) -> String {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| {
-            let duration = t.duration_since(std::time::UNIX_EPOCH).ok()?;
-            let dt = chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)?;
-            Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        })
+const AUDIT_FRESHNESS_VERSION: &str = "v2";
+
+fn audit_context_freshness_token(context: AuditContext) -> &'static str {
+    match context {
+        AuditContext::AlbumTrack => "album",
+        AuditContext::LooseTrack => "loose",
+    }
+}
+
+fn audit_freshness_key(
+    modified: Option<std::time::SystemTime>,
+    context: AuditContext,
+) -> Option<String> {
+    let modified_nanos = modified?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(format!(
+        "{AUDIT_FRESHNESS_VERSION}:{modified_nanos}:{}",
+        audit_context_freshness_token(context)
+    ))
+}
+
+fn audit_freshness_key_from_metadata(
+    metadata: &std::fs::Metadata,
+    context: AuditContext,
+) -> Option<String> {
+    audit_freshness_key(metadata.modified().ok(), context)
+}
+
+fn is_successful_audit_freshness_key(value: &str) -> bool {
+    let mut parts = value.split(':');
+    matches!(parts.next(), Some(AUDIT_FRESHNESS_VERSION))
+        && parts
+            .next()
+            .is_some_and(|nanos| nanos.parse::<u128>().is_ok())
+        && matches!(parts.next(), Some("album" | "loose"))
+        && parts.next().is_none()
+}
+
+#[derive(Clone, Copy)]
+enum AuditRetryKind {
+    Read,
+    Metadata,
+}
+
+fn retry_audit_freshness_key(kind: AuditRetryKind, attempt_nanos: u128) -> String {
+    let kind = match kind {
+        AuditRetryKind::Read => "read",
+        AuditRetryKind::Metadata => "metadata",
+    };
+    format!("retry:{kind}:{attempt_nanos}")
+}
+
+fn audit_attempt_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
+        .as_nanos()
 }
 
 fn now_iso() -> String {
@@ -1076,6 +1126,24 @@ pub fn scan(
     revalidate: bool,
     skip_issue_types: &HashSet<IssueType>,
     rekordbox_imported: Option<&HashSet<String>>,
+) -> Result<ScanSummary, String> {
+    scan_with_freshness_key_provider(
+        conn,
+        scope,
+        revalidate,
+        skip_issue_types,
+        rekordbox_imported,
+        audit_freshness_key_from_metadata,
+    )
+}
+
+fn scan_with_freshness_key_provider(
+    conn: &Connection,
+    scope: &str,
+    revalidate: bool,
+    skip_issue_types: &HashSet<IssueType>,
+    rekordbox_imported: Option<&HashSet<String>>,
+    freshness_key_for: fn(&std::fs::Metadata, AuditContext) -> Option<String>,
 ) -> Result<ScanSummary, String> {
     let scope = enforce_trailing_slash(scope);
     if scope == "/" {
@@ -1111,6 +1179,7 @@ pub fn scan(
     )?;
 
     let mut scanned = 0usize;
+    let mut failed_reads = 0usize;
     let mut skipped_unchanged = 0usize;
     let mut new_issues: HashMap<String, usize> = HashMap::new();
     let mut auto_resolved: HashMap<String, usize> = HashMap::new();
@@ -1149,30 +1218,35 @@ pub fn scan(
                 continue;
             }
         };
-        let mtime = file_mtime_iso(&metadata);
         let size = metadata.len() as i64;
-
+        let context = classify_track_context(file_path, &album_dirs);
+        let expected_freshness_key = freshness_key_for(&metadata, context);
         let existing_file = existing_map.get(&path_str);
+        let is_unchanged = !revalidate
+            && existing_file.is_some_and(|file| {
+                file.file_size == size
+                    && expected_freshness_key.as_deref().is_some_and(|expected| {
+                        is_successful_audit_freshness_key(expected)
+                            && file.freshness_key == expected
+                    })
+            });
 
-        let needs_scan = match existing_file {
-            None => true,
-            Some(ef) => {
-                if revalidate {
-                    true
-                } else {
-                    ef.file_mtime != mtime || ef.file_size != size
-                }
-            }
-        };
-
-        if !needs_scan {
+        if is_unchanged {
             skipped_unchanged += 1;
         } else {
             let read_result = tags::read_file_tags(file_path, None, false);
-            let context = classify_track_context(file_path, &album_dirs);
 
-            let mut detected: Vec<DetectedIssue> = Vec::new();
-            if !matches!(read_result, FileReadResult::Error { .. }) {
+            if let FileReadResult::Error { error, .. } = &read_result {
+                failed_reads += 1;
+                warnings.push(format!(
+                    "Tag read failed for {path_str}: {error}; file will be retried."
+                ));
+                let retry_key =
+                    retry_audit_freshness_key(AuditRetryKind::Read, audit_attempt_nanos());
+                store::upsert_audit_file(&tx, &path_str, &now, &retry_key, size)
+                    .map_err(|e| format!("DB error upserting failed-read file: {e}"))?;
+            } else {
+                let mut detected: Vec<DetectedIssue> = Vec::new();
                 detected.extend(check_tags(
                     file_path,
                     &read_result,
@@ -1185,71 +1259,83 @@ pub fn scan(
                     &context,
                     skip_issue_types,
                 ));
-            }
 
-            // Annotate rename-type issues with Rekordbox import status
-            if let Some(imported_set) = rekordbox_imported {
-                for issue in &mut detected {
-                    let is_imported = match issue.issue_type {
-                        IssueType::OriginalMixSuffix => Some(imported_set.contains(&path_str)),
-                        IssueType::TechSpecsInDir => {
-                            let parent_dir = file_path
-                                .parent()
-                                .map(|d| d.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            Some(imported_dirs.contains(&parent_dir))
+                // Annotate rename-type issues with Rekordbox import status
+                if let Some(imported_set) = rekordbox_imported {
+                    for issue in &mut detected {
+                        let is_imported = match issue.issue_type {
+                            IssueType::OriginalMixSuffix => Some(imported_set.contains(&path_str)),
+                            IssueType::TechSpecsInDir => {
+                                let parent_dir = file_path
+                                    .parent()
+                                    .map(|d| d.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                Some(imported_dirs.contains(&parent_dir))
+                            }
+                            _ => None,
+                        };
+                        if let (Some(imported), Some(detail)) = (is_imported, &issue.detail)
+                            && let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail)
+                        {
+                            obj["imported"] = serde_json::Value::Bool(imported);
+                            issue.detail = Some(obj.to_string());
                         }
-                        _ => None,
-                    };
-                    if let (Some(imported), Some(detail)) = (is_imported, &issue.detail)
-                        && let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail)
-                    {
-                        obj["imported"] = serde_json::Value::Bool(imported);
-                        issue.detail = Some(obj.to_string());
-                    }
-                }
-            }
-
-            store::upsert_audit_file(&tx, &path_str, &now, &mtime, size)
-                .map_err(|e| format!("DB error upserting file: {e}"))?;
-
-            let detected_types: Vec<&str> =
-                detected.iter().map(|d| d.issue_type.as_str()).collect();
-            for issue in &detected {
-                store::upsert_audit_issue(
-                    &tx,
-                    &path_str,
-                    issue.issue_type.as_str(),
-                    issue.detail.as_deref(),
-                    "open",
-                    &now,
-                )
-                .map_err(|e| format!("DB error upserting issue: {e}"))?;
-
-                *new_issues.entry(issue.issue_type.to_string()).or_insert(0) += 1;
-            }
-
-            // Auto-resolve issues no longer detected (for changed/re-read files).
-            // Skip when file read errored — we don't know the true state.
-            if existing_file.is_some() && !matches!(read_result, FileReadResult::Error { .. }) {
-                // Skipped issue types should not be auto-resolved — we didn't check them
-                let mut types_still_open: Vec<&str> = detected_types.clone();
-                for skip_type in skip_issue_types {
-                    let s = skip_type.as_str();
-                    if !types_still_open.contains(&s) {
-                        types_still_open.push(s);
                     }
                 }
 
-                let resolved_count =
-                    store::mark_issues_resolved_for_path(&tx, &path_str, &types_still_open, &now)
-                        .map_err(|e| format!("DB error resolving issues: {e}"))?;
-                if resolved_count > 0 {
-                    *auto_resolved.entry("_total".to_string()).or_insert(0) += resolved_count;
-                }
-            }
+                let persisted_freshness_key = expected_freshness_key.unwrap_or_else(|| {
+                    warnings.push(format!(
+                        "Audited {path_str}, but its modified time was unavailable; file will be retried."
+                    ));
+                    retry_audit_freshness_key(
+                        AuditRetryKind::Metadata,
+                        audit_attempt_nanos(),
+                    )
+                });
+                store::upsert_audit_file(&tx, &path_str, &now, &persisted_freshness_key, size)
+                    .map_err(|e| format!("DB error upserting file: {e}"))?;
 
-            scanned += 1;
+                let detected_types: Vec<&str> =
+                    detected.iter().map(|d| d.issue_type.as_str()).collect();
+                for issue in &detected {
+                    store::upsert_audit_issue(
+                        &tx,
+                        &path_str,
+                        issue.issue_type.as_str(),
+                        issue.detail.as_deref(),
+                        "open",
+                        &now,
+                    )
+                    .map_err(|e| format!("DB error upserting issue: {e}"))?;
+
+                    *new_issues.entry(issue.issue_type.to_string()).or_insert(0) += 1;
+                }
+
+                // Auto-resolve issues no longer detected (for changed/re-read files).
+                if existing_file.is_some() {
+                    // Skipped issue types should not be auto-resolved — we didn't check them
+                    let mut types_still_open: Vec<&str> = detected_types.clone();
+                    for skip_type in skip_issue_types {
+                        let s = skip_type.as_str();
+                        if !types_still_open.contains(&s) {
+                            types_still_open.push(s);
+                        }
+                    }
+
+                    let resolved_count = store::mark_issues_resolved_for_path(
+                        &tx,
+                        &path_str,
+                        &types_still_open,
+                        &now,
+                    )
+                    .map_err(|e| format!("DB error resolving issues: {e}"))?;
+                    if resolved_count > 0 {
+                        *auto_resolved.entry("_total".to_string()).or_insert(0) += resolved_count;
+                    }
+                }
+
+                scanned += 1;
+            }
         }
 
         batch_count += 1;
@@ -1315,6 +1401,7 @@ pub fn scan(
     Ok(ScanSummary {
         files_in_scope,
         scanned,
+        failed_reads,
         skipped_unchanged,
         missing_from_disk,
         skipped_issue_types: skipped_names,
@@ -1449,6 +1536,32 @@ pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_minimal_pcm_wav(path: &Path) {
+        let data_size: u32 = 2;
+        let file_size = 36 + data_size;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&file_size.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&88200u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.extend_from_slice(&[0u8; 2]);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    fn open_scan_test_store(dir: &tempfile::TempDir) -> Connection {
+        let db_path = dir.path().join("internal.sqlite3");
+        store::open(db_path.to_str().unwrap()).unwrap()
+    }
 
     // -- classify_track_context --
 
@@ -2213,6 +2326,414 @@ mod tests {
     fn scan_rejects_empty_scope() {
         let result = enforce_trailing_slash("");
         assert_eq!(result, "/");
+    }
+
+    #[test]
+    fn audit_read_failure_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let unreadable = dir.path().join("broken.flac");
+        std::fs::write(&unreadable, b"not a valid FLAC file").unwrap();
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let second = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            first.scanned, 0,
+            "a failed tag read is not a completed scan"
+        );
+        assert_eq!(first.failed_reads, 1);
+        assert_eq!(second.scanned, 0, "the retry should fail, not scan cleanly");
+        assert_eq!(second.failed_reads, 1);
+        assert_eq!(
+            second.skipped_unchanged, 0,
+            "a failed tag read must remain retryable",
+        );
+        assert!(
+            second
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Tag read failed")
+                    && warning.contains("broken.flac"))
+        );
+        let persisted = store::get_audit_file(&conn, unreadable.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(persisted.freshness_key.starts_with("retry:read:"));
+    }
+
+    #[test]
+    fn audit_read_failure_preserves_existing_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let unreadable = dir.path().join("broken.flac");
+        std::fs::write(&unreadable, b"not a valid FLAC file").unwrap();
+        let path = unreadable.to_str().unwrap();
+        let size = std::fs::metadata(&unreadable).unwrap().len() as i64;
+        store::upsert_audit_file(&conn, path, "before", "legacy-freshness", size).unwrap();
+        store::upsert_audit_issue(
+            &conn,
+            path,
+            IssueType::EmptyArtist.as_str(),
+            Some("existing detail"),
+            "open",
+            "before",
+        )
+        .unwrap();
+
+        let summary = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            true,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let issues = store::get_audit_issues(
+            &conn,
+            &enforce_trailing_slash(dir.path().to_str().unwrap()),
+            None,
+            None,
+            100,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].status, "open");
+        assert_eq!(issues[0].detail.as_deref(), Some("existing detail"));
+        assert_eq!(summary.scanned, 0, "a failed revalidation is not scanned");
+        assert_eq!(summary.failed_reads, 1);
+        assert!(summary.auto_resolved.is_empty());
+        let persisted = store::get_audit_file(&conn, path).unwrap().unwrap();
+        assert!(persisted.freshness_key.starts_with("retry:read:"));
+    }
+
+    #[test]
+    fn audit_freshness_key_distinguishes_subsecond_mtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtime.wav");
+        write_minimal_pcm_wav(&path);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let same_second = 1_700_000_000;
+        let first_time = std::time::UNIX_EPOCH + std::time::Duration::new(same_second, 123_000_000);
+        file.set_times(std::fs::FileTimes::new().set_modified(first_time))
+            .unwrap();
+        let first_metadata = std::fs::metadata(&path).unwrap();
+
+        let second_time =
+            std::time::UNIX_EPOCH + std::time::Duration::new(same_second, 987_000_000);
+        file.set_times(std::fs::FileTimes::new().set_modified(second_time))
+            .unwrap();
+        let second_metadata = std::fs::metadata(&path).unwrap();
+
+        assert_ne!(
+            first_metadata.modified().unwrap(),
+            second_metadata.modified().unwrap(),
+            "fixture must retain subsecond mtime precision",
+        );
+        let first_key =
+            audit_freshness_key(first_metadata.modified().ok(), AuditContext::LooseTrack).unwrap();
+        let second_key =
+            audit_freshness_key(second_metadata.modified().ok(), AuditContext::LooseTrack).unwrap();
+        assert_ne!(first_key, second_key);
+    }
+
+    #[test]
+    fn audit_freshness_key_context_and_domains() {
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::new(42, 123);
+        let album = audit_freshness_key(Some(modified), AuditContext::AlbumTrack).unwrap();
+        let loose = audit_freshness_key(Some(modified), AuditContext::LooseTrack).unwrap();
+        assert_eq!(album, "v2:42000000123:album");
+        assert_eq!(loose, "v2:42000000123:loose");
+        assert_ne!(album, loose);
+        assert!(is_successful_audit_freshness_key(&album));
+        assert!(is_successful_audit_freshness_key(&loose));
+
+        assert!(audit_freshness_key(None, AuditContext::LooseTrack).is_none());
+        assert!(
+            audit_freshness_key(
+                Some(std::time::UNIX_EPOCH - std::time::Duration::from_nanos(1)),
+                AuditContext::LooseTrack,
+            )
+            .is_none()
+        );
+
+        let read_retry = retry_audit_freshness_key(AuditRetryKind::Read, 99);
+        let metadata_retry = retry_audit_freshness_key(AuditRetryKind::Metadata, 100);
+        assert_eq!(read_retry, "retry:read:99");
+        assert_eq!(metadata_retry, "retry:metadata:100");
+        for not_successful in [
+            read_retry.as_str(),
+            metadata_retry.as_str(),
+            "2026-02-20T10:00:00Z",
+            "v2:not-nanos:loose",
+            "v2:123:other",
+        ] {
+            assert!(!is_successful_audit_freshness_key(not_successful));
+        }
+    }
+
+    #[test]
+    fn album_context_change_reaudits_unchanged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let first_path = dir.path().join("01 First.wav");
+        write_minimal_pcm_wav(&first_path);
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 1);
+
+        let second_path = dir.path().join("02 Second.wav");
+        write_minimal_pcm_wav(&second_path);
+        let after_sibling_added = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            after_sibling_added.scanned, 2,
+            "the unchanged first file must be reaudited after its context changes",
+        );
+        assert_eq!(after_sibling_added.skipped_unchanged, 0);
+
+        let stable_album = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stable_album.scanned, 0);
+        assert_eq!(stable_album.skipped_unchanged, 2);
+    }
+
+    #[test]
+    fn audit_metadata_freshness_failure_is_scanned_and_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let path = dir.path().join("Artist - Track.wav");
+        write_minimal_pcm_wav(&path);
+        let path_str = path.to_str().unwrap();
+        let size = std::fs::metadata(&path).unwrap().len() as i64;
+        store::upsert_audit_file(&conn, path_str, "before", "legacy-freshness", size).unwrap();
+        store::upsert_audit_issue(
+            &conn,
+            path_str,
+            IssueType::GenreSet.as_str(),
+            None,
+            "open",
+            "before",
+        )
+        .unwrap();
+
+        let missing_metadata_key = scan_with_freshness_key_provider(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+            |_, _| None,
+        )
+        .unwrap();
+        assert_eq!(missing_metadata_key.scanned, 1);
+        assert_eq!(missing_metadata_key.failed_reads, 0);
+        assert_eq!(missing_metadata_key.skipped_unchanged, 0);
+        assert!(missing_metadata_key.warnings.iter().any(|warning| {
+            warning.contains("modified time was unavailable") && warning.contains("Track.wav")
+        }));
+        let retry = store::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(retry.freshness_key.starts_with("retry:metadata:"));
+        let issues = store::get_audit_issues(
+            &conn,
+            &enforce_trailing_slash(dir.path().to_str().unwrap()),
+            None,
+            Some(IssueType::GenreSet.as_str()),
+            100,
+            0,
+        )
+        .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].status, "resolved");
+
+        let recovered = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(recovered.scanned, 1);
+        assert_eq!(recovered.failed_reads, 0);
+        let successful = store::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(successful.freshness_key.starts_with("v2:"));
+
+        let unchanged = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(unchanged.scanned, 0);
+        assert_eq!(unchanged.failed_reads, 0);
+        assert_eq!(unchanged.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_successful_unchanged_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        write_minimal_pcm_wav(&dir.path().join("Artist - Track.wav"));
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let second = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 1);
+        assert_eq!(first.failed_reads, 0);
+        assert_eq!(second.scanned, 0);
+        assert_eq!(second.failed_reads, 0);
+        assert_eq!(second.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_legacy_freshness_rescans_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let path = dir.path().join("Artist - Track.wav");
+        write_minimal_pcm_wav(&path);
+        let path_str = path.to_str().unwrap();
+        let size = std::fs::metadata(&path).unwrap().len() as i64;
+        store::upsert_audit_file(&conn, path_str, "before", "2026-02-20T10:00:00Z", size).unwrap();
+
+        let refreshed = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(refreshed.scanned, 1);
+        let persisted = store::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(persisted.freshness_key.starts_with("v2:"));
+
+        let stable = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stable.scanned, 0);
+        assert_eq!(stable.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn unrelated_album_context_change_does_not_reaudit_other_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let stable_dir = dir.path().join("stable");
+        let changing_dir = dir.path().join("changing");
+        std::fs::create_dir(&stable_dir).unwrap();
+        std::fs::create_dir(&changing_dir).unwrap();
+        write_minimal_pcm_wav(&stable_dir.join("Artist - Stable.wav"));
+        write_minimal_pcm_wav(&changing_dir.join("01 First.wav"));
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 2);
+
+        write_minimal_pcm_wav(&changing_dir.join("02 Second.wav"));
+        let changed = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(changed.scanned, 2);
+        assert_eq!(changed.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_failed_reads_respect_transaction_batching() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        for index in 0..=BATCH_SIZE {
+            let path = dir.path().join(format!("{index:04}-broken.flac"));
+            std::fs::write(path, b"not a valid FLAC file").unwrap();
+        }
+        conn.execute_batch(
+            "CREATE TRIGGER fail_after_first_audit_batch
+             BEFORE INSERT ON audit_files
+             WHEN NEW.path LIKE '%/0500-broken.flac'
+             BEGIN
+                 SELECT RAISE(ABORT, 'stop after committed batch');
+             END;",
+        )
+        .unwrap();
+
+        let error = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("upserting failed-read file"));
+        let committed: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(committed, BATCH_SIZE as i64);
     }
 
     // Finding 9: NN - Title parsing

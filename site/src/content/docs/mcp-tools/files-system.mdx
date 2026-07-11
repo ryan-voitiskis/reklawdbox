@@ -178,6 +178,8 @@ Scan a directory tree for convention violations.
 
 Detects: empty fields, WAV tag drift, filename convention violations, and imported file protection warnings.
 
+The scan summary includes additive `failed_reads`. It counts files whose tags could not be read; those paths remain retryable and appear in `warnings` rather than being counted as successfully scanned or skipped unchanged. A result with `total_open == 0` is not a clean or complete audit while `failed_reads` is nonzero: surface the affected paths, retry the scan, and report persistent failures as an incomplete audit.
+
 #### Operation: `query_issues`
 
 Query detected issues from a previous scan.

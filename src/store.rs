@@ -1039,7 +1039,8 @@ pub struct AuditFile {
     pub path: String,
     #[allow(dead_code)]
     pub last_audited: String,
-    pub file_mtime: String,
+    /// Stored in the legacy SQL `file_mtime` column for backwards compatibility.
+    pub freshness_key: String,
     pub file_size: i64,
 }
 
@@ -1063,15 +1064,16 @@ pub fn upsert_audit_file(
     conn: &Connection,
     path: &str,
     last_audited: &str,
-    file_mtime: &str,
+    freshness_key: &str,
     file_size: i64,
 ) -> Result<(), rusqlite::Error> {
+    // `file_mtime` is the compatibility container for the opaque audit freshness key.
     conn.execute(
         "INSERT INTO audit_files (path, last_audited, file_mtime, file_size)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(path)
          DO UPDATE SET last_audited = ?2, file_mtime = ?3, file_size = ?4",
-        params![path, last_audited, file_mtime, file_size],
+        params![path, last_audited, freshness_key, file_size],
     )?;
     Ok(())
 }
@@ -1089,7 +1091,7 @@ pub fn get_audit_files_in_scope(
         Ok(AuditFile {
             path: row.get(0)?,
             last_audited: row.get(1)?,
-            file_mtime: row.get(2)?,
+            freshness_key: row.get(2)?,
             file_size: row.get(3)?,
         })
     })?;
@@ -1106,7 +1108,7 @@ pub fn get_audit_file(conn: &Connection, path: &str) -> Result<Option<AuditFile>
         Ok(AuditFile {
             path: row.get(0)?,
             last_audited: row.get(1)?,
-            file_mtime: row.get(2)?,
+            freshness_key: row.get(2)?,
             file_size: row.get(3)?,
         })
     })?;
@@ -1771,7 +1773,7 @@ mod tests {
             &conn,
             "/music/track.flac",
             "2026-02-25T12:00:00Z",
-            "2026-02-20T10:00:00Z",
+            "v2:1771581600123456789:album",
             12345,
         )
         .unwrap();
@@ -1781,20 +1783,44 @@ mod tests {
             .expect("should find audit file");
         assert_eq!(entry.path, "/music/track.flac");
         assert_eq!(entry.last_audited, "2026-02-25T12:00:00Z");
-        assert_eq!(entry.file_mtime, "2026-02-20T10:00:00Z");
+        assert_eq!(entry.freshness_key, "v2:1771581600123456789:album");
         assert_eq!(entry.file_size, 12345);
+
+        upsert_audit_file(
+            &conn,
+            "/music/retry.flac",
+            "2026-02-25T12:00:01Z",
+            "retry:read:1771581601123456789",
+            23456,
+        )
+        .unwrap();
+        let retry = get_audit_file(&conn, "/music/retry.flac").unwrap().unwrap();
+        assert_eq!(retry.freshness_key, "retry:read:1771581601123456789");
+
+        upsert_audit_file(
+            &conn,
+            "/music/legacy.flac",
+            "2026-02-25T12:00:02Z",
+            "2026-02-20T10:00:00Z",
+            34567,
+        )
+        .unwrap();
+        let legacy = get_audit_file(&conn, "/music/legacy.flac")
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.freshness_key, "2026-02-20T10:00:00Z");
     }
 
     #[test]
     fn test_audit_file_upsert() {
         let (_dir, conn) = open_temp_store();
 
-        upsert_audit_file(&conn, "/music/track.flac", "t1", "m1", 100).unwrap();
-        upsert_audit_file(&conn, "/music/track.flac", "t2", "m2", 200).unwrap();
+        upsert_audit_file(&conn, "/music/track.flac", "t1", "retry:metadata:1", 100).unwrap();
+        upsert_audit_file(&conn, "/music/track.flac", "t2", "v2:2:loose", 200).unwrap();
 
         let entry = get_audit_file(&conn, "/music/track.flac").unwrap().unwrap();
         assert_eq!(entry.last_audited, "t2");
-        assert_eq!(entry.file_mtime, "m2");
+        assert_eq!(entry.freshness_key, "v2:2:loose");
         assert_eq!(entry.file_size, 200);
     }
 
