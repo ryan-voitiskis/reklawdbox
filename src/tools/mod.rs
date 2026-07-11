@@ -92,6 +92,7 @@ pub(super) struct ServerState {
     pub(super) essentia_python: OnceLock<Option<String>>,
     pub(super) essentia_python_override: Mutex<Option<String>>,
     pub(super) essentia_setup_lock: tokio::sync::Mutex<()>,
+    pub(super) xml_export_lock: tokio::sync::Mutex<()>,
     pub(super) discogs_pending: Mutex<Option<discogs::PendingDeviceSession>>,
     pub(super) db_path: Option<String>,
     /// Explicit store path override (used by tests and batch tasks that need
@@ -195,6 +196,7 @@ impl ReklawdboxServer {
                 essentia_python: OnceLock::new(),
                 essentia_python_override: Mutex::new(None),
                 essentia_setup_lock: tokio::sync::Mutex::new(()),
+                xml_export_lock: tokio::sync::Mutex::new(()),
                 discogs_pending: Mutex::new(None),
                 db_path,
                 store_path: None,

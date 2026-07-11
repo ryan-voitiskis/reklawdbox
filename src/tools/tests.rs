@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -103,6 +104,130 @@ impl Drop for EnvVarGuard {
     }
 }
 
+const WRITE_XML_TASK_TIMEOUT: Duration = Duration::from_secs(5);
+
+type WriteXmlTaskOutput = Result<CallToolResult, McpError>;
+
+struct WriteXmlTaskCleanup {
+    handles: Vec<Option<tokio::task::JoinHandle<WriteXmlTaskOutput>>>,
+}
+
+impl WriteXmlTaskCleanup {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, handle: tokio::task::JoinHandle<WriteXmlTaskOutput>) {
+        self.handles.push(Some(handle));
+    }
+
+    fn all_pending(&self) -> bool {
+        self.handles
+            .iter()
+            .flatten()
+            .all(|handle| !handle.is_finished())
+    }
+
+    async fn join(&mut self, index: usize, phase: &str) -> Result<WriteXmlTaskOutput, String> {
+        let mut handle = self
+            .handles
+            .get_mut(index)
+            .and_then(Option::take)
+            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
+
+        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(err)) => Err(format!("{phase}: task join failed: {err}")),
+            Err(_) => {
+                handle.abort();
+                let cleanup = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await;
+                if cleanup.is_err() {
+                    return Err(format!(
+                        "{phase}: task timed out and abort cleanup did not finish within five seconds"
+                    ));
+                }
+                Err(format!("{phase}: task did not finish within five seconds"))
+            }
+        }
+    }
+
+    async fn abort(&mut self, index: usize, phase: &str) -> Result<(), String> {
+        let mut handle = self
+            .handles
+            .get_mut(index)
+            .and_then(Option::take)
+            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
+        handle.abort();
+        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
+            Ok(Err(err)) if err.is_cancelled() => Ok(()),
+            Ok(Err(err)) => Err(format!("{phase}: aborted task join failed: {err}")),
+            Ok(Ok(_)) => Err(format!("{phase}: task completed before cancellation")),
+            Err(_) => Err(format!(
+                "{phase}: aborted task did not join within five seconds"
+            )),
+        }
+    }
+
+    async fn abort_all(&mut self) -> Result<(), String> {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+
+        for (index, slot) in self.handles.iter_mut().enumerate() {
+            let Some(mut handle) = slot.take() else {
+                continue;
+            };
+            if tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+            {
+                return Err(format!(
+                    "task {index} did not join during cleanup within five seconds"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WriteXmlTaskCleanup {
+    fn drop(&mut self) {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+    }
+}
+
+fn spawn_queued_write_xml(
+    server: ReklawdboxServer,
+    params: WriteXmlParams,
+    queued: Arc<tokio::sync::Notify>,
+) -> tokio::task::JoinHandle<WriteXmlTaskOutput> {
+    tokio::spawn(async move {
+        let mut request = Box::pin(server.write_xml(Parameters(params)));
+        std::future::poll_fn(|cx| match request.as_mut().poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(()),
+            std::task::Poll::Ready(_) => {
+                panic!("write_xml completed instead of waiting for the held export lock")
+            }
+        })
+        .await;
+        queued.notify_one();
+        request.await
+    })
+}
+
+async fn wait_for_queued_write_xml(
+    queued: &tokio::sync::Notify,
+    phase: &str,
+) -> Result<(), String> {
+    tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, queued.notified())
+        .await
+        .map_err(|_| format!("{phase}: write_xml did not queue within five seconds"))
+}
+
 fn create_server_with_connections(
     db_conn: Connection,
     store_conn: Connection,
@@ -124,6 +249,7 @@ fn create_server_with_store_path(
             essentia_python: OnceLock::new(),
             essentia_python_override: Mutex::new(None),
             essentia_setup_lock: tokio::sync::Mutex::new(()),
+            xml_export_lock: tokio::sync::Mutex::new(()),
             discogs_pending: Mutex::new(None),
             db_path: None,
             store_path,
@@ -1218,6 +1344,235 @@ async fn write_xml_no_change_path_via_router_returns_message() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
+async fn write_xml_serializes_overlapping_exports() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let missing_backup = backup_dir.path().join("missing-backup.sh");
+    let _backup_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &missing_backup);
+
+    let db_conn = create_single_track_test_db("overlap-track-1", "/tmp/overlap-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server.state.changes.stage(vec![TrackChange {
+        track_id: "overlap-track-1".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let first_path = output_dir.path().join("first.xml");
+    let second_path = output_dir.path().join("second.xml");
+    let mut tasks = WriteXmlTaskCleanup::new();
+    let mut held_lock = Some(
+        tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, server.state.xml_export_lock.lock())
+            .await
+            .expect("test should acquire export lock within five seconds"),
+    );
+
+    let scenario = async {
+        let first_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(first_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&first_queued),
+        ));
+        wait_for_queued_write_xml(&first_queued, "first export queue").await?;
+
+        let second_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(second_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&second_queued),
+        ));
+        wait_for_queued_write_xml(&second_queued, "second export queue").await?;
+
+        if !tasks.all_pending() {
+            return Err("queued exports should remain pending while the lock is held".to_string());
+        }
+        if server.state.changes.pending_count() != 1 {
+            return Err(
+                "queued exports crossed the take boundary while the lock was held".to_string(),
+            );
+        }
+
+        drop(held_lock.take());
+        let first = tasks
+            .join(0, "first overlapping export")
+            .await?
+            .map_err(|err| format!("first overlapping export failed: {err:?}"))?;
+        let second = tasks
+            .join(1, "second overlapping export")
+            .await?
+            .map_err(|err| format!("second overlapping export failed: {err:?}"))?;
+        Ok::<_, String>((extract_json(&first), extract_json(&second)))
+    };
+
+    let scenario_result = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, scenario).await;
+    let (first, second) = match scenario_result {
+        Ok(Ok(payloads)) => payloads,
+        Ok(Err(err)) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("overlapping export scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("overlapping export scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    let applied = [
+        first["changes_applied"].as_u64().unwrap_or_default(),
+        second["changes_applied"].as_u64().unwrap_or_default(),
+    ];
+    assert_eq!(applied.iter().sum::<u64>(), 1);
+    assert_eq!(applied.iter().filter(|&&count| count == 1).count(), 1);
+    assert_eq!(applied.iter().filter(|&&count| count == 0).count(), 1);
+    assert_eq!(server.state.changes.pending_count(), 0);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_cancelled_waiter_does_not_touch_snapshots() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let missing_backup = backup_dir.path().join("missing-backup.sh");
+    let _backup_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &missing_backup);
+
+    let db_conn = create_single_track_test_db("cancel-track-1", "/tmp/cancel-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server.state.changes.stage(vec![TrackChange {
+        track_id: "cancel-track-1".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let active_path = output_dir.path().join("active.xml");
+    let cancelled_path = output_dir.path().join("cancelled.xml");
+    let next_path = output_dir.path().join("next.xml");
+    let mut tasks = WriteXmlTaskCleanup::new();
+    let mut held_lock = Some(
+        tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, server.state.xml_export_lock.lock())
+            .await
+            .expect("test should acquire export lock within five seconds"),
+    );
+
+    let scenario = async {
+        let active_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(active_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&active_queued),
+        ));
+        wait_for_queued_write_xml(&active_queued, "active export queue").await?;
+
+        let cancelled_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(cancelled_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&cancelled_queued),
+        ));
+        wait_for_queued_write_xml(&cancelled_queued, "cancelled export queue").await?;
+
+        if !tasks.all_pending() || server.state.changes.pending_count() != 1 {
+            return Err("both exports should remain before the take boundary".to_string());
+        }
+        tasks.abort(1, "cancelled queued export").await?;
+        if server.state.changes.pending_count() != 1 {
+            return Err("cancelling a waiter changed the staged snapshot".to_string());
+        }
+
+        drop(held_lock.take());
+        let active = tasks
+            .join(0, "active export after waiter cancellation")
+            .await?
+            .map_err(|err| format!("active export failed: {err:?}"))?;
+        if server.state.changes.pending_count() != 0 {
+            return Err("active export should commit its snapshot exactly once".to_string());
+        }
+
+        server.state.changes.stage(vec![TrackChange {
+            track_id: "cancel-track-1".to_string(),
+            genre: Some("Trance".to_string()),
+            ..Default::default()
+        }]);
+        let next = tokio::time::timeout(
+            WRITE_XML_TASK_TIMEOUT,
+            server.write_xml(Parameters(WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(next_path.to_string_lossy().to_string()),
+                playlists: None,
+            })),
+        )
+        .await
+        .map_err(|_| "next export did not finish within five seconds".to_string())?
+        .map_err(|err| format!("next export failed: {err:?}"))?;
+
+        Ok::<_, String>((extract_json(&active), extract_json(&next)))
+    };
+
+    let scenario_result = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, scenario).await;
+    let (active, next) = match scenario_result {
+        Ok(Ok(payloads)) => payloads,
+        Ok(Err(err)) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("cancelled waiter scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("cancelled waiter scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    assert_eq!(active["changes_applied"], 1);
+    assert_eq!(next["changes_applied"], 1);
+    assert!(!cancelled_path.exists());
+    assert_eq!(server.state.changes.pending_count(), 0);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_with_playlists_exports_without_staged_changes() {
     let _env_guard = backup_script_env_lock()
         .lock()
@@ -1267,7 +1622,12 @@ async fn write_xml_with_playlists_exports_without_staged_changes() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn write_xml_with_playlists_reports_missing_track_ids() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
     let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");

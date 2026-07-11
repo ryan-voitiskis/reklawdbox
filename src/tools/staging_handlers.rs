@@ -302,7 +302,8 @@ pub(super) async fn handle_write_xml(
 
     let playlists = params.playlists.unwrap_or_default();
     let has_playlists = !playlists.is_empty();
-    let snapshot = server.state.changes.take(None);
+    let _export_lock = server.state.xml_export_lock.lock().await;
+    let snapshot = server.state.changes.take_guard(None);
     if snapshot.is_empty() && !has_playlists {
         let result = serde_json::json!({
             "message": "No changes to write.",
@@ -312,17 +313,13 @@ pub(super) async fn handle_write_xml(
         return ok_json(&result);
     }
 
-    let backup_status = match crate::backup::run_pre_op_backup().await {
-        Ok(status) => status,
-        Err(err) => {
-            server.state.changes.restore(snapshot);
-            return Err(mcp_internal_error(format!("pre-op {err}")));
-        }
-    };
+    let backup_status = crate::backup::run_pre_op_backup()
+        .await
+        .map_err(|err| mcp_internal_error(format!("pre-op {err}")))?;
 
     let mut ids = Vec::new();
     let mut seen_ids = HashSet::new();
-    for change in &snapshot {
+    for change in snapshot.changes() {
         if seen_ids.insert(change.track_id.clone()) {
             ids.push(change.track_id.clone());
         }
@@ -335,20 +332,8 @@ pub(super) async fn handle_write_xml(
         }
     }
 
-    let conn = match server.rekordbox_conn() {
-        Ok(conn) => conn,
-        Err(e) => {
-            server.state.changes.restore(snapshot);
-            return Err(e);
-        }
-    };
-    let current_tracks = match db::get_tracks_by_ids(&conn, &ids) {
-        Ok(tracks) => tracks,
-        Err(e) => {
-            server.state.changes.restore(snapshot);
-            return Err(db_error(e));
-        }
-    };
+    let conn = server.rekordbox_conn()?;
+    let current_tracks = db::get_tracks_by_ids(&conn, &ids).map_err(db_error)?;
     let found_ids: HashSet<&str> = current_tracks.iter().map(|t| t.id.as_str()).collect();
     let missing_ids: Vec<String> = ids
         .iter()
@@ -356,7 +341,6 @@ pub(super) async fn handle_write_xml(
         .cloned()
         .collect();
     if !missing_ids.is_empty() {
-        server.state.changes.restore(snapshot);
         return Err(mcp_internal_error(format!(
             "Track IDs not found in database: {}",
             missing_ids.join(", ")
@@ -366,7 +350,7 @@ pub(super) async fn handle_write_xml(
     let modified_tracks = server
         .state
         .changes
-        .apply_snapshot(&ordered_tracks, &snapshot);
+        .apply_snapshot(&ordered_tracks, snapshot.changes());
     let playlist_defs: Vec<xml::PlaylistDef> = playlists
         .iter()
         .map(|playlist| xml::PlaylistDef {
@@ -386,13 +370,12 @@ pub(super) async fn handle_write_xml(
         PathBuf::from,
     );
 
-    if let Err(e) = xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path) {
-        server.state.changes.restore(snapshot);
-        return Err(mcp_internal_error(format!("Write error: {e}")));
-    }
+    xml::write_xml_with_playlists(&modified_tracks, &playlist_defs, &output_path)
+        .map_err(|err| mcp_internal_error(format!("Write error: {err}")))?;
 
     let track_count = modified_tracks.len();
     let changes_applied = snapshot.len();
+    snapshot.commit();
 
     let mut result = serde_json::json!({
         "path": output_path.to_string_lossy(),

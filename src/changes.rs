@@ -25,6 +25,37 @@ pub struct ChangeManager {
     cleared_all_since_take: AtomicBool,
 }
 
+pub(crate) struct ChangeSnapshotGuard<'a> {
+    manager: &'a ChangeManager,
+    snapshot: Option<Vec<TrackChange>>,
+}
+
+impl ChangeSnapshotGuard<'_> {
+    pub(crate) fn changes(&self) -> &[TrackChange] {
+        self.snapshot.as_deref().unwrap_or_default()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.changes().len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.changes().is_empty()
+    }
+
+    pub(crate) fn commit(mut self) {
+        self.snapshot.take();
+    }
+}
+
+impl Drop for ChangeSnapshotGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(snapshot) = self.snapshot.take() {
+            self.manager.restore(snapshot);
+        }
+    }
+}
+
 impl ChangeManager {
     pub fn new() -> Self {
         Self {
@@ -149,6 +180,13 @@ impl ChangeManager {
                 drained.sort_by(|a, b| a.track_id.cmp(&b.track_id));
                 drained
             }
+        }
+    }
+
+    pub(crate) fn take_guard(&self, track_ids: Option<Vec<String>>) -> ChangeSnapshotGuard<'_> {
+        ChangeSnapshotGuard {
+            manager: self,
+            snapshot: Some(self.take(track_ids)),
         }
     }
 
@@ -1257,6 +1295,118 @@ mod tests {
         // resurrect any snapshot entries.
         assert!(cm.get("t1").is_none());
         assert_eq!(cm.pending_count(), 0);
+    }
+
+    #[test]
+    fn change_snapshot_guard_drop_restores_snapshot() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            ..Default::default()
+        }]);
+
+        {
+            let guard = cm.take_guard(None);
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard.changes()[0].track_id, "t1");
+            assert_eq!(cm.pending_count(), 0);
+        }
+
+        assert_eq!(cm.pending_count(), 1);
+        assert_eq!(
+            cm.get("t1").and_then(|change| change.genre).as_deref(),
+            Some("House")
+        );
+    }
+
+    #[test]
+    fn change_snapshot_guard_commit_leaves_changes_drained() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            ..Default::default()
+        }]);
+
+        let guard = cm.take_guard(None);
+        assert!(!guard.is_empty());
+        guard.commit();
+
+        assert_eq!(cm.pending_count(), 0);
+        assert!(cm.get("t1").is_none());
+    }
+
+    #[test]
+    fn change_snapshot_guard_drop_preserves_post_take_stage_and_clear() {
+        let cm = ChangeManager::new();
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            comments: Some("old notes".to_string()),
+            rating: Some(4),
+            ..Default::default()
+        }]);
+
+        let guard = cm.take_guard(None);
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("Techno".to_string()),
+            ..Default::default()
+        }]);
+        cm.clear_fields(Some(vec!["t1".to_string()]), &["comments".to_string()]);
+        drop(guard);
+
+        let restored = cm.get("t1").expect("untouched fields should be restored");
+        assert_eq!(restored.genre.as_deref(), Some("Techno"));
+        assert_eq!(restored.comments, None);
+        assert_eq!(restored.rating, Some(4));
+    }
+
+    #[tokio::test]
+    async fn change_snapshot_guard_aborted_task_restores_snapshot() {
+        const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        let cm = std::sync::Arc::new(ChangeManager::new());
+        cm.stage(vec![TrackChange {
+            track_id: "t1".to_string(),
+            genre: Some("House".to_string()),
+            ..Default::default()
+        }]);
+        let ready = std::sync::Arc::new(tokio::sync::Notify::new());
+        let task_cm = std::sync::Arc::clone(&cm);
+        let task_ready = std::sync::Arc::clone(&ready);
+        let mut task = tokio::spawn(async move {
+            let _guard = task_cm.take_guard(None);
+            task_ready.notify_one();
+            std::future::pending::<()>().await;
+        });
+
+        if tokio::time::timeout(TEST_TIMEOUT, ready.notified())
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = tokio::time::timeout(TEST_TIMEOUT, &mut task)
+                .await
+                .expect("guard cancellation cleanup should finish within five seconds");
+            panic!("guard task did not signal after taking the snapshot within five seconds");
+        }
+
+        let snapshot_was_drained = cm.pending_count() == 0;
+        task.abort();
+        let join_result = tokio::time::timeout(TEST_TIMEOUT, &mut task)
+            .await
+            .expect("aborted guard task should join within five seconds");
+        let join_error = join_result.expect_err("the deliberately pending task should be aborted");
+
+        assert!(snapshot_was_drained, "guard should drain staged changes");
+        assert!(join_error.is_cancelled(), "task should report cancellation");
+        assert_eq!(cm.pending_count(), 1);
+        assert_eq!(
+            cm.get("t1").and_then(|change| change.genre).as_deref(),
+            Some("House")
+        );
     }
 
     // ==================== Integration tests (real DB) ====================
