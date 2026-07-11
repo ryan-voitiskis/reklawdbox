@@ -58,6 +58,62 @@ pub use analysis::result::{
 pub use config::AnalysisConfig;
 pub use error::AnalysisError;
 
+const ONSET_ACCENT_WINDOW_MILLISECONDS: u64 = 80;
+
+fn onset_accent_strengths(
+    samples: &[f32],
+    onset_indices: &[usize],
+    sample_rate: u32,
+) -> Result<Vec<f32>, AnalysisError> {
+    if sample_rate == 0 {
+        return Err(AnalysisError::InvalidInput(
+            "Cannot measure onset accents with a zero sample rate".to_string(),
+        ));
+    }
+
+    let rounded_window_samples = u64::from(sample_rate)
+        .checked_mul(ONSET_ACCENT_WINDOW_MILLISECONDS)
+        .and_then(|samples| samples.checked_add(500))
+        .map(|samples| samples / 1_000)
+        .ok_or_else(|| {
+            AnalysisError::InvalidInput("Onset accent window size overflowed".to_string())
+        })?;
+    let window_samples = usize::try_from(rounded_window_samples)
+        .map_err(|_| AnalysisError::InvalidInput("Onset accent window is too large".to_string()))?
+        .max(1);
+
+    onset_indices
+        .iter()
+        .map(|onset| {
+            let start = (*onset).min(samples.len());
+            let end = start.saturating_add(window_samples).min(samples.len());
+            if start == end {
+                return Ok(0.0);
+            }
+
+            let mut sum_squares = 0.0_f64;
+            for (offset, sample) in samples[start..end].iter().enumerate() {
+                if !sample.is_finite() {
+                    return Err(AnalysisError::InvalidInput(format!(
+                        "Onset accent window contains a non-finite sample at index {}",
+                        start.saturating_add(offset)
+                    )));
+                }
+                let sample = f64::from(*sample);
+                sum_squares += sample * sample;
+            }
+
+            let rms = (sum_squares / (end - start) as f64).sqrt() as f32;
+            if !rms.is_finite() || rms < 0.0 {
+                return Err(AnalysisError::InvalidInput(
+                    "Onset accent RMS must be finite and non-negative".to_string(),
+                ));
+            }
+            Ok(rms)
+        })
+        .collect()
+}
+
 /// Main analysis function
 ///
 /// Analyzes audio samples and returns comprehensive analysis results including
@@ -938,6 +994,9 @@ pub fn analyze_audio(
         );
         (ext.clone(), 1.0)
     } else if bpm > 0.0 && onsets_for_beat_tracking.len() >= 2 {
+        let onset_accents =
+            onset_accent_strengths(&trimmed_samples, &onsets_for_beat_tracking, sample_rate)?;
+
         // Convert onsets from sample indices to seconds
         let onsets_seconds: Vec<f32> = onsets_for_beat_tracking
             .iter()
@@ -945,8 +1004,14 @@ pub fn analyze_audio(
             .collect();
 
         // Generate beat grid using HMM Viterbi algorithm
-        use features::beat_tracking::generate_beat_grid;
-        match generate_beat_grid(bpm, bpm_confidence, &onsets_seconds, sample_rate) {
+        use features::beat_tracking::generate_beat_grid_with_evidence;
+        match generate_beat_grid_with_evidence(
+            bpm,
+            bpm_confidence,
+            &onsets_seconds,
+            &onset_accents,
+            sample_rate,
+        ) {
             Ok((grid, stability)) => {
                 log::debug!(
                     "Beat grid generated: {} beats, {} downbeats, stability={:.3}",
@@ -1973,5 +2038,27 @@ mod analysis_config_tests {
         let spectrogram = vec![vec![1.0f32; 2]; 6];
         let proportion = harmonic_proportion(&spectrogram, 10, 10).unwrap();
         assert_eq!(proportion, Some(0.5));
+    }
+
+    #[test]
+    fn onset_accent_strengths_compare_pulses_and_handle_boundaries() {
+        let sample_rate = 1_000;
+        let mut samples = vec![0.0; 200];
+        samples[0..80].fill(0.2);
+        samples[100..180].fill(0.8);
+
+        let accents = onset_accent_strengths(
+            &samples,
+            &[0, 100, samples.len(), samples.len().saturating_add(10)],
+            sample_rate,
+        )
+        .unwrap();
+
+        assert!(accents[1] > accents[0]);
+        assert_eq!(accents[2], 0.0);
+        assert_eq!(accents[3], 0.0);
+        assert!(accents
+            .iter()
+            .all(|accent| accent.is_finite() && *accent >= 0.0));
     }
 }

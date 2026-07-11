@@ -48,7 +48,56 @@ pub mod time_signature;
 use crate::analysis::result::BeatGrid;
 use crate::error::AnalysisError;
 use tempo_variation::{detect_tempo_variations, has_tempo_variation};
-use time_signature::{detect_time_signature, TimeSignature};
+use time_signature::{detect_time_signature_with_evidence, TimeSignature};
+
+/// Parallel onset times and audio-derived transient accents used for meter scoring.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BeatEvidence<'a> {
+    pub(crate) onset_times: &'a [f32],
+    pub(crate) accents: &'a [f32],
+}
+
+impl BeatEvidence<'_> {
+    pub(crate) fn validate(self) -> Result<(), AnalysisError> {
+        if self.onset_times.len() != self.accents.len() {
+            return Err(AnalysisError::InvalidInput(format!(
+                "Beat evidence length mismatch: {} onset times, {} accents",
+                self.onset_times.len(),
+                self.accents.len()
+            )));
+        }
+
+        for (index, (time, accent)) in self.onset_times.iter().zip(self.accents.iter()).enumerate()
+        {
+            if !time.is_finite() || *time < 0.0 {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "Beat evidence time[{index}] must be finite and non-negative, got {time}"
+                )));
+            }
+            if !accent.is_finite() || *accent < 0.0 {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "Beat evidence accent[{index}] must be finite and non-negative, got {accent}"
+                )));
+            }
+        }
+
+        if let Some((index, pair)) = self
+            .onset_times
+            .windows(2)
+            .enumerate()
+            .find(|(_, pair)| pair[0] > pair[1])
+        {
+            return Err(AnalysisError::InvalidInput(format!(
+                "Beat evidence must be sorted: onset_times[{index}]={} exceeds onset_times[{}]={}",
+                pair[0],
+                index + 1,
+                pair[1]
+            )));
+        }
+
+        Ok(())
+    }
+}
 
 /// Beat position in a bar
 #[derive(Debug, Clone)]
@@ -111,12 +160,37 @@ pub fn generate_beat_grid(
     onsets: &[f32],
     sample_rate: u32,
 ) -> Result<(BeatGrid, f32), AnalysisError> {
-    if bpm_estimate <= 0.0 || bpm_estimate > 300.0 {
+    let mut sorted_onsets = onsets.to_vec();
+    sorted_onsets.sort_by(f32::total_cmp);
+    let uniform_accents = vec![1.0; sorted_onsets.len()];
+    generate_beat_grid_with_evidence(
+        bpm_estimate,
+        bpm_confidence,
+        &sorted_onsets,
+        &uniform_accents,
+        sample_rate,
+    )
+}
+
+/// Generate a beat grid using audio-derived accent evidence for meter and phase.
+pub(crate) fn generate_beat_grid_with_evidence(
+    bpm_estimate: f32,
+    bpm_confidence: f32,
+    onsets: &[f32],
+    accents: &[f32],
+    sample_rate: u32,
+) -> Result<(BeatGrid, f32), AnalysisError> {
+    if !bpm_estimate.is_finite() || bpm_estimate <= 0.0 || bpm_estimate > 300.0 {
         return Err(AnalysisError::InvalidInput(format!(
-            "Invalid BPM estimate: {:.2}",
-            bpm_estimate
+            "Invalid BPM estimate: {bpm_estimate}"
         )));
     }
+
+    let evidence = BeatEvidence {
+        onset_times: onsets,
+        accents,
+    };
+    evidence.validate()?;
 
     if onsets.is_empty() {
         return Err(AnalysisError::InvalidInput(
@@ -131,9 +205,7 @@ pub fn generate_beat_grid(
         onsets.len()
     );
 
-    // Ensure onsets are sorted
-    let mut sorted_onsets = onsets.to_vec();
-    sorted_onsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let sorted_onsets = onsets.to_vec();
 
     // Step 1: Run HMM Viterbi beat tracking (initial beat sequence)
     let tracker = hmm::HmmBeatTracker::new(bpm_estimate, sorted_onsets.clone(), sample_rate);
@@ -220,17 +292,22 @@ pub fn generate_beat_grid(
 
     // Step 4: Detect time signature
     let beat_times: Vec<f32> = beat_positions.iter().map(|bp| bp.time_seconds).collect();
-    let (time_sig, time_sig_confidence) = detect_time_signature(&beat_times, bpm_estimate)?;
+    let meter = detect_time_signature_with_evidence(&beat_times, bpm_estimate, evidence)?;
 
     log::debug!(
-        "Time signature detected: {} (confidence: {:.3})",
-        time_sig.name(),
-        time_sig_confidence
+        "Time signature detected: {} phase={} (confidence: {:.3})",
+        meter.time_signature.name(),
+        meter.downbeat_phase,
+        meter.confidence
     );
 
     // Step 5: Generate beat grid with detected time signature
-    let beat_grid =
-        generate_beat_grid_from_positions_with_time_sig(&beat_positions, bpm_estimate, time_sig)?;
+    let beat_grid = generate_beat_grid_from_positions_with_time_sig(
+        &beat_positions,
+        bpm_estimate,
+        meter.time_signature,
+        meter.downbeat_phase,
+    )?;
 
     // Calculate grid stability
     let stability = calculate_grid_stability(&beat_positions, bpm_estimate)?;
@@ -240,7 +317,7 @@ pub fn generate_beat_grid(
         beat_grid.beats.len(),
         beat_grid.downbeats.len(),
         stability,
-        time_sig.name()
+        meter.time_signature.name()
     );
 
     Ok((beat_grid, stability))
@@ -271,6 +348,7 @@ fn generate_beat_grid_from_positions(
         beat_positions,
         bpm_estimate,
         TimeSignature::FourFour,
+        0,
     )
 }
 
@@ -286,6 +364,7 @@ fn generate_beat_grid_from_positions(
 /// * `beat_positions` - Beat positions from HMM tracker
 /// * `bpm_estimate` - BPM estimate (for downbeat detection)
 /// * `time_sig` - Detected time signature
+/// * `downbeat_phase` - Index of the first tracked beat that starts a complete bar
 ///
 /// # Returns
 ///
@@ -294,6 +373,7 @@ fn generate_beat_grid_from_positions_with_time_sig(
     beat_positions: &[BeatPosition],
     bpm_estimate: f32,
     time_sig: TimeSignature,
+    downbeat_phase: usize,
 ) -> Result<BeatGrid, AnalysisError> {
     if beat_positions.is_empty() {
         return Err(AnalysisError::InvalidInput(
@@ -308,7 +388,7 @@ fn generate_beat_grid_from_positions_with_time_sig(
     beats.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     // Detect downbeats (beat 1 of each bar) using detected time signature
-    let downbeats = detect_downbeats_with_time_sig(&beats, bpm_estimate, time_sig)?;
+    let downbeats = detect_downbeats_with_time_sig(&beats, bpm_estimate, time_sig, downbeat_phase)?;
 
     // Bar boundaries are the same as downbeats (bar starts at downbeat)
     let bars = downbeats.clone();
@@ -335,27 +415,24 @@ fn generate_beat_grid_from_positions_with_time_sig(
 /// Vector of downbeat times (beat 1 of each bar)
 #[allow(dead_code)] // Used in tests
 fn detect_downbeats(beats: &[f32], bpm_estimate: f32) -> Result<Vec<f32>, AnalysisError> {
-    detect_downbeats_with_time_sig(beats, bpm_estimate, TimeSignature::FourFour)
+    detect_downbeats_with_time_sig(beats, bpm_estimate, TimeSignature::FourFour, 0)
 }
 
 /// Detect downbeats (beat 1 of each bar) with time signature
 ///
-/// Identifies downbeats by finding beats that align with the expected bar structure
-/// for the given time signature.
+/// Identifies downbeats by selecting actual tracked beats at the chosen meter and
+/// phase.
 ///
 /// # Algorithm
 ///
-/// 1. Calculate expected beat interval from BPM
-/// 2. Calculate bar interval based on time signature (beats_per_bar × beat_interval)
-/// 3. Find first beat as initial downbeat
-/// 4. For each subsequent beat, check if it's approximately one bar away from last downbeat
-/// 5. If yes, mark as downbeat
+/// Starting at `downbeat_phase`, select every `beats_per_bar`-th tracked beat.
 ///
 /// # Arguments
 ///
 /// * `beats` - All beat times in seconds (sorted)
 /// * `bpm_estimate` - BPM estimate for calculating expected intervals
 /// * `time_sig` - Time signature (determines beats per bar)
+/// * `downbeat_phase` - Index of the first observed downbeat
 ///
 /// # Returns
 ///
@@ -364,43 +441,32 @@ fn detect_downbeats_with_time_sig(
     beats: &[f32],
     bpm_estimate: f32,
     time_sig: TimeSignature,
+    downbeat_phase: usize,
 ) -> Result<Vec<f32>, AnalysisError> {
+    let beats_per_bar = time_sig.beats_per_bar() as usize;
+    if downbeat_phase >= beats_per_bar {
+        return Err(AnalysisError::InvalidInput(format!(
+            "Invalid downbeat phase {downbeat_phase} for {}",
+            time_sig.name()
+        )));
+    }
+
     if beats.is_empty() {
         return Ok(Vec::new());
     }
 
-    if bpm_estimate <= 0.0 {
+    if !bpm_estimate.is_finite() || bpm_estimate <= 0.0 {
         return Err(AnalysisError::InvalidInput(format!(
-            "Invalid BPM for downbeat detection: {:.2}",
-            bpm_estimate
+            "Invalid BPM for downbeat detection: {bpm_estimate}"
         )));
     }
 
-    let beats_per_bar = time_sig.beats_per_bar() as f32;
-    let beat_interval = 60.0 / bpm_estimate;
-    let bar_interval = beat_interval * beats_per_bar;
-
-    // Tolerance for downbeat detection: ±10% of bar interval
-    let tolerance = bar_interval * 0.1;
-
-    let mut downbeats = Vec::new();
-
-    // First beat is always a downbeat
-    downbeats.push(beats[0]);
-
-    // For each subsequent beat, check if it's approximately one bar away from last downbeat
-    for &beat_time in &beats[1..] {
-        let last_downbeat = downbeats[downbeats.len() - 1];
-        let expected_next_downbeat = last_downbeat + bar_interval;
-        let distance = (beat_time - expected_next_downbeat).abs();
-
-        // If this beat is close to expected downbeat time, mark it as downbeat
-        if distance <= tolerance {
-            downbeats.push(beat_time);
-        }
-    }
-
-    Ok(downbeats)
+    Ok(beats
+        .iter()
+        .skip(downbeat_phase)
+        .step_by(beats_per_bar)
+        .copied()
+        .collect())
 }
 
 /// Calculate grid stability
@@ -689,5 +755,40 @@ mod tests {
     #[test]
     fn test_generate_beat_grid_from_positions_empty() {
         assert!(generate_beat_grid_from_positions(&[], 120.0).is_err());
+    }
+
+    #[test]
+    fn shifted_four_four_phase_selects_actual_beat_indices() {
+        let beat_positions: Vec<BeatPosition> = (0..12)
+            .map(|index| BeatPosition {
+                beat_index: index,
+                time_seconds: index as f32 * 0.5,
+                confidence: 1.0,
+            })
+            .collect();
+
+        let grid = generate_beat_grid_from_positions_with_time_sig(
+            &beat_positions,
+            120.0,
+            TimeSignature::FourFour,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(grid.downbeats, vec![1.0, 3.0, 5.0]);
+        assert_eq!(grid.bars, grid.downbeats);
+    }
+
+    #[test]
+    fn impossible_downbeat_phase_is_rejected() {
+        let error = detect_downbeats_with_time_sig(
+            &[0.0, 0.5, 1.0, 1.5],
+            120.0,
+            TimeSignature::FourFour,
+            4,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, AnalysisError::InvalidInput(_)));
     }
 }

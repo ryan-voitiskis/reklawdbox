@@ -222,13 +222,40 @@ mod tests {
             beat_interval
         );
 
-        // Validate downbeats (should be every N beats depending on time signature).
-        if result.beat_grid.downbeats.len() >= 2 {
-            let bar_interval = result.beat_grid.downbeats[1] - result.beat_grid.downbeats[0];
+        // Uniform kick accents contain no meter contrast, so the conservative
+        // fallback must produce 4/4 bars from actual tracked-beat indices.
+        let mut positive_intervals: Vec<f32> = result
+            .beat_grid
+            .beats
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .filter(|interval| *interval > 0.0)
+            .collect();
+        assert!(
+            !positive_intervals.is_empty(),
+            "need a positive tracked-beat interval to derive tolerance"
+        );
+        positive_intervals.sort_by(f32::total_cmp);
+        let median_interval = positive_intervals[positive_intervals.len() / 2];
+        let timestamp_tolerance = median_interval * 0.05;
+        let expected_downbeats: Vec<f32> =
+            result.beat_grid.beats.iter().step_by(4).copied().collect();
+        assert_eq!(
+            result.beat_grid.downbeats.len(),
+            expected_downbeats.len(),
+            "uniform accents should fall back to one downbeat every four tracked beats"
+        );
+        for (index, (actual, expected)) in result
+            .beat_grid
+            .downbeats
+            .iter()
+            .zip(expected_downbeats.iter())
+            .enumerate()
+        {
             assert!(
-                (1.0..=4.0).contains(&bar_interval),
-                "Bar interval should be reasonable (1.0-4.0s), got {:.3}s",
-                bar_interval
+                (actual - expected).abs() <= timestamp_tolerance,
+                "downbeat {index} should use tracked beat index {}, got {actual:.6} instead of {expected:.6}",
+                index * 4
             );
         }
 

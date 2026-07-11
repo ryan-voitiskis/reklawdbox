@@ -3,17 +3,17 @@
 //! Detects musical time signature by analyzing beat patterns and accent structures.
 //! Supports common time signatures: 4/4, 3/4, 6/8.
 //!
-//! This module implements time signature detection using autocorrelation of beat
-//! intervals to find repeating patterns. It tests hypotheses for 4/4, 3/4, and 6/8
-//! time signatures and returns the best match with a confidence score.
+//! This module jointly scores meter and downbeat phase from onset accents. Beat
+//! timing alone cannot distinguish regular 3/4, 4/4, and 6/8 grids, so uniform or
+//! weak evidence deliberately falls back to low-confidence 4/4.
 //!
 //! # Algorithm
 //!
-//! 1. Calculate beat intervals from beat times
-//! 2. Compute autocorrelation of intervals to find repeating patterns
-//! 3. Test hypotheses for 4/4, 3/4, and 6/8 time signatures
-//! 4. Score each hypothesis based on pattern alignment and consistency
-//! 5. Return best match with confidence score
+//! 1. Match tracked beats to nearby onset evidence
+//! 2. Normalize onset accents robustly
+//! 3. Score every supported meter and downbeat phase
+//! 4. Reject weak, ambiguous, or insufficient evidence
+//! 5. Return the selected meter, phase, and bounded confidence
 //!
 //! # Example
 //!
@@ -30,9 +30,26 @@
 //! ```
 
 use crate::error::AnalysisError;
+use crate::features::beat_tracking::BeatEvidence;
 
 /// Numerical stability epsilon
 const EPSILON: f32 = 1e-10;
+/// Accent ranges at or below this value contain no useful contrast.
+const UNIFORM_ACCENT_EPSILON: f32 = 1e-6;
+/// Maximum distance between a tracked beat and its onset evidence.
+const ONSET_MATCH_BEAT_FRACTION: f32 = 0.25;
+/// At least this many fully mapped bars are required for a positive claim.
+const MIN_COMPLETE_BARS: usize = 3;
+/// Minimum candidate score for a positive meter claim.
+const MIN_CANDIDATE_SCORE: f32 = 0.10;
+/// Minimum separation between the best and runner-up candidates.
+const MIN_CANDIDATE_MARGIN: f32 = 0.05;
+/// Confidence returned when meter evidence is ambiguous or insufficient.
+const FALLBACK_CONFIDENCE: f32 = 0.20;
+/// Primary downbeat contribution to a compound 6/8 score.
+const SIX_EIGHT_PRIMARY_WEIGHT: f32 = 0.65;
+/// Beat-four contribution to a compound 6/8 score.
+const SIX_EIGHT_SECONDARY_WEIGHT: f32 = 0.35;
 
 /// Musical time signature
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,11 +82,49 @@ impl TimeSignature {
     }
 }
 
+/// Internal meter decision with explicit downbeat phase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MeterDetection {
+    /// Selected meter.
+    pub(crate) time_signature: TimeSignature,
+    /// Index of the first observed downbeat, always less than beats per bar.
+    pub(crate) downbeat_phase: usize,
+    /// Bounded decision confidence.
+    pub(crate) confidence: f32,
+}
+
+impl MeterDetection {
+    fn fallback() -> Self {
+        Self {
+            time_signature: TimeSignature::FourFour,
+            downbeat_phase: 0,
+            confidence: FALLBACK_CONFIDENCE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CandidateScore {
+    time_signature: TimeSignature,
+    downbeat_phase: usize,
+    score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct MappedAccentEvidence {
+    /// Normalized accents aligned to tracked beats; unmatched beats are zero.
+    accents: Vec<f32>,
+    /// Whether each tracked beat received a unique nearby onset.
+    mapped: Vec<bool>,
+}
+
 /// Detect time signature from beat pattern
 ///
-/// Analyzes beat intervals and accent patterns to detect the most likely
-/// time signature. Uses autocorrelation of beat intervals to find repeating
-/// patterns.
+/// Compatibility API for callers that only have beat times.
+///
+/// Uniform evidence is intentionally ambiguous, so this wrapper returns the
+/// documented low-confidence 4/4 fallback. Callers with audio-derived accents
+/// use the crate-private evidence-aware detector.
 ///
 /// # Arguments
 ///
@@ -80,190 +135,470 @@ impl TimeSignature {
 ///
 /// Detected time signature with confidence score
 ///
-/// # Algorithm
-///
-/// 1. Calculate beat intervals
-/// 2. Compute autocorrelation of intervals to find repeating patterns
-/// 3. Test hypotheses for 4/4, 3/4, and 6/8 time signatures
-/// 4. Score each hypothesis based on pattern alignment
-/// 5. Return best match
 pub fn detect_time_signature(
     beats: &[f32],
     bpm_estimate: f32,
 ) -> Result<(TimeSignature, f32), AnalysisError> {
-    if beats.len() < 8 {
-        // Need at least 8 beats to detect time signature reliably
-        // Default to 4/4 (most common)
-        return Ok((TimeSignature::FourFour, 0.5));
-    }
+    let uniform_accents = vec![1.0; beats.len()];
+    let detection = detect_time_signature_with_evidence(
+        beats,
+        bpm_estimate,
+        BeatEvidence {
+            onset_times: beats,
+            accents: &uniform_accents,
+        },
+    )?;
+    Ok((detection.time_signature, detection.confidence))
+}
 
-    if bpm_estimate <= EPSILON {
+/// Detect meter and phase from tracked beats plus onset-accent evidence.
+pub(crate) fn detect_time_signature_with_evidence(
+    beats: &[f32],
+    bpm_estimate: f32,
+    evidence: BeatEvidence<'_>,
+) -> Result<MeterDetection, AnalysisError> {
+    if !bpm_estimate.is_finite() || bpm_estimate <= EPSILON {
         return Err(AnalysisError::InvalidInput(format!(
-            "Invalid BPM for time signature detection: {:.2}",
-            bpm_estimate
+            "Invalid BPM for time signature detection: {bpm_estimate}"
         )));
     }
 
-    // Calculate beat intervals
-    let mut intervals = Vec::new();
-    for i in 1..beats.len() {
-        let interval = beats[i] - beats[i - 1];
-        if interval > 0.0 {
-            intervals.push(interval);
+    validate_sorted_non_negative(beats, "beats")?;
+    evidence.validate()?;
+    if beats.is_empty() || evidence.onset_times.is_empty() {
+        return Ok(MeterDetection::fallback());
+    }
+
+    let min_accent = evidence
+        .accents
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    let max_accent = evidence
+        .accents
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let accent_range = max_accent - min_accent;
+    if accent_range <= UNIFORM_ACCENT_EPSILON {
+        return Ok(MeterDetection::fallback());
+    }
+
+    let normalized_accents: Vec<f32> = evidence
+        .accents
+        .iter()
+        .map(|accent| (accent - min_accent) / accent_range)
+        .collect();
+    let mapped_evidence = map_accents_to_beats(
+        beats,
+        evidence.onset_times,
+        &normalized_accents,
+        bpm_estimate,
+    );
+    let mapped_count = mapped_evidence
+        .mapped
+        .iter()
+        .filter(|mapped| **mapped)
+        .count();
+    let coverage = mapped_count as f32 / beats.len() as f32;
+
+    let mut candidates = Vec::new();
+    for time_signature in [
+        TimeSignature::FourFour,
+        TimeSignature::ThreeFour,
+        TimeSignature::SixEight,
+    ] {
+        for downbeat_phase in 0..time_signature.beats_per_bar() as usize {
+            if let Some(score) = score_candidate(
+                &mapped_evidence,
+                time_signature,
+                downbeat_phase,
+                MIN_COMPLETE_BARS,
+            ) {
+                candidates.push(CandidateScore {
+                    time_signature,
+                    downbeat_phase,
+                    score: score * coverage,
+                });
+            }
         }
     }
 
-    if intervals.is_empty() {
-        return Ok((TimeSignature::FourFour, 0.5));
+    if candidates.is_empty() {
+        return Ok(MeterDetection::fallback());
     }
 
-    // Calculate mean interval (expected beat interval)
-    let mean_interval: f32 = intervals.iter().sum::<f32>() / intervals.len() as f32;
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| candidate_order(*left).cmp(&candidate_order(*right)))
+    });
 
-    // Test each time signature hypothesis
-    let mut scores = Vec::new();
+    let best = candidates[0];
+    let runner_up_score = candidates.get(1).map_or(0.0, |candidate| candidate.score);
+    let margin = best.score - runner_up_score;
+    if best.score < MIN_CANDIDATE_SCORE || margin < MIN_CANDIDATE_MARGIN {
+        return Ok(MeterDetection::fallback());
+    }
 
-    // Test 4/4: Look for pattern repeating every 4 beats
-    let score_44 = score_time_signature(&intervals, 4, mean_interval);
-    scores.push((TimeSignature::FourFour, score_44));
-
-    // Test 3/4: Look for pattern repeating every 3 beats
-    let score_34 = score_time_signature(&intervals, 3, mean_interval);
-    scores.push((TimeSignature::ThreeFour, score_34));
-
-    // Test 6/8: Look for pattern repeating every 6 beats
-    // In 6/8, beats are typically grouped in 3+3 pattern
-    let score_68 = score_time_signature(&intervals, 6, mean_interval);
-    scores.push((TimeSignature::SixEight, score_68));
-
-    // Find best match; on tied scores prefer shorter period (3/4 over 6/8)
-    // since a period-N signal always also matches period-2N.
-    let (best_sig, best_score) = scores
-        .iter()
-        .max_by(|(sig_a, a), (sig_b, b)| {
-            a.partial_cmp(b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| sig_b.beats_per_bar().cmp(&sig_a.beats_per_bar()))
-        })
-        .unwrap();
-
-    // Normalize confidence to [0, 1]
-    let confidence = (*best_score).clamp(0.0, 1.0);
-
-    Ok((*best_sig, confidence))
+    let confidence =
+        (coverage * (0.5 * best.score.max(0.0) + 0.5 * margin.max(0.0))).clamp(0.0, 1.0);
+    Ok(MeterDetection {
+        time_signature: best.time_signature,
+        downbeat_phase: best.downbeat_phase,
+        confidence,
+    })
 }
 
-/// Score a time signature hypothesis
-///
-/// Tests how well the beat intervals match the expected pattern for a
-/// given time signature. Uses autocorrelation to find repeating patterns.
-fn score_time_signature(intervals: &[f32], beats_per_bar: u32, mean_interval: f32) -> f32 {
-    if intervals.len() < beats_per_bar as usize {
-        return 0.0;
+fn validate_sorted_non_negative(values: &[f32], name: &str) -> Result<(), AnalysisError> {
+    for (index, value) in values.iter().enumerate() {
+        if !value.is_finite() || *value < 0.0 {
+            return Err(AnalysisError::InvalidInput(format!(
+                "{name}[{index}] must be finite and non-negative, got {value}"
+            )));
+        }
+    }
+    if let Some((index, pair)) = values
+        .windows(2)
+        .enumerate()
+        .find(|(_, pair)| pair[0] > pair[1])
+    {
+        return Err(AnalysisError::InvalidInput(format!(
+            "{name} must be sorted: {name}[{index}]={} exceeds {name}[{}]={}",
+            pair[0],
+            index + 1,
+            pair[1]
+        )));
+    }
+    Ok(())
+}
+
+fn map_accents_to_beats(
+    beats: &[f32],
+    onset_times: &[f32],
+    normalized_accents: &[f32],
+    bpm_estimate: f32,
+) -> MappedAccentEvidence {
+    let tolerance = ONSET_MATCH_BEAT_FRACTION * 60.0 / bpm_estimate;
+    let mut used = vec![false; onset_times.len()];
+    let mut accents = Vec::with_capacity(beats.len());
+    let mut mapped = Vec::with_capacity(beats.len());
+
+    for beat in beats {
+        let nearest = onset_times
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !used[*index])
+            .map(|(index, onset)| (index, (*onset - *beat).abs()))
+            .filter(|(_, distance)| *distance <= tolerance)
+            .min_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+
+        if let Some((index, _)) = nearest {
+            used[index] = true;
+            accents.push(normalized_accents[index]);
+            mapped.push(true);
+        } else {
+            accents.push(0.0);
+            mapped.push(false);
+        }
     }
 
-    // Calculate autocorrelation at lag = beats_per_bar
-    let lag = beats_per_bar as usize;
-    let mut autocorr_sum = 0.0;
-    let mut count = 0;
+    MappedAccentEvidence { accents, mapped }
+}
 
-    for i in 0..(intervals.len() - lag) {
-        // Compare interval at position i with interval at position i + lag
-        let diff = (intervals[i] - intervals[i + lag]).abs();
-        let similarity = 1.0 / (1.0 + diff / mean_interval);
-        autocorr_sum += similarity;
-        count += 1;
+fn score_candidate(
+    evidence: &MappedAccentEvidence,
+    time_signature: TimeSignature,
+    downbeat_phase: usize,
+    minimum_complete_bars: usize,
+) -> Option<f32> {
+    let beats_per_bar = time_signature.beats_per_bar() as usize;
+    if downbeat_phase >= beats_per_bar {
+        return None;
     }
 
-    if count == 0 {
-        return 0.0;
-    }
-
-    let autocorr = autocorr_sum / count as f32;
-
-    // Also check if intervals are relatively consistent (low variance)
-    let variance: f32 = intervals
-        .iter()
-        .map(|&interval| {
-            let diff = interval - mean_interval;
-            diff * diff
+    let scored_bars: Vec<(&[f32], &[bool])> = (downbeat_phase..evidence.accents.len())
+        .step_by(beats_per_bar)
+        .filter_map(|start| {
+            Some((
+                evidence.accents.get(start..start + beats_per_bar)?,
+                evidence.mapped.get(start..start + beats_per_bar)?,
+            ))
         })
-        .sum::<f32>()
-        / intervals.len() as f32;
+        .collect();
+    let fully_mapped_bars = scored_bars
+        .iter()
+        .filter(|(_, mapped)| mapped.iter().all(|mapped| *mapped))
+        .count();
+    if fully_mapped_bars < minimum_complete_bars {
+        return None;
+    }
 
-    let cv = if mean_interval > EPSILON {
-        variance.sqrt() / mean_interval
+    let primary_mean = mean(scored_bars.iter().map(|(accents, _)| accents[0]));
+
+    match time_signature {
+        TimeSignature::ThreeFour | TimeSignature::FourFour => {
+            let other_mean = mean(
+                scored_bars
+                    .iter()
+                    .flat_map(|(accents, _)| accents[1..].iter().copied()),
+            );
+            Some(primary_mean - other_mean)
+        }
+        TimeSignature::SixEight => {
+            let secondary_mean = mean(scored_bars.iter().map(|(accents, _)| accents[3]));
+            if secondary_mean > primary_mean {
+                return None;
+            }
+            let other_mean = mean(
+                scored_bars
+                    .iter()
+                    .flat_map(|(accents, _)| [1, 2, 4, 5].into_iter().map(|index| accents[index])),
+            );
+            Some(
+                SIX_EIGHT_PRIMARY_WEIGHT * primary_mean
+                    + SIX_EIGHT_SECONDARY_WEIGHT * secondary_mean
+                    - other_mean,
+            )
+        }
+    }
+}
+
+fn mean(values: impl Iterator<Item = f32>) -> f32 {
+    let (sum, count) = values.fold((0.0, 0_usize), |(sum, count), value| {
+        (sum + value, count + 1)
+    });
+    if count == 0 {
+        0.0
     } else {
-        1.0
-    };
+        sum / count as f32
+    }
+}
 
-    // Score combines autocorrelation and consistency
-    // Higher autocorr and lower CV = higher score
-    let consistency_score = 1.0 / (1.0 + cv);
-    (autocorr * 0.7 + consistency_score * 0.3).min(1.0)
+fn candidate_order(candidate: CandidateScore) -> (u8, usize) {
+    let meter_order = match candidate.time_signature {
+        TimeSignature::FourFour => 0,
+        TimeSignature::ThreeFour => 1,
+        TimeSignature::SixEight => 2,
+    };
+    (meter_order, candidate.downbeat_phase)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::beat_tracking::BeatEvidence;
 
-    #[test]
-    fn test_time_signature_four_four() {
-        // 4/4 pattern with strong/weak/weak/weak accent (longer downbeat interval)
-        let strong = 0.55_f32;
-        let weak = (4.0 * 0.5 - strong) / 3.0;
-        let mut beats = Vec::new();
-        let mut time = 0.0_f32;
-        for _ in 0..8 {
-            beats.push(time);
-            time += strong;
-            beats.push(time);
-            time += weak;
-            beats.push(time);
-            time += weak;
-            beats.push(time);
-            time += weak;
-        }
-        beats.push(time);
+    fn regular_beats(count: usize) -> Vec<f32> {
+        (0..count).map(|index| index as f32 * 0.5).collect()
+    }
 
-        let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
+    fn accents_for_meter(count: usize, beats_per_bar: usize, downbeat_phase: usize) -> Vec<f32> {
+        (0..count)
+            .map(|index| {
+                if index % beats_per_bar == downbeat_phase {
+                    1.0
+                } else {
+                    0.1
+                }
+            })
+            .collect()
+    }
 
-        assert!((0.0..=1.0).contains(&confidence));
-        assert_eq!(time_sig, TimeSignature::FourFour);
+    fn detect_with_accents(beats: &[f32], accents: &[f32]) -> MeterDetection {
+        detect_time_signature_with_evidence(
+            beats,
+            120.0,
+            BeatEvidence {
+                onset_times: beats,
+                accents,
+            },
+        )
+        .unwrap()
     }
 
     #[test]
-    fn test_time_signature_three_four() {
-        // 3/4 pattern with strong/weak/weak accent (longer downbeat interval)
-        let strong = 0.56_f32;
-        let weak = (3.0 * 0.5 - strong) / 2.0;
-        let mut beats = Vec::new();
-        let mut time = 0.0_f32;
-        for _ in 0..12 {
-            beats.push(time);
-            time += strong;
-            beats.push(time);
-            time += weak;
-            beats.push(time);
-            time += weak;
-        }
-        beats.push(time);
+    fn uniform_evidence_falls_back_to_low_confidence_four_four() {
+        let beats = regular_beats(16);
+        let detection = detect_with_accents(&beats, &vec![0.5; beats.len()]);
 
-        let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
-
-        assert!((0.0..=1.0).contains(&confidence));
-        assert_eq!(time_sig, TimeSignature::ThreeFour);
+        assert_eq!(detection.time_signature, TimeSignature::FourFour);
+        assert_eq!(detection.downbeat_phase, 0);
+        assert!((0.0..=0.25).contains(&detection.confidence));
     }
 
     #[test]
-    fn test_time_signature_insufficient_beats() {
-        let beats = vec![0.0, 0.5, 1.0, 1.5]; // Only 4 beats
+    fn accent_evidence_selects_four_four_and_shifted_phase() {
+        let beats = regular_beats(18);
+
+        for phase in [0, 2] {
+            let accents = accents_for_meter(beats.len(), 4, phase);
+            let detection = detect_with_accents(&beats, &accents);
+
+            assert_eq!(detection.time_signature, TimeSignature::FourFour);
+            assert_eq!(detection.downbeat_phase, phase);
+            assert!((0.0..=1.0).contains(&detection.confidence));
+            assert!(detection.confidence > 0.20);
+        }
+    }
+
+    #[test]
+    fn accent_evidence_selects_three_four_and_phase() {
+        let beats = regular_beats(14);
+        let accents = accents_for_meter(beats.len(), 3, 1);
+        let detection = detect_with_accents(&beats, &accents);
+
+        assert_eq!(detection.time_signature, TimeSignature::ThreeFour);
+        assert_eq!(detection.downbeat_phase, 1);
+        assert!((0.0..=1.0).contains(&detection.confidence));
+        assert!(detection.confidence > 0.20);
+    }
+
+    #[test]
+    fn compound_accents_select_six_eight_and_phase() {
+        let beats = regular_beats(26);
+        let phase = 2;
+        let accents: Vec<f32> = (0..beats.len())
+            .map(|index| {
+                if index % 6 == phase {
+                    1.0
+                } else if index % 6 == (phase + 3) % 6 {
+                    0.55
+                } else {
+                    0.1
+                }
+            })
+            .collect();
+        let detection = detect_with_accents(&beats, &accents);
+
+        assert_eq!(detection.time_signature, TimeSignature::SixEight);
+        assert_eq!(detection.downbeat_phase, phase);
+        assert!((0.0..=1.0).contains(&detection.confidence));
+        assert!(detection.confidence > 0.20);
+    }
+
+    #[test]
+    fn insufficient_evidence_falls_back() {
+        let beats = regular_beats(8);
+        let accents = accents_for_meter(beats.len(), 4, 0);
+        let detection = detect_with_accents(&beats, &accents);
+
+        assert_eq!(detection.time_signature, TimeSignature::FourFour);
+        assert_eq!(detection.downbeat_phase, 0);
+        assert!((0.0..=0.25).contains(&detection.confidence));
+    }
+
+    #[test]
+    fn unmatched_beats_receive_zero_accent_without_reusing_onsets() {
+        let mapped = map_accents_to_beats(&[0.0, 0.5, 1.0], &[0.0, 1.0], &[0.8, 0.4], 120.0);
+
+        assert_eq!(mapped.accents, vec![0.8, 0.0, 0.4]);
+        assert_eq!(mapped.mapped, vec![true, false, true]);
+    }
+
+    #[test]
+    fn partially_mapped_contradictory_bars_force_fallback() {
+        let beats = regular_beats(48);
+        let mut onset_times = Vec::new();
+        let mut accents = Vec::new();
+
+        for (index, time) in beats.iter().copied().enumerate() {
+            // Establish exactly three fully mapped 4/4 bars, then provide nine
+            // partial bars whose strongest evidence contradicts phase zero.
+            // Dropping partial bars would incorrectly retain a positive 4/4 claim.
+            if index < 12 || index % 4 != 0 {
+                onset_times.push(time);
+                accents.push(if index % 4 == 0 || index % 4 == 1 {
+                    1.0
+                } else {
+                    0.1
+                });
+            }
+        }
+
+        let detection = detect_time_signature_with_evidence(
+            &beats,
+            120.0,
+            BeatEvidence {
+                onset_times: &onset_times,
+                accents: &accents,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(detection.time_signature, TimeSignature::FourFour);
+        assert_eq!(detection.downbeat_phase, 0);
+        assert_eq!(detection.confidence, FALLBACK_CONFIDENCE);
+    }
+
+    #[test]
+    fn malformed_evidence_is_rejected() {
+        let beats = regular_beats(16);
+        let valid_accents = accents_for_meter(beats.len(), 4, 0);
+
+        for (onset_times, accents) in [
+            (
+                {
+                    let mut values = beats.clone();
+                    values[3] = f32::NAN;
+                    values
+                },
+                valid_accents.clone(),
+            ),
+            (
+                {
+                    let mut values = beats.clone();
+                    values[3] = -0.5;
+                    values
+                },
+                valid_accents.clone(),
+            ),
+            (
+                {
+                    let mut values = beats.clone();
+                    values.swap(3, 4);
+                    values
+                },
+                valid_accents.clone(),
+            ),
+            (beats.clone(), {
+                let mut values = valid_accents.clone();
+                values[3] = f32::INFINITY;
+                values
+            }),
+            (beats.clone(), {
+                let mut values = valid_accents.clone();
+                values[3] = -0.1;
+                values
+            }),
+            (beats[..beats.len() - 1].to_vec(), valid_accents.clone()),
+        ] {
+            let error = detect_time_signature_with_evidence(
+                &beats,
+                120.0,
+                BeatEvidence {
+                    onset_times: &onset_times,
+                    accents: &accents,
+                },
+            )
+            .unwrap_err();
+            assert!(matches!(error, AnalysisError::InvalidInput(_)));
+        }
+    }
+
+    #[test]
+    fn public_compatibility_signature_uses_uniform_fallback() {
+        let beats = regular_beats(16);
 
         let (time_sig, confidence) = detect_time_signature(&beats, 120.0).unwrap();
 
-        // Should default to 4/4
         assert_eq!(time_sig, TimeSignature::FourFour);
-        assert_eq!(confidence, 0.5);
+        assert!((0.0..=0.25).contains(&confidence));
     }
 
     #[test]
