@@ -114,6 +114,161 @@ fn onset_accent_strengths(
         .collect()
 }
 
+fn should_run_legacy_bpm(
+    force_legacy_bpm: bool,
+    enable_bpm_fusion: bool,
+    tempogram_available: bool,
+) -> bool {
+    force_legacy_bpm || enable_bpm_fusion || !tempogram_available
+}
+
+fn maybe_run_legacy_bpm<F>(
+    run_legacy: bool,
+    estimator: F,
+) -> Result<Option<features::period::BpmEstimate>, AnalysisError>
+where
+    F: FnOnce() -> Result<Option<features::period::BpmEstimate>, AnalysisError>,
+{
+    if run_legacy {
+        estimator()
+    } else {
+        Ok(None)
+    }
+}
+
+fn compute_legacy_bpm(
+    config: &AnalysisConfig,
+    onset_indices: &[usize],
+    sample_rate: u32,
+) -> Result<Option<features::period::BpmEstimate>, AnalysisError> {
+    use features::period::{estimate_bpm, estimate_bpm_with_guardrails, LegacyBpmGuardrails};
+
+    if onset_indices.len() < 2 {
+        return Ok(None);
+    }
+
+    if config.enable_legacy_bpm_guardrails {
+        let guardrails = LegacyBpmGuardrails {
+            preferred_min: config.legacy_bpm_preferred_min,
+            preferred_max: config.legacy_bpm_preferred_max,
+            soft_min: config.legacy_bpm_soft_min,
+            soft_max: config.legacy_bpm_soft_max,
+            mul_preferred: config.legacy_bpm_conf_mul_preferred,
+            mul_soft: config.legacy_bpm_conf_mul_soft,
+            mul_extreme: config.legacy_bpm_conf_mul_extreme,
+        };
+        estimate_bpm_with_guardrails(
+            onset_indices,
+            sample_rate,
+            config.hop_size,
+            config.min_bpm,
+            config.max_bpm,
+            config.bpm_resolution,
+            guardrails,
+        )
+    } else {
+        estimate_bpm(
+            onset_indices,
+            sample_rate,
+            config.hop_size,
+            config.min_bpm,
+            config.max_bpm,
+            config.bpm_resolution,
+        )
+    }
+}
+
+fn select_bpm_estimate(
+    config: &AnalysisConfig,
+    tempogram_estimate: Option<&features::period::BpmEstimate>,
+    legacy_estimate: Option<&features::period::BpmEstimate>,
+) -> (f32, f32) {
+    if config.force_legacy_bpm {
+        legacy_estimate
+            .map(|estimate| (estimate.bpm, estimate.confidence.clamp(0.0, 1.0)))
+            .unwrap_or((0.0, 0.0))
+    } else if config.enable_bpm_fusion {
+        // Fusion (safe validator mode):
+        // - **Never** override the tempogram BPM (so fusion cannot regress BPM accuracy).
+        // - Use legacy only to adjust *confidence* and emit diagnostics.
+        let (tempogram_bpm, tempogram_confidence, tempogram_agreement) = tempogram_estimate
+            .map(|estimate| (estimate.bpm, estimate.confidence, estimate.method_agreement))
+            .unwrap_or((0.0, 0.0, 0));
+        let (legacy_bpm, legacy_confidence_raw) = legacy_estimate
+            .map(|estimate| (estimate.bpm, estimate.confidence))
+            .unwrap_or((0.0, 0.0));
+        let legacy_confidence = legacy_confidence_raw.clamp(0.0, 1.0);
+
+        // If tempogram is unavailable, fall back to legacy (guardrailed).
+        if tempogram_bpm <= 0.0 {
+            return legacy_estimate
+                .map(|estimate| (estimate.bpm, estimate.confidence.clamp(0.0, 1.0)))
+                .unwrap_or((0.0, 0.0));
+        }
+
+        let tolerance = 2.0_f32;
+        let mut confidence = tempogram_confidence.clamp(0.0, 1.0);
+
+        // Agreement / validation scoring between legacy and tempogram BPMs.
+        let agreement = if legacy_bpm > 0.0 {
+            // Allow common metrical ambiguity relations without forcing an override.
+            let differences = [
+                (legacy_bpm - tempogram_bpm).abs(),
+                (legacy_bpm - (tempogram_bpm * 0.5)).abs(),
+                (legacy_bpm - (tempogram_bpm * 2.0)).abs(),
+                (legacy_bpm - (tempogram_bpm * (2.0 / 3.0))).abs(),
+                (legacy_bpm - (tempogram_bpm * (3.0 / 2.0))).abs(),
+            ];
+            differences
+                .into_iter()
+                .any(|difference| difference <= tolerance)
+        } else {
+            false
+        };
+
+        if agreement {
+            // Modest boost when legacy is consistent (even if it is at a different metrical level).
+            let boost = 0.12 * legacy_confidence;
+            confidence = (confidence + boost).clamp(0.0, 1.0);
+            log::debug!(
+                "BPM fusion (validator): tempogram {:.2} kept; legacy {:.2} validates (agree≈true); conf {:.3}->{:.3}; temp_agree={}",
+                tempogram_bpm,
+                legacy_bpm,
+                tempogram_confidence,
+                confidence,
+                tempogram_agreement
+            );
+        } else if legacy_bpm > 0.0 {
+            // If legacy strongly disagrees, slightly down-weight confidence.
+            // This helps downstream beat-tracking avoid over-trusting borderline tempos,
+            // while preserving the tempogram BPM choice.
+            confidence = (confidence * 0.90).clamp(0.0, 1.0);
+            log::debug!(
+                "BPM fusion (validator): tempogram {:.2} kept; legacy {:.2} disagrees; conf {:.3}->{:.3}; temp_agree={}",
+                tempogram_bpm,
+                legacy_bpm,
+                tempogram_confidence,
+                confidence,
+                tempogram_agreement
+            );
+        } else {
+            log::debug!(
+                "BPM fusion (validator): tempogram {:.2} kept; no legacy estimate available; temp_agree={}",
+                tempogram_bpm,
+                tempogram_agreement
+            );
+        }
+
+        (tempogram_bpm, confidence)
+    } else {
+        // Default behavior: tempogram first; legacy fallback only if tempogram fails.
+        tempogram_estimate
+            .map(|estimate| (estimate.bpm, estimate.confidence))
+            .or_else(|| legacy_estimate.map(|estimate| (estimate.bpm, estimate.confidence)))
+            .unwrap_or((0.0, 0.0))
+    }
+}
+
 /// Main analysis function
 ///
 /// Analyzes audio samples and returns comprehensive analysis results including
@@ -362,44 +517,7 @@ pub fn analyze_audio(
         }
     }
 
-    // BPM estimation: tempogram (Phase 1F) + legacy (Phase 1B), optionally fused
-    let legacy_estimate = {
-        use features::period::{estimate_bpm, estimate_bpm_with_guardrails, LegacyBpmGuardrails};
-        if onsets_for_legacy.len() >= 2 {
-            if config.enable_legacy_bpm_guardrails {
-                let guardrails = LegacyBpmGuardrails {
-                    preferred_min: config.legacy_bpm_preferred_min,
-                    preferred_max: config.legacy_bpm_preferred_max,
-                    soft_min: config.legacy_bpm_soft_min,
-                    soft_max: config.legacy_bpm_soft_max,
-                    mul_preferred: config.legacy_bpm_conf_mul_preferred,
-                    mul_soft: config.legacy_bpm_conf_mul_soft,
-                    mul_extreme: config.legacy_bpm_conf_mul_extreme,
-                };
-                estimate_bpm_with_guardrails(
-                    &onsets_for_legacy,
-                    sample_rate,
-                    config.hop_size,
-                    config.min_bpm,
-                    config.max_bpm,
-                    config.bpm_resolution,
-                    guardrails,
-                )?
-            } else {
-                estimate_bpm(
-                    &onsets_for_legacy,
-                    sample_rate,
-                    config.hop_size,
-                    config.min_bpm,
-                    config.max_bpm,
-                    config.bpm_resolution,
-                )?
-            }
-        } else {
-            None
-        }
-    };
-
+    // BPM estimation: tempogram (Phase 1F) + lazy legacy fallback (Phase 1B), optionally fused
     let mut tempogram_candidates: Option<Vec<crate::analysis::result::TempoCandidateDebug>> = None;
     let mut tempogram_multi_res_triggered: Option<bool> = None;
     let mut tempogram_multi_res_used: Option<bool> = None;
@@ -883,93 +1001,23 @@ pub fn analyze_audio(
         None
     };
 
-    let (bpm, bpm_confidence) = if config.force_legacy_bpm {
-        legacy_estimate
-            .as_ref()
-            .map(|e| (e.bpm, e.confidence.clamp(0.0, 1.0)))
-            .unwrap_or((0.0, 0.0))
-    } else if config.enable_bpm_fusion {
-        // Fusion (safe validator mode):
-        // - **Never** override the tempogram BPM (so fusion cannot regress BPM accuracy).
-        // - Use legacy only to adjust *confidence* and emit diagnostics.
-        let (t_bpm, t_conf, t_agree) = tempogram_estimate
-            .as_ref()
-            .map(|e| (e.bpm, e.confidence, e.method_agreement))
-            .unwrap_or((0.0, 0.0, 0));
-        let (l_bpm, l_conf_raw) = legacy_estimate
-            .as_ref()
-            .map(|e| (e.bpm, e.confidence))
-            .unwrap_or((0.0, 0.0));
-        let l_conf = l_conf_raw.clamp(0.0, 1.0);
+    let run_legacy = should_run_legacy_bpm(
+        config.force_legacy_bpm,
+        config.enable_bpm_fusion,
+        tempogram_estimate.is_some(),
+    );
+    let legacy_estimate = maybe_run_legacy_bpm(run_legacy, || {
+        compute_legacy_bpm(&config, &onsets_for_legacy, sample_rate)
+    })?;
+    if !run_legacy {
+        log::debug!("Skipping legacy BPM estimation: tempogram estimate is available");
+    }
 
-        // If tempogram is unavailable, fall back to legacy (guardrailed).
-        if t_bpm <= 0.0 {
-            legacy_estimate
-                .as_ref()
-                .map(|e| (e.bpm, e.confidence.clamp(0.0, 1.0)))
-                .unwrap_or((0.0, 0.0))
-        } else {
-            let tol = 2.0f32;
-            let mut conf = t_conf.clamp(0.0, 1.0);
-
-            // Agreement / validation scoring between legacy and tempogram BPMs.
-            let agreement = if l_bpm > 0.0 {
-                // Allow common metrical ambiguity relations without forcing an override.
-                let diffs = [
-                    (l_bpm - t_bpm).abs(),
-                    (l_bpm - (t_bpm * 0.5)).abs(),
-                    (l_bpm - (t_bpm * 2.0)).abs(),
-                    (l_bpm - (t_bpm * (2.0 / 3.0))).abs(),
-                    (l_bpm - (t_bpm * (3.0 / 2.0))).abs(),
-                ];
-                diffs.into_iter().any(|d| d <= tol)
-            } else {
-                false
-            };
-
-            if agreement {
-                // Modest boost when legacy is consistent (even if it’s at a different metrical level).
-                let boost = 0.12 * l_conf;
-                conf = (conf + boost).clamp(0.0, 1.0);
-                log::debug!(
-                    "BPM fusion (validator): tempogram {:.2} kept; legacy {:.2} validates (agree≈true); conf {:.3}->{:.3}; temp_agree={}",
-                    t_bpm,
-                    l_bpm,
-                    t_conf,
-                    conf,
-                    t_agree
-                );
-            } else if l_bpm > 0.0 {
-                // If legacy strongly disagrees, slightly down-weight confidence.
-                // This helps downstream beat-tracking avoid over-trusting borderline tempos,
-                // while preserving the tempogram BPM choice.
-                conf = (conf * 0.90).clamp(0.0, 1.0);
-                log::debug!(
-                    "BPM fusion (validator): tempogram {:.2} kept; legacy {:.2} disagrees; conf {:.3}->{:.3}; temp_agree={}",
-                    t_bpm,
-                    l_bpm,
-                    t_conf,
-                    conf,
-                    t_agree
-                );
-            } else {
-                log::debug!(
-                    "BPM fusion (validator): tempogram {:.2} kept; no legacy estimate available; temp_agree={}",
-                    t_bpm,
-                    t_agree
-                );
-            }
-
-            (t_bpm, conf)
-        }
-    } else {
-        // Default behavior: tempogram first; legacy fallback only if tempogram fails.
-        tempogram_estimate
-            .as_ref()
-            .map(|e| (e.bpm, e.confidence))
-            .or_else(|| legacy_estimate.as_ref().map(|e| (e.bpm, e.confidence)))
-            .unwrap_or((0.0, 0.0))
-    };
+    let (bpm, bpm_confidence) = select_bpm_estimate(
+        &config,
+        tempogram_estimate.as_ref(),
+        legacy_estimate.as_ref(),
+    );
 
     if bpm == 0.0 {
         log::warn!("Could not estimate BPM: tempogram and legacy methods both failed");
@@ -2060,5 +2108,270 @@ mod analysis_config_tests {
         assert!(accents
             .iter()
             .all(|accent| accent.is_finite() && *accent >= 0.0));
+    }
+}
+
+#[cfg(test)]
+mod legacy_bpm_tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::features::period::{
+        estimate_bpm, estimate_bpm_with_guardrails, BpmEstimate, LegacyBpmGuardrails,
+    };
+
+    fn estimate(bpm: f32, confidence: f32) -> BpmEstimate {
+        BpmEstimate {
+            bpm,
+            confidence,
+            method_agreement: 2,
+        }
+    }
+
+    fn assert_same_estimate(actual: Option<BpmEstimate>, expected: Option<BpmEstimate>) {
+        match (actual, expected) {
+            (Some(actual), Some(expected)) => {
+                assert_eq!(actual.bpm.to_bits(), expected.bpm.to_bits());
+                assert_eq!(actual.confidence.to_bits(), expected.confidence.to_bits());
+                assert_eq!(actual.method_agreement, expected.method_agreement);
+            }
+            (None, None) => {}
+            (actual, expected) => {
+                panic!("legacy BPM estimate mismatch: actual={actual:?}, expected={expected:?}")
+            }
+        }
+    }
+
+    fn synthetic_120_bpm_onsets() -> Vec<usize> {
+        (0..16).map(|beat| beat * 22_050).collect()
+    }
+
+    #[test]
+    fn legacy_bpm_policy_truth_table_is_exhaustive() {
+        let cases = [
+            (true, false, false, true),
+            (true, false, true, true),
+            (true, true, false, true),
+            (true, true, true, true),
+            (false, true, false, true),
+            (false, true, true, true),
+            (false, false, false, true),
+            (false, false, true, false),
+        ];
+
+        for (force_legacy, fusion_enabled, tempogram_available, expected) in cases {
+            assert_eq!(
+                should_run_legacy_bpm(force_legacy, fusion_enabled, tempogram_available),
+                expected,
+                "unexpected policy for force={force_legacy}, fusion={fusion_enabled}, tempogram={tempogram_available}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_bpm_policy_runs_required_closures_once_and_skips_default_success() {
+        for (force_legacy, fusion_enabled, tempogram_available) in [
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+            (false, true, false),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            let calls = Cell::new(0);
+            let run_legacy =
+                should_run_legacy_bpm(force_legacy, fusion_enabled, tempogram_available);
+            let result = maybe_run_legacy_bpm(run_legacy, || {
+                calls.set(calls.get() + 1);
+                Ok(Some(estimate(120.0, 0.6)))
+            })
+            .unwrap();
+
+            assert!(result.is_some());
+            assert_eq!(calls.get(), 1);
+        }
+
+        let skipped_calls = Cell::new(0);
+        let skipped = maybe_run_legacy_bpm(false, || {
+            skipped_calls.set(skipped_calls.get() + 1);
+            Err(AnalysisError::ProcessingError(
+                "legacy estimator should have been skipped".to_string(),
+            ))
+        })
+        .unwrap();
+        assert!(skipped.is_none());
+        assert_eq!(skipped_calls.get(), 0);
+    }
+
+    #[test]
+    fn legacy_bpm_helper_matches_direct_estimators_with_and_without_guardrails() {
+        let onsets = synthetic_120_bpm_onsets();
+        let sample_rate = 44_100;
+
+        let unguarded_config = AnalysisConfig {
+            enable_legacy_bpm_guardrails: false,
+            ..AnalysisConfig::default()
+        };
+        let direct_unguarded = estimate_bpm(
+            &onsets,
+            sample_rate,
+            unguarded_config.hop_size,
+            unguarded_config.min_bpm,
+            unguarded_config.max_bpm,
+            unguarded_config.bpm_resolution,
+        )
+        .unwrap();
+        let helper_unguarded = compute_legacy_bpm(&unguarded_config, &onsets, sample_rate).unwrap();
+        assert!(helper_unguarded.is_some());
+        assert_same_estimate(helper_unguarded, direct_unguarded);
+
+        let guarded_config = AnalysisConfig {
+            enable_legacy_bpm_guardrails: true,
+            ..AnalysisConfig::default()
+        };
+        let guardrails = LegacyBpmGuardrails {
+            preferred_min: guarded_config.legacy_bpm_preferred_min,
+            preferred_max: guarded_config.legacy_bpm_preferred_max,
+            soft_min: guarded_config.legacy_bpm_soft_min,
+            soft_max: guarded_config.legacy_bpm_soft_max,
+            mul_preferred: guarded_config.legacy_bpm_conf_mul_preferred,
+            mul_soft: guarded_config.legacy_bpm_conf_mul_soft,
+            mul_extreme: guarded_config.legacy_bpm_conf_mul_extreme,
+        };
+        let direct_guarded = estimate_bpm_with_guardrails(
+            &onsets,
+            sample_rate,
+            guarded_config.hop_size,
+            guarded_config.min_bpm,
+            guarded_config.max_bpm,
+            guarded_config.bpm_resolution,
+            guardrails,
+        )
+        .unwrap();
+        let helper_guarded = compute_legacy_bpm(&guarded_config, &onsets, sample_rate).unwrap();
+        assert!(helper_guarded.is_some());
+        assert_same_estimate(helper_guarded, direct_guarded);
+
+        assert!(compute_legacy_bpm(&guarded_config, &[0], sample_rate)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_bpm_selection_preserves_default_fallback_and_forced_modes() {
+        let tempogram = estimate(128.0, 0.7);
+        let legacy = estimate(120.0, 0.6);
+        let default_config = AnalysisConfig::default();
+
+        let calls = Cell::new(0);
+        let run_legacy = should_run_legacy_bpm(false, false, true);
+        let skipped_legacy = maybe_run_legacy_bpm(run_legacy, || {
+            calls.set(calls.get() + 1);
+            Ok(Some(legacy.clone()))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            select_bpm_estimate(&default_config, Some(&tempogram), skipped_legacy.as_ref()),
+            (128.0, 0.7)
+        );
+
+        let calls = Cell::new(0);
+        let fallback = maybe_run_legacy_bpm(should_run_legacy_bpm(false, false, false), || {
+            calls.set(calls.get() + 1);
+            Ok(Some(legacy.clone()))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            select_bpm_estimate(&default_config, None, fallback.as_ref()),
+            (120.0, 0.6)
+        );
+
+        let forced_config = AnalysisConfig {
+            force_legacy_bpm: true,
+            ..AnalysisConfig::default()
+        };
+        let calls = Cell::new(0);
+        let forced = maybe_run_legacy_bpm(should_run_legacy_bpm(true, false, false), || {
+            calls.set(calls.get() + 1);
+            Ok(Some(legacy.clone()))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            select_bpm_estimate(&forced_config, None, forced.as_ref()),
+            (120.0, 0.6)
+        );
+    }
+
+    #[test]
+    fn legacy_bpm_selection_preserves_fusion_agreement_and_disagreement() {
+        let fusion_config = AnalysisConfig {
+            enable_bpm_fusion: true,
+            ..AnalysisConfig::default()
+        };
+        let tempogram = estimate(120.0, 0.5);
+
+        let calls = Cell::new(0);
+        let agreeing = maybe_run_legacy_bpm(should_run_legacy_bpm(false, true, true), || {
+            calls.set(calls.get() + 1);
+            Ok(Some(estimate(60.0, 0.5)))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        let (agreement_bpm, agreement_confidence) =
+            select_bpm_estimate(&fusion_config, Some(&tempogram), agreeing.as_ref());
+        assert_eq!(agreement_bpm, 120.0);
+        assert!((agreement_confidence - 0.56).abs() < f32::EPSILON);
+
+        let calls = Cell::new(0);
+        let disagreeing = maybe_run_legacy_bpm(should_run_legacy_bpm(false, true, true), || {
+            calls.set(calls.get() + 1);
+            Ok(Some(estimate(100.0, 0.5)))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        let (disagreement_bpm, disagreement_confidence) =
+            select_bpm_estimate(&fusion_config, Some(&tempogram), disagreeing.as_ref());
+        assert_eq!(disagreement_bpm, 120.0);
+        assert!((disagreement_confidence - 0.45).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn legacy_bpm_required_error_propagates_while_skipped_error_is_ignored() {
+        let required_calls = Cell::new(0);
+        let required = maybe_run_legacy_bpm(true, || {
+            required_calls.set(required_calls.get() + 1);
+            Err(AnalysisError::NumericalError(
+                "required legacy failure".to_string(),
+            ))
+        });
+        assert_eq!(required_calls.get(), 1);
+        assert!(matches!(
+            required,
+            Err(AnalysisError::NumericalError(message)) if message == "required legacy failure"
+        ));
+
+        let skipped_calls = Cell::new(0);
+        let skipped = maybe_run_legacy_bpm(false, || {
+            skipped_calls.set(skipped_calls.get() + 1);
+            Err(AnalysisError::NumericalError(
+                "skipped legacy failure".to_string(),
+            ))
+        })
+        .unwrap();
+        assert_eq!(skipped_calls.get(), 0);
+
+        let tempogram = estimate(126.0, 0.4);
+        assert_eq!(
+            select_bpm_estimate(
+                &AnalysisConfig::default(),
+                Some(&tempogram),
+                skipped.as_ref()
+            ),
+            (126.0, 0.4)
+        );
     }
 }
