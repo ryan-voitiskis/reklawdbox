@@ -4,7 +4,7 @@
 //! private fixture files. Keep them portable enough to run in CI and fresh
 //! clones.
 
-use stratum_dsp::{analyze_audio, AnalysisConfig};
+use stratum_dsp::{analyze_audio, AnalysisConfig, AnalysisResult};
 
 const SAMPLE_RATE: u32 = 44_100;
 
@@ -61,6 +61,104 @@ fn synth_tone_with_silence() -> Vec<f32> {
     [silence.as_slice(), tone.as_slice(), silence.as_slice()].concat()
 }
 
+fn assert_finite(value: f32, field: &str) {
+    assert!(value.is_finite(), "{field} should be finite, got {value}");
+}
+
+fn assert_unit_interval(value: f32, field: &str) {
+    assert_finite(value, field);
+    assert!(
+        (0.0..=1.0).contains(&value),
+        "{field} should be in [0, 1], got {value}"
+    );
+}
+
+fn assert_finite_non_negative(values: &[f32], field: &str) {
+    for (index, value) in values.iter().enumerate() {
+        assert!(
+            value.is_finite(),
+            "{field}[{index}] should be finite, got {value}"
+        );
+        assert!(
+            *value >= 0.0,
+            "{field}[{index}] should be non-negative, got {value}"
+        );
+    }
+}
+
+fn assert_non_decreasing_non_negative(values: &[f32], field: &str) {
+    assert_finite_non_negative(values, field);
+    for (index, pair) in values.windows(2).enumerate() {
+        assert!(
+            pair[0] <= pair[1],
+            "{field}[{index}]={} should not exceed {field}[{}]={}",
+            pair[0],
+            index + 1,
+            pair[1]
+        );
+    }
+}
+
+fn assert_strictly_ascending_non_negative(values: &[f32], field: &str) {
+    assert_finite_non_negative(values, field);
+    for (index, pair) in values.windows(2).enumerate() {
+        assert!(
+            pair[0] < pair[1],
+            "{field}[{index}]={} should be less than {field}[{}]={}",
+            pair[0],
+            index + 1,
+            pair[1]
+        );
+    }
+}
+
+fn assert_analysis_result_invariants(result: &AnalysisResult) {
+    assert_finite(result.bpm, "bpm");
+    assert_unit_interval(result.bpm_confidence, "bpm_confidence");
+    assert_unit_interval(result.grid_stability, "grid_stability");
+    assert_finite(
+        result.metadata.duration_seconds,
+        "metadata.duration_seconds",
+    );
+    assert_finite(
+        result.metadata.processing_time_ms,
+        "metadata.processing_time_ms",
+    );
+
+    assert_non_decreasing_non_negative(&result.beat_grid.beats, "beat_grid.beats");
+    assert_strictly_ascending_non_negative(&result.beat_grid.downbeats, "beat_grid.downbeats");
+    assert_strictly_ascending_non_negative(&result.beat_grid.bars, "beat_grid.bars");
+
+    if !result.beat_grid.downbeats.is_empty() || !result.beat_grid.bars.is_empty() {
+        let first_beat = result
+            .beat_grid
+            .beats
+            .first()
+            .expect("downbeats and bars require at least one beat");
+        let last_beat = result
+            .beat_grid
+            .beats
+            .last()
+            .expect("downbeats and bars require at least one beat");
+        for (field, values) in [
+            ("beat_grid.downbeats", result.beat_grid.downbeats.as_slice()),
+            ("beat_grid.bars", result.beat_grid.bars.as_slice()),
+        ] {
+            for (index, value) in values.iter().enumerate() {
+                assert!(
+                    (*first_beat..=*last_beat).contains(value),
+                    "{field}[{index}]={value} should be within the beat range [{first_beat}, {last_beat}]"
+                );
+            }
+        }
+    }
+
+    assert_eq!(
+        result.beat_grid.downbeats, result.beat_grid.bars,
+        "beat_grid.downbeats should match beat_grid.bars"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,76 +169,66 @@ mod tests {
 
         let config = AnalysisConfig::default();
         let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
+        assert_analysis_result_invariants(&result);
 
         // Verify basic results
         assert!(result.metadata.duration_seconds > 7.0 && result.metadata.duration_seconds < 9.0);
         assert!(result.metadata.processing_time_ms > 0.0);
         assert_eq!(result.metadata.sample_rate, SAMPLE_RATE);
 
-        // Phase 1B: BPM detection should work
-        // For fixed-tempo synthetic audio, we can use tighter tolerance (±2 BPM)
-        if result.bpm > 0.0 {
+        assert!(
+            result.bpm > 0.0,
+            "BPM should be positive, got {}",
+            result.bpm
+        );
+        assert!(
+            (result.bpm - 120.0).abs() < 2.0,
+            "BPM should be close to 120 (±2 BPM tolerance), got {:.2}",
+            result.bpm
+        );
+        assert!(
+            result.bpm_confidence.is_finite(),
+            "BPM confidence should be finite, got {}",
+            result.bpm_confidence
+        );
+        assert!(
+            result.bpm_confidence > 0.0,
+            "BPM confidence should be positive, got {}",
+            result.bpm_confidence
+        );
+        assert!(
+            result.beat_grid.beats.len() >= 4,
+            "Should detect at least 4 beats for 4-bar track, got {}",
+            result.beat_grid.beats.len()
+        );
+        assert!(
+            result.beat_grid.beats.len() >= 2,
+            "Need at least 2 beats to check the first interval, got {}",
+            result.beat_grid.beats.len()
+        );
+
+        let beat_interval = result.beat_grid.beats[1] - result.beat_grid.beats[0];
+        let expected_interval = 60.0 / 120.0;
+        assert!(
+            (beat_interval - expected_interval).abs() < 0.1,
+            "Beat interval should be ~0.5s for 120 BPM, got {:.3}s",
+            beat_interval
+        );
+
+        // Validate downbeats (should be every N beats depending on time signature).
+        if result.beat_grid.downbeats.len() >= 2 {
+            let bar_interval = result.beat_grid.downbeats[1] - result.beat_grid.downbeats[0];
             assert!(
-                (result.bpm - 120.0).abs() < 2.0,
-                "BPM should be close to 120 (±2 BPM tolerance), got {:.2}",
-                result.bpm
-            );
-            assert!(
-                result.bpm_confidence > 0.0,
-                "BPM confidence should be positive"
-            );
-
-            // Phase 1C: Beat tracking should work
-            if !result.beat_grid.beats.is_empty() {
-                assert!(
-                    result.beat_grid.beats.len() >= 4,
-                    "Should detect at least 4 beats for 4-bar track"
-                );
-                assert!(
-                    result.grid_stability >= 0.0 && result.grid_stability <= 1.0,
-                    "Grid stability should be in [0, 1]"
-                );
-
-                // Validate beat intervals (should be ~0.5s for 120 BPM)
-                if result.beat_grid.beats.len() >= 2 {
-                    let beat_interval = result.beat_grid.beats[1] - result.beat_grid.beats[0];
-                    let expected_interval = 60.0 / 120.0; // 0.5s
-                    assert!(
-                        (beat_interval - expected_interval).abs() < 0.1,
-                        "Beat interval should be ~0.5s for 120 BPM, got {:.3}s",
-                        beat_interval
-                    );
-                }
-
-                // Validate downbeats (should be every N beats depending on time signature)
-                // For 4/4: ~2.0s, for 3/4: ~1.5s, for 6/8: ~3.0s
-                if result.beat_grid.downbeats.len() >= 2 {
-                    let bar_interval =
-                        result.beat_grid.downbeats[1] - result.beat_grid.downbeats[0];
-                    // Accept any reasonable bar interval (1.0s to 4.0s)
-                    assert!(
-                        (1.0..=4.0).contains(&bar_interval),
-                        "Bar interval should be reasonable (1.0-4.0s), got {:.3}s",
-                        bar_interval
-                    );
-                }
-
-                // Phase 1C Enhanced: Variable tempo and time signature detection
-                println!("120 BPM test: BPM={:.2}, confidence={:.3}, {} beats, {} downbeats, stability={:.3}, duration={:.2}s, processing={:.2}ms",
-                         result.bpm, result.bpm_confidence, result.beat_grid.beats.len(),
-                         result.beat_grid.downbeats.len(), result.grid_stability,
-                         result.metadata.duration_seconds, result.metadata.processing_time_ms);
-                // Note: Variable tempo and time signature detection are now integrated
-            } else {
-                println!("120 BPM test: BPM={:.2}, confidence={:.3}, but beat grid is empty, duration={:.2}s, processing={:.2}ms",
-                         result.bpm, result.bpm_confidence, result.metadata.duration_seconds, result.metadata.processing_time_ms);
-            }
-        } else {
-            println!(
-                "120 BPM test: BPM detection failed, duration={:.2}s, processing={:.2}ms",
-                result.metadata.duration_seconds, result.metadata.processing_time_ms
+                (1.0..=4.0).contains(&bar_interval),
+                "Bar interval should be reasonable (1.0-4.0s), got {:.3}s",
+                bar_interval
             );
         }
+
+        println!("120 BPM test: BPM={:.2}, confidence={:.3}, {} beats, {} downbeats, stability={:.3}, duration={:.2}s, processing={:.2}ms",
+                 result.bpm, result.bpm_confidence, result.beat_grid.beats.len(),
+                 result.beat_grid.downbeats.len(), result.grid_stability,
+                 result.metadata.duration_seconds, result.metadata.processing_time_ms);
     }
 
     #[test]
@@ -149,99 +237,77 @@ mod tests {
 
         let config = AnalysisConfig::default();
         let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
+        assert_analysis_result_invariants(&result);
 
         // Verify basic results
         assert!(result.metadata.duration_seconds > 7.0 && result.metadata.duration_seconds < 8.0);
         assert!(result.metadata.processing_time_ms > 0.0);
 
-        // Phase 1B: BPM detection should work
-        // For fixed-tempo synthetic audio, we can use tighter tolerance (±2 BPM)
-        if result.bpm > 0.0 {
-            assert!(
-                (result.bpm - 128.0).abs() <= 2.0,
-                "BPM should be close to 128 (±2 BPM tolerance), got {:.2}",
-                result.bpm
-            );
-            assert!(
-                result.bpm_confidence > 0.0,
-                "BPM confidence should be positive"
-            );
+        assert!(
+            result.bpm > 0.0,
+            "BPM should be positive, got {}",
+            result.bpm
+        );
+        assert!(
+            (result.bpm - 128.0).abs() <= 2.0,
+            "BPM should be close to 128 (±2 BPM tolerance), got {:.2}",
+            result.bpm
+        );
+        assert!(
+            result.bpm_confidence.is_finite(),
+            "BPM confidence should be finite, got {}",
+            result.bpm_confidence
+        );
+        assert!(
+            result.bpm_confidence > 0.0,
+            "BPM confidence should be positive, got {}",
+            result.bpm_confidence
+        );
+        assert!(
+            result.beat_grid.beats.len() >= 4,
+            "Should detect at least 4 beats for 4-bar track, got {}",
+            result.beat_grid.beats.len()
+        );
+        assert!(
+            result.beat_grid.beats.len() >= 2,
+            "Need at least 2 beats to check the first interval, got {}",
+            result.beat_grid.beats.len()
+        );
 
-            // Phase 1C: Beat tracking should work
-            if !result.beat_grid.beats.is_empty() {
-                assert!(
-                    result.beat_grid.beats.len() >= 4,
-                    "Should detect at least 4 beats for 4-bar track"
-                );
-                assert!(
-                    result.grid_stability >= 0.0 && result.grid_stability <= 1.0,
-                    "Grid stability should be in [0, 1]"
-                );
+        let beat_interval = result.beat_grid.beats[1] - result.beat_grid.beats[0];
+        let expected_interval = 60.0 / 128.0;
+        assert!(
+            (beat_interval - expected_interval).abs() < 0.1,
+            "Beat interval should be ~{:.3}s for 128 BPM, got {:.3}s",
+            expected_interval,
+            beat_interval
+        );
 
-                // Validate beat intervals (should be ~0.469s for 128 BPM)
-                if result.beat_grid.beats.len() >= 2 {
-                    let beat_interval = result.beat_grid.beats[1] - result.beat_grid.beats[0];
-                    let expected_interval = 60.0 / 128.0; // ~0.469s
-                    assert!(
-                        (beat_interval - expected_interval).abs() < 0.1,
-                        "Beat interval should be ~{:.3}s for 128 BPM, got {:.3}s",
-                        expected_interval,
-                        beat_interval
-                    );
-                }
-
-                println!("128 BPM test: BPM={:.2}, confidence={:.3}, {} beats, {} downbeats, stability={:.3}, duration={:.2}s, processing={:.2}ms", 
-                         result.bpm, result.bpm_confidence, result.beat_grid.beats.len(),
-                         result.beat_grid.downbeats.len(), result.grid_stability,
-                         result.metadata.duration_seconds, result.metadata.processing_time_ms);
-            } else {
-                println!("128 BPM test: BPM={:.2}, confidence={:.3}, but beat grid is empty, duration={:.2}s, processing={:.2}ms", 
-                         result.bpm, result.bpm_confidence, result.metadata.duration_seconds, result.metadata.processing_time_ms);
-            }
-        } else {
-            println!(
-                "128 BPM test: BPM detection failed, duration={:.2}s, processing={:.2}ms",
-                result.metadata.duration_seconds, result.metadata.processing_time_ms
-            );
-        }
+        println!("128 BPM test: BPM={:.2}, confidence={:.3}, {} beats, {} downbeats, stability={:.3}, duration={:.2}s, processing={:.2}ms",
+                 result.bpm, result.bpm_confidence, result.beat_grid.beats.len(),
+                 result.beat_grid.downbeats.len(), result.grid_stability,
+                 result.metadata.duration_seconds, result.metadata.processing_time_ms);
     }
 
     #[test]
-    fn test_analyze_cmajor_scale() {
+    fn test_analyze_c_major_chord_pipeline_smoke() {
         let samples = synth_c_major_chord(4.0);
 
         let config = AnalysisConfig::default();
         let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
+        assert_analysis_result_invariants(&result);
 
-        // Verify basic results
         assert!(result.metadata.duration_seconds > 3.0 && result.metadata.duration_seconds < 5.0);
+        assert_unit_interval(result.key_confidence, "key_confidence");
 
-        // Phase 1D: Key detection should work
-        // C major scale should be detected as C major (Key::Major(0))
-        use stratum_dsp::analysis::result::Key;
-        if result.key_confidence > 0.0 {
-            // For a C major scale, we expect C major to be detected
-            // Allow for some tolerance since it's a simple scale (not full harmonic content)
-            assert!(
-                result.key == Key::Major(0) || result.key_confidence < 0.3,
-                "C major scale should be detected as C major (Key::Major(0)), got {:?} with confidence {:.3}",
-                result.key, result.key_confidence
-            );
-            assert!(
-                result.key_confidence >= 0.0 && result.key_confidence <= 1.0,
-                "Key confidence should be in [0, 1], got {:.3}",
-                result.key_confidence
-            );
-
-            // Key clarity should be reasonable for a tonal scale
-            // Note: key_clarity is not in AnalysisResult yet, but we can check if it's computed
-            println!("C major scale test: key={:?} ({}), confidence={:.3}, duration={:.2}s, processing={:.2}ms",
-                     result.key, result.key.name(), result.key_confidence,
-                     result.metadata.duration_seconds, result.metadata.processing_time_ms);
-        } else {
-            println!("C major scale test: Key detection failed or low confidence, duration={:.2}s, processing={:.2}ms",
-                     result.metadata.duration_seconds, result.metadata.processing_time_ms);
-        }
+        // Plan 004 owns detector-level key and mode expectations.
+        println!(
+            "C-major chord pipeline smoke: key={:?}, confidence={:.3}, duration={:.2}s, processing={:.2}ms",
+            result.key,
+            result.key_confidence,
+            result.metadata.duration_seconds,
+            result.metadata.processing_time_ms
+        );
     }
 
     #[test]
@@ -315,6 +381,8 @@ mod tests {
         // if the HMM tracker silently overrode it.
         let beats: Vec<f32> = (0..12).map(|i| 0.05 + i as f32 * 0.6).collect();
         let bars: Vec<f32> = beats.iter().step_by(4).copied().collect();
+        assert_strictly_ascending_non_negative(&beats, "supplied beat_grid.beats");
+        assert_strictly_ascending_non_negative(&bars, "supplied beat_grid.bars");
         let supplied = BeatGrid {
             downbeats: bars.clone(),
             beats: beats.clone(),
@@ -326,6 +394,9 @@ mod tests {
             ..AnalysisConfig::default()
         };
         let result = analyze_audio(&samples, sample_rate, config).expect("analysis");
+        assert_analysis_result_invariants(&result);
+        assert_strictly_ascending_non_negative(&result.beat_grid.beats, "returned beat_grid.beats");
+        assert_strictly_ascending_non_negative(&result.beat_grid.bars, "returned beat_grid.bars");
 
         assert_eq!(result.beat_grid.beats, beats);
         assert_eq!(result.beat_grid.bars, bars);
@@ -400,6 +471,8 @@ mod tests {
 
         let beats: Vec<f32> = (0..14).map(|i| lead_silence_s + i as f32 * 0.5).collect();
         let bars: Vec<f32> = beats.iter().step_by(4).copied().collect();
+        assert_strictly_ascending_non_negative(&beats, "supplied beat_grid.beats");
+        assert_strictly_ascending_non_negative(&bars, "supplied beat_grid.bars");
         let supplied = BeatGrid {
             downbeats: bars.clone(),
             beats: beats.clone(),
@@ -411,8 +484,12 @@ mod tests {
             ..AnalysisConfig::default()
         };
         let result = analyze_audio(&samples, sample_rate, config).expect("analysis");
+        assert_analysis_result_invariants(&result);
+        assert_strictly_ascending_non_negative(&result.beat_grid.beats, "returned beat_grid.beats");
+        assert_strictly_ascending_non_negative(&result.beat_grid.bars, "returned beat_grid.bars");
 
         assert_eq!(result.beat_grid.beats, beats);
+        assert_eq!(result.beat_grid.bars, bars);
         let dub = result
             .dub_stab
             .expect("dub_stab populated when external grid is supplied");
