@@ -70,6 +70,82 @@ pub struct TempoSegment {
     pub is_variable: bool,
 }
 
+/// Exclusive output range for an overlapping tempo-analysis segment.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SegmentOwnership {
+    start_time: f32,
+    end_time: f32,
+    include_end: bool,
+}
+
+impl SegmentOwnership {
+    pub(super) fn owns(&self, time: f32) -> bool {
+        time.is_finite()
+            && time >= self.start_time
+            && (time < self.end_time || (self.include_end && time <= self.end_time))
+    }
+}
+
+/// Partition overlapping analysis windows into gap-free, exclusive output ranges.
+pub(super) fn segment_ownerships(
+    segments: &[TempoSegment],
+) -> Result<Vec<SegmentOwnership>, AnalysisError> {
+    if segments.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    for (index, segment) in segments.iter().enumerate() {
+        if !segment.start_time.is_finite()
+            || !segment.end_time.is_finite()
+            || segment.start_time < 0.0
+            || segment.end_time < segment.start_time
+        {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Invalid tempo segment {index}: [{}, {}]",
+                segment.start_time, segment.end_time
+            )));
+        }
+        if index > 0 && segment.start_time <= segments[index - 1].start_time {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Tempo segments are not strictly ordered at index {index}"
+            )));
+        }
+    }
+
+    let mut boundaries = Vec::with_capacity(segments.len().saturating_sub(1));
+    for pair in segments.windows(2) {
+        let boundary = pair[0].end_time + (pair[1].start_time - pair[0].end_time) / 2.0;
+        if !boundary.is_finite() || boundary < pair[0].start_time || boundary > pair[1].end_time {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Invalid tempo-segment ownership boundary: {boundary}"
+            )));
+        }
+        boundaries.push(boundary);
+    }
+
+    let mut ownerships = Vec::with_capacity(segments.len());
+    for (index, segment) in segments.iter().enumerate() {
+        let start_time = if index == 0 {
+            segment.start_time
+        } else {
+            boundaries[index - 1]
+        };
+        let end_time = boundaries.get(index).copied().unwrap_or(segment.end_time);
+        if end_time < start_time {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Tempo-segment ownership range {index} is inverted"
+            )));
+        }
+        ownerships.push(SegmentOwnership {
+            start_time,
+            end_time,
+            include_end: index + 1 == segments.len(),
+        });
+    }
+
+    Ok(ownerships)
+}
+
 /// Detect tempo variations by segmenting audio and analyzing beat intervals
 ///
 /// Divides the audio into segments and analyzes beat intervals to detect
@@ -319,5 +395,74 @@ mod tests {
         }];
 
         assert!(!has_tempo_variation(&constant_segments));
+    }
+
+    #[test]
+    fn overlapping_segments_have_exclusive_gap_free_ownership() {
+        let segments = vec![
+            TempoSegment {
+                start_time: 0.0,
+                end_time: 8.0,
+                bpm: 120.0,
+                confidence: 0.8,
+                is_variable: false,
+            },
+            TempoSegment {
+                start_time: 4.0,
+                end_time: 12.0,
+                bpm: 124.0,
+                confidence: 0.7,
+                is_variable: true,
+            },
+            TempoSegment {
+                start_time: 8.0,
+                end_time: 16.0,
+                bpm: 128.0,
+                confidence: 0.7,
+                is_variable: true,
+            },
+        ];
+        let ownerships = segment_ownerships(&segments).unwrap();
+
+        for sample in [0.0, 5.999, 6.0, 6.001, 9.999, 10.0, 10.001, 16.0] {
+            assert_eq!(
+                ownerships
+                    .iter()
+                    .filter(|ownership| ownership.owns(sample))
+                    .count(),
+                1,
+                "sample {sample} should have exactly one owner"
+            );
+        }
+        assert!(ownerships[0].owns(5.999));
+        assert!(!ownerships[0].owns(6.0));
+        assert!(ownerships[1].owns(6.0));
+        assert!(!ownerships[1].owns(10.0));
+        assert!(ownerships[2].owns(10.0));
+        assert!(ownerships[2].owns(16.0));
+    }
+
+    #[test]
+    fn tempo_analysis_windows_remain_inclusively_overlapping() {
+        let beats: Vec<f32> = (0..41).map(|index| index as f32 * 0.5).collect();
+        let segments = detect_tempo_variations(&beats, 120.0).unwrap();
+
+        assert!(segments.len() > 1);
+        assert!(segments.windows(2).all(|pair| {
+            pair[0].start_time < pair[1].start_time && pair[0].end_time >= pair[1].start_time
+        }));
+    }
+
+    #[test]
+    fn invalid_segment_range_is_rejected_for_ownership() {
+        let segments = vec![TempoSegment {
+            start_time: f32::NAN,
+            end_time: 4.0,
+            bpm: 120.0,
+            confidence: 0.8,
+            is_variable: false,
+        }];
+
+        assert!(segment_ownerships(&segments).is_err());
     }
 }

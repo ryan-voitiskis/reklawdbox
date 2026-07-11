@@ -39,6 +39,52 @@ fn synth_kick_track(bpm: f32, bars: usize) -> Vec<f32> {
     samples
 }
 
+fn synth_gradual_tempo_track() -> (Vec<f32>, Vec<f32>) {
+    const PULSE_COUNT: usize = 40;
+    const START_BPM: f32 = 114.0;
+    const END_BPM: f32 = 126.0;
+
+    let mut pulse_times = Vec::with_capacity(PULSE_COUNT);
+    let mut time = 0.0_f32;
+    for index in 0..PULSE_COUNT {
+        pulse_times.push(time);
+        let progress = index as f32 / (PULSE_COUNT - 1) as f32;
+        let bpm = START_BPM + progress * (END_BPM - START_BPM);
+        time += 60.0 / bpm;
+    }
+
+    let duration_s = time + 0.1;
+    let n = (duration_s * SAMPLE_RATE as f32) as usize;
+    let mut samples = vec![0.0_f32; n];
+    for (index, sample) in samples.iter_mut().enumerate() {
+        let t = index as f32 / SAMPLE_RATE as f32;
+        *sample = 0.05 * (2.0 * std::f32::consts::PI * 55.0 * t).sin();
+    }
+
+    let pulse_len = (0.08 * SAMPLE_RATE as f32) as usize;
+    for pulse_time in &pulse_times {
+        let start = (*pulse_time * SAMPLE_RATE as f32).round() as usize;
+        for index in 0..pulse_len {
+            if start + index >= samples.len() {
+                break;
+            }
+            let t = index as f32 / SAMPLE_RATE as f32;
+            let envelope = 1.0 - index as f32 / pulse_len as f32;
+            let thump = (2.0 * std::f32::consts::PI * 60.0 * t).sin()
+                + 0.35 * (2.0 * std::f32::consts::PI * 120.0 * t).sin();
+            samples[start + index] += 0.65 * envelope * thump;
+        }
+    }
+
+    (samples, pulse_times)
+}
+
+fn median(mut values: Vec<f32>) -> f32 {
+    assert!(!values.is_empty());
+    values.sort_by(f32::total_cmp);
+    values[values.len() / 2]
+}
+
 fn synth_chord(duration_s: f32, freqs: [f32; 4]) -> Vec<f32> {
     let n = (duration_s * SAMPLE_RATE as f32) as usize;
     (0..n)
@@ -93,19 +139,6 @@ fn assert_finite_non_negative(values: &[f32], field: &str) {
     }
 }
 
-fn assert_non_decreasing_non_negative(values: &[f32], field: &str) {
-    assert_finite_non_negative(values, field);
-    for (index, pair) in values.windows(2).enumerate() {
-        assert!(
-            pair[0] <= pair[1],
-            "{field}[{index}]={} should not exceed {field}[{}]={}",
-            pair[0],
-            index + 1,
-            pair[1]
-        );
-    }
-}
-
 fn assert_strictly_ascending_non_negative(values: &[f32], field: &str) {
     assert_finite_non_negative(values, field);
     for (index, pair) in values.windows(2).enumerate() {
@@ -132,7 +165,7 @@ fn assert_analysis_result_invariants(result: &AnalysisResult) {
         "metadata.processing_time_ms",
     );
 
-    assert_non_decreasing_non_negative(&result.beat_grid.beats, "beat_grid.beats");
+    assert_strictly_ascending_non_negative(&result.beat_grid.beats, "beat_grid.beats");
     assert_strictly_ascending_non_negative(&result.beat_grid.downbeats, "beat_grid.downbeats");
     assert_strictly_ascending_non_negative(&result.beat_grid.bars, "beat_grid.bars");
 
@@ -321,6 +354,76 @@ mod tests {
                  result.bpm, result.bpm_confidence, result.beat_grid.beats.len(),
                  result.beat_grid.downbeats.len(), result.grid_stability,
                  result.metadata.duration_seconds, result.metadata.processing_time_ms);
+    }
+
+    #[test]
+    fn variable_tempo_grid_is_strict_unique_and_tracks_acceleration() {
+        use stratum_dsp::features::beat_tracking::tempo_variation::detect_tempo_variations;
+
+        let (samples, pulse_times) = synth_gradual_tempo_track();
+        let result = analyze_audio(&samples, SAMPLE_RATE, AnalysisConfig::default())
+            .expect("gradual-tempo analysis should succeed");
+        assert_analysis_result_invariants(&result);
+        assert!(!result.beat_grid.beats.is_empty());
+
+        let segments = detect_tempo_variations(&result.beat_grid.beats, result.bpm)
+            .expect("tracked grid should support tempo segmentation");
+        assert!(segments.len() > 1, "fixture should span multiple segments");
+
+        let merge_tolerance = 0.05_f32.min(0.20 * (60.0 / result.bpm));
+        assert!(result
+            .beat_grid
+            .beats
+            .windows(2)
+            .all(|pair| pair[1] - pair[0] >= merge_tolerance));
+
+        let pulse_match_tolerance = 0.08_f32;
+        let mut used_pulses = vec![false; pulse_times.len()];
+        let mut mapped_beats = 0_usize;
+        for beat in &result.beat_grid.beats {
+            let matches: Vec<usize> = pulse_times
+                .iter()
+                .enumerate()
+                .filter(|(_, pulse)| (**pulse - *beat).abs() <= pulse_match_tolerance)
+                .map(|(index, _)| index)
+                .collect();
+            assert!(
+                matches.len() <= 1,
+                "beat {beat:.6}s should map to at most one synthesized pulse"
+            );
+            if let Some(index) = matches.first().copied() {
+                assert!(
+                    !used_pulses[index],
+                    "synthesized pulse {index} should not be reused by multiple beats"
+                );
+                used_pulses[index] = true;
+                mapped_beats += 1;
+            }
+        }
+        assert!(
+            mapped_beats * 2 >= result.beat_grid.beats.len(),
+            "at least half of tracked beats should map to synthesized pulses"
+        );
+
+        let track_end = pulse_times.last().copied().unwrap();
+        let early_intervals: Vec<f32> = result
+            .beat_grid
+            .beats
+            .windows(2)
+            .filter(|pair| pair[1] <= track_end * 0.4)
+            .map(|pair| pair[1] - pair[0])
+            .collect();
+        let late_intervals: Vec<f32> = result
+            .beat_grid
+            .beats
+            .windows(2)
+            .filter(|pair| pair[0] >= track_end * 0.6)
+            .map(|pair| pair[1] - pair[0])
+            .collect();
+        assert!(
+            median(late_intervals) < median(early_intervals),
+            "later median interval should be shorter as the fixture accelerates"
+        );
     }
 
     #[test]

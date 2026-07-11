@@ -47,7 +47,7 @@ pub mod time_signature;
 
 use crate::analysis::result::BeatGrid;
 use crate::error::AnalysisError;
-use tempo_variation::{detect_tempo_variations, has_tempo_variation};
+use tempo_variation::{detect_tempo_variations, has_tempo_variation, segment_ownerships};
 use time_signature::{detect_time_signature_with_evidence, TimeSignature};
 
 /// Parallel onset times and audio-derived transient accents used for meter scoring.
@@ -110,6 +110,178 @@ pub struct BeatPosition {
 
     /// Confidence score (0.0-1.0)
     pub confidence: f32,
+}
+
+const REFINEMENT_TIMING_TOLERANCE_S: f32 = 0.05;
+
+fn validate_segment_candidates(candidates: &[BeatPosition]) -> Result<(), AnalysisError> {
+    for (index, candidate) in candidates.iter().enumerate() {
+        if !candidate.time_seconds.is_finite() || candidate.time_seconds < 0.0 {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Refined beat {index} has invalid time {}",
+                candidate.time_seconds
+            )));
+        }
+        if !candidate.confidence.is_finite() || !(0.0..=1.0).contains(&candidate.confidence) {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Refined beat {index} has invalid confidence {}",
+                candidate.confidence
+            )));
+        }
+    }
+    if let Some((index, _pair)) = candidates
+        .windows(2)
+        .enumerate()
+        .find(|(_, pair)| pair[0].time_seconds > pair[1].time_seconds)
+    {
+        return Err(AnalysisError::ProcessingError(format!(
+            "Refined segment is not monotonic at beats {index} and {}",
+            index + 1
+        )));
+    }
+    Ok(())
+}
+
+fn merge_refined_beats(
+    segment_outputs: Vec<Vec<BeatPosition>>,
+    nominal_bpm: f32,
+) -> Result<Vec<BeatPosition>, AnalysisError> {
+    if !nominal_bpm.is_finite() || nominal_bpm <= 0.0 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "Invalid nominal BPM for refinement merge: {nominal_bpm}"
+        )));
+    }
+    for candidates in &segment_outputs {
+        validate_segment_candidates(candidates)?;
+    }
+
+    let mut candidates: Vec<BeatPosition> = segment_outputs.into_iter().flatten().collect();
+    if candidates.is_empty() {
+        return Err(AnalysisError::ProcessingError(
+            "Tempo refinement produced no owned beats".to_string(),
+        ));
+    }
+    candidates.sort_by(|left, right| left.time_seconds.total_cmp(&right.time_seconds));
+
+    let nominal_period = 60.0 / nominal_bpm;
+    let merge_tolerance = REFINEMENT_TIMING_TOLERANCE_S.min(0.20 * nominal_period);
+    let mut merged = Vec::with_capacity(candidates.len());
+    let mut candidates = candidates.into_iter();
+    let mut winner = candidates.next().ok_or_else(|| {
+        AnalysisError::ProcessingError("Tempo refinement produced no candidates".to_string())
+    })?;
+    let mut last_cluster_time = winner.time_seconds;
+    for candidate in candidates {
+        let candidate_time = candidate.time_seconds;
+        if candidate_time - last_cluster_time < merge_tolerance {
+            if candidate.confidence > winner.confidence
+                || (candidate.confidence == winner.confidence
+                    && candidate_time < winner.time_seconds)
+            {
+                winner = candidate;
+            }
+            last_cluster_time = candidate_time;
+        } else {
+            merged.push(winner);
+            winner = candidate;
+            last_cluster_time = winner.time_seconds;
+        }
+    }
+    merged.push(winner);
+
+    let minimum_interval = 0.45 * nominal_period;
+    let maximum_interval = 2.25 * nominal_period;
+    for (index, pair) in merged.windows(2).enumerate() {
+        if pair[0].time_seconds >= pair[1].time_seconds {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Merged refinement is not strictly increasing at beat {index}"
+            )));
+        }
+        let interval = pair[1].time_seconds - pair[0].time_seconds;
+        if !interval.is_finite() || interval < minimum_interval || interval > maximum_interval {
+            return Err(AnalysisError::ProcessingError(format!(
+                "Merged refinement interval {index} is {interval:.6}s, outside [{minimum_interval:.6}, {maximum_interval:.6}]"
+            )));
+        }
+    }
+
+    Ok(merged)
+}
+
+fn refine_variable_tempo_beats(
+    original_beats: &[BeatPosition],
+    sorted_onsets: &[f32],
+    tempo_segments: &[tempo_variation::TempoSegment],
+    bpm_estimate: f32,
+    bpm_confidence: f32,
+    sample_rate: u32,
+) -> Result<Vec<BeatPosition>, AnalysisError> {
+    let ownerships = segment_ownerships(tempo_segments)?;
+    if ownerships.len() != tempo_segments.len() {
+        return Err(AnalysisError::ProcessingError(
+            "Tempo segment ownership count mismatch".to_string(),
+        ));
+    }
+
+    let mut segment_outputs: Vec<Vec<BeatPosition>> = Vec::with_capacity(tempo_segments.len());
+    let mut bayesian_tracker = bayesian::BayesianBeatTracker::new(bpm_estimate, bpm_confidence);
+    for (segment, ownership) in tempo_segments.iter().zip(ownerships.iter()) {
+        let candidates: Vec<BeatPosition> = if segment.is_variable {
+            // The full inclusive analysis window remains available to both estimators;
+            // ownership is applied only to their emitted beat positions.
+            let segment_onsets: Vec<f32> = sorted_onsets
+                .iter()
+                .filter(|&&onset| onset >= segment.start_time && onset <= segment.end_time)
+                .copied()
+                .collect();
+            if segment_onsets.is_empty() {
+                return Err(AnalysisError::ProcessingError(format!(
+                    "Variable tempo segment [{:.2}, {:.2}] has no analysis onsets",
+                    segment.start_time, segment.end_time
+                )));
+            }
+            let (updated_bpm, updated_confidence) =
+                bayesian_tracker.update_with_onsets(&segment_onsets, sample_rate)?;
+            log::debug!(
+                "Segment [{:.2}s-{:.2}s]: BPM {:.2} → {:.2} (confidence: {:.3})",
+                segment.start_time,
+                segment.end_time,
+                segment.bpm,
+                updated_bpm,
+                updated_confidence
+            );
+            let segment_tracker =
+                hmm::HmmBeatTracker::new(updated_bpm, segment_onsets, sample_rate);
+            segment_tracker
+                .track_beats()?
+                .into_iter()
+                .filter(|beat| ownership.owns(beat.time_seconds))
+                .collect()
+        } else {
+            original_beats
+                .iter()
+                .filter(|beat| ownership.owns(beat.time_seconds))
+                .cloned()
+                .collect()
+        };
+        validate_segment_candidates(&candidates)?;
+        segment_outputs.push(candidates);
+    }
+
+    merge_refined_beats(segment_outputs, bpm_estimate)
+}
+
+fn resolve_optional_refinement(
+    original_beats: &[BeatPosition],
+    refinement: Result<Vec<BeatPosition>, AnalysisError>,
+) -> Vec<BeatPosition> {
+    match refinement {
+        Ok(refined) => refined,
+        Err(error) => {
+            log::warn!("Tempo refinement rejected; retaining original beat grid: {error}");
+            original_beats.to_vec()
+        }
+    }
 }
 
 /// Generate beat grid from BPM estimate and onsets
@@ -231,58 +403,17 @@ pub(crate) fn generate_beat_grid_with_evidence(
     // Step 3: If tempo variation detected, refine beats using Bayesian tracker
     if has_variation {
         log::debug!("Tempo variation detected, refining beats with Bayesian tracker");
-
-        // Use Bayesian tracker to refine beats for variable tempo segments
-        let mut refined_beats = Vec::new();
-        let mut bayesian_tracker = bayesian::BayesianBeatTracker::new(bpm_estimate, bpm_confidence);
-
-        for segment in &tempo_segments {
-            if segment.is_variable {
-                // Get onsets in this segment
-                let segment_onsets: Vec<f32> = sorted_onsets
-                    .iter()
-                    .filter(|&&onset| onset >= segment.start_time && onset <= segment.end_time)
-                    .copied()
-                    .collect();
-
-                if !segment_onsets.is_empty() {
-                    // Update Bayesian tracker with segment onsets
-                    let (updated_bpm, updated_confidence) =
-                        bayesian_tracker.update_with_onsets(&segment_onsets, sample_rate)?;
-
-                    log::debug!(
-                        "Segment [{:.2}s-{:.2}s]: BPM {:.2} → {:.2} (confidence: {:.3})",
-                        segment.start_time,
-                        segment.end_time,
-                        segment.bpm,
-                        updated_bpm,
-                        updated_confidence
-                    );
-
-                    // Re-track beats for this segment with updated BPM
-                    let segment_tracker =
-                        hmm::HmmBeatTracker::new(updated_bpm, segment_onsets, sample_rate);
-                    if let Ok(segment_beats) = segment_tracker.track_beats() {
-                        refined_beats.extend(segment_beats);
-                    }
-                }
-            } else {
-                // Keep original beats for constant tempo segments
-                let segment_beats: Vec<BeatPosition> = beat_positions
-                    .iter()
-                    .filter(|bp| {
-                        bp.time_seconds >= segment.start_time && bp.time_seconds <= segment.end_time
-                    })
-                    .cloned()
-                    .collect();
-                refined_beats.extend(segment_beats);
-            }
-        }
-
-        // If we got refined beats, use them; otherwise keep original
-        if !refined_beats.is_empty() {
-            refined_beats.sort_by(|a, b| a.time_seconds.partial_cmp(&b.time_seconds).unwrap());
-            beat_positions = refined_beats;
+        let refinement = refine_variable_tempo_beats(
+            &beat_positions,
+            &sorted_onsets,
+            &tempo_segments,
+            bpm_estimate,
+            bpm_confidence,
+            sample_rate,
+        );
+        let original_count = beat_positions.len();
+        beat_positions = resolve_optional_refinement(&beat_positions, refinement);
+        if beat_positions.len() != original_count {
             log::debug!(
                 "Refined beats using Bayesian tracker: {} beats",
                 beat_positions.len()
@@ -385,7 +516,7 @@ fn generate_beat_grid_from_positions_with_time_sig(
     let mut beats: Vec<f32> = beat_positions.iter().map(|bp| bp.time_seconds).collect();
 
     // Sort by time (should already be sorted, but ensure it)
-    beats.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    beats.sort_by(f32::total_cmp);
 
     // Detect downbeats (beat 1 of each bar) using detected time signature
     let downbeats = detect_downbeats_with_time_sig(&beats, bpm_estimate, time_sig, downbeat_phase)?;
@@ -553,6 +684,14 @@ fn calculate_grid_stability(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn beat(time_seconds: f32, confidence: f32) -> BeatPosition {
+        BeatPosition {
+            beat_index: 0,
+            time_seconds,
+            confidence,
+        }
+    }
 
     #[test]
     fn test_generate_beat_grid_basic() {
@@ -790,5 +929,76 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, AnalysisError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn refinement_merge_deduplicates_overlap_by_confidence() {
+        let merged = merge_refined_beats(
+            vec![
+                vec![beat(0.0, 1.0), beat(0.5, 0.9), beat(1.0, 0.4)],
+                vec![beat(1.03, 0.8), beat(1.5, 0.9), beat(2.0, 0.9)],
+            ],
+            120.0,
+        )
+        .unwrap();
+
+        assert_eq!(merged.len(), 5);
+        assert!((merged[2].time_seconds - 1.03).abs() < 1e-6);
+        assert_eq!(merged[2].confidence, 0.8);
+        assert!(merged
+            .windows(2)
+            .all(|pair| pair[0].time_seconds < pair[1].time_seconds));
+    }
+
+    #[test]
+    fn refinement_merge_equal_confidence_keeps_earlier_candidate() {
+        let merged = merge_refined_beats(
+            vec![
+                vec![beat(0.0, 1.0), beat(0.5, 1.0), beat(1.0, 0.8)],
+                vec![beat(1.03, 0.8), beat(1.5, 1.0), beat(2.0, 1.0)],
+            ],
+            120.0,
+        )
+        .unwrap();
+
+        assert_eq!(merged.len(), 5);
+        assert_eq!(merged[2].time_seconds, 1.0);
+    }
+
+    #[test]
+    fn refinement_merge_rejects_invalid_segment_candidates() {
+        assert!(merge_refined_beats(vec![vec![beat(f32::NAN, 1.0)]], 120.0).is_err());
+        assert!(merge_refined_beats(vec![vec![beat(0.5, 1.0), beat(0.0, 1.0)]], 120.0).is_err());
+    }
+
+    #[test]
+    fn refinement_merge_accepts_one_missing_beat_but_rejects_larger_gap() {
+        let accepted = merge_refined_beats(
+            vec![vec![beat(0.0, 1.0), beat(0.5, 1.0), beat(1.5, 1.0)]],
+            120.0,
+        )
+        .unwrap();
+        assert_eq!(accepted.len(), 3);
+
+        assert!(merge_refined_beats(
+            vec![vec![beat(0.0, 1.0), beat(0.5, 1.0), beat(1.626, 1.0)]],
+            120.0,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn invalid_optional_refinement_retains_original_grid() {
+        let original = vec![beat(0.0, 1.0), beat(0.5, 1.0), beat(1.0, 1.0)];
+        let invalid = merge_refined_beats(Vec::new(), 120.0);
+        let resolved = resolve_optional_refinement(&original, invalid);
+
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|position| position.time_seconds)
+                .collect::<Vec<_>>(),
+            vec![0.0, 0.5, 1.0]
+        );
     }
 }

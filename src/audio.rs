@@ -128,7 +128,7 @@ pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
 /// fields so that stale cache entries are evicted automatically.
-pub const STRATUM_SCHEMA_VERSION: &str = "20";
+pub const STRATUM_SCHEMA_VERSION: &str = "21";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn stratum_result_shape_matches_schema_version() {
-        assert_eq!(STRATUM_SCHEMA_VERSION, "20");
+        assert_eq!(STRATUM_SCHEMA_VERSION, "21");
 
         let value =
             serde_json::to_value(StratumResult::default()).expect("serialize should succeed");
