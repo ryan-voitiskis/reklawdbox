@@ -6,6 +6,8 @@ mod setup;
 mod tags;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::Parser;
 use indicatif::MultiProgress;
@@ -16,11 +18,17 @@ use crate::{audio, store};
 /// Spawn signal handlers for graceful shutdown (Ctrl+C) and terminal resize
 /// (SIGWINCH). The SIGWINCH handler forces indicatif to clear-and-redraw so its
 /// internal line tracking stays in sync with the actual terminal state.
-pub(crate) fn spawn_signal_handlers(mp: &MultiProgress, cancel: &CancellationToken) {
+pub(crate) fn spawn_signal_handlers(
+    mp: &MultiProgress,
+    cancel: &CancellationToken,
+    cancellation_state: &CliCancellationState,
+) {
     let cancel_clone = cancel.clone();
+    let state_clone = cancellation_state.clone();
     let mp_clone = mp.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
+            state_clone.mark_user_requested();
             mp_clone
                 .println("Shutting down gracefully... (waiting for in-flight tasks)")
                 .ok();
@@ -48,6 +56,23 @@ pub(crate) fn spawn_signal_handlers(mp: &MultiProgress, cancel: &CancellationTok
             }
         }
     });
+}
+
+/// Tracks cancellation that came from the operator rather than internal or
+/// normal end-of-batch shutdown.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CliCancellationState {
+    user_requested: Arc<AtomicBool>,
+}
+
+impl CliCancellationState {
+    pub(crate) fn mark_user_requested(&self) {
+        self.user_requested.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn user_requested(&self) -> bool {
+        self.user_requested.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
@@ -325,6 +350,108 @@ pub(crate) struct CliCacheWriteMsg {
     pub features_json: String,
 }
 
+pub(crate) struct CacheWriteRequest<T> {
+    pub payload: T,
+    pub acknowledgement: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CacheWriterReport {
+    pub attempted: u32,
+    pub succeeded: u32,
+    pub failed: u32,
+    pub threshold_cancelled: bool,
+    pub error_summaries: Vec<String>,
+}
+
+impl CacheWriterReport {
+    pub(crate) fn record_success(&mut self) {
+        self.attempted += 1;
+        self.succeeded += 1;
+    }
+
+    pub(crate) fn record_failure(&mut self, summary: String) {
+        self.attempted += 1;
+        self.failed += 1;
+        if self.error_summaries.len() < 10 && !self.error_summaries.contains(&summary) {
+            self.error_summaries.push(summary);
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CliBatchFailure {
+    pub command: &'static str,
+    pub track_or_provider_failures: u32,
+    pub worker_join_failures: u32,
+    pub writer_failures: u32,
+    pub incomplete: usize,
+    pub user_cancelled: bool,
+    pub error_summaries: Vec<String>,
+}
+
+impl std::fmt::Display for CliBatchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} batch failed: {} track/provider failures, {} task join failures, {} cache write failures, {} incomplete",
+            self.command,
+            self.track_or_provider_failures,
+            self.worker_join_failures,
+            self.writer_failures,
+            self.incomplete,
+        )?;
+        if self.user_cancelled {
+            write!(f, ", cancelled by user")?;
+        }
+        if !self.error_summaries.is_empty() {
+            write!(f, ": {}", self.error_summaries.join("; "))?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CliBatchFailure {}
+
+pub(crate) fn cli_batch_outcome(
+    command: &'static str,
+    track_or_provider_failures: u32,
+    worker_join_failures: u32,
+    writer_failures: u32,
+    incomplete: usize,
+    user_cancelled: bool,
+    error_summaries: Vec<String>,
+) -> Result<(), CliBatchFailure> {
+    if track_or_provider_failures == 0
+        && worker_join_failures == 0
+        && writer_failures == 0
+        && incomplete == 0
+        && !user_cancelled
+    {
+        Ok(())
+    } else {
+        Err(CliBatchFailure {
+            command,
+            track_or_provider_failures,
+            worker_join_failures,
+            writer_failures,
+            incomplete,
+            user_cancelled,
+            error_summaries,
+        })
+    }
+}
+
+pub(crate) fn task_join_error_summary(task: &str, error: &tokio::task::JoinError) -> String {
+    if error.is_cancelled() {
+        format!("{task} was cancelled")
+    } else if error.is_panic() {
+        format!("{task} panicked")
+    } else {
+        format!("{task} failed")
+    }
+}
+
 pub(crate) fn serialize_cache_payload<T: serde::Serialize>(
     value: &T,
     context: &str,
@@ -333,13 +460,20 @@ pub(crate) fn serialize_cache_payload<T: serde::Serialize>(
 }
 
 pub(crate) async fn send_cache_message<T>(
-    tx: &tokio::sync::mpsc::Sender<T>,
+    tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<T>>,
     message: T,
     context: &str,
 ) -> Result<(), String> {
-    tx.send(message)
+    let (acknowledgement, result) = tokio::sync::oneshot::channel();
+    tx.send(CacheWriteRequest {
+        payload: message,
+        acknowledgement,
+    })
+    .await
+    .map_err(|e| format!("{context} cache queue send failed: {e}"))?;
+    result
         .await
-        .map_err(|e| format!("{context} cache queue send failed: {e}"))
+        .map_err(|_| format!("{context} cache acknowledgement canceled"))?
 }
 
 fn is_audio_file(path: &Path) -> bool {
@@ -415,10 +549,77 @@ fn display_field_name(field: &str) -> String {
 }
 
 #[cfg(test)]
+pub(crate) mod async_test_support {
+    use std::future::Future;
+    use std::time::Duration;
+
+    pub(crate) const STEP_TIMEOUT: Duration = Duration::from_secs(1);
+    pub(crate) const TEST_WATCHDOG: Duration = Duration::from_secs(5);
+
+    pub(crate) struct TaskGuard<T> {
+        handle: Option<tokio::task::JoinHandle<T>>,
+    }
+
+    impl<T> TaskGuard<T> {
+        pub(crate) fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+            Self {
+                handle: Some(handle),
+            }
+        }
+
+        pub(crate) async fn join_raw(
+            mut self,
+            context: &str,
+        ) -> Result<Result<T, tokio::task::JoinError>, String> {
+            let mut handle = self.handle.take().expect("task guard handle");
+            match tokio::time::timeout(STEP_TIMEOUT, &mut handle).await {
+                Ok(result) => Ok(result),
+                Err(_) => {
+                    handle.abort();
+                    tokio::time::timeout(STEP_TIMEOUT, &mut handle)
+                        .await
+                        .map_err(|_| format!("{context} cleanup timed out"))
+                        .map(|_| ())?;
+                    Err(format!("{context} timed out"))
+                }
+            }
+        }
+
+        pub(crate) async fn join(self, context: &str) -> Result<T, String> {
+            self.join_raw(context)
+                .await?
+                .map_err(|error| format!("{context} failed: {error}"))
+        }
+
+        pub(crate) fn abort(&self) {
+            if let Some(handle) = &self.handle {
+                handle.abort();
+            }
+        }
+    }
+
+    impl<T> Drop for TaskGuard<T> {
+        fn drop(&mut self) {
+            if let Some(handle) = &self.handle {
+                handle.abort();
+            }
+        }
+    }
+
+    pub(crate) async fn bounded<F: Future>(future: F, context: &str) -> Result<F::Output, String> {
+        tokio::time::timeout(STEP_TIMEOUT, future)
+            .await
+            .map_err(|_| format!("{context} timed out"))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::analyze::{handle_analysis_result, handle_decode_result, mark_track_outcome};
+    use super::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
     use super::{
-        CacheProbe, CliCacheWriteMsg, cache_status_for_track, file_mtime_unix, is_cache_fresh,
+        CacheProbe, CacheWriteRequest, CliCacheWriteMsg, CliCancellationState,
+        cache_status_for_track, cli_batch_outcome, file_mtime_unix, is_cache_fresh,
         send_cache_message, serialize_cache_payload,
     };
     use crate::{
@@ -473,6 +674,17 @@ mod tests {
             sections: None,
             flags: vec![],
             warnings: vec![],
+        }
+    }
+
+    fn cache_message() -> CliCacheWriteMsg {
+        CliCacheWriteMsg {
+            file_path: "/tmp/test.flac".to_string(),
+            analyzer: "stratum-dsp".to_string(),
+            file_size: 1,
+            file_mtime: 2,
+            analyzer_version: "v1".to_string(),
+            features_json: "{}".to_string(),
         }
     }
 
@@ -649,70 +861,237 @@ mod tests {
 
     #[tokio::test]
     async fn send_cache_message_reports_closed_channel() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<CliCacheWriteMsg>(1);
-        drop(rx);
-        let err = send_cache_message(
-            &tx,
-            CliCacheWriteMsg {
-                file_path: "/tmp/test.flac".to_string(),
-                analyzer: "stratum-dsp".to_string(),
-                file_size: 1,
-                file_mtime: 2,
-                analyzer_version: "v1".to_string(),
-                features_json: "{}".to_string(),
-            },
-            "analysis",
-        )
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (tx, rx) = tokio::sync::mpsc::channel::<CacheWriteRequest<CliCacheWriteMsg>>(1);
+            drop(rx);
+            let result = bounded(
+                send_cache_message(&tx, cache_message(), "analysis"),
+                "closed-channel send",
+            )
+            .await
+            .expect("bounded send");
+            drop(tx);
+            let err = result.expect_err("closed cache channel should surface an error");
+            assert!(err.contains("analysis cache queue send failed"));
+        })
         .await
-        .expect_err("closed cache channel should surface an error");
-        assert!(err.contains("analysis cache queue send failed"));
+        .expect("closed-channel test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn send_cache_message_waits_for_success_acknowledgement() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<CacheWriteRequest<CliCacheWriteMsg>>(1);
+            let writer = TaskGuard::new(tokio::spawn(async move {
+                let request = bounded(rx.recv(), "success writer receive")
+                    .await?
+                    .ok_or_else(|| "success writer channel closed".to_string())?;
+                request.acknowledgement.send(Ok(())).ok();
+                Ok::<(), String>(())
+            }));
+
+            let send_result = bounded(
+                send_cache_message(&tx, cache_message(), "analysis"),
+                "success acknowledged send",
+            )
+            .await;
+            drop(tx);
+            let writer_result = writer.join("success writer join").await;
+            assert_eq!(send_result.expect("bounded send"), Ok(()));
+            assert_eq!(writer_result.expect("guarded writer join"), Ok(()));
+        })
+        .await
+        .expect("success-ack test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn send_cache_message_reports_write_acknowledgement_error() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<CacheWriteRequest<CliCacheWriteMsg>>(1);
+            let writer = TaskGuard::new(tokio::spawn(async move {
+                let request = bounded(rx.recv(), "error writer receive")
+                    .await?
+                    .ok_or_else(|| "error writer channel closed".to_string())?;
+                request
+                    .acknowledgement
+                    .send(Err("sqlite write rejected".to_string()))
+                    .ok();
+                Ok::<(), String>(())
+            }));
+
+            let send_result = bounded(
+                send_cache_message(&tx, cache_message(), "analysis"),
+                "error acknowledged send",
+            )
+            .await;
+            drop(tx);
+            let writer_result = writer.join("error writer join").await;
+            let err = send_result
+                .expect("bounded send")
+                .expect_err("write error must reach producer");
+            assert_eq!(err, "sqlite write rejected");
+            assert_eq!(writer_result.expect("guarded writer join"), Ok(()));
+        })
+        .await
+        .expect("write-error test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn send_cache_message_reports_canceled_acknowledgement() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<CacheWriteRequest<CliCacheWriteMsg>>(1);
+            let writer = TaskGuard::new(tokio::spawn(async move {
+                let request = bounded(rx.recv(), "canceled writer receive")
+                    .await?
+                    .ok_or_else(|| "canceled writer channel closed".to_string())?;
+                drop(request.acknowledgement);
+                Ok::<(), String>(())
+            }));
+
+            let send_result = bounded(
+                send_cache_message(&tx, cache_message(), "analysis"),
+                "canceled acknowledged send",
+            )
+            .await;
+            drop(tx);
+            let writer_result = writer.join("canceled writer join").await;
+            let err = send_result
+                .expect("bounded send")
+                .expect_err("dropped acknowledgement must reach producer");
+            assert!(err.contains("analysis cache acknowledgement canceled"));
+            assert_eq!(writer_result.expect("guarded writer join"), Ok(()));
+        })
+        .await
+        .expect("canceled-ack test watchdog expired");
+    }
+
+    #[test]
+    fn cli_batch_outcome_accepts_only_complete_success() {
+        assert!(cli_batch_outcome("test", 0, 0, 0, 0, false, vec![]).is_ok());
+        for (failures, joins, writes, incomplete, cancelled) in [
+            (1, 0, 0, 0, false),
+            (0, 1, 0, 0, false),
+            (0, 0, 1, 0, false),
+            (0, 0, 0, 1, false),
+            (0, 0, 0, 0, true),
+            (1, 1, 1, 1, true),
+        ] {
+            assert!(
+                cli_batch_outcome(
+                    "test",
+                    failures,
+                    joins,
+                    writes,
+                    incomplete,
+                    cancelled,
+                    vec!["stable summary".to_string()],
+                )
+                .is_err()
+            );
+        }
+
+        let combined =
+            cli_batch_outcome("test", 1, 2, 3, 4, true, vec!["stable summary".to_string()])
+                .expect_err("combined failures");
+        assert_eq!(
+            combined,
+            super::CliBatchFailure {
+                command: "test",
+                track_or_provider_failures: 1,
+                worker_join_failures: 2,
+                writer_failures: 3,
+                incomplete: 4,
+                user_cancelled: true,
+                error_summaries: vec!["stable summary".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn cli_cancellation_state_distinguishes_user_and_internal_shutdown() {
+        let state = CliCancellationState::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        assert!(!state.user_requested());
+
+        token.cancel();
+        assert!(token.is_cancelled());
+        assert!(
+            !state.user_requested(),
+            "internal cancellation is not Ctrl-C"
+        );
+
+        state.mark_user_requested();
+        assert!(state.user_requested());
+    }
+
+    #[test]
+    fn cli_cancellation_state_normal_shutdown_is_not_user_cancelled() {
+        let state = CliCancellationState::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let user_requested_before_shutdown = state.user_requested();
+        token.cancel();
+        assert!(!user_requested_before_shutdown);
+        assert!(!state.user_requested());
     }
 
     #[tokio::test]
     async fn decode_join_error_marks_failed_and_allows_next_track() {
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            Ok::<(Vec<f32>, u32), AudioError>((vec![0.0], 44_100))
-        });
-        handle.abort();
-        let join_err = handle
-            .await
-            .expect_err("aborted task should produce JoinError");
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let handle = TaskGuard::new(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok::<(Vec<f32>, u32), AudioError>((vec![0.0], 44_100))
+            }));
+            handle.abort();
+            let join_err = handle
+                .join_raw("aborted decode task join")
+                .await
+                .expect("bounded decode join")
+                .expect_err("aborted task should produce JoinError");
 
-        let mut failed = 0;
-        assert!(handle_decode_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
-        assert_eq!(failed, 1);
+            let mut failed = 0;
+            assert!(handle_decode_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
+            assert_eq!(failed, 1);
 
-        let next = handle_decode_result(Ok(Ok((vec![0.0], 44_100))), 2, 2, "c - d", &mut failed);
-        assert!(
-            next.is_some(),
-            "next track should continue after prior join error"
-        );
-        assert_eq!(failed, 1);
+            let next =
+                handle_decode_result(Ok(Ok((vec![0.0], 44_100))), 2, 2, "c - d", &mut failed);
+            assert!(
+                next.is_some(),
+                "next track should continue after prior join error"
+            );
+            assert_eq!(failed, 1);
+        })
+        .await
+        .expect("decode-join test watchdog expired");
     }
 
     #[tokio::test]
     async fn analysis_join_error_marks_failed_and_allows_next_track() {
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            Ok::<StratumResult, AudioError>(sample_stratum_result())
-        });
-        handle.abort();
-        let join_err = handle
-            .await
-            .expect_err("aborted task should produce JoinError");
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let handle = TaskGuard::new(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok::<StratumResult, AudioError>(sample_stratum_result())
+            }));
+            handle.abort();
+            let join_err = handle
+                .join_raw("aborted analysis task join")
+                .await
+                .expect("bounded analysis join")
+                .expect_err("aborted task should produce JoinError");
 
-        let mut failed = 0;
-        assert!(handle_analysis_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
-        assert_eq!(failed, 1);
+            let mut failed = 0;
+            assert!(handle_analysis_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
+            assert_eq!(failed, 1);
 
-        let next =
-            handle_analysis_result(Ok(Ok(sample_stratum_result())), 2, 2, "c - d", &mut failed);
-        assert!(
-            next.is_some(),
-            "next track should continue after prior analysis join error"
-        );
-        assert_eq!(failed, 1);
+            let next =
+                handle_analysis_result(Ok(Ok(sample_stratum_result())), 2, 2, "c - d", &mut failed);
+            assert!(
+                next.is_some(),
+                "next track should continue after prior analysis join error"
+            );
+            assert_eq!(failed, 1);
+        })
+        .await
+        .expect("analysis-join test watchdog expired");
     }
 
     #[test]

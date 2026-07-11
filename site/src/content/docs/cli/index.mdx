@@ -72,6 +72,8 @@ reklawdbox hydrate [options]
 
 Discovers tracks, shows a summary with cache/pending/error counts, prompts for confirmation, then runs all three providers concurrently with progress bars and graceful Ctrl+C. If Discogs auth is needed, it opens the browser flow automatically.
 
+The command drains and prints its final summary before exiting. A new provider, analysis, cache-write, or worker failure exits nonzero, as does Ctrl+C or any incomplete selected work. An all-cached/no-work run and declining the confirmation prompt remain successful.
+
 ### Examples
 
 ```bash
@@ -129,6 +131,8 @@ reklawdbox analyze [options]
 | `--concurrency` | `-j` | integer | auto | Override analysis concurrency (overrides `--cpu` preset, min `1`, max `16`) |
 
 Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Cache is invalidated when the analysis schema version changes.
+
+The command drains and prints its final summary before exiting. A new analysis, cache-write, or worker failure exits nonzero, as does Ctrl+C or any incomplete selected work. No matching tracks and all-cached/no-work runs remain successful.
 
 ### Example
 

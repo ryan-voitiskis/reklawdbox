@@ -10,8 +10,9 @@ use console::style;
 use crate::{audio, beatport, db, discogs, normalize, store, tools};
 
 use super::{
-    CliCacheWriteMsg, cache_probe_for_path, cache_status_for_track, file_mtime_unix,
-    send_cache_message, serialize_cache_payload,
+    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
+    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, file_mtime_unix,
+    send_cache_message, serialize_cache_payload, task_join_error_summary,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,6 +109,9 @@ struct ProviderCounters {
     enriched: AtomicU32,
     no_match: AtomicU32,
     errors: AtomicU32,
+    // Provider/analysis failures only; cache and task failures have separate reports.
+    operation_errors: AtomicU32,
+    terminal: AtomicU32,
 }
 
 impl ProviderCounters {
@@ -116,6 +120,8 @@ impl ProviderCounters {
             enriched: AtomicU32::new(0),
             no_match: AtomicU32::new(0),
             errors: AtomicU32::new(0),
+            operation_errors: AtomicU32::new(0),
+            terminal: AtomicU32::new(0),
         }
     }
 }
@@ -130,6 +136,199 @@ enum HydrateCacheMsg {
         response_json: Option<String>,
     },
     AudioAnalysis(CliCacheWriteMsg),
+}
+
+#[derive(Debug, Default)]
+struct HydrateAnalysisOutcome {
+    operation_failed: bool,
+    cache_write_failed: bool,
+}
+
+impl HydrateAnalysisOutcome {
+    fn succeeded(&self) -> bool {
+        !self.operation_failed && !self.cache_write_failed
+    }
+}
+
+#[derive(Debug, Default)]
+struct ProviderTaskReport {
+    selected: usize,
+    terminal_workers: usize,
+    join_failures: u32,
+    error_summaries: Vec<String>,
+}
+
+impl ProviderTaskReport {
+    fn new(selected: usize) -> Self {
+        Self {
+            selected,
+            ..Self::default()
+        }
+    }
+
+    fn incomplete(&self) -> usize {
+        self.selected.saturating_sub(self.terminal_workers)
+    }
+}
+
+fn record_provider_worker_join(
+    provider: &'static str,
+    result: Result<bool, tokio::task::JoinError>,
+    counters: &ProviderCounters,
+    report: &mut ProviderTaskReport,
+) {
+    match result {
+        Ok(true) => report.terminal_workers += 1,
+        Ok(false) => {}
+        Err(error) => {
+            counters.errors.fetch_add(1, Ordering::Relaxed);
+            report.join_failures += 1;
+            let summary = task_join_error_summary(&format!("{provider} worker task"), &error);
+            tracing::error!("{summary}: {error}");
+            report.error_summaries.push(summary);
+        }
+    }
+}
+
+fn resolve_provider_task_join(
+    provider: &'static str,
+    selected: usize,
+    counters: &ProviderCounters,
+    result: Result<ProviderTaskReport, tokio::task::JoinError>,
+) -> ProviderTaskReport {
+    match result {
+        Ok(report) => report,
+        Err(error) => {
+            counters.errors.fetch_add(1, Ordering::Relaxed);
+            let summary = task_join_error_summary(&format!("{provider} provider task"), &error);
+            tracing::error!("{summary}: {error}");
+            ProviderTaskReport {
+                selected,
+                terminal_workers: counters.terminal.load(Ordering::Relaxed) as usize,
+                join_failures: 1,
+                error_summaries: vec![summary],
+            }
+        }
+    }
+}
+
+fn run_hydrate_cache_writer(
+    store_path: String,
+    mut cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<HydrateCacheMsg>>,
+    cancel: CancellationToken,
+) -> CacheWriterReport {
+    let mut report = CacheWriterReport::default();
+    let conn = match store::open(&store_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            let summary = format!("cache store open failed: {error}");
+            tracing::error!("Cache writer: {summary} — rejecting queued writes");
+            report.error_summaries.push(summary.clone());
+            cancel.cancel();
+            while let Some(request) = cache_rx.blocking_recv() {
+                report.record_failure(summary.clone());
+                request.acknowledgement.send(Err(summary.clone())).ok();
+            }
+            return report;
+        }
+    };
+
+    let mut consecutive_failures: u32 = 0;
+    let mut fatal_error: Option<String> = None;
+    while let Some(request) = cache_rx.blocking_recv() {
+        if let Some(summary) = &fatal_error {
+            report.record_failure(summary.clone());
+            request.acknowledgement.send(Err(summary.clone())).ok();
+            continue;
+        }
+
+        let message = request.payload;
+        let (write_result, label) = match &message {
+            HydrateCacheMsg::Enrichment {
+                provider,
+                norm_artist,
+                norm_title,
+                norm_album,
+                match_quality,
+                response_json,
+            } => (
+                store::set_enrichment(
+                    &conn,
+                    provider,
+                    norm_artist,
+                    norm_title,
+                    norm_album.as_deref(),
+                    match_quality.as_deref(),
+                    response_json.as_deref(),
+                ),
+                format!("{provider} enrichment"),
+            ),
+            HydrateCacheMsg::AudioAnalysis(analysis) => (
+                store::set_audio_analysis(
+                    &conn,
+                    &analysis.file_path,
+                    &analysis.analyzer,
+                    analysis.file_size,
+                    analysis.file_mtime,
+                    &analysis.analyzer_version,
+                    &analysis.features_json,
+                ),
+                format!("{} analysis", analysis.analyzer),
+            ),
+        };
+
+        match write_result {
+            Ok(()) => {
+                consecutive_failures = 0;
+                report.record_success();
+                request.acknowledgement.send(Ok(())).ok();
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                let summary = format!("{label} cache write failed: {error}");
+                tracing::error!(
+                    "Cache writer: {summary} ({consecutive_failures}/{})",
+                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
+                );
+                report.record_failure(summary.clone());
+                request.acknowledgement.send(Err(summary)).ok();
+                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
+                    let fatal = format!(
+                        "cache writer stopped after {} consecutive failures",
+                        super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
+                    );
+                    tracing::error!("Cache writer: {fatal} — draining queued writes");
+                    report.threshold_cancelled = true;
+                    if report.error_summaries.len() < 10 && !report.error_summaries.contains(&fatal)
+                    {
+                        report.error_summaries.push(fatal.clone());
+                    }
+                    fatal_error = Some(fatal);
+                    cancel.cancel();
+                }
+            }
+        }
+    }
+    report
+}
+
+fn hydrate_batch_outcome(
+    provider_failures: u32,
+    join_failures: u32,
+    writer_failures: u32,
+    incomplete: usize,
+    user_cancelled: bool,
+    error_summaries: Vec<String>,
+) -> Result<(), CliBatchFailure> {
+    cli_batch_outcome(
+        "hydrate",
+        provider_failures,
+        join_failures,
+        writer_failures,
+        incomplete,
+        user_cancelled,
+        error_summaries,
+    )
 }
 
 pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -291,7 +490,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     drop(store_conn);
 
     let total_tracks = tracks.len();
-    let total_work = discogs_pending.len() + beatport_pending.len() + analysis_pending.len();
+    let discogs_selected = discogs_pending.len();
+    let beatport_selected = beatport_pending.len();
+    let analysis_selected = analysis_pending.len();
+    let total_work = discogs_selected + beatport_selected + analysis_selected;
 
     if total_work == 0 {
         println!("Found {total_tracks} tracks matching filters.");
@@ -422,7 +624,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     status_pb.set_style(ProgressStyle::with_template("  {msg}").unwrap());
     status_pb.enable_steady_tick(Duration::from_secs(1));
 
-    super::spawn_signal_handlers(&mp, &cancel);
+    let cancellation_state = CliCancellationState::default();
+    super::spawn_signal_handlers(&mp, &cancel, &cancellation_state);
 
     let discogs_counters = Arc::new(ProviderCounters::new());
     let beatport_counters = Arc::new(ProviderCounters::new());
@@ -430,77 +633,14 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
     // 8. Cache writer task
     let enrich_concurrency = args.concurrency.unwrap_or(4).clamp(1, 16) as usize;
-    let (cache_tx, mut cache_rx) =
-        tokio::sync::mpsc::channel::<HydrateCacheMsg>(enrich_concurrency * 8 + 32);
+    let (cache_tx, cache_rx) = tokio::sync::mpsc::channel::<CacheWriteRequest<HydrateCacheMsg>>(
+        enrich_concurrency * 8 + 32,
+    );
 
     let writer_store_path = store_path_str.clone();
     let writer_cancel = cancel.clone();
     let writer_handle = tokio::task::spawn_blocking(move || {
-        let conn = match store::open(&writer_store_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Cache writer: failed to open store: {e} — aborting pipeline");
-                writer_cancel.cancel();
-                return;
-            }
-        };
-        let mut consecutive_failures: u32 = 0;
-        while let Some(msg) = cache_rx.blocking_recv() {
-            let write_result = match &msg {
-                HydrateCacheMsg::Enrichment {
-                    provider,
-                    norm_artist,
-                    norm_title,
-                    norm_album,
-                    match_quality,
-                    response_json,
-                } => store::set_enrichment(
-                    &conn,
-                    provider,
-                    norm_artist,
-                    norm_title,
-                    norm_album.as_deref(),
-                    match_quality.as_deref(),
-                    response_json.as_deref(),
-                ),
-                HydrateCacheMsg::AudioAnalysis(a) => store::set_audio_analysis(
-                    &conn,
-                    &a.file_path,
-                    &a.analyzer,
-                    a.file_size,
-                    a.file_mtime,
-                    &a.analyzer_version,
-                    &a.features_json,
-                ),
-            };
-            if let Err(e) = write_result {
-                consecutive_failures += 1;
-                let label = match &msg {
-                    HydrateCacheMsg::Enrichment {
-                        provider,
-                        norm_artist,
-                        norm_title,
-                        ..
-                    } => format!("{provider} {norm_artist}/{norm_title}"),
-                    HydrateCacheMsg::AudioAnalysis(a) => {
-                        format!("{} {}", a.analyzer, a.file_path)
-                    }
-                };
-                tracing::error!(
-                    "Cache writer: write failed for {label}: {e} ({consecutive_failures}/{})",
-                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
-                );
-                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
-                    tracing::error!(
-                        "Cache writer: {consecutive_failures} consecutive failures — aborting pipeline"
-                    );
-                    writer_cancel.cancel();
-                    return;
-                }
-            } else {
-                consecutive_failures = 0;
-            }
-        }
+        run_hydrate_cache_writer(writer_store_path, cache_rx, writer_cancel)
     });
 
     // 9. Spawn provider loops concurrently (each in its own task so serial
@@ -554,15 +694,16 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = discogs_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
+            let mut report = ProviderTaskReport::new(discogs_selected);
             if discogs_pending.is_empty() {
-                return;
+                return report;
             }
             let (broker_cfg, session_token) = match discogs_mode {
                 Some(m) => m,
-                None => return,
+                None => return report,
             };
             let sem = Arc::new(tokio::sync::Semaphore::new(enrich_concurrency));
-            let mut handles = Vec::with_capacity(discogs_pending.len());
+            let mut handles = tokio::task::JoinSet::new();
 
             for track in discogs_pending {
                 if cancel.is_cancelled() {
@@ -580,10 +721,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 let token = session_token.clone();
                 let cancel = cancel.clone();
 
-                handles.push(tokio::spawn(async move {
+                handles.spawn(async move {
                     if cancel.is_cancelled() {
                         drop(permit);
-                        return;
+                        return false;
                     }
 
                     let norm_artist = normalize::normalize_for_matching(&track.artist);
@@ -630,6 +771,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 Err(e) => {
                                     tracing::error!("{e}");
                                     counters.errors.fetch_add(1, Ordering::Relaxed);
+                                    counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
                         }
@@ -660,7 +802,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 track.artist,
                                 track.title
                             );
-                            let _ = send_cache_message(
+                            if let Err(error) = send_cache_message(
                                 &cache_tx,
                                 HydrateCacheMsg::Enrichment {
                                     provider: "discogs".to_string(),
@@ -672,19 +814,26 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 },
                                 "discogs error",
                             )
-                            .await;
+                            .await
+                            {
+                                tracing::error!("{error}");
+                            }
                             counters.errors.fetch_add(1, Ordering::Relaxed);
+                            counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
+                    counters.terminal.fetch_add(1, Ordering::Relaxed);
                     pb.inc(1);
                     drop(permit);
-                }));
+                    true
+                });
             }
 
-            for handle in handles {
-                let _ = handle.await;
+            while let Some(result) = handles.join_next().await {
+                record_provider_worker_join("discogs", result, &counters, &mut report);
             }
+            report
         })
     };
 
@@ -696,11 +845,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = beatport_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
+            let mut report = ProviderTaskReport::new(beatport_selected);
             if beatport_pending.is_empty() {
-                return;
+                return report;
             }
             let sem = Arc::new(tokio::sync::Semaphore::new(1));
-            let mut handles = Vec::with_capacity(beatport_pending.len());
+            let mut handles = tokio::task::JoinSet::new();
 
             for track in beatport_pending {
                 if cancel.is_cancelled() {
@@ -716,10 +866,10 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 let pb = pb.clone();
                 let cancel = cancel.clone();
 
-                handles.push(tokio::spawn(async move {
+                handles.spawn(async move {
                     if cancel.is_cancelled() {
                         drop(permit);
-                        return;
+                        return false;
                     }
 
                     let norm_artist = normalize::normalize_for_matching(&track.artist);
@@ -758,6 +908,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 Err(e) => {
                                     tracing::error!("{e}");
                                     counters.errors.fetch_add(1, Ordering::Relaxed);
+                                    counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
                         }
@@ -788,7 +939,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 track.artist,
                                 track.title
                             );
-                            let _ = send_cache_message(
+                            if let Err(error) = send_cache_message(
                                 &cache_tx,
                                 HydrateCacheMsg::Enrichment {
                                     provider: "beatport".to_string(),
@@ -800,19 +951,26 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                                 },
                                 "beatport error",
                             )
-                            .await;
+                            .await
+                            {
+                                tracing::error!("{error}");
+                            }
                             counters.errors.fetch_add(1, Ordering::Relaxed);
+                            counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
+                    counters.terminal.fetch_add(1, Ordering::Relaxed);
                     pb.inc(1);
                     drop(permit);
-                }));
+                    true
+                });
             }
 
-            for handle in handles {
-                let _ = handle.await;
+            while let Some(result) = handles.join_next().await {
+                record_provider_worker_join("beatport", result, &counters, &mut report);
             }
+            report
         })
     };
 
@@ -822,12 +980,13 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = analysis_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
+            let mut report = ProviderTaskReport::new(analysis_selected);
             if analysis_pending.is_empty() {
-                return;
+                return report;
             }
             let cpu_sem = Arc::new(tokio::sync::Semaphore::new(analysis_concurrency));
             let mem_sem = Arc::new(tokio::sync::Semaphore::new(analysis_budget_mb as usize));
-            let mut handles = Vec::with_capacity(analysis_pending.len());
+            let mut handles = tokio::task::JoinSet::new();
 
             for (track, needs_stratum, needs_essentia) in analysis_pending {
                 if cancel.is_cancelled() {
@@ -857,14 +1016,14 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 let pb = pb.clone();
                 let cancel = cancel.clone();
 
-                handles.push(tokio::spawn(async move {
+                handles.spawn(async move {
                     if cancel.is_cancelled() {
                         drop(cpu_permit);
                         drop(mem_permit);
-                        return;
+                        return false;
                     }
 
-                    let ok = cli_analyze_for_hydrate(
+                    let outcome = cli_analyze_for_hydrate(
                         &track.file_path,
                         needs_stratum,
                         needs_essentia,
@@ -873,31 +1032,78 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                     )
                     .await;
 
-                    if ok {
+                    if outcome.succeeded() {
                         counters.enriched.fetch_add(1, Ordering::Relaxed);
                     } else {
                         counters.errors.fetch_add(1, Ordering::Relaxed);
                     }
+                    if outcome.operation_failed {
+                        counters.operation_errors.fetch_add(1, Ordering::Relaxed);
+                    }
 
+                    counters.terminal.fetch_add(1, Ordering::Relaxed);
                     pb.inc(1);
                     drop(cpu_permit);
                     drop(mem_permit);
-                }));
+                    true
+                });
             }
 
-            for handle in handles {
-                let _ = handle.await;
+            while let Some(result) = handles.join_next().await {
+                record_provider_worker_join("analysis", result, &counters, &mut report);
             }
+            report
         })
     };
 
     // Drop our sender so the writer sees EOF when all producer tasks finish
     drop(cache_tx);
 
-    let _ = tokio::join!(discogs_task, beatport_task, analysis_task);
+    let discogs_report = resolve_provider_task_join(
+        "discogs",
+        discogs_selected,
+        &discogs_counters,
+        discogs_task.await,
+    );
+    let beatport_report = resolve_provider_task_join(
+        "beatport",
+        beatport_selected,
+        &beatport_counters,
+        beatport_task.await,
+    );
+    let analysis_report = resolve_provider_task_join(
+        "analysis",
+        analysis_selected,
+        &analysis_counters,
+        analysis_task.await,
+    );
+
+    let user_cancelled = cancellation_state.user_requested();
     cancel.cancel();
-    let _ = status_task.await;
-    let _ = writer_handle.await;
+    let mut error_summaries = Vec::new();
+    error_summaries.extend(discogs_report.error_summaries.iter().cloned());
+    error_summaries.extend(beatport_report.error_summaries.iter().cloned());
+    error_summaries.extend(analysis_report.error_summaries.iter().cloned());
+
+    let status_join_failures = match status_task.await {
+        Ok(()) => 0_u32,
+        Err(error) => {
+            let summary = task_join_error_summary("hydrate status task", &error);
+            tracing::error!("{summary}: {error}");
+            error_summaries.push(summary);
+            1
+        }
+    };
+    let (writer_report, writer_join_failures) = match writer_handle.await {
+        Ok(report) => (report, 0_u32),
+        Err(error) => {
+            let summary = task_join_error_summary("hydrate cache writer task", &error);
+            tracing::error!("{summary}: {error}");
+            error_summaries.push(summary);
+            (CacheWriterReport::default(), 1_u32)
+        }
+    };
+    error_summaries.extend(writer_report.error_summaries.iter().cloned());
     status_pb.finish_and_clear();
     pb.finish_and_clear();
     mp.clear().ok();
@@ -952,7 +1158,46 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         );
     }
 
-    Ok(())
+    if writer_report.attempted > 0 || writer_report.failed > 0 {
+        println!(
+            "  Cache writes: {} succeeded, {} failed",
+            style(writer_report.succeeded).green(),
+            if writer_report.failed > 0 {
+                style(writer_report.failed).red()
+            } else {
+                style(writer_report.failed).dim()
+            }
+        );
+    }
+    if writer_join_failures > 0 {
+        println!("  Cache writer task: {}", style("failed").red());
+    }
+
+    let incomplete =
+        discogs_report.incomplete() + beatport_report.incomplete() + analysis_report.incomplete();
+    if incomplete > 0 {
+        println!("  Incomplete: {} selected tasks", style(incomplete).red());
+    }
+    if user_cancelled {
+        println!("Cancelled");
+    }
+
+    let provider_failures = discogs_counters.operation_errors.load(Ordering::Relaxed)
+        + beatport_counters.operation_errors.load(Ordering::Relaxed)
+        + analysis_counters.operation_errors.load(Ordering::Relaxed);
+    let provider_join_failures = discogs_report.join_failures
+        + beatport_report.join_failures
+        + analysis_report.join_failures;
+
+    hydrate_batch_outcome(
+        provider_failures,
+        provider_join_failures + status_join_failures + writer_join_failures,
+        writer_report.failed,
+        incomplete,
+        user_cancelled,
+        error_summaries,
+    )
+    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
 }
 
 async fn cli_ensure_discogs_auth(
@@ -1149,20 +1394,25 @@ async fn cli_analyze_for_hydrate(
     needs_stratum: bool,
     needs_essentia: bool,
     essentia_python: Option<&str>,
-    cache_tx: &tokio::sync::mpsc::Sender<HydrateCacheMsg>,
-) -> bool {
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<HydrateCacheMsg>>,
+) -> HydrateAnalysisOutcome {
+    let mut outcome = HydrateAnalysisOutcome::default();
     let file_path = match audio::resolve_audio_path(raw_file_path) {
         Ok(p) => p,
-        Err(_) => return false,
+        Err(_) => {
+            outcome.operation_failed = true;
+            return outcome;
+        }
     };
     let metadata = match std::fs::metadata(&file_path) {
         Ok(m) => m,
-        Err(_) => return false,
+        Err(_) => {
+            outcome.operation_failed = true;
+            return outcome;
+        }
     };
     let file_size = metadata.len() as i64;
     let file_mtime = file_mtime_unix(&metadata);
-    let mut ok = true;
-
     if needs_stratum {
         let path_clone = file_path.clone();
         let decode_result =
@@ -1184,8 +1434,8 @@ async fn cli_analyze_for_hydrate(
                                 Ok(json) => json,
                                 Err(e) => {
                                     tracing::error!("{e}");
-                                    ok = false;
-                                    return ok;
+                                    outcome.operation_failed = true;
+                                    return outcome;
                                 }
                             };
                         if let Err(e) = send_cache_message(
@@ -1203,26 +1453,26 @@ async fn cli_analyze_for_hydrate(
                         .await
                         {
                             tracing::error!("{e}");
-                            ok = false;
+                            outcome.cache_write_failed = true;
                         }
                     }
                     Ok(Err(e)) => {
                         tracing::error!("stratum-dsp analysis failed for {file_path}: {e}");
-                        ok = false;
+                        outcome.operation_failed = true;
                     }
                     Err(e) => {
                         tracing::error!("stratum-dsp analysis task failed for {file_path}: {e}");
-                        ok = false;
+                        outcome.operation_failed = true;
                     }
                 }
             }
             Ok(Err(e)) => {
                 tracing::error!("Audio decode failed for {file_path}: {e}");
-                ok = false;
+                outcome.operation_failed = true;
             }
             Err(e) => {
                 tracing::error!("Audio decode task failed for {file_path}: {e}");
-                ok = false;
+                outcome.operation_failed = true;
             }
         }
     }
@@ -1234,8 +1484,8 @@ async fn cli_analyze_for_hydrate(
                     Ok(json) => json,
                     Err(e) => {
                         tracing::error!("{e}");
-                        ok = false;
-                        return ok;
+                        outcome.operation_failed = true;
+                        return outcome;
                     }
                 };
                 if let Err(e) = send_cache_message(
@@ -1253,15 +1503,331 @@ async fn cli_analyze_for_hydrate(
                 .await
                 {
                     tracing::error!("{e}");
-                    ok = false;
+                    outcome.cache_write_failed = true;
                 }
             }
             Err(e) => {
                 tracing::error!("Essentia analysis failed for {file_path}: {e}");
-                ok = false;
+                outcome.operation_failed = true;
             }
         }
     }
 
-    ok
+    outcome
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::cli::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
+
+    fn enrichment_message(provider: &str, id: u32) -> HydrateCacheMsg {
+        HydrateCacheMsg::Enrichment {
+            provider: provider.to_string(),
+            norm_artist: format!("artist-{id}"),
+            norm_title: format!("title-{id}"),
+            norm_album: None,
+            match_quality: Some("exact".to_string()),
+            response_json: Some("{}".to_string()),
+        }
+    }
+
+    fn no_match_message(provider: &str, id: u32) -> HydrateCacheMsg {
+        HydrateCacheMsg::Enrichment {
+            provider: provider.to_string(),
+            norm_artist: format!("artist-{id}"),
+            norm_title: format!("title-{id}"),
+            norm_album: None,
+            match_quality: Some("none".to_string()),
+            response_json: None,
+        }
+    }
+
+    fn analysis_message(analyzer: &str, id: u32) -> HydrateCacheMsg {
+        HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
+            file_path: format!("/tmp/hydrate-{id}.flac"),
+            analyzer: analyzer.to_string(),
+            file_size: i64::from(id) + 1,
+            file_mtime: i64::from(id) + 2,
+            analyzer_version: "test-v1".to_string(),
+            features_json: "{}".to_string(),
+        })
+    }
+
+    fn temp_store() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("cache.sqlite3");
+        let path = path.to_string_lossy().to_string();
+        let conn = store::open(&path).expect("create store");
+        drop(conn);
+        (dir, path)
+    }
+
+    fn install_failure_triggers(path: &str) {
+        let conn = store::open(path).expect("open store for triggers");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_failed_enrichment
+             BEFORE INSERT ON enrichment_cache
+             WHEN NEW.provider = 'fail'
+             BEGIN
+               SELECT RAISE(FAIL, 'injected enrichment write failure');
+             END;
+             CREATE TRIGGER reject_failed_audio
+             BEFORE INSERT ON audio_analysis_cache
+             WHEN NEW.analyzer = 'fail'
+             BEGIN
+               SELECT RAISE(FAIL, 'injected audio write failure');
+             END;",
+        )
+        .expect("install failure triggers");
+    }
+
+    async fn run_writer_requests(
+        path: String,
+        messages: Vec<HydrateCacheMsg>,
+    ) -> (
+        Vec<Result<(), String>>,
+        CacheWriterReport,
+        CancellationToken,
+    ) {
+        let cancel = CancellationToken::new();
+        let writer_cancel = cancel.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(messages.len().max(1));
+        let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
+            run_hydrate_cache_writer(path, rx, writer_cancel)
+        }));
+        let mut results = Vec::with_capacity(messages.len());
+        for message in messages {
+            match bounded(
+                send_cache_message(&tx, message, "hydrate test"),
+                "hydrate writer acknowledgement",
+            )
+            .await
+            {
+                Ok(result) => results.push(result),
+                Err(error) => {
+                    results.push(Err(error));
+                    break;
+                }
+            }
+        }
+        drop(tx);
+        let report = writer
+            .join("hydrate writer join")
+            .await
+            .expect("guarded writer join");
+        (results, report, cancel)
+    }
+
+    #[tokio::test]
+    async fn hydrate_cache_writer_persists_both_payload_variants_before_ack() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            let (results, report, cancel) = run_writer_requests(
+                path.clone(),
+                vec![no_match_message("discogs", 1), analysis_message("ok", 2)],
+            )
+            .await;
+            assert_eq!(results, vec![Ok(()), Ok(())]);
+            assert_eq!(report.attempted, 2);
+            assert_eq!(report.succeeded, 2);
+            assert_eq!(report.failed, 0);
+            assert!(!cancel.is_cancelled());
+
+            let conn = store::open(&path).expect("reopen store");
+            let enrichment =
+                store::get_enrichment(&conn, "discogs", "artist-1", "title-1", None, true)
+                    .expect("read enrichment")
+                    .expect("durable enrichment");
+            assert_eq!(enrichment.match_quality.as_deref(), Some("none"));
+            assert!(
+                store::get_audio_analysis(&conn, "/tmp/hydrate-2.flac", "ok")
+                    .expect("read analysis")
+                    .is_some()
+            );
+            cancel.cancel();
+        })
+        .await
+        .expect("hydrate writer success watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn hydrate_cache_writer_reports_selective_failure_and_recovers() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            install_failure_triggers(&path);
+            let (results, report, cancel) = run_writer_requests(
+                path,
+                vec![enrichment_message("fail", 1), analysis_message("ok", 2)],
+            )
+            .await;
+            assert!(results[0].is_err());
+            assert_eq!(results[1], Ok(()));
+            assert_eq!(report.succeeded, 1);
+            assert_eq!(report.failed, 1);
+            assert!(!report.threshold_cancelled);
+            assert!(!cancel.is_cancelled());
+            cancel.cancel();
+        })
+        .await
+        .expect("hydrate selective-failure watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn hydrate_cache_writer_threshold_cancels_and_drains_mixed_payloads() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            install_failure_triggers(&path);
+            let (results, report, cancel) = run_writer_requests(
+                path,
+                vec![
+                    enrichment_message("fail", 1),
+                    enrichment_message("fail", 2),
+                    enrichment_message("fail", 3),
+                    analysis_message("ok", 4),
+                ],
+            )
+            .await;
+            assert!(results.iter().all(Result::is_err));
+            assert_eq!(report.attempted, 4);
+            assert_eq!(report.failed, 4);
+            assert!(report.threshold_cancelled);
+            assert!(cancel.is_cancelled());
+            assert!(
+                results[3]
+                    .as_ref()
+                    .expect_err("drained payload rejection")
+                    .contains("cache writer stopped")
+            );
+        })
+        .await
+        .expect("hydrate threshold watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn hydrate_cache_writer_open_failure_rejects_and_drains() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let invalid_path = dir.path().to_string_lossy().to_string();
+            let (results, report, cancel) =
+                run_writer_requests(invalid_path, vec![enrichment_message("ok", 1)]).await;
+            assert!(
+                results[0]
+                    .as_ref()
+                    .expect_err("open failure")
+                    .contains("cache store open failed")
+            );
+            assert_eq!(report.attempted, 1);
+            assert_eq!(report.failed, 1);
+            assert!(cancel.is_cancelled());
+        })
+        .await
+        .expect("hydrate open-failure watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn hydrate_cache_writer_tolerates_dropped_ack_receiver() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            let cancel = CancellationToken::new();
+            let writer_cancel = cancel.clone();
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
+                run_hydrate_cache_writer(path, rx, writer_cancel)
+            }));
+            let (acknowledgement, result) = tokio::sync::oneshot::channel();
+            drop(result);
+            let send_result = bounded(
+                tx.send(CacheWriteRequest {
+                    payload: enrichment_message("ok", 1),
+                    acknowledgement,
+                }),
+                "hydrate dropped-ack queue send",
+            )
+            .await;
+            drop(tx);
+            let report = writer.join("hydrate dropped-ack writer join").await;
+            send_result
+                .expect("bounded queue send")
+                .expect("queue request");
+            let report = report.expect("guarded writer join");
+            assert_eq!(report.succeeded, 1);
+            assert!(!cancel.is_cancelled());
+            cancel.cancel();
+        })
+        .await
+        .expect("hydrate dropped-ack watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn hydrate_provider_inner_and_outer_join_failures_are_incomplete() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let counters = ProviderCounters::new();
+            let mut inner_report = ProviderTaskReport::new(1);
+            let inner = TaskGuard::new(tokio::spawn(async {
+                panic!("injected inner provider panic")
+            }));
+            let inner_result = inner
+                .join_raw("injected inner provider join")
+                .await
+                .expect("bounded inner join");
+            record_provider_worker_join("discogs", inner_result, &counters, &mut inner_report);
+            assert_eq!(inner_report.join_failures, 1);
+            assert_eq!(inner_report.incomplete(), 1);
+            assert_eq!(
+                inner_report.error_summaries,
+                vec!["discogs worker task panicked"]
+            );
+            assert_eq!(counters.errors.load(Ordering::Relaxed), 1);
+            assert_eq!(counters.operation_errors.load(Ordering::Relaxed), 0);
+
+            counters.terminal.store(1, Ordering::Relaxed);
+            let outer = TaskGuard::new(tokio::spawn(async {
+                panic!("injected outer provider panic");
+                #[allow(unreachable_code)]
+                ProviderTaskReport::new(3)
+            }));
+            let outer_result = outer
+                .join_raw("injected outer provider join")
+                .await
+                .expect("bounded outer join");
+            let outer_report = resolve_provider_task_join("discogs", 3, &counters, outer_result);
+            assert_eq!(outer_report.join_failures, 1);
+            assert_eq!(outer_report.terminal_workers, 1);
+            assert_eq!(outer_report.incomplete(), 2);
+            assert_eq!(
+                outer_report.error_summaries,
+                vec!["discogs provider task panicked"]
+            );
+        })
+        .await
+        .expect("provider-join watchdog expired");
+    }
+
+    #[test]
+    fn hydrate_batch_outcome_has_disjoint_exact_counts() {
+        assert!(hydrate_batch_outcome(0, 0, 0, 0, false, vec![]).is_ok());
+
+        let provider =
+            hydrate_batch_outcome(2, 0, 0, 0, false, vec![]).expect_err("provider failure");
+        assert_eq!(provider.track_or_provider_failures, 2);
+        assert_eq!(provider.worker_join_failures, 0);
+        assert_eq!(provider.writer_failures, 0);
+
+        let join = hydrate_batch_outcome(0, 1, 0, 1, false, vec![]).expect_err("join failure");
+        assert_eq!(join.track_or_provider_failures, 0);
+        assert_eq!(join.worker_join_failures, 1);
+        assert_eq!(join.writer_failures, 0);
+        assert_eq!(join.incomplete, 1);
+
+        let writer = hydrate_batch_outcome(0, 0, 3, 0, false, vec![]).expect_err("writer failure");
+        assert_eq!(writer.track_or_provider_failures, 0);
+        assert_eq!(writer.worker_join_failures, 0);
+        assert_eq!(writer.writer_failures, 3);
+
+        let cancelled =
+            hydrate_batch_outcome(0, 0, 0, 2, true, vec![]).expect_err("cancelled batch");
+        assert_eq!(cancelled.incomplete, 2);
+        assert!(cancelled.user_cancelled);
+    }
 }

@@ -8,8 +8,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{audio, db, store, tools};
 
 use super::{
-    CliCacheWriteMsg, cache_probe_for_path, cache_status_for_track, send_cache_message,
-    serialize_cache_payload,
+    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
+    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, send_cache_message,
+    serialize_cache_payload, task_join_error_summary,
 };
 
 #[derive(clap::Args)]
@@ -65,6 +66,114 @@ pub(crate) struct AnalyzeArgs {
     /// Override analysis concurrency (overrides --cpu preset, min 1, max 16)
     #[arg(long, short = 'j')]
     concurrency: Option<u32>,
+}
+
+fn run_analyze_cache_writer(
+    store_path: String,
+    mut cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<CliCacheWriteMsg>>,
+    cancel: CancellationToken,
+) -> CacheWriterReport {
+    let mut report = CacheWriterReport::default();
+    let conn = match store::open(&store_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            let summary = format!("cache store open failed: {error}");
+            tracing::error!("Cache writer: {summary} — rejecting queued writes");
+            report.error_summaries.push(summary.clone());
+            cancel.cancel();
+            while let Some(request) = cache_rx.blocking_recv() {
+                report.record_failure(summary.clone());
+                request.acknowledgement.send(Err(summary.clone())).ok();
+            }
+            return report;
+        }
+    };
+
+    let mut consecutive_failures: u32 = 0;
+    let mut fatal_error: Option<String> = None;
+    while let Some(request) = cache_rx.blocking_recv() {
+        if let Some(summary) = &fatal_error {
+            report.record_failure(summary.clone());
+            request.acknowledgement.send(Err(summary.clone())).ok();
+            continue;
+        }
+
+        let message = request.payload;
+        match store::set_audio_analysis(
+            &conn,
+            &message.file_path,
+            &message.analyzer,
+            message.file_size,
+            message.file_mtime,
+            &message.analyzer_version,
+            &message.features_json,
+        ) {
+            Ok(()) => {
+                consecutive_failures = 0;
+                report.record_success();
+                request.acknowledgement.send(Ok(())).ok();
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                let summary = format!("{} cache write failed: {error}", message.analyzer);
+                tracing::error!(
+                    "Cache writer: {summary} ({consecutive_failures}/{})",
+                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
+                );
+                report.record_failure(summary.clone());
+                request.acknowledgement.send(Err(summary)).ok();
+                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
+                    let fatal = format!(
+                        "cache writer stopped after {} consecutive failures",
+                        super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
+                    );
+                    tracing::error!("Cache writer: {fatal} — draining queued writes");
+                    report.threshold_cancelled = true;
+                    if report.error_summaries.len() < 10 && !report.error_summaries.contains(&fatal)
+                    {
+                        report.error_summaries.push(fatal.clone());
+                    }
+                    fatal_error = Some(fatal);
+                    cancel.cancel();
+                }
+            }
+        }
+    }
+    report
+}
+
+fn analyze_batch_outcome(
+    track_failures: u32,
+    join_failures: u32,
+    writer_failures: u32,
+    incomplete: usize,
+    user_cancelled: bool,
+    error_summaries: Vec<String>,
+) -> Result<(), CliBatchFailure> {
+    cli_batch_outcome(
+        "analyze",
+        track_failures,
+        join_failures,
+        writer_failures,
+        incomplete,
+        user_cancelled,
+        error_summaries,
+    )
+}
+
+fn record_analyze_worker_join(
+    result: Result<(), tokio::task::JoinError>,
+    error_summaries: &mut Vec<String>,
+) -> u32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            let summary = task_join_error_summary("analysis worker task", &error);
+            tracing::error!("{summary}: {error}");
+            error_summaries.push(summary);
+            1
+        }
+    }
 }
 
 pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -192,55 +301,21 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     drop(store_conn);
 
     let cancel = CancellationToken::new();
+    let cancellation_state = CliCancellationState::default();
 
-    super::spawn_signal_handlers(&mp, &cancel);
+    super::spawn_signal_handlers(&mp, &cancel, &cancellation_state);
 
     let batch_start = Instant::now();
     let analyzed = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let failed = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    let (cache_tx, mut cache_rx) = tokio::sync::mpsc::channel::<CliCacheWriteMsg>(concurrency * 4);
+    let (cache_tx, cache_rx) =
+        tokio::sync::mpsc::channel::<CacheWriteRequest<CliCacheWriteMsg>>(concurrency * 4);
     let writer_store_path = store_path_str.clone();
     let writer_cancel = cancel.clone();
     let writer_handle = tokio::task::spawn_blocking(move || {
-        let conn = match store::open(&writer_store_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Cache writer: failed to open store: {e} — aborting pipeline");
-                writer_cancel.cancel();
-                return;
-            }
-        };
-        let mut consecutive_failures: u32 = 0;
-        while let Some(msg) = cache_rx.blocking_recv() {
-            if let Err(e) = store::set_audio_analysis(
-                &conn,
-                &msg.file_path,
-                &msg.analyzer,
-                msg.file_size,
-                msg.file_mtime,
-                &msg.analyzer_version,
-                &msg.features_json,
-            ) {
-                consecutive_failures += 1;
-                tracing::error!(
-                    "Cache writer: failed to write {} for {}: {e} ({consecutive_failures}/{})",
-                    msg.analyzer,
-                    msg.file_path,
-                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
-                );
-                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
-                    tracing::error!(
-                        "Cache writer: {consecutive_failures} consecutive failures — aborting pipeline"
-                    );
-                    writer_cancel.cancel();
-                    return;
-                }
-            } else {
-                consecutive_failures = 0;
-            }
-        }
+        run_analyze_cache_writer(writer_store_path, cache_rx, writer_cancel)
     });
 
     // Dual semaphore: CPU concurrency + memory budget
@@ -344,12 +419,14 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
                         }
                     }
                 }
-                Err(msg) => {
+                Err(error) => {
                     mp.println(format!(
-                        "[{idx}/{pending}] {} {label}: {msg}",
+                        "[{idx}/{pending}] {} {label}: {error}",
                         style("SKIP").yellow()
                     )).ok();
-                    failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if matches!(error, CliTrackFailure::Processing(_)) {
+                        failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
 
@@ -359,18 +436,33 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         }));
     }
 
+    let mut worker_join_failures = 0_u32;
+    let mut error_summaries = Vec::new();
     for handle in handles {
-        let _ = handle.await;
+        worker_join_failures += record_analyze_worker_join(handle.await, &mut error_summaries);
     }
 
+    let user_cancelled = cancellation_state.user_requested();
     cancel.cancel();
     pb.finish_and_clear();
 
     drop(cache_tx);
-    let _ = writer_handle.await;
+    let (writer_report, writer_join_failures) = match writer_handle.await {
+        Ok(report) => (report, 0_u32),
+        Err(error) => {
+            let summary = task_join_error_summary("cache writer task", &error);
+            tracing::error!("{summary}: {error}");
+            error_summaries.push(summary);
+            (CacheWriterReport::default(), 1_u32)
+        }
+    };
+    error_summaries.extend(writer_report.error_summaries.iter().cloned());
 
     let analyzed = analyzed.load(std::sync::atomic::Ordering::Relaxed);
-    let failed = failed.load(std::sync::atomic::Ordering::Relaxed);
+    let track_failures = failed.load(std::sync::atomic::Ordering::Relaxed);
+    let failed = track_failures + worker_join_failures;
+    let terminal = completed_count.load(std::sync::atomic::Ordering::Relaxed);
+    let incomplete = pending.saturating_sub(terminal);
     let total_time = batch_start.elapsed();
     let mins = total_time.as_secs() / 60;
     let secs = total_time.as_secs() % 60;
@@ -388,7 +480,36 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         );
     }
 
-    Ok(())
+    if writer_report.attempted > 0 || writer_report.failed > 0 {
+        println!(
+            "Cache writes: {} succeeded, {} failed",
+            style(writer_report.succeeded).green(),
+            if writer_report.failed > 0 {
+                style(writer_report.failed).red()
+            } else {
+                style(writer_report.failed).dim()
+            }
+        );
+    }
+    if writer_join_failures > 0 {
+        println!("Cache writer task: {}", style("failed").red());
+    }
+    if incomplete > 0 {
+        println!("Incomplete: {} selected tracks", style(incomplete).red());
+    }
+    if user_cancelled {
+        println!("Cancelled");
+    }
+
+    analyze_batch_outcome(
+        track_failures,
+        worker_join_failures + writer_join_failures,
+        writer_report.failed,
+        incomplete,
+        user_cancelled,
+        error_summaries,
+    )
+    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
 }
 
 enum CliTrackOutcome {
@@ -406,6 +527,26 @@ enum CliTrackOutcome {
     },
 }
 
+enum CliTrackFailure {
+    Processing(String),
+    // Reported once by CacheWriterReport instead of double-counted as a track failure.
+    CacheWrite(String),
+}
+
+impl std::fmt::Display for CliTrackFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Processing(message) | Self::CacheWrite(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for CliTrackFailure {
+    fn from(message: String) -> Self {
+        Self::Processing(message)
+    }
+}
+
 struct CliTrackResult {
     kind: CliTrackOutcome,
     elapsed: f64,
@@ -416,8 +557,8 @@ async fn cli_analyze_single_track(
     needs_stratum: bool,
     needs_essentia: bool,
     essentia_python: Option<&str>,
-    cache_tx: &tokio::sync::mpsc::Sender<CliCacheWriteMsg>,
-) -> Result<CliTrackResult, String> {
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<CliCacheWriteMsg>>,
+) -> Result<CliTrackResult, CliTrackFailure> {
     let file_path =
         audio::resolve_audio_path(raw_file_path).map_err(|_| "File not found".to_string())?;
     let metadata = std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
@@ -455,7 +596,8 @@ async fn cli_analyze_single_track(
             },
             "stratum-dsp analysis",
         )
-        .await?;
+        .await
+        .map_err(CliTrackFailure::CacheWrite)?;
 
         if needs_essentia && let Some(python) = essentia_python {
             let essentia_ok =
@@ -487,9 +629,9 @@ async fn cli_analyze_single_track(
                 elapsed: track_start.elapsed().as_secs_f64(),
             });
         }
-        Err("Essentia not available".to_string())
+        Err("Essentia not available".to_string().into())
     } else {
-        Err("Nothing to analyze".to_string())
+        Err("Nothing to analyze".to_string().into())
     }
 }
 
@@ -498,8 +640,8 @@ async fn cli_run_and_send_essentia(
     file_path: &str,
     file_size: i64,
     file_mtime: i64,
-    cache_tx: &tokio::sync::mpsc::Sender<CliCacheWriteMsg>,
-) -> Result<bool, String> {
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<CliCacheWriteMsg>>,
+) -> Result<bool, CliTrackFailure> {
     match audio::run_essentia(python, file_path)
         .await
         .map_err(|e| e.to_string())
@@ -518,7 +660,8 @@ async fn cli_run_and_send_essentia(
                 },
                 "essentia analysis",
             )
-            .await?;
+            .await
+            .map_err(CliTrackFailure::CacheWrite)?;
             Ok(true)
         }
         Err(e) => {
@@ -583,5 +726,250 @@ pub(super) fn mark_track_outcome(analyzed: &mut u32, failed: &mut u32, success: 
         *analyzed += 1;
     } else {
         *failed += 1;
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::cli::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
+
+    fn cache_message(analyzer: &str, id: u32) -> CliCacheWriteMsg {
+        CliCacheWriteMsg {
+            file_path: format!("/tmp/track-{id}.flac"),
+            analyzer: analyzer.to_string(),
+            file_size: i64::from(id) + 1,
+            file_mtime: i64::from(id) + 2,
+            analyzer_version: "test-v1".to_string(),
+            features_json: "{}".to_string(),
+        }
+    }
+
+    fn temp_store() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("cache.sqlite3");
+        let path = path.to_string_lossy().to_string();
+        let conn = store::open(&path).expect("create store");
+        drop(conn);
+        (dir, path)
+    }
+
+    fn install_failure_trigger(path: &str) {
+        let conn = store::open(path).expect("open store for trigger");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_failed_analysis
+             BEFORE INSERT ON audio_analysis_cache
+             WHEN NEW.analyzer = 'fail'
+             BEGIN
+               SELECT RAISE(FAIL, 'injected cache write failure');
+             END;",
+        )
+        .expect("install failure trigger");
+    }
+
+    async fn run_writer_requests(
+        path: String,
+        messages: Vec<CliCacheWriteMsg>,
+    ) -> (
+        Vec<Result<(), String>>,
+        CacheWriterReport,
+        CancellationToken,
+    ) {
+        let cancel = CancellationToken::new();
+        let writer_cancel = cancel.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(messages.len().max(1));
+        let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
+            run_analyze_cache_writer(path, rx, writer_cancel)
+        }));
+        let mut results = Vec::with_capacity(messages.len());
+        for message in messages {
+            match bounded(
+                send_cache_message(&tx, message, "analysis test"),
+                "analysis writer acknowledgement",
+            )
+            .await
+            {
+                Ok(result) => results.push(result),
+                Err(error) => {
+                    results.push(Err(error));
+                    break;
+                }
+            }
+        }
+        drop(tx);
+        let report = writer
+            .join("analysis writer join")
+            .await
+            .expect("guarded writer join");
+        (results, report, cancel)
+    }
+
+    #[tokio::test]
+    async fn analyze_cache_writer_acknowledges_durable_success() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            let (results, report, cancel) =
+                run_writer_requests(path.clone(), vec![cache_message("ok", 1)]).await;
+            assert_eq!(results, vec![Ok(())]);
+            assert_eq!(report.attempted, 1);
+            assert_eq!(report.succeeded, 1);
+            assert_eq!(report.failed, 0);
+            assert!(!cancel.is_cancelled());
+
+            let conn = store::open(&path).expect("reopen store");
+            assert!(
+                store::get_audio_analysis(&conn, "/tmp/track-1.flac", "ok")
+                    .expect("read cache")
+                    .is_some(),
+                "success acknowledgement must follow durable persistence"
+            );
+            cancel.cancel();
+        })
+        .await
+        .expect("writer success test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analyze_cache_writer_reports_recoverable_failure() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            install_failure_trigger(&path);
+            let (results, report, cancel) =
+                run_writer_requests(path, vec![cache_message("fail", 1), cache_message("ok", 2)])
+                    .await;
+            assert!(results[0].is_err());
+            assert_eq!(results[1], Ok(()));
+            assert_eq!(report.attempted, 2);
+            assert_eq!(report.succeeded, 1);
+            assert_eq!(report.failed, 1);
+            assert!(!report.threshold_cancelled);
+            assert!(!cancel.is_cancelled());
+            cancel.cancel();
+        })
+        .await
+        .expect("recoverable writer test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analyze_cache_writer_threshold_cancels_and_drains() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            install_failure_trigger(&path);
+            let messages = (0..4)
+                .map(|id| cache_message("fail", id))
+                .collect::<Vec<_>>();
+            let (results, report, cancel) = run_writer_requests(path, messages).await;
+            assert!(results.iter().all(Result::is_err));
+            assert_eq!(report.attempted, 4);
+            assert_eq!(report.failed, 4);
+            assert!(report.threshold_cancelled);
+            assert!(cancel.is_cancelled());
+            assert!(
+                results[3]
+                    .as_ref()
+                    .expect_err("drained write should be rejected")
+                    .contains("cache writer stopped")
+            );
+        })
+        .await
+        .expect("threshold writer test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analyze_cache_writer_open_failure_rejects_and_drains() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let invalid_path = dir.path().to_string_lossy().to_string();
+            let (results, report, cancel) =
+                run_writer_requests(invalid_path, vec![cache_message("ok", 1)]).await;
+            assert!(
+                results[0]
+                    .as_ref()
+                    .expect_err("open failure")
+                    .contains("cache store open failed")
+            );
+            assert_eq!(report.attempted, 1);
+            assert_eq!(report.failed, 1);
+            assert!(cancel.is_cancelled());
+        })
+        .await
+        .expect("open-failure writer test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analyze_cache_writer_tolerates_dropped_ack_receiver() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let (_dir, path) = temp_store();
+            let cancel = CancellationToken::new();
+            let writer_cancel = cancel.clone();
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
+                run_analyze_cache_writer(path, rx, writer_cancel)
+            }));
+            let (acknowledgement, result) = tokio::sync::oneshot::channel();
+            drop(result);
+            let send_result = bounded(
+                tx.send(CacheWriteRequest {
+                    payload: cache_message("ok", 1),
+                    acknowledgement,
+                }),
+                "dropped-ack queue send",
+            )
+            .await;
+            drop(tx);
+            let report = writer.join("dropped-ack writer join").await;
+            send_result
+                .expect("bounded queue send")
+                .expect("queue request");
+            let report = report.expect("guarded writer join");
+            assert_eq!(report.succeeded, 1);
+            assert!(!cancel.is_cancelled());
+            cancel.cancel();
+        })
+        .await
+        .expect("dropped-ack writer test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analyze_worker_join_error_is_counted() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let handle = TaskGuard::new(tokio::spawn(async { panic!("injected worker panic") }));
+            let join_result = handle
+                .join_raw("injected analysis worker join")
+                .await
+                .expect("bounded worker join");
+            let mut errors = Vec::new();
+            assert_eq!(record_analyze_worker_join(join_result, &mut errors), 1);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0], "analysis worker task panicked");
+        })
+        .await
+        .expect("worker-join test watchdog expired");
+    }
+
+    #[test]
+    fn analyze_batch_outcome_has_disjoint_exact_counts() {
+        assert!(analyze_batch_outcome(0, 0, 0, 0, false, vec![]).is_ok());
+
+        let track = analyze_batch_outcome(1, 0, 0, 0, false, vec![]).expect_err("track failure");
+        assert_eq!(track.track_or_provider_failures, 1);
+        assert_eq!(track.worker_join_failures, 0);
+        assert_eq!(track.writer_failures, 0);
+
+        let join = analyze_batch_outcome(0, 1, 0, 1, false, vec![]).expect_err("join failure");
+        assert_eq!(join.track_or_provider_failures, 0);
+        assert_eq!(join.worker_join_failures, 1);
+        assert_eq!(join.writer_failures, 0);
+        assert_eq!(join.incomplete, 1);
+
+        let writer = analyze_batch_outcome(0, 0, 2, 0, false, vec![]).expect_err("writer failure");
+        assert_eq!(writer.track_or_provider_failures, 0);
+        assert_eq!(writer.worker_join_failures, 0);
+        assert_eq!(writer.writer_failures, 2);
+
+        let cancelled =
+            analyze_batch_outcome(0, 0, 0, 3, true, vec![]).expect_err("cancelled batch");
+        assert_eq!(cancelled.incomplete, 3);
+        assert!(cancelled.user_cancelled);
     }
 }
