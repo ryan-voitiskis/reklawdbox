@@ -1509,6 +1509,15 @@ pub(super) fn compute_track_energy(
 // Timbral vector construction and z-score normalization (pool kernel)
 // ---------------------------------------------------------------------------
 
+/// Bump whenever timbral vector membership, order, or inclusion rules change.
+pub(super) const TIMBRAL_VECTOR_SCHEMA_VERSION: &str = "1";
+
+#[derive(Debug)]
+pub(super) struct TimbralSourceSnapshot {
+    pub(super) vectors: Vec<Vec<f64>>,
+    pub(super) source_fingerprint: String,
+}
+
 fn assemble_timbral_vector(
     mfcc_mean: &[f64],
     mfcc_std: &[f64],
@@ -1547,14 +1556,32 @@ fn build_timbral_vector_from_essentia(essentia: &crate::audio::EssentiaOutput) -
     ))
 }
 
-/// Welford's online algorithm over all Essentia cache entries.
-pub(super) fn compute_timbral_norm_stats(
+fn hash_length_delimited(hasher: &mut sha2::Sha256, value: &[u8]) {
+    use sha2::Digest as _;
+
+    let length = u64::try_from(value.len()).expect("hash input length fits in u64");
+    hasher.update(length.to_be_bytes());
+    hasher.update(value);
+}
+
+fn load_timbral_source_snapshot_with_vector_schema(
     store_conn: &Connection,
-) -> Result<crate::store::TimbralNormStats, String> {
+) -> Result<TimbralSourceSnapshot, String> {
+    load_timbral_source_snapshot_for_schema(store_conn, TIMBRAL_VECTOR_SCHEMA_VERSION)
+}
+
+fn load_timbral_source_snapshot_for_schema(
+    store_conn: &Connection,
+    vector_schema_version: &str,
+) -> Result<TimbralSourceSnapshot, String> {
+    use sha2::Digest as _;
+
     let mut stmt = store_conn
         .prepare(
-            "SELECT features_json FROM audio_analysis_cache \
-             WHERE analyzer = ?1 AND analysis_version = ?2",
+            "SELECT file_path, file_size, file_mtime, features_json
+             FROM audio_analysis_cache
+             WHERE analyzer = ?1 AND analysis_version = ?2
+             ORDER BY file_path",
         )
         .map_err(|e| format!("DB error: {e}"))?;
 
@@ -1564,45 +1591,119 @@ pub(super) fn compute_timbral_norm_stats(
                 crate::audio::ANALYZER_ESSENTIA,
                 crate::audio::ESSENTIA_SCHEMA_VERSION
             ],
-            |row| row.get::<_, String>(0),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
         )
         .map_err(|e| format!("DB error: {e}"))?;
 
-    let mut count: i64 = 0;
-    let mut means: Vec<f64> = Vec::new();
-    let mut m2s: Vec<f64> = Vec::new();
+    let mut hasher = sha2::Sha256::new();
+    hash_length_delimited(&mut hasher, vector_schema_version.as_bytes());
+    hash_length_delimited(
+        &mut hasher,
+        crate::audio::ESSENTIA_SCHEMA_VERSION.as_bytes(),
+    );
+    let mut vectors = Vec::new();
+    let mut expected_dimensions = None;
 
     for row in rows {
-        let json_str = row.map_err(|e| format!("Row error: {e}"))?;
-        let essentia: crate::audio::EssentiaOutput = match serde_json::from_str(&json_str) {
+        let (file_path, file_size, file_mtime, features_json) =
+            row.map_err(|e| format!("Row error: {e}"))?;
+
+        let Some(identity) = super::analysis::audio_cache_identity(&file_path) else {
+            continue;
+        };
+        if identity.cache_key != file_path {
+            continue;
+        }
+        let cached = crate::store::CachedAudioAnalysis {
+            file_path: file_path.clone(),
+            analyzer: crate::audio::ANALYZER_ESSENTIA.to_string(),
+            file_size,
+            file_mtime,
+            analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+            features_json: features_json.clone(),
+            created_at: String::new(),
+        };
+        if !crate::store::is_audio_analysis_fresh(
+            Some(&cached),
+            crate::audio::ESSENTIA_SCHEMA_VERSION,
+            identity.file_size,
+            identity.file_mtime,
+        ) {
+            continue;
+        }
+
+        let essentia: crate::audio::EssentiaOutput = match serde_json::from_str(&features_json) {
             Ok(e) => e,
             Err(_) => continue,
         };
 
-        let Some(vec) = build_timbral_vector_from_essentia(&essentia) else {
+        let Some(vector) = build_timbral_vector_from_essentia(&essentia) else {
             continue;
         };
-
-        if means.is_empty() {
-            means = vec![0.0; vec.len()];
-            m2s = vec![0.0; vec.len()];
-        }
-        if vec.len() != means.len() {
+        if !vector.iter().all(|value| value.is_finite()) {
             continue;
         }
-        count += 1;
+        let dimensions = *expected_dimensions.get_or_insert(vector.len());
+        if vector.len() != dimensions {
+            continue;
+        }
 
+        hash_length_delimited(&mut hasher, file_path.as_bytes());
+        hash_length_delimited(&mut hasher, &file_size.to_be_bytes());
+        hash_length_delimited(&mut hasher, &file_mtime.to_be_bytes());
+        hash_length_delimited(&mut hasher, features_json.as_bytes());
+        vectors.push(vector);
+    }
+
+    Ok(TimbralSourceSnapshot {
+        vectors,
+        source_fingerprint: format!("{:x}", hasher.finalize()),
+    })
+}
+
+pub(super) fn load_timbral_source_snapshot(
+    store_conn: &Connection,
+) -> Result<TimbralSourceSnapshot, String> {
+    load_timbral_source_snapshot_with_vector_schema(store_conn)
+}
+
+#[cfg(test)]
+pub(super) fn load_timbral_source_snapshot_for_test(
+    store_conn: &Connection,
+    vector_schema_version: &str,
+) -> Result<TimbralSourceSnapshot, String> {
+    load_timbral_source_snapshot_for_schema(store_conn, vector_schema_version)
+}
+
+fn compute_timbral_norm_stats_from_snapshot(
+    snapshot: &TimbralSourceSnapshot,
+) -> Result<crate::store::TimbralNormStats, String> {
+    let count = i64::try_from(snapshot.vectors.len())
+        .map_err(|_| "Too many Essentia entries to compute normalization stats".to_string())?;
+    if count < 2 {
+        return Err("Need at least 2 Essentia entries to compute normalization stats".to_string());
+    }
+
+    let dimensions = snapshot.vectors[0].len();
+    let mut means = vec![0.0; dimensions];
+    let mut m2s = vec![0.0; dimensions];
+
+    for (row_index, vector) in snapshot.vectors.iter().enumerate() {
+        let sample_count = (row_index + 1) as f64;
         // Welford's online update
-        for (i, &x) in vec.iter().enumerate() {
+        for (i, &x) in vector.iter().enumerate() {
             let delta = x - means[i];
-            means[i] += delta / count as f64;
+            means[i] += delta / sample_count;
             let delta2 = x - means[i];
             m2s[i] += delta * delta2;
         }
-    }
-
-    if count < 2 {
-        return Err("Need at least 2 Essentia entries to compute normalization stats".to_string());
     }
 
     let dims: Vec<(f64, f64)> = means
@@ -1614,7 +1715,19 @@ pub(super) fn compute_timbral_norm_stats(
     Ok(crate::store::TimbralNormStats {
         dims,
         sample_count: count,
+        source_fingerprint: snapshot.source_fingerprint.clone(),
+        analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+        vector_schema_version: TIMBRAL_VECTOR_SCHEMA_VERSION.to_string(),
     })
+}
+
+/// Welford's online algorithm over one exact, fresh Essentia source snapshot.
+#[cfg(test)]
+pub(super) fn compute_timbral_norm_stats(
+    store_conn: &Connection,
+) -> Result<crate::store::TimbralNormStats, String> {
+    let snapshot = load_timbral_source_snapshot(store_conn)?;
+    compute_timbral_norm_stats_from_snapshot(&snapshot)
 }
 
 pub(super) fn normalize_timbral_vector(
@@ -1632,44 +1745,37 @@ pub(super) fn normalize_timbral_vector(
     )
 }
 
-/// Recomputes if missing or cache has grown >10% since last computation.
 pub(super) fn ensure_timbral_norm_stats(
     store_conn: &Connection,
 ) -> Result<Option<crate::store::TimbralNormStats>, String> {
-    // Count only entries with complete timbral data (all 5 fields present),
-    // matching what compute_timbral_norm_stats actually processes.
-    let current_count: i64 = store_conn
-        .query_row(
-            "SELECT COUNT(*) FROM audio_analysis_cache \
-             WHERE analyzer = ?1 AND analysis_version = ?2 \
-               AND json_extract(features_json, '$.mfcc_mean') IS NOT NULL \
-               AND json_extract(features_json, '$.mfcc_std') IS NOT NULL \
-               AND json_extract(features_json, '$.spectral_contrast_mean') IS NOT NULL \
-               AND json_extract(features_json, '$.spectral_centroid_cv') IS NOT NULL \
-               AND json_extract(features_json, '$.dissonance_mean') IS NOT NULL",
-            rusqlite::params![
-                crate::audio::ANALYZER_ESSENTIA,
-                crate::audio::ESSENTIA_SCHEMA_VERSION
-            ],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("DB error: {e}"))?;
-
-    if current_count < 2 {
+    let snapshot = load_timbral_source_snapshot(store_conn)?;
+    if snapshot.vectors.len() < 2 {
+        crate::store::clear_timbral_norm_stats(store_conn)
+            .map_err(|e| format!("Failed to clear norm stats: {e}"))?;
         return Ok(None);
     }
 
     let existing =
         crate::store::get_timbral_norm_stats(store_conn).map_err(|e| format!("DB error: {e}"))?;
 
-    if let Some(ref stats) = existing {
-        let drift = (current_count - stats.sample_count).abs() as f64 / stats.sample_count as f64;
-        if drift <= 0.10 {
-            return Ok(existing);
+    if let Some(stats) = existing {
+        let expected_dimensions = snapshot.vectors[0].len();
+        let provenance_matches = stats.source_fingerprint == snapshot.source_fingerprint
+            && stats.analysis_version == crate::audio::ESSENTIA_SCHEMA_VERSION
+            && stats.vector_schema_version == TIMBRAL_VECTOR_SCHEMA_VERSION;
+        let dimensions_are_coherent = stats.dims.len() == expected_dimensions
+            && stats
+                .dims
+                .iter()
+                .all(|(mean, stddev)| mean.is_finite() && stddev.is_finite() && *stddev > 0.0);
+        let sample_count_matches = usize::try_from(stats.sample_count)
+            .is_ok_and(|sample_count| sample_count == snapshot.vectors.len());
+        if provenance_matches && dimensions_are_coherent && sample_count_matches {
+            return Ok(Some(stats));
         }
     }
 
-    let stats = compute_timbral_norm_stats(store_conn)?;
+    let stats = compute_timbral_norm_stats_from_snapshot(&snapshot)?;
     crate::store::save_timbral_norm_stats(store_conn, &stats)
         .map_err(|e| format!("Failed to save norm stats: {e}"))?;
     Ok(Some(stats))

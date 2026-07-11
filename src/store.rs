@@ -8,7 +8,7 @@ use crate::db::escape_like;
 pub type AuditIssueRow = (i64, String, String, Option<String>);
 /// (provider, query_artist, query_title, query_album)
 pub type EnrichmentKey = (String, String, String, String);
-const STORE_SCHEMA_VERSION: i32 = 7;
+const STORE_SCHEMA_VERSION: i32 = 8;
 
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
@@ -107,6 +107,9 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             mean REAL NOT NULL,
             stddev REAL NOT NULL,
             sample_count INTEGER NOT NULL,
+            source_fingerprint TEXT NOT NULL DEFAULT '',
+            analysis_version TEXT NOT NULL DEFAULT '',
+            vector_schema_version TEXT NOT NULL DEFAULT '',
             computed_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS weight_presets (
@@ -145,6 +148,7 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         ",
     )?;
     migrate_enrichment_cache(conn)?;
+    migrate_timbral_norm_stats(conn)?;
     conn.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     Ok(())
 }
@@ -190,6 +194,40 @@ fn migrate_enrichment_cache(conn: &Connection) -> Result<(), rusqlite::Error> {
             "DROP TABLE enrichment_cache;
              ALTER TABLE enrichment_cache_new RENAME TO enrichment_cache;",
         )?;
+        tx.commit()?;
+    }
+
+    Ok(())
+}
+
+fn migrate_timbral_norm_stats(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let missing_source_fingerprint =
+        !table_has_column(conn, "timbral_norm_stats", "source_fingerprint")?;
+    let missing_analysis_version =
+        !table_has_column(conn, "timbral_norm_stats", "analysis_version")?;
+    let missing_vector_schema_version =
+        !table_has_column(conn, "timbral_norm_stats", "vector_schema_version")?;
+
+    if missing_source_fingerprint || missing_analysis_version || missing_vector_schema_version {
+        let tx = conn.unchecked_transaction()?;
+        if missing_source_fingerprint {
+            tx.execute_batch(
+                "ALTER TABLE timbral_norm_stats
+                 ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+        if missing_analysis_version {
+            tx.execute_batch(
+                "ALTER TABLE timbral_norm_stats
+                 ADD COLUMN analysis_version TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+        if missing_vector_schema_version {
+            tx.execute_batch(
+                "ALTER TABLE timbral_norm_stats
+                 ADD COLUMN vector_schema_version TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
         tx.commit()?;
     }
 
@@ -680,22 +718,35 @@ pub fn set_audio_analysis(
 // Timbral normalization stats (for pool compatibility z-score normalization)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct TimbralNormStats {
     pub dims: Vec<(f64, f64)>, // (mean, stddev) per dimension
     pub sample_count: i64,
+    pub source_fingerprint: String,
+    pub analysis_version: String,
+    pub vector_schema_version: String,
 }
 
 pub fn get_timbral_norm_stats(
     conn: &Connection,
 ) -> Result<Option<TimbralNormStats>, rusqlite::Error> {
     let mut stmt = conn.prepare_cached(
-        "SELECT dimension_index, mean, stddev, sample_count
+        "SELECT dimension_index, mean, stddev, sample_count,
+                source_fingerprint, analysis_version, vector_schema_version
          FROM timbral_norm_stats
          ORDER BY dimension_index",
     )?;
-    let rows: Vec<(i64, f64, f64, i64)> = stmt
+    let rows: Vec<(i64, f64, f64, i64, String, String, String)> = stmt
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
         })?
         .collect::<Result<_, _>>()?;
 
@@ -704,9 +755,30 @@ pub fn get_timbral_norm_stats(
     }
 
     let sample_count = rows[0].3;
+    let source_fingerprint = rows[0].4.clone();
+    let analysis_version = rows[0].5.clone();
+    let vector_schema_version = rows[0].6.clone();
+
+    let coherent = rows.iter().enumerate().all(|(expected_index, row)| {
+        row.0 == expected_index as i64
+            && row.3 == sample_count
+            && row.4 == source_fingerprint
+            && row.5 == analysis_version
+            && row.6 == vector_schema_version
+    });
+    if !coherent {
+        return Ok(None);
+    }
+
     let dims: Vec<(f64, f64)> = rows.iter().map(|r| (r.1, r.2)).collect();
 
-    Ok(Some(TimbralNormStats { dims, sample_count }))
+    Ok(Some(TimbralNormStats {
+        dims,
+        sample_count,
+        source_fingerprint,
+        analysis_version,
+        vector_schema_version,
+    }))
 }
 
 pub fn save_timbral_norm_stats(
@@ -716,14 +788,35 @@ pub fn save_timbral_norm_stats(
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM timbral_norm_stats", [])?;
     let mut stmt = tx.prepare_cached(
-        "INSERT INTO timbral_norm_stats (dimension_index, mean, stddev, sample_count)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO timbral_norm_stats (
+             dimension_index,
+             mean,
+             stddev,
+             sample_count,
+             source_fingerprint,
+             analysis_version,
+             vector_schema_version
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     for (i, (mean, stddev)) in stats.dims.iter().enumerate() {
-        stmt.execute(params![i as i64, mean, stddev, stats.sample_count])?;
+        stmt.execute(params![
+            i as i64,
+            mean,
+            stddev,
+            stats.sample_count,
+            stats.source_fingerprint,
+            stats.analysis_version,
+            stats.vector_schema_version,
+        ])?;
     }
     drop(stmt);
     tx.commit()?;
+    Ok(())
+}
+
+pub fn clear_timbral_norm_stats(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM timbral_norm_stats", [])?;
     Ok(())
 }
 
@@ -2323,31 +2416,166 @@ mod tests {
         let stats = TimbralNormStats {
             dims: vec![(0.5, 0.1), (1.2, 0.3), (-0.8, 0.05)],
             sample_count: 42,
+            source_fingerprint: "a".repeat(64),
+            analysis_version: "2".to_string(),
+            vector_schema_version: "1".to_string(),
         };
         save_timbral_norm_stats(&conn, &stats).unwrap();
 
         let loaded = get_timbral_norm_stats(&conn)
             .unwrap()
             .expect("should find stats");
-        assert_eq!(loaded.dims.len(), 3);
-        assert!((loaded.dims[0].0 - 0.5).abs() < f64::EPSILON);
-        assert!((loaded.dims[0].1 - 0.1).abs() < f64::EPSILON);
-        assert!((loaded.dims[1].0 - 1.2).abs() < f64::EPSILON);
-        assert!((loaded.dims[1].1 - 0.3).abs() < f64::EPSILON);
-        assert!((loaded.dims[2].0 - (-0.8)).abs() < f64::EPSILON);
-        assert!((loaded.dims[2].1 - 0.05).abs() < f64::EPSILON);
-        assert_eq!(loaded.sample_count, 42);
+        assert_eq!(loaded, stats);
 
         let stats2 = TimbralNormStats {
             dims: vec![(10.0, 2.0)],
             sample_count: 99,
+            source_fingerprint: "b".repeat(64),
+            analysis_version: "3".to_string(),
+            vector_schema_version: "2".to_string(),
         };
         save_timbral_norm_stats(&conn, &stats2).unwrap();
 
         let loaded2 = get_timbral_norm_stats(&conn).unwrap().unwrap();
-        assert_eq!(loaded2.dims.len(), 1);
-        assert!((loaded2.dims[0].0 - 10.0).abs() < f64::EPSILON);
-        assert_eq!(loaded2.sample_count, 99);
+        assert_eq!(loaded2, stats2);
+
+        conn.execute_batch(
+            "CREATE TRIGGER reject_second_timbral_dimension
+             BEFORE INSERT ON timbral_norm_stats
+             WHEN NEW.dimension_index = 1
+             BEGIN
+                 SELECT RAISE(ABORT, 'reject second dimension');
+             END;",
+        )
+        .unwrap();
+        let rejected = TimbralNormStats {
+            dims: vec![(1.0, 1.0), (2.0, 1.0)],
+            sample_count: 2,
+            source_fingerprint: "c".repeat(64),
+            analysis_version: "2".to_string(),
+            vector_schema_version: "1".to_string(),
+        };
+        assert!(save_timbral_norm_stats(&conn, &rejected).is_err());
+        assert_eq!(get_timbral_norm_stats(&conn).unwrap().unwrap(), stats2);
+    }
+
+    #[test]
+    fn test_timbral_norm_stats_legacy_migration_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        let path_str = path.to_str().unwrap();
+        let conn = Connection::open(path_str).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE timbral_norm_stats (
+                 dimension_index INTEGER PRIMARY KEY,
+                 mean REAL NOT NULL,
+                 stddev REAL NOT NULL,
+                 sample_count INTEGER NOT NULL,
+                 computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+             INSERT INTO timbral_norm_stats
+                 (dimension_index, mean, stddev, sample_count)
+             VALUES (0, 1.0, 0.5, 2);
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        let migrated = get_timbral_norm_stats(&conn).unwrap().unwrap();
+        assert_eq!(migrated.source_fingerprint, "");
+        assert_eq!(migrated.analysis_version, "");
+        assert_eq!(migrated.vector_schema_version, "");
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, STORE_SCHEMA_VERSION);
+        drop(conn);
+
+        let reopened = open(path_str).unwrap();
+        let columns: Vec<String> = reopened
+            .prepare("PRAGMA table_info(timbral_norm_stats)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.as_str() == "source_fingerprint")
+                .count(),
+            1
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.as_str() == "analysis_version")
+                .count(),
+            1
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.as_str() == "vector_schema_version")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_timbral_norm_stats_rejects_incoherent_rows() {
+        let (_dir, conn) = open_temp_store();
+        let stats = TimbralNormStats {
+            dims: vec![(1.0, 0.5), (2.0, 0.75), (3.0, 1.0)],
+            sample_count: 3,
+            source_fingerprint: "d".repeat(64),
+            analysis_version: "2".to_string(),
+            vector_schema_version: "1".to_string(),
+        };
+
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+        conn.execute(
+            "UPDATE timbral_norm_stats SET sample_count = 4 WHERE dimension_index = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_timbral_norm_stats(&conn).unwrap().is_none());
+
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+        conn.execute(
+            "UPDATE timbral_norm_stats SET source_fingerprint = 'mismatch'
+             WHERE dimension_index = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_timbral_norm_stats(&conn).unwrap().is_none());
+
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+        conn.execute(
+            "UPDATE timbral_norm_stats SET analysis_version = 'mismatch'
+             WHERE dimension_index = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_timbral_norm_stats(&conn).unwrap().is_none());
+
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+        conn.execute(
+            "UPDATE timbral_norm_stats SET vector_schema_version = 'mismatch'
+             WHERE dimension_index = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_timbral_norm_stats(&conn).unwrap().is_none());
+
+        save_timbral_norm_stats(&conn, &stats).unwrap();
+        conn.execute(
+            "DELETE FROM timbral_norm_stats WHERE dimension_index = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_timbral_norm_stats(&conn).unwrap().is_none());
     }
 
     #[test]
