@@ -5,6 +5,7 @@ use rmcp::ErrorData as McpError;
 use super::*;
 use crate::db;
 use crate::genre;
+use crate::types::Track;
 
 pub(super) struct ResolveTracksOpts {
     /// Default max_tracks when track_ids are absent and max_tracks param is None.
@@ -15,6 +16,23 @@ pub(super) struct ResolveTracksOpts {
     pub max_tracks_cap: Option<u32>,
     /// Post-filter to exclude sampler tracks (used by cache_coverage).
     pub exclude_samplers: bool,
+}
+
+pub(super) fn track_has_unknown_genre(track: &Track) -> bool {
+    !track.genre.is_empty()
+        && !genre::is_known_genre(&track.genre)
+        && genre::canonical_genre_from_alias(&track.genre).is_none()
+}
+
+pub(super) fn apply_offset_limit(
+    tracks: Vec<Track>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Vec<Track> {
+    // Reklawdbox supports 32- and 64-bit targets, where every u32 fits usize.
+    let offset = offset.unwrap_or(0) as usize;
+    let limit = limit.map_or(usize::MAX, |value| value as usize);
+    tracks.into_iter().skip(offset).take(limit).collect()
 }
 
 /// Resolve tracks using priority: track_ids > playlist_id > search filters.
@@ -29,20 +47,22 @@ pub(super) fn resolve_tracks(
     offset: Option<u32>,
     opts: &ResolveTracksOpts,
 ) -> Result<Vec<crate::types::Track>, McpError> {
-    let effective_max: Option<usize> = match opts.default_max_tracks {
+    let effective_max: Option<u32> = match opts.default_max_tracks {
         Some(default_when_no_ids) => {
-            let default = track_ids.map_or(default_when_no_ids, |ids| ids.len() as u32);
+            let default = track_ids.map_or(default_when_no_ids, |ids| {
+                u32::try_from(ids.len()).unwrap_or(u32::MAX)
+            });
             let mut max = max_tracks_param.unwrap_or(default);
             if let Some(max_tracks_cap) = opts.max_tracks_cap {
                 max = max.min(max_tracks_cap);
             }
-            Some(max as usize)
+            Some(max)
         }
         None => max_tracks_param.map(|m| {
             if let Some(max_tracks_cap) = opts.max_tracks_cap {
-                m.min(max_tracks_cap) as usize
+                m.min(max_tracks_cap)
             } else {
-                m as usize
+                m
             }
         }),
     };
@@ -54,43 +74,51 @@ pub(super) fn resolve_tracks(
     let has_unknown_genre = filters.has_unknown_genre;
     let bounded = opts.max_tracks_cap.is_some();
 
-    // When has_unknown_genre is active, the post-filter will discard most rows.
-    // Fetch without a limit so the post-filter has the full candidate set to work
-    // with, then truncate to effective_max afterward.
-    let skip_db_limit = has_unknown_genre == Some(true) && track_ids.is_none();
-
-    let tracks = if let Some(ids) = track_ids {
-        db::get_tracks_by_ids(conn, ids).map_err(db_error)?
+    // Selector priority is IDs > playlist > search. Pagination is applied in
+    // SQL only when every logical filter is also in SQL; otherwise the full
+    // ordered candidate set is post-filtered and paginated locally.
+    let (tracks, pagination_applied_in_db) = if let Some(ids) = track_ids {
+        (db::get_tracks_by_ids(conn, ids).map_err(db_error)?, false)
     } else if let Some(pid) = playlist_id {
-        if skip_db_limit {
-            db::get_playlist_tracks_unbounded(conn, pid, None).map_err(db_error)?
+        let playlist_requires_post_filter =
+            has_unknown_genre == Some(true) || opts.exclude_samplers;
+        if playlist_requires_post_filter {
+            (
+                db::get_playlist_tracks_unbounded(conn, pid, None).map_err(db_error)?,
+                false,
+            )
+        } else if bounded {
+            (
+                db::get_playlist_tracks_page(conn, pid, effective_max, offset).map_err(db_error)?,
+                true,
+            )
         } else {
-            let db_limit = if bounded {
-                effective_max.map(|m| m as u32)
-            } else {
-                None
-            };
-            if bounded {
-                db::get_playlist_tracks(conn, pid, db_limit).map_err(db_error)?
-            } else {
-                db::get_playlist_tracks_unbounded(conn, pid, db_limit).map_err(db_error)?
-            }
+            (
+                db::get_playlist_tracks_unbounded_page(conn, pid, effective_max, offset)
+                    .map_err(db_error)?,
+                true,
+            )
         }
     } else {
-        if skip_db_limit {
+        if has_unknown_genre == Some(true) {
             let search = filters
-                .into_search_params(true, None, offset)
+                .into_search_params(true, None, None)
                 .map_err(|e| McpError::invalid_params(e, None))?;
-            db::search_tracks_unbounded(conn, &search).map_err(db_error)?
+            (
+                db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
+                false,
+            )
         } else {
-            let limit = effective_max.map(|m| m as u32);
             let search = filters
-                .into_search_params(true, limit, offset)
+                .into_search_params(true, effective_max, offset)
                 .map_err(|e| McpError::invalid_params(e, None))?;
             if bounded {
-                db::search_tracks(conn, &search).map_err(db_error)?
+                (db::search_tracks(conn, &search).map_err(db_error)?, true)
             } else {
-                db::search_tracks_unbounded(conn, &search).map_err(db_error)?
+                (
+                    db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
+                    true,
+                )
             }
         }
     };
@@ -105,18 +133,14 @@ pub(super) fn resolve_tracks(
     };
 
     if has_unknown_genre == Some(true) {
-        tracks.retain(|t| {
-            !t.genre.is_empty()
-                && !genre::is_known_genre(&t.genre)
-                && genre::canonical_genre_from_alias(&t.genre).is_none()
-        });
+        tracks.retain(track_has_unknown_genre);
     }
 
-    if let Some(max) = effective_max {
-        tracks.truncate(max);
+    if pagination_applied_in_db {
+        Ok(tracks)
+    } else {
+        Ok(apply_offset_limit(tracks, offset, effective_max))
     }
-
-    Ok(tracks)
 }
 
 pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String {

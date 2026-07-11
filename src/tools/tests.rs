@@ -2411,6 +2411,406 @@ fn insert_test_track(
     .expect("test track should insert");
 }
 
+fn create_selector_pagination_test_db() -> Connection {
+    let conn = create_single_track_test_db("t1", "/music/01-known.flac");
+    conn.execute_batch(
+        "
+            CREATE TABLE djmdSongPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-known-2', 'Techno');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-1', 'Wonky Bass');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-2', 'Alien Rhythms');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-3', 'Future Tribal');
+
+            UPDATE djmdContent
+            SET Title = '01 Known', GenreID = 'g1', FolderPath = '/music/01-known.flac'
+            WHERE ID = 't1';
+        ",
+    )
+    .expect("selector pagination fixture schema should initialize");
+
+    insert_test_track(
+        &conn,
+        "t2",
+        "02 Unknown First",
+        "g-unknown-1",
+        "/music/02-unknown.flac",
+    );
+    insert_test_track(&conn, "t3", "03 Known", "g-known-2", "/music/03-known.flac");
+    insert_test_track(
+        &conn,
+        "t4",
+        "04 Unknown Second",
+        "g-unknown-2",
+        "/music/04-unknown.flac",
+    );
+    insert_test_track(&conn, "t5", "05 Empty", "", "/music/05-empty.flac");
+    insert_test_track(
+        &conn,
+        "t6",
+        "06 Unknown Sample",
+        "g-unknown-3",
+        &format!("/music{}06-unknown-sample.wav", db::SAMPLER_PATH_FRAGMENT),
+    );
+
+    for (row_id, track_id, position) in [
+        ("sp1", "t1", 1),
+        ("sp2", "t6", 2),
+        ("sp3", "t2", 3),
+        ("sp4", "t3", 4),
+        ("sp5", "t4", 5),
+        ("sp6", "t5", 6),
+    ] {
+        conn.execute(
+            "INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo)
+             VALUES (?1, 'selector-playlist', ?2, ?3)",
+            params![row_id, track_id, position],
+        )
+        .expect("selector pagination playlist row should insert");
+    }
+
+    conn
+}
+
+fn selector_pagination_opts(
+    default_max_tracks: Option<u32>,
+    max_tracks_cap: Option<u32>,
+    exclude_samplers: bool,
+) -> ResolveTracksOpts {
+    ResolveTracksOpts {
+        default_max_tracks,
+        max_tracks_cap,
+        exclude_samplers,
+    }
+}
+
+fn track_ids(tracks: &[crate::types::Track]) -> Vec<&str> {
+    tracks.iter().map(|track| track.id.as_str()).collect()
+}
+
+fn tracks_from_tool_result(result: &CallToolResult) -> Vec<crate::types::Track> {
+    serde_json::from_value(extract_json(result)).expect("tool result should contain tracks")
+}
+
+#[test]
+fn selector_pagination_playlist_offset_preserves_position() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t6"]);
+    assert_eq!(tracks[0].position, Some(2));
+}
+
+#[test]
+fn selector_pagination_playlist_pages_do_not_repeat() {
+    let conn = create_selector_pagination_test_db();
+    let opts = selector_pagination_opts(Some(50), Some(200), false);
+    let first = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(0),
+        &opts,
+    )
+    .expect("first playlist page should resolve");
+    let second = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(2),
+        &opts,
+    )
+    .expect("second playlist page should resolve");
+
+    assert_eq!(track_ids(&first), ["t1", "t6"]);
+    assert_eq!(track_ids(&second), ["t2", "t3"]);
+}
+
+#[test]
+fn selector_pagination_explicit_ids_follow_caller_order_after_deduplication() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec![
+        "t3".to_string(),
+        "t1".to_string(),
+        "t1".to_string(),
+        "t2".to_string(),
+    ];
+    let tracks = resolve_tracks(
+        &conn,
+        Some(&ids),
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("explicit ID selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t1"]);
+}
+
+#[test]
+fn selector_pagination_unknown_genre_search_filters_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("unknown-genre search selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t4"]);
+}
+
+#[test]
+fn selector_pagination_unknown_genre_playlist_filters_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("unknown-genre playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t2"]);
+    assert_eq!(tracks[0].position, Some(3));
+}
+
+#[test]
+fn selector_pagination_sampler_filter_runs_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(None, None, true),
+    )
+    .expect("sampler-excluding playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t2"]);
+    assert_eq!(tracks[0].position, Some(3));
+}
+
+#[test]
+fn selector_pagination_zero_beyond_default_and_cap() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec!["t1".to_string(), "t2".to_string()];
+    let zero = resolve_tracks(
+        &conn,
+        Some(&ids),
+        None,
+        SearchFilterParams::default(),
+        Some(0),
+        None,
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("zero limit should resolve");
+    assert!(zero.is_empty());
+
+    let beyond = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(9),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("beyond-end offset should resolve");
+    assert!(beyond.is_empty());
+
+    let defaulted = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        None,
+        None,
+        &selector_pagination_opts(Some(2), Some(200), false),
+    )
+    .expect("default limit should resolve");
+    assert_eq!(track_ids(&defaulted), ["t1", "t2"]);
+
+    let capped = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(10),
+        None,
+        &selector_pagination_opts(Some(50), Some(2), false),
+    )
+    .expect("capped limit should resolve");
+    assert_eq!(track_ids(&capped), ["t1", "t2"]);
+}
+
+#[test]
+fn selector_pagination_sql_fast_paths_apply_offset_once() {
+    let conn = create_selector_pagination_test_db();
+    let bounded_search = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(2),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("bounded search page should resolve");
+    assert_eq!(track_ids(&bounded_search), ["t2", "t3"]);
+
+    let unbounded_search = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(2),
+        Some(1),
+        &selector_pagination_opts(None, None, false),
+    )
+    .expect("unbounded search page should resolve");
+    assert_eq!(track_ids(&unbounded_search), ["t2", "t3"]);
+
+    let unbounded_playlist = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(2),
+        &selector_pagination_opts(None, None, false),
+    )
+    .expect("unbounded playlist page should resolve");
+    assert_eq!(track_ids(&unbounded_playlist), ["t2", "t3"]);
+}
+
+#[test]
+fn search_tracks_unknown_genre_paginates_after_filtering() {
+    let conn = Mutex::new(create_selector_pagination_test_db());
+    let search = |offset, include_samples| {
+        let guard = conn.lock().expect("test DB mutex should lock");
+        let result = handle_search_tracks(
+            guard,
+            SearchTracksParams {
+                filters: SearchFilterParams {
+                    has_unknown_genre: Some(true),
+                    ..Default::default()
+                },
+                playlist: Some("selector-playlist".to_string()),
+                include_samples,
+                limit: Some(1),
+                offset: Some(offset),
+            },
+        )
+        .expect("unknown-genre search handler should succeed");
+        tracks_from_tool_result(&result)
+    };
+
+    assert_eq!(track_ids(&search(0, None)), ["t2"]);
+    assert_eq!(track_ids(&search(1, None)), ["t4"]);
+    assert!(search(2, None).is_empty());
+    assert_eq!(track_ids(&search(2, Some(true))), ["t6"]);
+}
+
+#[test]
+fn search_tracks_unknown_genre_false_retains_sql_pagination() {
+    let conn = Mutex::new(create_selector_pagination_test_db());
+    let result = handle_search_tracks(
+        conn.lock().expect("test DB mutex should lock"),
+        SearchTracksParams {
+            filters: SearchFilterParams::default(),
+            playlist: Some("selector-playlist".to_string()),
+            include_samples: None,
+            limit: Some(2),
+            offset: Some(1),
+        },
+    )
+    .expect("ordinary search handler should succeed");
+
+    assert_eq!(track_ids(&tracks_from_tool_result(&result)), ["t2", "t3"]);
+}
+
+#[test]
+fn selector_pagination_helpers_skip_then_take_without_reordering() {
+    let conn = create_selector_pagination_test_db();
+    let all = db::search_tracks_unbounded(&conn, &db::SearchParams::default())
+        .expect("fixture tracks should load");
+
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), None, None)),
+        ["t1", "t2", "t3", "t4", "t5", "t6"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), Some(1), None)),
+        ["t2", "t3", "t4", "t5", "t6"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), None, Some(2))),
+        ["t1", "t2"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), Some(1), Some(2))),
+        ["t2", "t3"]
+    );
+    assert!(apply_offset_limit(all.clone(), Some(99), Some(1)).is_empty());
+    assert!(apply_offset_limit(all, Some(0), Some(0)).is_empty());
+}
+
+#[test]
+fn selector_pagination_helpers_unknown_genre_predicate_is_exact() {
+    let conn = create_selector_pagination_test_db();
+    let mut track = db::get_track(&conn, "t1")
+        .expect("fixture lookup should succeed")
+        .expect("fixture track should exist");
+
+    track.genre = "Techno".to_string();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre = "Hip-Hop".to_string();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre.clear();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre = "Alien Rhythms".to_string();
+    assert!(track_has_unknown_genre(&track));
+}
+
 fn canonical_genre_name(raw_genre: &str) -> String {
     if let Some(canonical) = genre::canonical_genre_name(raw_genre) {
         return canonical.to_string();

@@ -420,6 +420,7 @@ fn get_playlist_tracks_with_limit_policy(
     conn: &Connection,
     playlist_id: &str,
     limit: Option<u32>,
+    offset: Option<u32>,
     default_limit: Option<u32>,
     max_limit: Option<u32>,
 ) -> Result<Vec<Track>, rusqlite::Error> {
@@ -441,6 +442,14 @@ ORDER BY sp.TrackNo"
     );
     if let Some(limit) = resolved_limit {
         write!(sql, " LIMIT {limit}").unwrap();
+    }
+    if let Some(offset) = offset {
+        // SQLite requires LIMIT before OFFSET. The unbounded variant has no
+        // resolved limit, so use SQLite's unlimited sentinel in that case.
+        if resolved_limit.is_none() {
+            sql.push_str(" LIMIT -1");
+        }
+        write!(sql, " OFFSET {offset}").unwrap();
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -502,7 +511,18 @@ pub fn get_playlist_tracks(
     playlist_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Track>, rusqlite::Error> {
-    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, Some(200), Some(200))
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, None, Some(200), Some(200))
+}
+
+/// Bounded playlist page for shared selector paths. Applies offset in
+/// `sp.TrackNo` order while retaining the ordinary 200-track default and cap.
+pub fn get_playlist_tracks_page(
+    conn: &Connection,
+    playlist_id: &str,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, offset, Some(200), Some(200))
 }
 
 /// Unbounded variant of `get_playlist_tracks` with no safety limit.
@@ -513,7 +533,18 @@ pub fn get_playlist_tracks_unbounded(
     playlist_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Track>, rusqlite::Error> {
-    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, None, None)
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, None, None, None)
+}
+
+/// Unbounded playlist page for diagnostic selector paths. Offset without a
+/// limit uses SQLite's `LIMIT -1 OFFSET ...` form.
+pub fn get_playlist_tracks_unbounded_page(
+    conn: &Connection,
+    playlist_id: &str,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<Track>, rusqlite::Error> {
+    get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, offset, None, None)
 }
 
 /// Compute the minimal set of root directories that cover all library audio files.
@@ -1736,6 +1767,56 @@ mod tests {
         assert_eq!(tracks[1].position, Some(2));
 
         assert_eq!(tracks[0].file_kind, FileKind::Flac);
+    }
+
+    #[test]
+    fn test_get_playlist_tracks_bounded_limit_and_offset() {
+        let conn = create_test_db();
+        let tracks = get_playlist_tracks_page(&conn, "p1", Some(1), Some(1)).unwrap();
+        let default_limit = get_playlist_tracks_page(&conn, "p1", None, Some(1)).unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, "t3");
+        assert_eq!(tracks[0].position, Some(2));
+        assert_eq!(default_limit.len(), 1);
+        assert_eq!(default_limit[0].id, "t3");
+        assert_eq!(default_limit[0].position, Some(2));
+    }
+
+    #[test]
+    fn test_get_playlist_tracks_unbounded_limit_and_offset() {
+        let conn = create_test_db();
+        let tracks = get_playlist_tracks_unbounded_page(&conn, "p1", Some(1), Some(1)).unwrap();
+        let old_wrapper = get_playlist_tracks_unbounded(&conn, "p1", None).unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, "t3");
+        assert_eq!(tracks[0].position, Some(2));
+        assert_eq!(old_wrapper.len(), 2);
+        assert_eq!(old_wrapper[0].position, Some(1));
+        assert_eq!(old_wrapper[1].position, Some(2));
+    }
+
+    #[test]
+    fn test_get_playlist_tracks_unbounded_offset_without_limit() {
+        let conn = create_test_db();
+        let tracks = get_playlist_tracks_unbounded_page(&conn, "p1", None, Some(1)).unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, "t3");
+        assert_eq!(tracks[0].position, Some(2));
+    }
+
+    #[test]
+    fn test_get_playlist_tracks_zero_and_beyond_end_offsets() {
+        let conn = create_test_db();
+        let from_start = get_playlist_tracks_unbounded_page(&conn, "p1", Some(1), Some(0)).unwrap();
+        let beyond = get_playlist_tracks_unbounded_page(&conn, "p1", Some(10), Some(10)).unwrap();
+
+        assert_eq!(from_start.len(), 1);
+        assert_eq!(from_start[0].id, "t1");
+        assert_eq!(from_start[0].position, Some(1));
+        assert!(beyond.is_empty());
     }
 
     #[test]
