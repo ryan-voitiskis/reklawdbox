@@ -2852,6 +2852,63 @@ async fn classify_tracks_audio_cache_ignores_stale_file_identity() {
 }
 
 #[tokio::test]
+async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("classify-stratum-only.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("classify-stratum-only", &audio_path_str);
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET GenreID = '', BPM = 16000 WHERE ID = ?1",
+            ["classify-stratum-only"],
+        )
+        .expect("BPM-only test track should be ungenred and fast");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    store::set_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":160.0,"duration_seconds":240.0,"analyzer_version":"18"}"#,
+    )
+    .expect("fresh Stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .classify_tracks(Parameters(ClassifyTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["classify-stratum-only".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            offset: None,
+            genre_overrides: None,
+            format: Some(ClassifyFormat::Full),
+            auto_stage: Some(vec![crate::tools::params::StageLevel::Medium]),
+        }))
+        .await
+        .expect("classify_tracks should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["staging"]["staged"], 0);
+    assert_eq!(payload["staging"]["total_pending"], 0);
+    assert_eq!(payload["results"][0]["genre"], serde_json::Value::Null);
+    assert_eq!(payload["results"][0]["confidence"], "insufficient");
+}
+
+#[tokio::test]
 async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let with_genre_path = audio_dir.path().join("coverage-1.flac");

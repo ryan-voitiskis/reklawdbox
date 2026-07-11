@@ -114,6 +114,7 @@ pub(crate) struct MappedGenre {
 }
 
 /// Pre-extracted audio features from cache.
+#[derive(Clone)]
 pub(crate) struct AudioFeatures {
     pub(crate) rekordbox_bpm: f64,
     pub(crate) stratum_bpm: Option<f64>,
@@ -210,10 +211,11 @@ enum CharFlag {
 }
 
 struct AudioProfile {
-    bucket: EnergyBucket,
+    bucket: Option<EnergyBucket>,
     flags: Vec<CharFlag>,
     bpm: f64,
     centroid: Option<f64>,
+    rhythm_regularity: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -271,12 +273,13 @@ pub(crate) fn classify_track_with_profiles(
     );
 
     if let Some(profile) = audio_profile.as_ref()
-        && let Some(result) = check_audio_vetoes(evidence, profile)
+        && let Some(mut result) = check_audio_vetoes(evidence, profile)
     {
+        add_missing_audio_flags(evidence, &mut result.flags);
         return result;
     }
 
-    let (votes, affinities) = gather_votes(
+    let (votes, affinities, calibrated_coverage_missing) = gather_votes(
         evidence,
         audio_profile.as_ref(),
         profile_registry,
@@ -295,6 +298,10 @@ pub(crate) fn classify_track_with_profiles(
             ev_lines.push(audio_profile::format_evidence(a));
         }
     }
+    if calibrated_coverage_missing {
+        ev_lines.push("audio-profile: insufficient optional-feature coverage".into());
+        push_unique_flag(&mut flags, "calibrated-audio-insufficient-coverage");
+    }
 
     let current_canonical = resolve_current_canonical(&evidence.current_genre);
     let action = compare_to_current(current_canonical, genre);
@@ -302,11 +309,12 @@ pub(crate) fn classify_track_with_profiles(
     let candidates = build_candidates(&votes, genre);
 
     if !evidence.has_discogs && !evidence.has_beatport {
-        flags.push("no-enrichment".into());
+        push_unique_flag(&mut flags, "no-enrichment");
     }
     if !evidence.has_audio {
-        flags.push("no-audio".into());
+        push_unique_flag(&mut flags, "no-audio");
     }
+    add_missing_audio_flags(evidence, &mut flags);
 
     let review_hint = match confidence {
         ClassificationConfidence::Low | ClassificationConfidence::Insufficient => {
@@ -332,34 +340,38 @@ pub(crate) fn classify_track_with_profiles(
 
 fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
     let bpm = audio.rekordbox_bpm;
-    let danceability = audio.danceability.unwrap_or(1.5);
-
-    let bucket = if danceability < 1.0 {
-        EnergyBucket::NonDancefloor
-    } else if danceability < 1.5 {
-        EnergyBucket::LowEnergy
-    } else if danceability <= 2.5 {
-        EnergyBucket::Dancefloor
-    } else {
-        EnergyBucket::HighEnergy
-    };
+    let danceability = audio.danceability.filter(|value| value.is_finite());
+    let dynamic_complexity = audio.dynamic_complexity.filter(|value| value.is_finite());
+    let rhythm_regularity = audio.rhythm_regularity.filter(|value| value.is_finite());
+    let bucket = danceability.map(|danceability| {
+        if danceability < 1.0 {
+            EnergyBucket::NonDancefloor
+        } else if danceability < 1.5 {
+            EnergyBucket::LowEnergy
+        } else if danceability <= 2.5 {
+            EnergyBucket::Dancefloor
+        } else {
+            EnergyBucket::HighEnergy
+        }
+    });
 
     let mut flags = Vec::new();
-    let dc = audio.dynamic_complexity.unwrap_or(0.0);
-    let rr = audio.rhythm_regularity.unwrap_or(0.0);
-
-    if dc > 10.0 {
-        flags.push(CharFlag::Ambient);
-    }
-    if dc > 5.0 {
-        flags.push(CharFlag::Atmospheric);
+    if let Some(dc) = dynamic_complexity {
+        if dc > 10.0 {
+            flags.push(CharFlag::Ambient);
+        }
+        if dc > 5.0 {
+            flags.push(CharFlag::Atmospheric);
+        }
     }
     // Caveat: atmospheric + broken/irregular → lower confidence on rhythm flags
     // We still set them but the decision tree checks for this combination
-    if rr < 0.5 {
-        flags.push(CharFlag::Broken);
-    } else if rr < 0.8 {
-        flags.push(CharFlag::Irregular);
+    if let Some(rr) = rhythm_regularity {
+        if rr < 0.5 {
+            flags.push(CharFlag::Broken);
+        } else if rr < 0.8 {
+            flags.push(CharFlag::Irregular);
+        }
     }
     if bpm > 155.0 {
         flags.push(CharFlag::Fast);
@@ -389,7 +401,10 @@ fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
         bucket,
         flags,
         bpm,
-        centroid: audio.spectral_centroid_mean,
+        centroid: audio
+            .spectral_centroid_mean
+            .filter(|value| value.is_finite()),
+        rhythm_regularity,
     }
 }
 
@@ -399,7 +414,10 @@ fn compute_bpm_context(
     fallback_bpm: f64,
 ) -> BpmContext {
     let default_bpm = audio_profile.map_or(fallback_bpm, |p| p.bpm);
-    if audio_profile.is_none_or(|profile| profile.bucket < EnergyBucket::Dancefloor) {
+    if audio_profile
+        .and_then(|profile| profile.bucket)
+        .is_none_or(|bucket| bucket < EnergyBucket::Dancefloor)
+    {
         return BpmContext {
             effective_bpm: default_bpm,
             fallback: None,
@@ -465,6 +483,27 @@ fn has_flag(profile: &AudioProfile, flag: CharFlag) -> bool {
     profile.flags.contains(&flag)
 }
 
+fn push_unique_flag(flags: &mut Vec<String>, flag: &str) {
+    if !flags.iter().any(|existing| existing == flag) {
+        flags.push(flag.to_string());
+    }
+}
+
+fn add_missing_audio_flags(evidence: &TrackEvidence, flags: &mut Vec<String>) {
+    let Some(audio) = evidence.audio.as_ref() else {
+        return;
+    };
+    if audio.danceability.is_none_or(|value| !value.is_finite()) {
+        push_unique_flag(flags, "missing-danceability");
+    }
+    if audio
+        .rhythm_regularity
+        .is_none_or(|value| !value.is_finite())
+    {
+        push_unique_flag(flags, "missing-rhythm-regularity");
+    }
+}
+
 fn veto_result(
     evidence: &TrackEvidence,
     genre: &'static str,
@@ -494,7 +533,7 @@ fn check_audio_vetoes(
 ) -> Option<ClassificationResult> {
     let current_canonical = resolve_current_canonical(&evidence.current_genre);
 
-    if profile.bucket == EnergyBucket::NonDancefloor && has_flag(profile, CharFlag::Ambient) {
+    if profile.bucket == Some(EnergyBucket::NonDancefloor) && has_flag(profile, CharFlag::Ambient) {
         let action = compare_to_current(current_canonical, Some("Ambient"));
         return Some(veto_result(
             evidence,
@@ -508,7 +547,7 @@ fn check_audio_vetoes(
 
     // Expanded ambient veto: NonDancefloor + Atmospheric (dc > 5.0) catches ambient
     // tracks below the dc > 10.0 Ambient flag threshold. Lower confidence than above.
-    if profile.bucket == EnergyBucket::NonDancefloor
+    if profile.bucket == Some(EnergyBucket::NonDancefloor)
         && has_flag(profile, CharFlag::Atmospheric)
         && !has_flag(profile, CharFlag::Ambient)
         && !has_flag(profile, CharFlag::Compressed)
@@ -525,7 +564,7 @@ fn check_audio_vetoes(
         ));
     }
 
-    if profile.bucket == EnergyBucket::NonDancefloor && has_flag(profile, CharFlag::Slow) {
+    if profile.bucket == Some(EnergyBucket::NonDancefloor) && has_flag(profile, CharFlag::Slow) {
         let dt_genre = find_family_genre(evidence, GenreFamily::Downtempo).unwrap_or("Downtempo");
         let action = compare_to_current(current_canonical, Some(dt_genre));
         return Some(veto_result(
@@ -541,7 +580,7 @@ fn check_audio_vetoes(
         ));
     }
 
-    if profile.bucket == EnergyBucket::NonDancefloor {
+    if profile.bucket == Some(EnergyBucket::NonDancefloor) {
         let dt_genre = find_family_genre(evidence, GenreFamily::Downtempo).unwrap_or("Downtempo");
         let action = compare_to_current(current_canonical, Some(dt_genre));
         return Some(veto_result(
@@ -558,7 +597,12 @@ fn check_audio_vetoes(
     }
 
     // Bass veto only fires if enrichment agrees or is absent
-    if has_flag(profile, CharFlag::Fast) && profile.bucket != EnergyBucket::NonDancefloor {
+    if has_flag(profile, CharFlag::Fast)
+        && matches!(
+            profile.bucket,
+            Some(EnergyBucket::LowEnergy | EnergyBucket::Dancefloor | EnergyBucket::HighEnergy)
+        )
+    {
         let has_enrichment =
             !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
         let enrichment_supports_bass = evidence
@@ -591,7 +635,7 @@ fn check_audio_vetoes(
         }
     }
 
-    if profile.bucket == EnergyBucket::LowEnergy
+    if profile.bucket == Some(EnergyBucket::LowEnergy)
         && has_flag(profile, CharFlag::Atmospheric)
         && all_enrichment_dancefloor(evidence)
     {
@@ -655,7 +699,7 @@ fn gather_votes(
     audio_profile: Option<&AudioProfile>,
     profile_registry: Option<&ProfileRegistry>,
     bpm_context: BpmContext,
-) -> (Vec<GenreVote>, Vec<audio_profile::AudioAffinity>) {
+) -> (Vec<GenreVote>, Vec<audio_profile::AudioAffinity>, bool) {
     let mut votes = Vec::new();
     let effective_bpm = bpm_context.effective_bpm;
 
@@ -741,23 +785,28 @@ fn gather_votes(
     }
 
     // Audio-profile votes: Fisher discriminant scoring against calibrated prototypes.
-    let affinities = if let (Some(audio), Some(registry)) = (&evidence.audio, profile_registry) {
-        let aff = audio_profile::score_all(audio, registry);
-        for a in &aff {
-            if a.vote_weight < 0.05 {
-                continue;
+    let (affinities, calibrated_coverage_missing) =
+        if let (Some(audio), Some(registry)) = (&evidence.audio, profile_registry) {
+            let scored = audio_profile::score_all(audio, registry);
+            let aff = scored.affinities;
+            for a in &aff {
+                if a.vote_weight < 0.05 {
+                    continue;
+                }
+                votes.push(GenreVote {
+                    genre: a.genre,
+                    weight: a.vote_weight,
+                    source: "audio-profile",
+                    bpm_plausible: bpm_plausible(a.genre, effective_bpm),
+                });
             }
-            votes.push(GenreVote {
-                genre: a.genre,
-                weight: a.vote_weight,
-                source: "audio-profile",
-                bpm_plausible: bpm_plausible(a.genre, effective_bpm),
-            });
-        }
-        aff
-    } else {
-        vec![]
-    };
+            (
+                aff,
+                !registry.prototypes.is_empty() && !scored.had_sufficient_coverage,
+            )
+        } else {
+            (vec![], false)
+        };
 
     if let Some(profile) = audio_profile
         && has_flag(profile, CharFlag::LongTail)
@@ -772,7 +821,7 @@ fn gather_votes(
         });
     }
 
-    (votes, affinities)
+    (votes, affinities, calibrated_coverage_missing)
 }
 
 fn bpm_plausible(genre: &str, bpm: f64) -> bool {
@@ -877,10 +926,11 @@ fn find_consensus(
 
     if let Some(profile) = audio_profile.as_ref() {
         let bucket_name = match profile.bucket {
-            EnergyBucket::NonDancefloor => "non-dancefloor",
-            EnergyBucket::LowEnergy => "low-energy",
-            EnergyBucket::Dancefloor => "dancefloor",
-            EnergyBucket::HighEnergy => "high-energy",
+            Some(EnergyBucket::NonDancefloor) => "non-dancefloor",
+            Some(EnergyBucket::LowEnergy) => "low-energy",
+            Some(EnergyBucket::Dancefloor) => "dancefloor",
+            Some(EnergyBucket::HighEnergy) => "high-energy",
+            None => "energy-unknown",
         };
         let flag_names: Vec<&str> = profile
             .flags
@@ -1042,8 +1092,8 @@ fn find_consensus(
         && let Some(shallower) = shallower_alternative(final_genre)
     {
         let demote = match profile.bucket {
-            EnergyBucket::HighEnergy => true,
-            EnergyBucket::Dancefloor => {
+            Some(EnergyBucket::HighEnergy) => true,
+            Some(EnergyBucket::Dancefloor) => {
                 ranked.iter().any(|(g, _, _)| *g == shallower)
                     && !has_flag(profile, CharFlag::Atmospheric)
                     && !has_flag(profile, CharFlag::Atonal)
@@ -1055,7 +1105,7 @@ fn find_consensus(
         if demote {
             ev.push(format!(
                 "depth: {}-energy audio → {} over {}",
-                if profile.bucket == EnergyBucket::HighEnergy {
+                if profile.bucket == Some(EnergyBucket::HighEnergy) {
                     "high"
                 } else {
                     "dancefloor"
@@ -1126,7 +1176,9 @@ fn resolve_same_family_specificity(
             return deeper;
         }
 
-        if compressed && family == GenreFamily::Techno && profile.bucket == EnergyBucket::Dancefloor
+        if compressed
+            && family == GenreFamily::Techno
+            && profile.bucket == Some(EnergyBucket::Dancefloor)
         {
             evidence.push(format!(
                 "depth: audio compressed dancefloor → {deeper} over {shallower} (club-master signal)"
@@ -1135,14 +1187,14 @@ fn resolve_same_family_specificity(
         }
 
         if has_flag(profile, CharFlag::Atmospheric)
-            || profile.bucket == EnergyBucket::LowEnergy
+            || profile.bucket == Some(EnergyBucket::LowEnergy)
             || long_tail
         {
             evidence.push(format!(
                 "depth: audio atmospheric/low-energy/long-tail → {deeper} over {shallower}"
             ));
             deeper
-        } else if profile.bucket == EnergyBucket::HighEnergy {
+        } else if profile.bucket == Some(EnergyBucket::HighEnergy) {
             evidence.push(format!(
                 "depth: audio high-energy → {shallower} over {deeper}"
             ));
@@ -1176,36 +1228,46 @@ fn audio_clearly_favors_family(profile: &AudioProfile, candidate: &str) -> bool 
     match family {
         GenreFamily::Downtempo => {
             let very_low_centroid = profile.centroid.is_some_and(|c| c < CENTROID_VERY_LOW);
-            (profile.bucket == EnergyBucket::LowEnergy
+            (profile.bucket == Some(EnergyBucket::LowEnergy)
                 && (has_flag(profile, CharFlag::Atmospheric) || very_low_centroid))
-                || (profile.bucket == EnergyBucket::NonDancefloor && very_low_centroid)
+                || (profile.bucket == Some(EnergyBucket::NonDancefloor) && very_low_centroid)
         }
         GenreFamily::Bass => {
             has_flag(profile, CharFlag::Fast)
                 || (has_flag(profile, CharFlag::Broken)
-                    && profile.bucket >= EnergyBucket::Dancefloor)
+                    && profile
+                        .bucket
+                        .is_some_and(|bucket| bucket >= EnergyBucket::Dancefloor))
         }
         GenreFamily::Techno => {
             let dark_timbre = profile.centroid.is_some_and(|c| c < CENTROID_DARK);
             let long_tail = has_flag(profile, CharFlag::LongTail);
-            (profile.bucket >= EnergyBucket::Dancefloor
+            (profile
+                .bucket
+                .is_some_and(|bucket| bucket >= EnergyBucket::Dancefloor)
+                && profile.rhythm_regularity.is_some()
                 && !has_flag(profile, CharFlag::Broken)
                 && profile.bpm >= 125.0)
-                || (profile.bucket == EnergyBucket::LowEnergy
+                || (profile.bucket == Some(EnergyBucket::LowEnergy)
+                    && profile.rhythm_regularity.is_some()
                     && !has_flag(profile, CharFlag::Broken)
                     && profile.bpm >= 118.0
                     && profile.bpm <= 132.0
                     && (dark_timbre || long_tail))
         }
         GenreFamily::House => {
-            profile.bucket == EnergyBucket::Dancefloor
+            profile.bucket == Some(EnergyBucket::Dancefloor)
+                && profile.rhythm_regularity.is_some()
                 && !has_flag(profile, CharFlag::Broken)
                 && !has_flag(profile, CharFlag::Atonal)
                 && profile.bpm >= 118.0
                 && profile.bpm <= 132.0
         }
         GenreFamily::Hardcore => {
-            profile.bucket >= EnergyBucket::Dancefloor
+            profile
+                .bucket
+                .is_some_and(|bucket| bucket >= EnergyBucket::Dancefloor)
+                && profile.rhythm_regularity.is_some()
                 && !has_flag(profile, CharFlag::Broken)
                 && profile.bpm >= 138.0
         }
@@ -1255,53 +1317,68 @@ fn audio_only_inference(
         .audio
         .as_ref()
         .and_then(|a| a.dynamic_complexity)
-        .unwrap_or(0.0);
+        .filter(|value| value.is_finite());
     let rr = evidence
         .audio
         .as_ref()
         .and_then(|a| a.rhythm_regularity)
-        .unwrap_or(0.0);
+        .filter(|value| value.is_finite());
     let sc = evidence
         .audio
         .as_ref()
-        .and_then(|a| a.spectral_centroid_mean);
-    // danceability is used indirectly via the audio profile's energy bucket
+        .and_then(|a| a.spectral_centroid_mean)
+        .filter(|value| value.is_finite());
 
     let mut candidates: Vec<&'static str> = Vec::new();
     let mut ev = Vec::new();
 
     // D.1: Broad bucket
     match profile.bucket {
-        EnergyBucket::NonDancefloor => {
-            if dc > 10.0 {
+        None => {
+            ev.push("D.1: energy evidence missing; no audio-only recommendation".into());
+        }
+        Some(EnergyBucket::NonDancefloor) => {
+            if dc.is_some_and(|value| value > 10.0) {
                 candidates.push("Ambient");
                 ev.push("D.1: non-dancefloor + high dynamic complexity → Ambient".into());
-            } else if dc > 5.0 {
+            } else if dc.is_some_and(|value| value > 5.0) {
                 candidates.extend_from_slice(&["Experimental", "Ambient"]);
                 ev.push("D.1: non-dancefloor + moderate complexity → Experimental/Ambient".into());
-            } else {
+            } else if dc.is_some() {
                 candidates.extend_from_slice(&["Downtempo", "Experimental"]);
                 ev.push("D.1: non-dancefloor + low complexity → Downtempo/Experimental".into());
+            } else {
+                ev.push(
+                    "D.1: dynamic-complexity evidence missing; no non-dancefloor refinement".into(),
+                );
             }
         }
-        EnergyBucket::LowEnergy => {
+        Some(EnergyBucket::LowEnergy) => {
             if profile.bpm > 145.0 {
                 candidates.extend_from_slice(&["Jungle", "Breakbeat"]);
                 ev.push(format!(
                     "D.1: low-energy but fast ({}bpm) → Jungle/Breakbeat",
                     profile.bpm as i32
                 ));
-            } else if dc > 5.0 {
+            } else if dc.is_some_and(|value| value > 5.0) {
                 candidates.extend_from_slice(&["Downtempo", "Ambient Techno"]);
                 ev.push("D.1: low-energy + atmospheric → Downtempo/Ambient Techno".into());
-            } else {
+            } else if dc.is_some() {
                 candidates.extend_from_slice(&["Electro", "IDM"]);
                 ev.push("D.1: low-energy + low complexity → Electro/IDM".into());
+            } else {
+                ev.push(
+                    "D.1: dynamic-complexity evidence missing; no low-energy refinement".into(),
+                );
             }
         }
-        EnergyBucket::Dancefloor | EnergyBucket::HighEnergy => {
+        Some(EnergyBucket::Dancefloor | EnergyBucket::HighEnergy) => {
             // D.2: Subgenre by BPM x rhythm regularity
             let bpm = profile.bpm;
+            let Some(rr) = rr else {
+                ev.push("D.2: rhythm-regularity evidence missing; no dancefloor refinement".into());
+                return finish_audio_only_result(evidence, profile, candidates, ev);
+            };
             if bpm > 155.0 {
                 candidates.extend_from_slice(&["Drum & Bass", "Jungle"]);
                 ev.push(format!("D.2: fast ({}bpm) → D&B/Jungle", bpm as i32));
@@ -1409,6 +1486,20 @@ fn audio_only_inference(
         }
     }
 
+    finish_audio_only_result(evidence, profile, candidates, ev)
+}
+
+fn finish_audio_only_result(
+    evidence: &TrackEvidence,
+    profile: &AudioProfile,
+    candidates: Vec<&'static str>,
+    ev: Vec<String>,
+) -> (
+    Option<&'static str>,
+    ClassificationConfidence,
+    Vec<String>,
+    Vec<String>,
+) {
     // D.4: Confidence
     let (genre, confidence) = if candidates.len() == 1 {
         (
@@ -1488,13 +1579,19 @@ fn build_candidates(votes: &[GenreVote], top_genre: Option<&str>) -> Vec<GenreCa
     candidates
 }
 
-fn build_review_hint(evidence: &TrackEvidence, _flags: &[String]) -> String {
+fn build_review_hint(evidence: &TrackEvidence, flags: &[String]) -> String {
     let mut hints = Vec::new();
     if !evidence.has_discogs && !evidence.has_beatport {
         hints.push("No enrichment data available");
     }
     if !evidence.has_audio {
         hints.push("No audio analysis available");
+    }
+    if flags.iter().any(|flag| flag == "missing-danceability") {
+        hints.push("Audio danceability/energy evidence is missing");
+    }
+    if flags.iter().any(|flag| flag == "missing-rhythm-regularity") {
+        hints.push("Audio rhythm-regularity evidence is missing");
     }
     if !evidence.artist.is_empty() {
         hints.push("Artist/title context may help disambiguate");
@@ -1572,6 +1669,117 @@ mod tests {
         assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
         assert_eq!(result.action, ClassificationAction::Manual);
         assert!(result.genre.is_none());
+    }
+
+    #[test]
+    fn missing_danceability_does_not_create_energy_evidence_or_fast_bass_veto() {
+        let mut ev = make_evidence("");
+        let mut audio = make_audio(160.0, 2.0, 3.0, 0.92, 1800.0);
+        audio.danceability = None;
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+
+        assert_eq!(result.genre, None);
+        assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
+        assert!(!result.flags.contains(&"audio-vetoed".to_string()));
+        assert!(result.flags.contains(&"missing-danceability".to_string()));
+        assert!(
+            result
+                .evidence
+                .iter()
+                .all(|line| !line.contains("dancefloor")),
+            "missing danceability must not be formatted as an energy bucket: {:?}",
+            result.evidence
+        );
+    }
+
+    #[test]
+    fn missing_rhythm_regularity_is_unknown_with_or_without_other_essentia_values() {
+        let mut otherwise_complete = make_audio(128.0, 2.0, 3.0, 0.92, 1800.0);
+        otherwise_complete.rhythm_regularity = None;
+        let profile = compute_audio_profile(&otherwise_complete);
+        assert!(!has_flag(&profile, CharFlag::Broken));
+        assert!(!has_flag(&profile, CharFlag::Irregular));
+
+        let mut no_essentia = make_audio(128.0, 2.0, 3.0, 0.92, 1800.0);
+        no_essentia.danceability = None;
+        no_essentia.dynamic_complexity = None;
+        no_essentia.rhythm_regularity = None;
+        no_essentia.spectral_centroid_mean = None;
+        let profile = compute_audio_profile(&no_essentia);
+        assert!(!has_flag(&profile, CharFlag::Broken));
+        assert!(!has_flag(&profile, CharFlag::Irregular));
+    }
+
+    #[test]
+    fn bpm_only_audio_is_insufficient_and_has_stable_missing_evidence_flags() {
+        let mut ev = make_evidence("");
+        let mut audio = make_audio(160.0, 2.0, 3.0, 0.92, 1800.0);
+        audio.danceability = None;
+        audio.dynamic_complexity = None;
+        audio.rhythm_regularity = None;
+        audio.spectral_centroid_mean = None;
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+
+        assert_eq!(result.genre, None);
+        assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
+        assert_eq!(
+            result.flags,
+            vec![
+                "audio-only".to_string(),
+                "no-enrichment".to_string(),
+                "missing-danceability".to_string(),
+                "missing-rhythm-regularity".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_fast_dancefloor_audio_keeps_representative_bass_veto() {
+        let mut ev = make_evidence("");
+        ev.audio = Some(make_audio(160.0, 2.0, 3.0, 0.92, 1800.0));
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+
+        assert_eq!(result.genre, Some("Breakbeat"));
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+        assert!(result.flags.contains(&"audio-vetoed".to_string()));
+    }
+
+    #[test]
+    fn enrichment_confidence_is_preserved_when_optional_audio_is_missing() {
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("Techno");
+        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Techno",
+            style_count: 3,
+        }];
+        ev.has_discogs = true;
+        let mut audio = make_audio(132.0, 2.0, 3.0, 0.92, 1800.0);
+        audio.danceability = None;
+        audio.dynamic_complexity = None;
+        audio.rhythm_regularity = None;
+        audio.spectral_centroid_mean = None;
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert!(result.flags.contains(&"missing-danceability".to_string()));
+        assert!(
+            result
+                .flags
+                .contains(&"missing-rhythm-regularity".to_string())
+        );
     }
 
     #[test]
@@ -3153,6 +3361,47 @@ mod tests {
             result_no_profile.genre, result_with_profile.genre,
             "Profile votes should influence the consensus. Without: {:?}, With: {:?}",
             result_no_profile.genre, result_with_profile.genre
+        );
+    }
+
+    #[test]
+    fn sparse_audio_with_registry_reports_calibrated_coverage_gap() {
+        use crate::audio_profile;
+
+        let house_tracks: Vec<AudioFeatures> = (0..8)
+            .map(|_| make_audio(128.0, 2.0, 3.0, 0.9, 1500.0))
+            .collect();
+        let ambient_tracks: Vec<AudioFeatures> = (0..8)
+            .map(|_| make_audio(128.0, 0.5, 3.0, 0.9, 1500.0))
+            .collect();
+        let samples: Vec<(&str, &AudioFeatures)> = house_tracks
+            .iter()
+            .map(|audio| ("House", audio))
+            .chain(ambient_tracks.iter().map(|audio| ("Ambient", audio)))
+            .collect();
+        let registry = audio_profile::calibrate(&samples);
+
+        let mut ev = make_evidence("");
+        ev.beatport_genre = Some("House");
+        ev.has_beatport = true;
+        let mut sparse = make_audio(128.0, 2.0, 3.0, 0.9, 1500.0);
+        sparse.danceability = None;
+        ev.audio = Some(sparse);
+        ev.has_audio = true;
+
+        let result = classify_track_with_profiles(&ev, Some(&registry));
+
+        assert_eq!(result.genre, Some("House"));
+        assert!(
+            result
+                .flags
+                .contains(&"calibrated-audio-insufficient-coverage".to_string())
+        );
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|line| line == "audio-profile: insufficient optional-feature coverage")
         );
     }
 }

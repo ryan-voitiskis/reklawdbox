@@ -26,6 +26,12 @@ pub(crate) const MIN_TRACKS: u32 = 5;
 const FISHER_WEIGHT_CAP: f64 = 0.4;
 /// Mild regularization floor — no feature fully ignored.
 const FISHER_WEIGHT_FLOOR: f64 = 0.02;
+/// Prototypes with at least this many optional families require three observations.
+const TARGET_CALIBRATED_OPTIONAL_FEATURES: usize = 3;
+/// Optional observations must cover a majority of the prototype's discriminative weight.
+const MIN_CALIBRATED_WEIGHT_COVERAGE: f64 = 0.50;
+/// Fixed optional weight for each usable timbral feature family.
+const TIMBRAL_FAMILY_WEIGHT: f64 = 0.05;
 
 /// Ordered list of scalar feature names used for scoring.
 /// Must match the extraction order in `extract_scalar_features`.
@@ -90,8 +96,15 @@ pub(crate) struct AudioAffinity {
     pub(crate) genre: &'static str,
     pub(crate) distance: f64,
     pub(crate) vote_weight: f32,
+    pub(crate) observed_optional_features: usize,
+    pub(crate) optional_weight_coverage: f64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) contributions: Vec<FeatureContribution>,
+}
+
+pub(crate) struct AudioScoreResult {
+    pub(crate) affinities: Vec<AudioAffinity>,
+    pub(crate) had_sufficient_coverage: bool,
 }
 
 /// How much a single feature contributed to the affinity score.
@@ -423,18 +436,23 @@ pub(crate) fn calibrate(samples: &[(&'static str, &AudioFeatures)]) -> ProfileRe
 // Scoring
 // ---------------------------------------------------------------------------
 
-/// Score a track against all genre prototypes. Returns affinities sorted by
-/// vote weight descending, filtered to weight >= 0.05.
-pub(crate) fn score_all(audio: &AudioFeatures, registry: &ProfileRegistry) -> Vec<AudioAffinity> {
+/// Score all prototypes and report whether any prototype had sufficient optional coverage.
+/// Affinities are sorted by vote weight descending and filtered to weight >= 0.05.
+pub(crate) fn score_all(audio: &AudioFeatures, registry: &ProfileRegistry) -> AudioScoreResult {
     let scalars = extract_scalar_features(audio);
     let mfcc = extract_mfcc_mean(audio);
     let mfcc_s = extract_mfcc_std(audio);
     let contrast = extract_contrast(audio);
 
+    let mut had_sufficient_coverage = false;
     let mut affinities: Vec<AudioAffinity> = registry
         .prototypes
         .values()
-        .map(|proto| score_track(&scalars, &mfcc, &mfcc_s, &contrast, proto, registry))
+        .filter_map(|proto| {
+            let affinity = score_track(&scalars, &mfcc, &mfcc_s, &contrast, proto, registry);
+            had_sufficient_coverage |= affinity.is_some();
+            affinity
+        })
         .filter(|a| a.vote_weight >= 0.05)
         .collect();
 
@@ -443,7 +461,10 @@ pub(crate) fn score_all(audio: &AudioFeatures, registry: &ProfileRegistry) -> Ve
             .partial_cmp(&a.vote_weight)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    affinities
+    AudioScoreResult {
+        affinities,
+        had_sufficient_coverage,
+    }
 }
 
 fn score_track(
@@ -453,30 +474,65 @@ fn score_track(
     contrast: &Option<Vec<f64>>,
     proto: &GenrePrototype,
     registry: &ProfileRegistry,
-) -> AudioAffinity {
-    let mut total_contribution = 0.0;
+) -> Option<AudioAffinity> {
+    if proto.total_n == 0 || scalars.len() != SCALAR_FEATURE_NAMES.len() {
+        return None;
+    }
+
+    let mut bpm_squared_contribution = 0.0;
+    let mut observed_optional_squared_contribution = 0.0;
+    let mut eligible_optional_weight = 0.0;
+    let mut observed_optional_weight = 0.0;
+    let mut eligible_optional_features = 0;
+    let mut observed_optional_features = 0;
     let mut contributions = Vec::new();
 
     // Tier 1: Scalar features
     for (fi, &fname) in SCALAR_FEATURE_NAMES.iter().enumerate() {
+        let stat = match proto.features.get(fname) {
+            Some(s)
+                if s.fisher_weight.is_finite()
+                    && s.fisher_weight > 0.0
+                    && s.mean.is_finite()
+                    && s.stddev.is_finite()
+                    && s.stddev > 0.0 =>
+            {
+                s
+            }
+            _ => continue,
+        };
+
+        let is_bpm = fname == "rekordbox_bpm";
+        if !is_bpm {
+            eligible_optional_weight += stat.fisher_weight;
+            eligible_optional_features += 1;
+        }
+
         let track_val = match scalars[fi] {
             Some(v) => v,
+            None if is_bpm => return None,
             None => continue,
-        };
-        let stat = match proto.features.get(fname) {
-            Some(s) if s.fisher_weight > 0.0 => s,
-            _ => continue,
         };
 
         let global_std = registry
             .global_stats
             .get(fname)
             .map(|(_, s)| *s)
+            .filter(|s| s.is_finite() && *s > 0.0)
             .unwrap_or(1.0);
         let effective_std = stat.stddev.max(global_std * 0.1);
         let z = (track_val - stat.mean) / effective_std;
         let contrib = stat.fisher_weight * z * z;
-        total_contribution += contrib;
+        if !z.is_finite() || !contrib.is_finite() {
+            return None;
+        }
+        if is_bpm {
+            bpm_squared_contribution += contrib;
+        } else {
+            observed_optional_weight += stat.fisher_weight;
+            observed_optional_features += 1;
+            observed_optional_squared_contribution += contrib;
+        }
 
         contributions.push(FeatureContribution {
             name: fname,
@@ -488,32 +544,74 @@ fn score_track(
     }
 
     // Tier 2: Timbral distances (if genre has centroids)
-    if let (Some(track_mfcc), Some(centroid), Some(mean_dist)) =
-        (mfcc, &proto.mfcc_centroid, proto.mfcc_mean_dist)
-    {
-        let dist = euclidean_distance(track_mfcc, centroid);
+    let timbral_families = [
+        (
+            mfcc.as_deref(),
+            proto.mfcc_centroid.as_deref(),
+            proto.mfcc_mean_dist,
+        ),
+        (
+            mfcc_s.as_deref(),
+            proto.mfcc_std_centroid.as_deref(),
+            proto.mfcc_std_mean_dist,
+        ),
+        (
+            contrast.as_deref(),
+            proto.contrast_centroid.as_deref(),
+            proto.contrast_mean_dist,
+        ),
+    ];
+    for (track_vector, prototype_centroid, mean_dist) in timbral_families {
+        let (Some(centroid), Some(mean_dist)) = (prototype_centroid, mean_dist) else {
+            continue;
+        };
+        if centroid.is_empty()
+            || centroid.iter().any(|value| !value.is_finite())
+            || !mean_dist.is_finite()
+            || mean_dist <= 0.0
+        {
+            continue;
+        }
+
+        eligible_optional_weight += TIMBRAL_FAMILY_WEIGHT;
+        eligible_optional_features += 1;
+
+        let Some(track_vector) = track_vector.filter(|values| {
+            values.len() == centroid.len() && values.iter().all(|value| value.is_finite())
+        }) else {
+            continue;
+        };
+        let dist = euclidean_distance(track_vector, centroid);
         let z = dist / mean_dist;
-        // Timbral distance gets a fixed weight budget of ~0.15 total for all 3 dims
-        total_contribution += 0.05 * z * z;
+        let contribution = TIMBRAL_FAMILY_WEIGHT * z * z;
+        if !z.is_finite() || !contribution.is_finite() {
+            continue;
+        }
+        observed_optional_weight += TIMBRAL_FAMILY_WEIGHT;
+        observed_optional_features += 1;
+        observed_optional_squared_contribution += contribution;
     }
 
-    if let (Some(track_mfcc_s), Some(centroid), Some(mean_dist)) =
-        (mfcc_s, &proto.mfcc_std_centroid, proto.mfcc_std_mean_dist)
+    if eligible_optional_weight <= 0.0 || !eligible_optional_weight.is_finite() {
+        return None;
+    }
+    let required_optional_features =
+        TARGET_CALIBRATED_OPTIONAL_FEATURES.min(eligible_optional_features);
+    let optional_weight_coverage = observed_optional_weight / eligible_optional_weight;
+    if observed_optional_features < required_optional_features
+        || !optional_weight_coverage.is_finite()
+        || optional_weight_coverage < MIN_CALIBRATED_WEIGHT_COVERAGE
     {
-        let dist = euclidean_distance(track_mfcc_s, centroid);
-        let z = dist / mean_dist;
-        total_contribution += 0.05 * z * z;
+        return None;
     }
 
-    if let (Some(track_c), Some(centroid), Some(mean_dist)) =
-        (contrast, &proto.contrast_centroid, proto.contrast_mean_dist)
-    {
-        let dist = euclidean_distance(track_c, centroid);
-        let z = dist / mean_dist;
-        total_contribution += 0.05 * z * z;
+    let normalized_squared_distance = bpm_squared_contribution
+        + observed_optional_squared_contribution * eligible_optional_weight
+            / observed_optional_weight;
+    if !normalized_squared_distance.is_finite() || normalized_squared_distance < 0.0 {
+        return None;
     }
-
-    let distance = total_contribution.sqrt();
+    let distance = normalized_squared_distance.sqrt();
 
     // Confidence penalty for small genres
     let n_active = proto.features.len() as f64;
@@ -531,12 +629,14 @@ fn score_track(
     });
     contributions.truncate(3);
 
-    AudioAffinity {
+    Some(AudioAffinity {
         genre: proto.genre,
         distance: adjusted_distance,
         vote_weight,
+        observed_optional_features,
+        optional_weight_coverage: optional_weight_coverage.clamp(0.0, 1.0),
         contributions,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -793,9 +893,11 @@ pub(crate) fn format_evidence(affinity: &AudioAffinity) -> String {
         })
         .collect();
     format!(
-        "audio-profile: {} {:.2} ({})",
+        "audio-profile: {} {:.2} [coverage: {} optional, {:.0}% weight] ({})",
         affinity.genre,
         affinity.vote_weight,
+        affinity.observed_optional_features,
+        affinity.optional_weight_coverage * 100.0,
         parts.join(", ")
     )
 }
@@ -910,7 +1012,7 @@ mod tests {
 
         // A house-like track should score higher for House
         let house_track = test_audio(125.0, 2.1, 2.8, 1750.0);
-        let affinities = score_all(&house_track, &registry);
+        let affinities = score_all(&house_track, &registry).affinities;
         assert!(!affinities.is_empty());
         assert_eq!(
             affinities[0].genre, "House",
@@ -919,7 +1021,7 @@ mod tests {
 
         // An ambient-like track should score higher for Ambient
         let ambient_track = test_audio(88.0, 0.7, 7.5, 350.0);
-        let affinities = score_all(&ambient_track, &registry);
+        let affinities = score_all(&ambient_track, &registry).affinities;
         assert!(!affinities.is_empty());
         assert_eq!(
             affinities[0].genre, "Ambient",
@@ -952,7 +1054,7 @@ mod tests {
 
         // Score a track identical to the prototype mean
         let exact_match = test_audio(130.5, 2.0, 3.0, 1500.0);
-        let affinities = score_all(&exact_match, &registry);
+        let affinities = score_all(&exact_match, &registry).affinities;
 
         for a in &affinities {
             assert!(
@@ -1012,6 +1114,284 @@ mod tests {
                 expected,
                 scalars[i]
             );
+        }
+    }
+
+    fn registry_with_features(
+        feature_specs: &[(&'static str, f64, f64)],
+        total_n: u32,
+    ) -> ProfileRegistry {
+        let features: HashMap<&'static str, FeatureStat> = feature_specs
+            .iter()
+            .map(|&(name, mean, fisher_weight)| {
+                (
+                    name,
+                    FeatureStat {
+                        mean,
+                        stddev: 1.0,
+                        fisher_weight,
+                        n: total_n,
+                    },
+                )
+            })
+            .collect();
+        let global_stats = feature_specs
+            .iter()
+            .map(|&(name, mean, _)| (name, (mean, 1.0)))
+            .collect();
+        let prototype = GenrePrototype {
+            genre: "Techno",
+            features,
+            mfcc_centroid: None,
+            mfcc_std_centroid: None,
+            contrast_centroid: None,
+            mfcc_mean_dist: None,
+            mfcc_std_mean_dist: None,
+            contrast_mean_dist: None,
+            total_n,
+        };
+        ProfileRegistry {
+            prototypes: HashMap::from([("Techno", prototype)]),
+            global_stats,
+        }
+    }
+
+    fn score_single(audio: &AudioFeatures, registry: &ProfileRegistry) -> Option<AudioAffinity> {
+        let proto = registry
+            .prototypes
+            .get("Techno")
+            .expect("test registry should contain Techno");
+        score_track(
+            &extract_scalar_features(audio),
+            &extract_mfcc_mean(audio),
+            &extract_mfcc_std(audio),
+            &extract_contrast(audio),
+            proto,
+            registry,
+        )
+    }
+
+    #[test]
+    fn bpm_only_prototype_fails_optional_coverage() {
+        let registry = registry_with_features(&[("rekordbox_bpm", 130.0, 1.0)], 8);
+        let audio = test_audio(130.0, 2.0, 3.0, 1500.0);
+
+        let scored = score_all(&audio, &registry);
+
+        assert!(!scored.had_sufficient_coverage);
+        assert!(scored.affinities.is_empty());
+        assert!(score_single(&audio, &registry).is_none());
+    }
+
+    #[test]
+    fn small_prototypes_require_all_one_or_two_available_optional_features() {
+        let one_feature = registry_with_features(&[("danceability", 2.0, 1.0)], 8);
+        let full = test_audio(130.0, 2.0, 3.0, 1500.0);
+        let affinity = score_single(&full, &one_feature).expect("one observed feature should pass");
+        assert_eq!(affinity.observed_optional_features, 1);
+        assert_eq!(affinity.optional_weight_coverage, 1.0);
+        let mut missing = full.clone();
+        missing.danceability = None;
+        assert!(score_single(&missing, &one_feature).is_none());
+
+        let two_features = registry_with_features(
+            &[("danceability", 2.0, 0.5), ("dynamic_complexity", 3.0, 0.5)],
+            12,
+        );
+        let affinity =
+            score_single(&full, &two_features).expect("both observed features should pass");
+        assert_eq!(affinity.observed_optional_features, 2);
+        assert_eq!(affinity.optional_weight_coverage, 1.0);
+        let mut missing = full;
+        missing.dynamic_complexity = None;
+        assert!(score_single(&missing, &two_features).is_none());
+    }
+
+    #[test]
+    fn three_observations_below_majority_fisher_weight_fail_coverage() {
+        let registry = registry_with_features(
+            &[
+                ("danceability", 2.0, 0.7),
+                ("onset_rate", 4.0, 0.1),
+                ("rhythm_regularity", 0.9, 0.1),
+                ("spectral_centroid_mean", 1500.0, 0.1),
+            ],
+            20,
+        );
+        let mut sparse = test_audio(130.0, 2.0, 3.0, 1500.0);
+        sparse.danceability = None;
+
+        assert!(score_single(&sparse, &registry).is_none());
+        assert!(!score_all(&sparse, &registry).had_sufficient_coverage);
+    }
+
+    #[test]
+    fn count_and_weight_thresholds_pass_at_exactly_half_coverage() {
+        let registry = registry_with_features(
+            &[
+                ("danceability", 2.0, 0.5),
+                ("onset_rate", 4.0, 0.2),
+                ("rhythm_regularity", 0.9, 0.2),
+                ("spectral_centroid_mean", 1500.0, 0.1),
+            ],
+            20,
+        );
+        let mut threshold = test_audio(130.0, 2.0, 3.0, 1500.0);
+        threshold.danceability = None;
+
+        let affinity = score_single(&threshold, &registry)
+            .expect("three observations covering exactly half the weight should pass");
+
+        assert_eq!(affinity.observed_optional_features, 3);
+        assert!((affinity.optional_weight_coverage - 0.5).abs() < 1e-12);
+        assert!(format_evidence(&affinity).contains("coverage: 3 optional, 50% weight"));
+    }
+
+    #[test]
+    fn full_coverage_preserves_original_distance_formula() {
+        let registry = registry_with_features(
+            &[
+                ("rekordbox_bpm", 130.0, 0.25),
+                ("danceability", 2.0, 0.25),
+                ("dynamic_complexity", 3.0, 0.5),
+            ],
+            10,
+        );
+        let audio = test_audio(131.0, 3.0, 5.0, 1500.0);
+
+        let affinity = score_single(&audio, &registry).expect("full coverage should score");
+        let old_squared_distance =
+            0.25 * 1.0_f64.powi(2) + 0.25 * 1.0_f64.powi(2) + 0.5 * 2.0_f64.powi(2);
+        let old_penalty = 0.5 * (3.0_f64 / 10.0).sqrt();
+
+        assert!((affinity.distance - (old_squared_distance.sqrt() + old_penalty)).abs() < 1e-12);
+        assert_eq!(affinity.observed_optional_features, 2);
+        assert_eq!(affinity.optional_weight_coverage, 1.0);
+    }
+
+    #[test]
+    fn omitting_an_eligible_feature_does_not_reduce_normalized_distance() {
+        let registry = registry_with_features(
+            &[
+                ("danceability", 1.0, 0.25),
+                ("onset_rate", 3.0, 0.25),
+                ("rhythm_regularity", -0.1, 0.25),
+                ("dynamic_complexity", 2.0, 0.25),
+            ],
+            20,
+        );
+        let full = test_audio(130.0, 2.0, 3.0, 1500.0);
+        let mut partial = full.clone();
+        partial.danceability = None;
+
+        let full_affinity = score_single(&full, &registry).expect("full track should score");
+        let partial_affinity =
+            score_single(&partial, &registry).expect("partial track should score");
+
+        assert!(partial_affinity.distance + 1e-12 >= full_affinity.distance);
+        assert!((partial_affinity.distance - full_affinity.distance).abs() < 1e-12);
+        assert!((partial_affinity.optional_weight_coverage - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn timbral_families_require_finite_dimensionally_valid_vectors() {
+        let mut registry = registry_with_features(&[], 20);
+        let proto = registry
+            .prototypes
+            .get_mut("Techno")
+            .expect("test registry should contain Techno");
+        proto.mfcc_centroid = Some(vec![0.0; 8]);
+        proto.mfcc_std_centroid = Some(vec![0.0; 5]);
+        proto.contrast_centroid = Some(vec![0.0; 3]);
+        proto.mfcc_mean_dist = Some(1.0);
+        proto.mfcc_std_mean_dist = Some(1.0);
+        proto.contrast_mean_dist = Some(1.0);
+
+        let mut complete = test_audio(130.0, 2.0, 3.0, 1500.0);
+        complete.mfcc_mean = Some(vec![0.0; 9]);
+        complete.mfcc_std = Some(vec![0.0; 6]);
+        complete.spectral_contrast_mean = Some(vec![0.0; 5]);
+        let affinity = score_single(&complete, &registry)
+            .expect("three complete timbral families should meet the count gate");
+        assert_eq!(affinity.observed_optional_features, 3);
+        assert_eq!(affinity.optional_weight_coverage, 1.0);
+
+        let mut malformed = complete.clone();
+        malformed.mfcc_mean = Some(vec![0.0; 8]);
+        assert!(score_single(&malformed, &registry).is_none());
+
+        let mut non_finite = complete.clone();
+        non_finite.spectral_contrast_mean = Some(vec![0.0, 0.0, f64::NAN, 0.0, 0.0]);
+        assert!(score_single(&non_finite, &registry).is_none());
+
+        let proto = registry
+            .prototypes
+            .get_mut("Techno")
+            .expect("test registry should contain Techno");
+        proto.mfcc_mean_dist = Some(0.0);
+        let affinity = score_single(&complete, &registry)
+            .expect("an invalid family is ineligible; both usable families are fully observed");
+        assert_eq!(affinity.observed_optional_features, 2);
+        assert_eq!(affinity.optional_weight_coverage, 1.0);
+
+        let proto = registry
+            .prototypes
+            .get_mut("Techno")
+            .expect("test registry should contain Techno");
+        proto.mfcc_std_mean_dist = Some(-1.0);
+        proto.contrast_mean_dist = Some(f64::NAN);
+        assert!(score_single(&complete, &registry).is_none());
+    }
+
+    #[test]
+    fn non_finite_optional_scalars_do_not_count_as_observed() {
+        let registry = registry_with_features(
+            &[
+                ("danceability", 2.0, 1.0 / 3.0),
+                ("onset_rate", 4.0, 1.0 / 3.0),
+                ("dynamic_complexity", 3.0, 1.0 / 3.0),
+            ],
+            15,
+        );
+        let mut audio = test_audio(130.0, 2.0, 3.0, 1500.0);
+        audio.danceability = Some(f64::NAN);
+        assert!(score_single(&audio, &registry).is_none());
+
+        audio.danceability = Some(2.0);
+        audio.onset_rate = Some(f64::INFINITY);
+        assert!(score_single(&audio, &registry).is_none());
+    }
+
+    #[test]
+    fn calibrated_small_n_prototypes_with_one_or_two_optional_features_are_reachable() {
+        for n in [8_usize, 12_usize] {
+            let house: Vec<AudioFeatures> = (0..n)
+                .map(|_| test_audio(128.0, 2.0, 3.0, 1500.0))
+                .collect();
+            let ambient: Vec<AudioFeatures> = (0..n)
+                .map(|_| test_audio(128.0, 0.5, if n >= 10 { 8.0 } else { 3.0 }, 1500.0))
+                .collect();
+            let samples: Vec<(&str, &AudioFeatures)> = house
+                .iter()
+                .map(|audio| ("House", audio))
+                .chain(ambient.iter().map(|audio| ("Ambient", audio)))
+                .collect();
+            let registry = calibrate(&samples);
+            let house_proto = registry
+                .prototypes
+                .get("House")
+                .expect("House prototype should calibrate");
+            assert_eq!(house_proto.features.len(), n / 5);
+            assert!(
+                house_proto
+                    .features
+                    .keys()
+                    .all(|name| *name != "rekordbox_bpm")
+            );
+
+            let scored = score_all(&house[0], &registry);
+            assert!(scored.had_sufficient_coverage);
+            assert!(scored.affinities.iter().any(|a| a.genre == "House"));
         }
     }
 
