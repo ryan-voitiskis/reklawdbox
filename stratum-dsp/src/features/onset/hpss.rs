@@ -24,6 +24,22 @@ use crate::error::AnalysisError;
 /// Default number of iterations for HPSS decomposition
 const DEFAULT_ITERATIONS: usize = 10;
 
+fn checked_effective_margin(
+    field: &str,
+    margin: usize,
+    dimension: usize,
+) -> Result<usize, AnalysisError> {
+    margin
+        .checked_mul(2)
+        .and_then(|width| width.checked_add(1))
+        .ok_or_else(|| {
+            AnalysisError::InvalidInput(format!(
+                "{field}={margin} overflows the 2 * margin + 1 window size"
+            ))
+        })?;
+    Ok(margin.min(dimension.saturating_sub(1)))
+}
+
 /// Decompose spectrogram into harmonic and percussive components
 ///
 /// Uses iterative median filtering to separate harmonic (sustained tones)
@@ -96,6 +112,9 @@ pub fn hpss_decompose(
         }
     }
 
+    let time_margin = checked_effective_margin("margin", margin, n_frames)?;
+    let frequency_margin = checked_effective_margin("margin", margin, n_bins)?;
+
     log::debug!(
         "HPSS decomposition: {} frames, {} bins, margin={}, iterations={}",
         n_frames,
@@ -116,11 +135,11 @@ pub fn hpss_decompose(
 
         // Apply horizontal median filter (across time) for harmonic
         // This smooths across time, preserving frequency structure
-        let harmonic_filtered = apply_horizontal_median_filter(&harmonic, margin);
+        let harmonic_filtered = apply_horizontal_median_filter(&harmonic, time_margin);
 
         // Apply vertical median filter (across frequency) for percussive
         // This smooths across frequency, preserving temporal structure
-        let percussive_filtered = apply_vertical_median_filter(&percussive, margin);
+        let percussive_filtered = apply_vertical_median_filter(&percussive, frequency_margin);
 
         // Update components
         harmonic = harmonic_filtered;
@@ -186,7 +205,10 @@ fn apply_horizontal_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Ve
         for frame_idx in 0..n_frames {
             // Collect values in window around current frame
             let start = frame_idx.saturating_sub(margin);
-            let end = (frame_idx + margin + 1).min(n_frames);
+            let end = frame_idx
+                .saturating_add(margin)
+                .saturating_add(1)
+                .min(n_frames);
 
             let mut window: Vec<f32> = (start..end).map(|f| spectrogram[f][bin_idx]).collect();
 
@@ -218,7 +240,7 @@ fn apply_vertical_median_filter(spectrogram: &[Vec<f32>], margin: usize) -> Vec<
         for (bin_idx, filtered_val) in filtered_row.iter_mut().enumerate() {
             // Collect values in window around current bin
             let start = bin_idx.saturating_sub(margin);
-            let end = (bin_idx + margin + 1).min(n_bins);
+            let end = bin_idx.saturating_add(margin).saturating_add(1).min(n_bins);
 
             let mut window: Vec<f32> = (start..end).map(|b| spectrogram[frame_idx][b]).collect();
 
@@ -262,7 +284,26 @@ pub fn harmonic_proportion(
     let n_frames = magnitude_spec.len();
     let n_bins = magnitude_spec[0].len();
 
-    if n_bins == 0 || n_frames < 4 {
+    if n_bins == 0 {
+        return Err(AnalysisError::InvalidInput("Empty frames".to_string()));
+    }
+    for (i, frame) in magnitude_spec.iter().enumerate() {
+        if frame.len() != n_bins {
+            return Err(AnalysisError::InvalidInput(format!(
+                "Inconsistent frame lengths: frame 0 has {} bins, frame {} has {} bins",
+                n_bins,
+                i,
+                frame.len()
+            )));
+        }
+    }
+
+    // Validate the raw caller-provided window widths even when the spectrogram
+    // is too short to produce a proportion.
+    checked_effective_margin("time_margin", time_margin, n_frames)?;
+    checked_effective_margin("freq_margin", freq_margin, n_bins)?;
+
+    if n_frames < 4 {
         return Ok(None);
     }
 
@@ -274,11 +315,14 @@ pub fn harmonic_proportion(
         return Ok(None);
     }
     let trimmed = &magnitude_spec[start..end];
+    let effective_time_margin =
+        checked_effective_margin("time_margin", time_margin, trimmed.len())?;
+    let effective_freq_margin = checked_effective_margin("freq_margin", freq_margin, n_bins)?;
 
     // Run one-pass HPSS with asymmetric kernels (no iteration needed for
     // proportion — we only need the energy ratio, not clean separation)
-    let harmonic_filtered = apply_horizontal_median_filter(trimmed, time_margin);
-    let percussive_filtered = apply_vertical_median_filter(trimmed, freq_margin);
+    let harmonic_filtered = apply_horizontal_median_filter(trimmed, effective_time_margin);
+    let percussive_filtered = apply_vertical_median_filter(trimmed, effective_freq_margin);
 
     // Compute total energy of each component
     let mut h_energy = 0.0_f64;
@@ -481,6 +525,68 @@ mod tests {
 
         let result = hpss_decompose(&magnitude_spec, 5);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hpss_decompose_rejects_margin_overflow() {
+        let magnitude_spec = vec![vec![0.5f32; 2]; 6];
+        assert!(matches!(
+            hpss_decompose(&magnitude_spec, usize::MAX),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_hpss_decompose_clamps_exact_and_oversized_margins() {
+        let magnitude_spec = vec![vec![0.5f32; 2]; 6];
+        for margin in [2, 6, 1_000_000] {
+            let (harmonic, percussive) = hpss_decompose(&magnitude_spec, margin).unwrap();
+            assert_eq!(harmonic.len(), magnitude_spec.len());
+            assert_eq!(percussive.len(), magnitude_spec.len());
+            assert!(harmonic.iter().flatten().all(|value| value.is_finite()));
+            assert!(percussive.iter().flatten().all(|value| value.is_finite()));
+        }
+    }
+
+    #[test]
+    fn test_harmonic_proportion_validates_shape_and_window_arithmetic() {
+        let valid = vec![vec![1.0f32; 2]; 6];
+        let mut ragged = valid.clone();
+        ragged[3] = vec![1.0];
+        assert!(matches!(
+            harmonic_proportion(&ragged, 1, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            harmonic_proportion(&[vec![]], 1, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            harmonic_proportion(&valid, usize::MAX, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            harmonic_proportion(&valid, 1, usize::MAX),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            harmonic_proportion(&[vec![1.0]], usize::MAX, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert_eq!(
+            harmonic_proportion(&[], usize::MAX, usize::MAX).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_harmonic_proportion_preserves_oversized_margin_result() {
+        let magnitude_spec = vec![vec![1.0f32; 2]; 6];
+        for (time_margin, freq_margin) in [(1, 1), (6, 2), (1_000_000, 1_000_000)] {
+            let proportion =
+                harmonic_proportion(&magnitude_spec, time_margin, freq_margin).unwrap();
+            assert_eq!(proportion, Some(0.5));
+        }
     }
 
     #[test]

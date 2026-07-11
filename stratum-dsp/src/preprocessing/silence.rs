@@ -115,10 +115,11 @@ pub fn detect_and_trim(
         ));
     }
 
-    if detector.frame_size == 0 {
-        return Err(AnalysisError::InvalidInput(
-            "Frame size must be > 0".to_string(),
-        ));
+    if detector.frame_size < 2 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "Frame size must be at least 2, got {}",
+            detector.frame_size
+        )));
     }
 
     if detector.frame_size > samples.len() {
@@ -373,6 +374,12 @@ mod tests {
         bad_detector.frame_size = 0;
         let result = detect_and_trim(&samples, 44100, bad_detector);
         assert!(result.is_err());
+
+        // A one-sample frame derives a zero half-hop and must be rejected.
+        let mut bad_detector = detector;
+        bad_detector.frame_size = 1;
+        let result = detect_and_trim(&samples, 44100, bad_detector);
+        assert!(matches!(result, Err(AnalysisError::InvalidInput(_))));
     }
 
     #[test]

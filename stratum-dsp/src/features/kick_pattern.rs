@@ -52,7 +52,7 @@ pub fn detect_kick_pattern(
         ));
     }
 
-    validate_beat_grid(beat_grid)?;
+    beat_grid.validate()?;
 
     let onsets = detect_band_onsets(
         spec,
@@ -390,29 +390,6 @@ fn cosine(a: &[f32; HISTOGRAM_LEN], b: &[f32; HISTOGRAM_LEN]) -> f32 {
 
 const fn idx(row: usize, col: usize) -> usize {
     row * KICK_PATTERN_COLS + col
-}
-
-fn validate_beat_grid(beat_grid: &BeatGrid) -> Result<(), AnalysisError> {
-    fn check(name: &str, xs: &[f32]) -> Result<(), AnalysisError> {
-        if let Some(idx) = xs.iter().position(|x| !x.is_finite()) {
-            return Err(AnalysisError::InvalidInput(format!(
-                "beat_grid.{name} must be finite, got {} at index {idx}",
-                xs[idx]
-            )));
-        }
-        if let Some(idx) = xs.windows(2).position(|w| w[0] >= w[1]) {
-            return Err(AnalysisError::InvalidInput(format!(
-                "beat_grid.{name} must be strictly ascending, got {name}[{idx}]={} >= {name}[{}]={}",
-                xs[idx],
-                idx + 1,
-                xs[idx + 1]
-            )));
-        }
-        Ok(())
-    }
-    check("beats", &beat_grid.beats)?;
-    check("bars", &beat_grid.bars)?;
-    Ok(())
 }
 
 #[cfg(test)]

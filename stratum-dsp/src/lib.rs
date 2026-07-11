@@ -112,6 +112,8 @@ pub fn analyze_audio(
         ));
     }
 
+    config.validate(sample_rate, samples.len())?;
+
     // Phase 1A: Preprocessing
     let mut processed_samples = samples.to_vec();
 
@@ -1866,4 +1868,110 @@ pub fn analyze_audio(
 
     // Return result with Phase 1E confidence scoring integrated
     Ok(result)
+}
+
+#[cfg(test)]
+mod analysis_config_tests {
+    use super::*;
+    use crate::features::onset::hpss::harmonic_proportion;
+
+    fn short_tone() -> Vec<f32> {
+        (0..8_192)
+            .map(|sample| {
+                let time = sample as f32 / 44_100.0;
+                0.25 * (2.0 * std::f32::consts::PI * 440.0 * time).sin()
+            })
+            .collect()
+    }
+
+    fn assert_boundary_error(expected_field: &str, config: AnalysisConfig) {
+        match analyze_audio(&[0.25; 1_024], 44_100, config) {
+            Err(AnalysisError::InvalidInput(message)) => assert!(
+                message.contains(expected_field),
+                "expected {expected_field:?} in validation error, got {message:?}"
+            ),
+            result => panic!("expected InvalidInput for {expected_field}, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn analysis_config_invalid_inputs_fail_at_the_public_boundary() {
+        assert_boundary_error(
+            "frame_size",
+            AnalysisConfig {
+                frame_size: 1,
+                ..AnalysisConfig::default()
+            },
+        );
+        assert_boundary_error(
+            "hop_size",
+            AnalysisConfig {
+                hop_size: 0,
+                ..AnalysisConfig::default()
+            },
+        );
+        assert_boundary_error(
+            "key_stft_frame_size",
+            AnalysisConfig {
+                key_stft_frame_size: 1,
+                ..AnalysisConfig::default()
+            },
+        );
+        assert_boundary_error(
+            "min_amplitude_db",
+            AnalysisConfig {
+                min_amplitude_db: f32::NAN,
+                ..AnalysisConfig::default()
+            },
+        );
+        assert_boundary_error(
+            "frame_size/hop_size",
+            AnalysisConfig {
+                frame_size: 512,
+                hop_size: 1,
+                ..AnalysisConfig::default()
+            },
+        );
+        assert_boundary_error(
+            "beat_grid.beats",
+            AnalysisConfig {
+                external_beat_grid: Some(BeatGrid {
+                    beats: vec![0.0, 0.0],
+                    downbeats: vec![],
+                    bars: vec![],
+                }),
+                ..AnalysisConfig::default()
+            },
+        );
+    }
+
+    #[test]
+    fn analysis_config_default_and_external_grid_controls_analyze_successfully() {
+        let samples = short_tone();
+        analyze_audio(&samples, 44_100, AnalysisConfig::default()).unwrap();
+
+        let external_grid = BeatGrid {
+            beats: vec![0.0, 0.05, 0.10, 0.15],
+            downbeats: vec![0.0],
+            bars: vec![0.0],
+        };
+        let result = analyze_audio(
+            &samples,
+            44_100,
+            AnalysisConfig {
+                external_beat_grid: Some(external_grid.clone()),
+                ..AnalysisConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.beat_grid.beats, external_grid.beats);
+        assert_eq!(result.beat_grid.bars, external_grid.bars);
+    }
+
+    #[test]
+    fn analysis_config_short_hpss_input_preserves_clamped_finite_result() {
+        let spectrogram = vec![vec![1.0f32; 2]; 6];
+        let proportion = harmonic_proportion(&spectrogram, 10, 10).unwrap();
+        assert_eq!(proportion, Some(0.5));
+    }
 }

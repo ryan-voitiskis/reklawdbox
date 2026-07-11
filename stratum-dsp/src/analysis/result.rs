@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::AnalysisError;
+
 /// Musical key
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Key {
@@ -151,6 +153,75 @@ pub struct BeatGrid {
 
     /// Bar boundaries in seconds
     pub bars: Vec<f32>,
+}
+
+/// Maximum difference between a bar/downbeat and its corresponding beat.
+/// Rekordbox PQTZ timestamps are millisecond-quantized.
+pub const BEAT_GRID_MATCH_TOLERANCE_SECONDS: f32 = 0.001;
+
+impl BeatGrid {
+    /// Validate the public beat-grid contract without sorting or mutating it.
+    pub fn validate(&self) -> Result<(), AnalysisError> {
+        fn check_series(name: &str, values: &[f32]) -> Result<(), AnalysisError> {
+            if let Some((index, value)) = values
+                .iter()
+                .enumerate()
+                .find(|(_, value)| !value.is_finite() || **value < 0.0)
+            {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "beat_grid.{name} must contain finite non-negative values, got {value} at index {index}"
+                )));
+            }
+            if let Some(index) = values.windows(2).position(|pair| pair[0] >= pair[1]) {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "beat_grid.{name} must be strictly ascending, got {name}[{index}]={} >= {name}[{}]={}",
+                    values[index],
+                    index + 1,
+                    values[index + 1]
+                )));
+            }
+            Ok(())
+        }
+
+        check_series("beats", &self.beats)?;
+        check_series("downbeats", &self.downbeats)?;
+        check_series("bars", &self.bars)?;
+
+        if self.downbeats != self.bars {
+            return Err(AnalysisError::InvalidInput(
+                "beat_grid.downbeats must equal beat_grid.bars".to_string(),
+            ));
+        }
+        if self.beats.is_empty() {
+            if self.bars.is_empty() {
+                return Ok(());
+            }
+            return Err(AnalysisError::InvalidInput(
+                "beat_grid.bars cannot be non-empty when beat_grid.beats is empty".to_string(),
+            ));
+        }
+
+        let first_beat = self.beats[0];
+        let last_beat = self.beats[self.beats.len() - 1];
+        for (index, &bar) in self.bars.iter().enumerate() {
+            if !(first_beat..=last_beat).contains(&bar) {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "beat_grid.bars[{index}]={bar} must lie within beat range [{first_beat}, {last_beat}]"
+                )));
+            }
+            if !self
+                .beats
+                .iter()
+                .any(|beat| (beat - bar).abs() <= BEAT_GRID_MATCH_TOLERANCE_SECONDS)
+            {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "beat_grid.bars[{index}]={bar} must match a beat within {BEAT_GRID_MATCH_TOLERANCE_SECONDS} seconds"
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Analysis flags
@@ -434,6 +505,72 @@ pub use Key as KeyType;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_beat_grid_validation_contract_and_tolerance() {
+        let valid = BeatGrid {
+            beats: vec![0.0, 0.5, 1.0],
+            downbeats: vec![0.000_999],
+            bars: vec![0.000_999],
+        };
+        assert!(valid.validate().is_ok());
+
+        let outside_tolerance = BeatGrid {
+            downbeats: vec![0.001_001],
+            bars: vec![0.001_001],
+            ..valid.clone()
+        };
+        assert!(matches!(
+            outside_tolerance.validate(),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+
+        for invalid in [
+            BeatGrid {
+                beats: vec![0.0, f32::NAN],
+                downbeats: vec![],
+                bars: vec![],
+            },
+            BeatGrid {
+                beats: vec![0.0, 0.5, 0.5],
+                downbeats: vec![],
+                bars: vec![],
+            },
+            BeatGrid {
+                beats: vec![0.0, 0.75, 0.5],
+                downbeats: vec![],
+                bars: vec![],
+            },
+            BeatGrid {
+                beats: vec![],
+                downbeats: vec![0.0],
+                bars: vec![0.0],
+            },
+            BeatGrid {
+                beats: vec![0.0, 0.5],
+                downbeats: vec![0.0],
+                bars: vec![],
+            },
+            BeatGrid {
+                beats: vec![0.0, 0.5],
+                downbeats: vec![1.0],
+                bars: vec![1.0],
+            },
+        ] {
+            assert!(matches!(
+                invalid.validate(),
+                Err(AnalysisError::InvalidInput(_))
+            ));
+        }
+
+        assert!(BeatGrid {
+            beats: vec![],
+            downbeats: vec![],
+            bars: vec![],
+        }
+        .validate()
+        .is_ok());
+    }
 
     #[test]
     fn test_key_name_major() {

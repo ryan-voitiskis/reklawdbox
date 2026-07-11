@@ -225,7 +225,7 @@ pub fn beat_relative_offset_histogram(
             "hop_size and sample_rate must be > 0".to_string(),
         ));
     }
-    validate_beat_grid(beat_grid)?;
+    beat_grid.validate()?;
     if beat_grid.bars.len() > MAX_BARS {
         return Err(AnalysisError::InvalidInput(format!(
             "beat_grid.bars has {} entries (max {MAX_BARS}); likely malformed grid",
@@ -285,35 +285,6 @@ pub fn beat_relative_offset_histogram(
     }
 
     Ok(OffsetHistogram { global, per_bar })
-}
-
-/// Validate that `beat_grid.beats` and `.bars` are finite and strictly
-/// ascending. The downstream histogram code assumes both invariants: a
-/// non-finite element makes the binary-search predicate non-total (silently
-/// mis-bucketing onsets, or with NaN propagating into every histogram bin),
-/// and a duplicate or non-monotonic element produces a wrong or zero beat
-/// period.
-fn validate_beat_grid(beat_grid: &BeatGrid) -> Result<(), AnalysisError> {
-    fn check(name: &str, xs: &[f32]) -> Result<(), AnalysisError> {
-        if let Some(idx) = xs.iter().position(|x| !x.is_finite()) {
-            return Err(AnalysisError::InvalidInput(format!(
-                "beat_grid.{name} must be finite, got {} at index {idx}",
-                xs[idx]
-            )));
-        }
-        if let Some(idx) = xs.windows(2).position(|w| w[0] >= w[1]) {
-            return Err(AnalysisError::InvalidInput(format!(
-                "beat_grid.{name} must be strictly ascending, got {name}[{idx}]={} >= {name}[{}]={}",
-                xs[idx],
-                idx + 1,
-                xs[idx + 1]
-            )));
-        }
-        Ok(())
-    }
-    check("beats", &beat_grid.beats)?;
-    check("bars", &beat_grid.bars)?;
-    Ok(())
 }
 
 fn locate_bar(bars: &[f32], onset_time: f32) -> Option<usize> {

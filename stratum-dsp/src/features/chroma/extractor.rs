@@ -25,6 +25,7 @@
 //! # Ok::<(), stratum_dsp::AnalysisError>(())
 //! ```
 
+use crate::config::validate_spectrogram_request;
 use crate::error::AnalysisError;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
@@ -304,14 +305,14 @@ pub fn compute_stft(
     hop_size: usize,
 ) -> Result<Vec<Vec<f32>>, AnalysisError> {
     let n_samples = samples.len();
+    let (n_frames, n_bins) =
+        validate_spectrogram_request(n_samples, frame_size, hop_size, "frame_size", "hop_size")?;
 
-    if n_samples < frame_size {
+    if n_frames == 0 {
         // Not enough samples for even one frame
         return Ok(vec![]);
     }
 
-    // Compute number of frames
-    let n_frames = (n_samples - frame_size) / hop_size + 1;
     let mut magnitudes = Vec::with_capacity(n_frames);
 
     // Create Hann window
@@ -346,7 +347,6 @@ pub fn compute_stft(
         fft.process(&mut fft_input);
 
         // Compute magnitude spectrum (only need first frame_size/2 + 1 bins for real FFT)
-        let n_bins = frame_size / 2 + 1;
         let magnitude: Vec<f32> = fft_input[..n_bins]
             .iter()
             .map(|x| (x.re * x.re + x.im * x.im).sqrt())
@@ -712,6 +712,12 @@ pub fn convert_linear_to_log_frequency_spectrogram(
     let n_frames = linear_spec_frames.len();
     let n_linear_bins = linear_spec_frames[0].len();
 
+    if n_linear_bins == 0 {
+        return Err(AnalysisError::InvalidInput(
+            "linear_spec_frames must contain non-empty frames".to_string(),
+        ));
+    }
+
     // Validate all frames have the same length
     for (i, frame) in linear_spec_frames.iter().enumerate() {
         if frame.len() != n_linear_bins {
@@ -724,32 +730,73 @@ pub fn convert_linear_to_log_frequency_spectrogram(
         }
     }
 
-    if sample_rate == 0 || fft_size == 0 {
+    if sample_rate == 0 {
         return Err(AnalysisError::InvalidInput(
-            "Sample rate and FFT size must be > 0".to_string(),
+            "sample_rate must be greater than 0, got 0".to_string(),
         ));
+    }
+    if fft_size < 2 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fft_size must be at least 2, got {fft_size}"
+        )));
+    }
+
+    let nyquist = sample_rate as f32 / 2.0;
+    if !fmin_hz.is_finite() || fmin_hz <= 0.0 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fmin_hz must be finite and greater than 0, got {fmin_hz}"
+        )));
+    }
+    if !fmax_hz.is_finite() || fmax_hz <= fmin_hz || fmax_hz > nyquist {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fmax_hz must be finite and satisfy fmin_hz < fmax_hz <= Nyquist ({nyquist}), got fmin_hz={fmin_hz}, fmax_hz={fmax_hz}"
+        )));
     }
 
     let freq_resolution = sample_rate as f32 / fft_size as f32;
-    let nyquist = sample_rate as f32 / 2.0;
-    let fmin = fmin_hz.max(20.0);
-    let fmax = fmax_hz.min(nyquist - 1.0);
+    let fmin = fmin_hz;
+    let fmax = fmax_hz;
 
     // Compute semitone range: convert frequency bounds to semitones
     // semitone = 12 * log2(freq / 440.0) + 57.0
     let semitone_min = 12.0 * (fmin / A4_FREQ).log2() + SEMITONE_OFFSET;
     let semitone_max = 12.0 * (fmax / A4_FREQ).log2() + SEMITONE_OFFSET;
 
-    // Round to nearest semitone and create bin range
-    let semitone_bin_min = semitone_min.floor() as i32;
-    let semitone_bin_max = semitone_max.ceil() as i32;
-    let n_semitone_bins = (semitone_bin_max - semitone_bin_min + 1) as usize;
-
-    if n_semitone_bins == 0 {
-        return Err(AnalysisError::InvalidInput(
-            "Invalid semitone range: fmin >= fmax".to_string(),
-        ));
+    // Prove the rounded bounds are representable before casting them.
+    let semitone_floor = semitone_min.floor();
+    let semitone_ceil = semitone_max.ceil();
+    if !semitone_floor.is_finite()
+        || !semitone_ceil.is_finite()
+        || f64::from(semitone_floor) < f64::from(i32::MIN)
+        || f64::from(semitone_ceil) > f64::from(i32::MAX)
+    {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fmin_hz/fmax_hz produce unrepresentable semitone bounds: {semitone_floor}..={semitone_ceil}"
+        )));
     }
+
+    // Round to semitones and create the checked bin range.
+    let semitone_bin_min = semitone_floor as i32;
+    let semitone_bin_max = semitone_ceil as i32;
+    let n_semitone_bins_i32 = semitone_bin_max
+        .checked_sub(semitone_bin_min)
+        .and_then(|span| span.checked_add(1))
+        .filter(|count| *count > 0)
+        .ok_or_else(|| {
+            AnalysisError::InvalidInput(format!(
+                "fmin_hz/fmax_hz produce an invalid semitone-bin count: fmin_hz={fmin_hz}, fmax_hz={fmax_hz}"
+            ))
+        })?;
+    let n_semitone_bins = usize::try_from(n_semitone_bins_i32).map_err(|_| {
+        AnalysisError::InvalidInput(format!(
+            "fmin_hz/fmax_hz produce an unrepresentable semitone-bin count: {n_semitone_bins_i32}"
+        ))
+    })?;
+    n_frames.checked_mul(n_semitone_bins).ok_or_else(|| {
+        AnalysisError::InvalidInput(format!(
+            "linear_spec_frames and frequency bounds produce an unrepresentable output size: {n_frames} frames x {n_semitone_bins} bins"
+        ))
+    })?;
 
     // Precompute semitone bin frequency bounds (for reference, not used in conversion)
     // Note: We use direct interpolation in the conversion loop below, so this is just for documentation
@@ -1397,14 +1444,74 @@ pub fn harmonic_spectrogram_hpss_median_mask(
                 f.len()
             )));
         }
+        for (bin, &magnitude) in f.iter().enumerate() {
+            if !magnitude.is_finite() || magnitude < 0.0 {
+                return Err(AnalysisError::InvalidInput(format!(
+                    "magnitude_spec_frames[{i}][{bin}] must be finite and non-negative, got {magnitude}"
+                )));
+            }
+        }
     }
-    if sample_rate == 0 || fft_size == 0 {
-        return Ok(magnitude_spec_frames.to_vec());
+    if sample_rate == 0 {
+        return Err(AnalysisError::InvalidInput(
+            "sample_rate must be greater than 0, got 0".to_string(),
+        ));
+    }
+    if fft_size < 2 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fft_size must be at least 2, got {fft_size}"
+        )));
+    }
+    if frame_step == 0 {
+        return Err(AnalysisError::InvalidInput(
+            "frame_step must be greater than 0, got 0".to_string(),
+        ));
+    }
+    let nyquist = sample_rate as f32 / 2.0;
+    if !fmin_hz.is_finite() || fmin_hz <= 0.0 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fmin_hz must be finite and greater than 0, got {fmin_hz}"
+        )));
+    }
+    if !fmax_hz.is_finite() || fmax_hz <= fmin_hz || fmax_hz > nyquist {
+        return Err(AnalysisError::InvalidInput(format!(
+            "fmax_hz must be finite and satisfy fmin_hz < fmax_hz <= Nyquist ({nyquist}), got fmin_hz={fmin_hz}, fmax_hz={fmax_hz}"
+        )));
+    }
+    if !mask_power.is_finite() || mask_power < 1.0 {
+        return Err(AnalysisError::InvalidInput(format!(
+            "mask_power must be finite and at least 1, got {mask_power}"
+        )));
     }
 
+    fn checked_margin(
+        field: &str,
+        margin: usize,
+        dimension: usize,
+    ) -> Result<(usize, usize), AnalysisError> {
+        let raw_width = margin
+            .checked_mul(2)
+            .and_then(|width| width.checked_add(1))
+            .ok_or_else(|| {
+                AnalysisError::InvalidInput(format!(
+                    "{field}={margin} overflows the 2 * margin + 1 window size"
+                ))
+            })?;
+        Ok((
+            margin.min(dimension.saturating_sub(1)),
+            raw_width.min(dimension),
+        ))
+    }
+
+    // Validate caller-provided window arithmetic before deriving dimension-clamped windows.
+    let (effective_time_margin, time_scratch_capacity) =
+        checked_margin("time_margin", time_margin, n_frames)?;
+    let (effective_freq_margin, freq_scratch_capacity) =
+        checked_margin("freq_margin", freq_margin, n_bins)?;
+
     let freq_resolution = sample_rate as f32 / fft_size as f32;
-    let fmin = fmin_hz.max(20.0);
-    let fmax = fmax_hz.max(fmin + 1.0).min(sample_rate as f32 / 2.0);
+    let fmin = fmin_hz;
+    let fmax = fmax_hz;
     let mut bin_start = (fmin / freq_resolution).floor() as isize;
     let mut bin_end = (fmax / freq_resolution).ceil() as isize;
     bin_start = bin_start.clamp(0, n_bins as isize);
@@ -1416,9 +1523,13 @@ pub fn harmonic_spectrogram_hpss_median_mask(
     let bin_end = bin_end as usize;
     let band_bins = bin_end - bin_start;
 
-    let step = frame_step.max(1);
+    let step = frame_step;
     let ds_indices: Vec<usize> = (0..n_frames).step_by(step).collect();
     let n_ds = ds_indices.len().max(1);
+    let effective_time_margin = effective_time_margin.min(n_ds.saturating_sub(1));
+    let time_scratch_capacity = time_scratch_capacity.min(n_ds);
+    let effective_freq_margin = effective_freq_margin.min(band_bins.saturating_sub(1));
+    let freq_scratch_capacity = freq_scratch_capacity.min(band_bins);
 
     // Downsampled, band-limited spectrogram used for median estimation.
     let mut band_ds = vec![vec![0.0f32; band_bins]; n_ds];
@@ -1440,13 +1551,16 @@ pub fn harmonic_spectrogram_hpss_median_mask(
 
     // Harmonic estimate: median across time (horizontal median filter).
     let mut h_est = vec![vec![0.0f32; band_bins]; n_ds];
-    let mut scratch: Vec<f32> = Vec::with_capacity(2 * time_margin + 1);
+    let mut scratch: Vec<f32> = Vec::with_capacity(time_scratch_capacity);
     #[allow(clippy::needless_range_loop)]
     for b in 0..band_bins {
         for t in 0..n_ds {
             scratch.clear();
-            let start = t.saturating_sub(time_margin);
-            let end = (t + time_margin + 1).min(n_ds);
+            let start = t.saturating_sub(effective_time_margin);
+            let end = t
+                .saturating_add(effective_time_margin)
+                .saturating_add(1)
+                .min(n_ds);
             for row in &band_ds[start..end] {
                 let x = row[b];
                 scratch.push(if x.is_finite() { x.max(0.0) } else { 0.0 });
@@ -1457,13 +1571,16 @@ pub fn harmonic_spectrogram_hpss_median_mask(
 
     // Percussive estimate: median across frequency (vertical median filter).
     let mut p_est = vec![vec![0.0f32; band_bins]; n_ds];
-    scratch = Vec::with_capacity(2 * freq_margin + 1);
+    scratch = Vec::with_capacity(freq_scratch_capacity);
     #[allow(clippy::needless_range_loop)]
     for t in 0..n_ds {
         for b in 0..band_bins {
             scratch.clear();
-            let start = b.saturating_sub(freq_margin);
-            let end = (b + freq_margin + 1).min(band_bins);
+            let start = b.saturating_sub(effective_freq_margin);
+            let end = b
+                .saturating_add(effective_freq_margin)
+                .saturating_add(1)
+                .min(band_bins);
             for &x in &band_ds[t][start..end] {
                 scratch.push(if x.is_finite() { x.max(0.0) } else { 0.0 });
             }
@@ -1472,7 +1589,7 @@ pub fn harmonic_spectrogram_hpss_median_mask(
     }
 
     // Harmonic soft mask (computed on downsampled band).
-    let p = mask_power.max(1.0);
+    let p = mask_power;
     let eps = 1e-12f32;
     let mut mask_ds = vec![vec![0.0f32; band_bins]; n_ds];
     for (t, mask_row) in mask_ds.iter_mut().enumerate() {
@@ -1504,6 +1621,276 @@ pub fn harmonic_spectrogram_hpss_median_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_compute_stft_rejects_unsafe_dimensions() {
+        assert!(matches!(
+            compute_stft(&[], 0, 0),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            compute_stft(&[0.0], 1, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            compute_stft(&[0.0; 2_048], 2_048, 0),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            compute_stft(&[0.0; 1_024], 512, 1),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+        assert!(compute_stft(&[], 2, 1).unwrap().is_empty());
+        assert_eq!(compute_stft(&[0.0; 4], 2, 1).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_log_frequency_rejects_non_finite_bounds() {
+        let spectrogram = vec![vec![1.0; 5]];
+        assert!(matches!(
+            convert_linear_to_log_frequency_spectrogram(&spectrogram, 44_100, 8, f32::NAN, 1_000.0,),
+            Err(AnalysisError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_log_frequency_validates_every_allocation_boundary() {
+        let valid = vec![vec![1.0; 5]; 2];
+        for result in [
+            convert_linear_to_log_frequency_spectrogram(&[vec![]], 44_100, 8, 100.0, 1_000.0),
+            convert_linear_to_log_frequency_spectrogram(
+                &[vec![1.0; 5], vec![1.0; 4]],
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+            ),
+            convert_linear_to_log_frequency_spectrogram(&valid, 0, 8, 100.0, 1_000.0),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 0, 100.0, 1_000.0),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 1, 100.0, 1_000.0),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 8, 0.0, 1_000.0),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 8, 100.0, f32::NAN),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 8, 100.0, 100.0),
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 8, 100.0, 30_000.0),
+        ] {
+            assert!(matches!(result, Err(AnalysisError::InvalidInput(_))));
+        }
+
+        assert_eq!(
+            convert_linear_to_log_frequency_spectrogram(&[], 0, 0, f32::NAN, f32::NAN).unwrap(),
+            Vec::<Vec<f32>>::new()
+        );
+        let converted =
+            convert_linear_to_log_frequency_spectrogram(&valid, 44_100, 8, 100.0, 1_000.0).unwrap();
+        assert_eq!(converted.len(), valid.len());
+        assert!(converted.iter().all(|frame| !frame.is_empty()));
+    }
+
+    #[test]
+    fn test_hpss_median_mask_rejects_invalid_spectrograms() {
+        let ragged = vec![vec![1.0; 5], vec![1.0; 4]];
+        let empty_frame = vec![vec![]];
+        let nan = vec![vec![f32::NAN; 5]];
+        let infinite = vec![vec![f32::INFINITY; 5]];
+        let negative = vec![vec![-0.1; 5]];
+
+        for spectrogram in [&ragged, &empty_frame, &nan, &infinite, &negative] {
+            assert!(matches!(
+                harmonic_spectrogram_hpss_median_mask(
+                    spectrogram,
+                    44_100,
+                    8,
+                    100.0,
+                    1_000.0,
+                    1,
+                    1,
+                    1,
+                    2.0,
+                ),
+                Err(AnalysisError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn test_hpss_median_mask_rejects_invalid_numeric_arguments() {
+        let spectrogram = vec![vec![1.0; 5]; 3];
+        let invalid_results = [
+            harmonic_spectrogram_hpss_median_mask(&spectrogram, 0, 8, 100.0, 1_000.0, 1, 1, 1, 2.0),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                0,
+                100.0,
+                1_000.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                1,
+                100.0,
+                1_000.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                0,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                f32::NAN,
+                1_000.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                0.0,
+                1_000.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                f32::NAN,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                100.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                30_000.0,
+                1,
+                1,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                1,
+                1,
+                1,
+                f32::NAN,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                1,
+                1,
+                1,
+                0.99,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                1,
+                usize::MAX,
+                1,
+                2.0,
+            ),
+            harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                1,
+                1,
+                usize::MAX,
+                2.0,
+            ),
+        ];
+        for result in invalid_results {
+            assert!(matches!(result, Err(AnalysisError::InvalidInput(_))));
+        }
+    }
+
+    #[test]
+    fn test_hpss_median_mask_preserves_empty_and_clamps_representable_margins() {
+        assert!(harmonic_spectrogram_hpss_median_mask(
+            &[],
+            0,
+            0,
+            f32::NAN,
+            f32::NAN,
+            0,
+            usize::MAX,
+            usize::MAX,
+            f32::NAN,
+        )
+        .unwrap()
+        .is_empty());
+
+        let spectrogram = vec![vec![1.0; 5]; 3];
+        for margin in [3, 5, 1_000_000] {
+            let result = harmonic_spectrogram_hpss_median_mask(
+                &spectrogram,
+                44_100,
+                8,
+                100.0,
+                1_000.0,
+                2,
+                margin,
+                margin,
+                2.0,
+            )
+            .unwrap();
+            assert_eq!(result.len(), spectrogram.len());
+            assert!(result.iter().all(|frame| {
+                frame.len() == spectrogram[0].len() && frame.iter().all(|value| value.is_finite())
+            }));
+        }
+    }
 
     #[test]
     fn test_extract_chroma_empty() {
