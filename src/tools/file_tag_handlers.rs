@@ -133,6 +133,7 @@ pub(super) async fn handle_read_file_tags(
 }
 
 pub(super) async fn handle_write_file_tags(
+    server: &ReklawdboxServer,
     params: WriteFileTagsParams,
 ) -> Result<CallToolResult, McpError> {
     let dry_run = params.dry_run.unwrap_or(false);
@@ -196,32 +197,79 @@ pub(super) async fn handle_write_file_tags(
         ok_json(&output)
     } else {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
-        let mut handles = Vec::with_capacity(entries.len());
+        let entry_count = entries.len();
+        let mut results: Vec<Option<tags::FileWriteResult>> =
+            (0..entry_count).map(|_| None).collect();
+        let mut groups: Vec<(PathBuf, Vec<(usize, tags::WriteEntry)>)> = Vec::new();
+        let mut group_indices: HashMap<PathBuf, usize> = HashMap::new();
 
-        for entry in entries {
-            let sem = semaphore.clone();
+        for (index, entry) in entries.into_iter().enumerate() {
             let path_display = entry.path.display().to_string();
-            handles.push(tokio::task::spawn(async move {
-                let _permit = sem.acquire().await.expect("semaphore is never closed");
-                tokio::task::spawn_blocking(move || tags::write_file_tags(&entry))
-                    .await
-                    .unwrap_or_else(|e| tags::FileWriteResult::Error {
+            match tokio::fs::canonicalize(&entry.path).await {
+                Ok(canonical_path) => {
+                    if let Some(&group_index) = group_indices.get(&canonical_path) {
+                        groups[group_index].1.push((index, entry));
+                    } else {
+                        let group_index = groups.len();
+                        group_indices.insert(canonical_path.clone(), group_index);
+                        groups.push((canonical_path, vec![(index, entry)]));
+                    }
+                }
+                Err(error) => {
+                    results[index] = Some(tags::FileWriteResult::Error {
                         path: path_display,
                         status: "error".to_string(),
-                        error: format!("task join error: {e}"),
-                    })
+                        error: format!("Failed to canonicalize path: {error}"),
+                    });
+                }
+            }
+        }
+
+        let mut handles = Vec::with_capacity(groups.len());
+        for (canonical_path, entries) in groups {
+            let sem = semaphore.clone();
+            let server = server.clone();
+            handles.push(tokio::task::spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore is never closed");
+                let mutation_lock = server.audio_file_mutation_lock(&canonical_path)?;
+                let _guard = mutation_lock.lock().await;
+                let mut group_results = Vec::with_capacity(entries.len());
+
+                for (index, entry) in entries {
+                    let path_display = entry.path.display().to_string();
+                    let result = tokio::task::spawn_blocking(move || tags::write_file_tags(&entry))
+                        .await
+                        .unwrap_or_else(|e| tags::FileWriteResult::Error {
+                            path: path_display,
+                            status: "error".to_string(),
+                            error: format!("task join error: {e}"),
+                        });
+                    group_results.push((index, result));
+                }
+
+                Ok::<_, McpError>(group_results)
             }));
         }
 
-        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let group_results = handle
+                .await
+                .map_err(|e| mcp_internal_error(format!("join error: {e}")))??;
+            for (index, result) in group_results {
+                results[index] = Some(result);
+            }
+        }
+
+        let results: Vec<tags::FileWriteResult> =
+            results
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| mcp_internal_error("missing file tag write result"))?;
         let mut files_written: usize = 0;
         let mut files_failed: usize = 0;
         let mut total_fields_written: usize = 0;
 
-        for handle in handles {
-            let result = handle
-                .await
-                .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
+        for result in &results {
             match &result {
                 tags::FileWriteResult::Ok { fields_written, .. } => {
                     files_written += 1;
@@ -229,7 +277,6 @@ pub(super) async fn handle_write_file_tags(
                 }
                 tags::FileWriteResult::Error { .. } => files_failed += 1,
             }
-            results.push(result);
         }
 
         let output = serde_json::json!({
@@ -265,6 +312,7 @@ pub(super) async fn handle_extract_cover_art(
 }
 
 pub(super) async fn handle_embed_cover_art(
+    server: &ReklawdboxServer,
     params: EmbedCoverArtParams,
 ) -> Result<CallToolResult, McpError> {
     let image_path = PathBuf::from(&params.image_path);
@@ -293,40 +341,89 @@ pub(super) async fn handle_embed_cover_art(
         }
     };
 
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
-    let mut handles = Vec::with_capacity(params.target_audio_files.len());
+    let targets = params.target_audio_files;
+    let target_count = targets.len();
+    let mut results: Vec<Option<tags::FileEmbedResult>> = (0..target_count).map(|_| None).collect();
+    let mut groups: Vec<(PathBuf, Vec<(usize, PathBuf)>)> = Vec::new();
+    let mut group_indices: HashMap<PathBuf, usize> = HashMap::new();
 
-    for target in params.target_audio_files {
+    for (index, target) in targets.into_iter().enumerate() {
+        let target_path = PathBuf::from(&target);
+        match tokio::fs::canonicalize(&target_path).await {
+            Ok(canonical_path) => {
+                if let Some(&group_index) = group_indices.get(&canonical_path) {
+                    groups[group_index].1.push((index, target_path));
+                } else {
+                    let group_index = groups.len();
+                    group_indices.insert(canonical_path.clone(), group_index);
+                    groups.push((canonical_path, vec![(index, target_path)]));
+                }
+            }
+            Err(error) => {
+                results[index] = Some(tags::FileEmbedResult::Error {
+                    path: target,
+                    status: "error".to_string(),
+                    error: format!("Failed to canonicalize path: {error}"),
+                });
+            }
+        }
+    }
+
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let mut handles = Vec::with_capacity(groups.len());
+
+    for (canonical_path, targets) in groups {
         let sem = semaphore.clone();
         let img = image_path.clone();
-        let tgt = PathBuf::from(&target);
         let pt = picture_type.clone();
-        let target_display = target.clone();
+        let server = server.clone();
         handles.push(tokio::task::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore is never closed");
-            tokio::task::spawn_blocking(move || tags::embed_cover_art(&img, &tgt, &pt))
+            let mutation_lock = server.audio_file_mutation_lock(&canonical_path)?;
+            let _guard = mutation_lock.lock().await;
+            let mut group_results = Vec::with_capacity(targets.len());
+
+            for (index, target) in targets {
+                let target_display = target.display().to_string();
+                let image_path = img.clone();
+                let picture_type = pt.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    tags::embed_cover_art(&image_path, &target, &picture_type)
+                })
                 .await
                 .unwrap_or_else(|e| tags::FileEmbedResult::Error {
                     path: target_display,
                     status: "error".to_string(),
                     error: format!("task join error: {e}"),
-                })
+                });
+                group_results.push((index, result));
+            }
+
+            Ok::<_, McpError>(group_results)
         }));
     }
 
-    let mut results = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let group_results = handle
+            .await
+            .map_err(|e| mcp_internal_error(format!("join error: {e}")))??;
+        for (index, result) in group_results {
+            results[index] = Some(result);
+        }
+    }
+
+    let results: Vec<tags::FileEmbedResult> = results
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| mcp_internal_error("missing cover art embed result"))?;
     let mut files_embedded: usize = 0;
     let mut files_failed: usize = 0;
 
-    for handle in handles {
-        let result = handle
-            .await
-            .map_err(|e| mcp_internal_error(format!("join error: {e}")))?;
-        match &result {
+    for result in &results {
+        match result {
             tags::FileEmbedResult::Ok { .. } => files_embedded += 1,
             tags::FileEmbedResult::Error { .. } => files_failed += 1,
         }
-        results.push(result);
     }
 
     let output = serde_json::json!({

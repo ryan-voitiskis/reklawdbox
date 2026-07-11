@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -93,6 +95,7 @@ pub(super) struct ServerState {
     pub(super) essentia_python_override: Mutex<Option<String>>,
     pub(super) essentia_setup_lock: tokio::sync::Mutex<()>,
     pub(super) xml_export_lock: tokio::sync::Mutex<()>,
+    pub(super) audio_file_mutation_locks: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
     pub(super) discogs_pending: Mutex<Option<discogs::PendingDeviceSession>>,
     pub(super) db_path: Option<String>,
     /// Explicit store path override (used by tests and batch tasks that need
@@ -178,6 +181,35 @@ impl ReklawdboxServer {
             .get_or_init(probe_essentia_python_path)
             .clone()
     }
+
+    pub(super) fn audio_file_mutation_lock(
+        &self,
+        canonical_path: &Path,
+    ) -> Result<Arc<tokio::sync::Mutex<()>>, McpError> {
+        let mut locks = self
+            .state
+            .audio_file_mutation_locks
+            .lock()
+            .map_err(|_| mcp_internal_error("Audio file mutation lock registry poisoned"))?;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+
+        if let Some(lock) = locks.get(canonical_path).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(canonical_path.to_path_buf(), Arc::downgrade(&lock));
+        Ok(lock)
+    }
+
+    #[cfg(test)]
+    pub(super) fn audio_file_mutation_registry_len(&self) -> Result<usize, McpError> {
+        self.state
+            .audio_file_mutation_locks
+            .lock()
+            .map(|locks| locks.len())
+            .map_err(|_| mcp_internal_error("Audio file mutation lock registry poisoned"))
+    }
 }
 
 #[tool_router(router = tool_router)]
@@ -197,6 +229,7 @@ impl ReklawdboxServer {
                 essentia_python_override: Mutex::new(None),
                 essentia_setup_lock: tokio::sync::Mutex::new(()),
                 xml_export_lock: tokio::sync::Mutex::new(()),
+                audio_file_mutation_locks: Mutex::new(HashMap::new()),
                 discogs_pending: Mutex::new(None),
                 db_path,
                 store_path: None,
@@ -630,7 +663,7 @@ impl ReklawdboxServer {
         &self,
         params: Parameters<WriteFileTagsParams>,
     ) -> Result<CallToolResult, McpError> {
-        handle_write_file_tags(params.0).await
+        handle_write_file_tags(self, params.0).await
     }
 
     #[tool(description = "Extract cover art from an audio file and save to disk.")]
@@ -646,7 +679,7 @@ impl ReklawdboxServer {
         &self,
         params: Parameters<EmbedCoverArtParams>,
     ) -> Result<CallToolResult, McpError> {
-        handle_embed_cover_art(params.0).await
+        handle_embed_cover_art(self, params.0).await
     }
 
     #[tool(
