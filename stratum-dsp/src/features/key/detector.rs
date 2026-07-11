@@ -39,6 +39,7 @@ use crate::error::AnalysisError;
 /// Returns `AnalysisError` if:
 /// - Chroma vectors are empty
 /// - Chroma vectors have incorrect dimensions
+/// - Chroma values or frame weights are non-finite, or a frame weight is negative
 ///
 /// # Example
 ///
@@ -99,6 +100,11 @@ pub fn detect_key_weighted(
                 chroma.len()
             )));
         }
+        if chroma.iter().any(|value| !value.is_finite()) {
+            return Err(AnalysisError::InvalidInput(format!(
+                "Chroma vector at index {i} contains a non-finite value"
+            )));
+        }
     }
 
     if let Some(w) = frame_weights {
@@ -107,6 +113,15 @@ pub fn detect_key_weighted(
                 "frame_weights length mismatch: got {}, expected {}",
                 w.len(),
                 chroma_vectors.len()
+            )));
+        }
+        if let Some((index, weight)) = w
+            .iter()
+            .enumerate()
+            .find(|(_, weight)| !weight.is_finite() || **weight < 0.0)
+        {
+            return Err(AnalysisError::InvalidInput(format!(
+                "frame weight at index {index} must be finite and non-negative, got {weight}"
             )));
         }
     }
@@ -132,38 +147,12 @@ pub fn detect_key_weighted(
         scores.push((Key::Minor(key_idx), score));
     }
 
-    // Step 1.5: Normalize major and minor scores separately to address scale differences.
-    // This helps when major and minor template scores have different ranges, which can
-    // bias mode selection. We normalize by the max score in each mode category.
-    let max_major = scores
-        .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Major(_)) {
-                Some(*s)
-            } else {
-                None
-            }
-        })
-        .fold(0.0f32, f32::max);
-    let max_minor = scores
-        .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Minor(_)) {
-                Some(*s)
-            } else {
-                None
-            }
-        })
-        .fold(0.0f32, f32::max);
-
-    // Normalize scores if max values are non-zero
-    if max_major > 1e-9 && max_minor > 1e-9 {
-        for (k, s) in scores.iter_mut() {
-            match k {
-                Key::Major(_) => *s /= max_major,
-                Key::Minor(_) => *s /= max_minor,
-            }
-        }
+    // Every template is L2-normalized, so raw weighted dot products form one comparable
+    // 24-key score space. Major and minor candidates must remain directly comparable.
+    if scores.iter().any(|(_, score)| !score.is_finite()) {
+        return Err(AnalysisError::InvalidInput(
+            "Key scoring produced a non-finite value".to_string(),
+        ));
     }
 
     // Step 1.75: Circle-of-fifths distance weighting (optional refinement)
@@ -176,25 +165,15 @@ pub fn detect_key_weighted(
     // Find the top-scoring key for each mode
     let (top_major_key, top_major_score) = scores
         .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Major(_)) {
-                Some((k, s))
-            } else {
-                None
-            }
-        })
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .filter(|(key, _)| matches!(key, Key::Major(_)))
+        .min_by(|a, b| compare_key_scores(a, b))
+        .map(|(key, score)| (key, score))
         .unwrap_or((&Key::Major(0), &0.0));
     let (top_minor_key, top_minor_score) = scores
         .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Minor(_)) {
-                Some((k, s))
-            } else {
-                None
-            }
-        })
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .filter(|(key, _)| matches!(key, Key::Minor(_)))
+        .min_by(|a, b| compare_key_scores(a, b))
+        .map(|(key, score)| (key, score))
         .unwrap_or((&Key::Minor(0), &0.0));
 
     // Apply circle-of-fifths bonus to keys near the top-scoring keys
@@ -242,44 +221,17 @@ pub fn detect_key_weighted(
 
     scores = refined_scores;
 
-    // Step 2: Sort by score (highest first)
-    scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    if scores.iter().any(|(_, score)| !score.is_finite()) {
+        return Err(AnalysisError::InvalidInput(
+            "Key score refinement produced a non-finite value".to_string(),
+        ));
+    }
 
-    // Step 3: Select best key using weighted top-N voting (if top keys are close)
-    // This helps when the best key is only slightly better than alternatives
-    let (best_key, best_score) = scores[0];
-    let second_score = if scores.len() > 1 { scores[1].1 } else { 0.0 };
-    let third_score = if scores.len() > 2 { scores[2].1 } else { 0.0 };
+    // Step 2: Sort by score, preserving major-then-minor/tonic construction order on ties.
+    scores.sort_by(compare_key_scores);
 
-    // If top 3 keys are within 5% of each other, use weighted voting
-    let score_threshold = best_score * 0.95;
-    let use_weighted_voting =
-        second_score >= score_threshold && third_score >= score_threshold * 0.90;
-
-    let final_key = if use_weighted_voting {
-        // Weighted voting: count occurrences of each key in top 3, weighted by score
-        let mut key_votes: std::collections::HashMap<Key, f32> = std::collections::HashMap::new();
-        for (key, score) in scores.iter().take(3) {
-            let vote_weight = *score / best_score; // Normalize by best score
-            *key_votes.entry(*key).or_insert(0.0) += vote_weight;
-        }
-
-        // Select key with highest vote count
-        key_votes
-            .iter()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(k, _)| *k)
-            .unwrap_or(best_key)
-    } else {
-        best_key
-    };
-
-    // Compute confidence for final key
-    let final_score = scores
-        .iter()
-        .find(|(k, _)| *k == final_key)
-        .map(|(_, s)| *s)
-        .unwrap_or(best_score);
+    // Step 3: Select the highest-ranked key and compute its margin over the best other key.
+    let (final_key, final_score) = scores[0];
     let best_other = scores
         .iter()
         .find(|(k, _)| *k != final_key)
@@ -297,11 +249,10 @@ pub fn detect_key_weighted(
     let top_keys: Vec<(Key, f32)> = scores.iter().take(top_n).cloned().collect();
 
     log::debug!(
-        "Detected key: {:?}, score: {:.4}, confidence: {:.4} (weighted voting: {})",
+        "Detected key: {:?}, score: {:.4}, confidence: {:.4}",
         final_key,
         final_score,
-        confidence,
-        use_weighted_voting
+        confidence
     );
 
     Ok(KeyDetectionResult {
@@ -980,6 +931,18 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
+fn key_construction_rank(key: Key) -> u32 {
+    match key {
+        Key::Major(tonic) => tonic,
+        Key::Minor(tonic) => 12 + tonic,
+    }
+}
+
+fn compare_key_scores(a: &(Key, f32), b: &(Key, f32)) -> std::cmp::Ordering {
+    b.1.total_cmp(&a.1)
+        .then_with(|| key_construction_rank(a.0).cmp(&key_construction_rank(b.0)))
+}
+
 /// Sum dot products across frames, optionally applying per-frame weights.
 fn weighted_sum_dot(chroma_vectors: &[Vec<f32>], weights: Option<&[f32]>, template: &[f32]) -> f32 {
     let mut acc = 0.0f32;
@@ -1003,6 +966,53 @@ fn weighted_sum_dot(chroma_vectors: &[Vec<f32>], weights: Option<&[f32]>, templa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repeated_template_frames(templates: &KeyTemplates, key: Key) -> Vec<Vec<f32>> {
+        let template = match key {
+            Key::Major(tonic) => templates.get_major_template(tonic),
+            Key::Minor(tonic) => templates.get_minor_template(tonic),
+        };
+        vec![template.to_vec(); 6]
+    }
+
+    fn score_for(result: &KeyDetectionResult, key: Key) -> f32 {
+        result
+            .all_scores
+            .iter()
+            .find_map(|(candidate, score)| (*candidate == key).then_some(*score))
+            .unwrap_or_else(|| panic!("missing score for {key:?}"))
+    }
+
+    fn assert_template_mode_evidence(template_set: TemplateSet, expected_key: Key, weighted: bool) {
+        let templates = KeyTemplates::new_with_template_set(template_set);
+        let frames = repeated_template_frames(&templates, expected_key);
+        let weights = weighted.then(|| vec![0.5, 1.0, 1.5, 2.0, 0.75, 1.25]);
+        let result = detect_key_weighted(&frames, &templates, weights.as_deref())
+            .expect("exact template frames should be valid detector input");
+        let parallel_key = match expected_key {
+            Key::Major(tonic) => Key::Minor(tonic),
+            Key::Minor(tonic) => Key::Major(tonic),
+        };
+        let expected_score = score_for(&result, expected_key);
+        let parallel_score = score_for(&result, parallel_key);
+
+        assert!(
+            expected_score > parallel_score,
+            "{template_set:?} {expected_key:?} score {expected_score} should beat parallel mode {parallel_key:?} score {parallel_score}"
+        );
+        assert!(
+            result.confidence.is_finite() && result.confidence > 0.0,
+            "{template_set:?} {expected_key:?} confidence should be finite and positive, got {}",
+            result.confidence
+        );
+        assert_eq!(result.key, expected_key, "template set {template_set:?}");
+        assert_eq!(result.all_scores.len(), 24);
+        assert!(result.all_scores.iter().all(|(_, score)| score.is_finite()));
+        assert_eq!(
+            result.top_keys.first().map(|(key, _)| *key),
+            Some(result.key)
+        );
+    }
 
     #[test]
     fn test_detect_key_empty() {
@@ -1045,6 +1055,78 @@ mod tests {
         assert!(!detection.top_keys.is_empty());
         assert!(detection.top_keys.len() <= 3);
         assert_eq!(detection.top_keys[0].0, Key::Major(0));
+    }
+
+    #[test]
+    fn test_exact_major_and_minor_templates_preserve_mode_evidence() {
+        for template_set in [TemplateSet::KrumhanslKessler, TemplateSet::Temperley] {
+            assert_template_mode_evidence(template_set, Key::Major(0), false);
+            assert_template_mode_evidence(template_set, Key::Minor(0), false);
+        }
+    }
+
+    #[test]
+    fn test_transposed_templates_preserve_tonic_and_mode() {
+        for template_set in [TemplateSet::KrumhanslKessler, TemplateSet::Temperley] {
+            assert_template_mode_evidence(template_set, Key::Major(2), false);
+            assert_template_mode_evidence(template_set, Key::Minor(9), false);
+        }
+    }
+
+    #[test]
+    fn test_positive_frame_weights_preserve_mode_evidence() {
+        assert_template_mode_evidence(TemplateSet::KrumhanslKessler, Key::Minor(9), true);
+    }
+
+    #[test]
+    fn test_zero_information_uses_construction_order_and_zero_confidence() {
+        for template_set in [TemplateSet::KrumhanslKessler, TemplateSet::Temperley] {
+            let templates = KeyTemplates::new_with_template_set(template_set);
+            let frames = vec![vec![0.0; 12]; 4];
+            let result = detect_key(&frames, &templates)
+                .expect("zero-information chroma should remain valid input");
+
+            assert_eq!(result.key, Key::Major(0), "template set {template_set:?}");
+            assert_eq!(result.confidence, 0.0);
+            assert_eq!(
+                result.top_keys.first().map(|(key, _)| *key),
+                Some(result.key)
+            );
+            assert_eq!(
+                result
+                    .all_scores
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>(),
+                (0..12)
+                    .map(Key::Major)
+                    .chain((0..12).map(Key::Minor))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_finite_chroma_is_rejected() {
+        let templates = KeyTemplates::new();
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut chroma = vec![0.0; 12];
+            chroma[4] = invalid;
+            let result = detect_key(&[chroma], &templates);
+            assert!(matches!(result, Err(AnalysisError::InvalidInput(_))));
+        }
+    }
+
+    #[test]
+    fn test_non_finite_and_negative_frame_weights_are_rejected() {
+        let templates = KeyTemplates::new();
+        let frames = repeated_template_frames(&templates, Key::Major(0));
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.5] {
+            let mut weights = vec![1.0; frames.len()];
+            weights[2] = invalid;
+            let result = detect_key_weighted(&frames, &templates, Some(&weights));
+            assert!(matches!(result, Err(AnalysisError::InvalidInput(_))));
+        }
     }
 
     #[test]

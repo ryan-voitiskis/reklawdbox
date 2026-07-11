@@ -4,7 +4,7 @@
 //! private fixture files. Keep them portable enough to run in CI and fresh
 //! clones.
 
-use stratum_dsp::{analyze_audio, AnalysisConfig, AnalysisResult};
+use stratum_dsp::{analyze_audio, AnalysisConfig, AnalysisResult, Key};
 
 const SAMPLE_RATE: u32 = 44_100;
 
@@ -39,9 +39,8 @@ fn synth_kick_track(bpm: f32, bars: usize) -> Vec<f32> {
     samples
 }
 
-fn synth_c_major_chord(duration_s: f32) -> Vec<f32> {
+fn synth_chord(duration_s: f32, freqs: [f32; 4]) -> Vec<f32> {
     let n = (duration_s * SAMPLE_RATE as f32) as usize;
-    let freqs = [261.63_f32, 329.63, 392.0, 523.25];
     (0..n)
         .map(|i| {
             let t = i as f32 / SAMPLE_RATE as f32;
@@ -53,6 +52,14 @@ fn synth_c_major_chord(duration_s: f32) -> Vec<f32> {
             0.18 * amp * v / freqs.len() as f32
         })
         .collect()
+}
+
+fn synth_c_major_chord(duration_s: f32) -> Vec<f32> {
+    synth_chord(duration_s, [261.63, 329.63, 392.0, 523.25])
+}
+
+fn synth_c_minor_chord(duration_s: f32) -> Vec<f32> {
+    synth_chord(duration_s, [261.63, 311.13, 392.0, 523.25])
 }
 
 fn synth_tone_with_silence() -> Vec<f32> {
@@ -299,10 +306,41 @@ mod tests {
 
         assert!(result.metadata.duration_seconds > 3.0 && result.metadata.duration_seconds < 5.0);
         assert_unit_interval(result.key_confidence, "key_confidence");
+        assert_eq!(result.key, Key::Major(0));
+        assert!(
+            result.key_confidence > 0.0,
+            "C-major confidence should be positive, got {}",
+            result.key_confidence
+        );
 
-        // Plan 004 owns detector-level key and mode expectations.
         println!(
             "C-major chord pipeline smoke: key={:?}, confidence={:.3}, duration={:.2}s, processing={:.2}ms",
+            result.key,
+            result.key_confidence,
+            result.metadata.duration_seconds,
+            result.metadata.processing_time_ms
+        );
+    }
+
+    #[test]
+    fn test_analyze_c_minor_chord_pipeline_smoke() {
+        let samples = synth_c_minor_chord(4.0);
+
+        let config = AnalysisConfig::default();
+        let result = analyze_audio(&samples, SAMPLE_RATE, config).expect("Analysis should succeed");
+        assert_analysis_result_invariants(&result);
+
+        assert!(result.metadata.duration_seconds > 3.0 && result.metadata.duration_seconds < 5.0);
+        assert_unit_interval(result.key_confidence, "key_confidence");
+        assert_eq!(result.key, Key::Minor(0));
+        assert!(
+            result.key_confidence > 0.0,
+            "C-minor confidence should be positive, got {}",
+            result.key_confidence
+        );
+
+        println!(
+            "C-minor chord pipeline smoke: key={:?}, confidence={:.3}, duration={:.2}s, processing={:.2}ms",
             result.key,
             result.key_confidence,
             result.metadata.duration_seconds,
