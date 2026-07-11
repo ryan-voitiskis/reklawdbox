@@ -99,15 +99,7 @@ fn run_analyze_cache_writer(
         }
 
         let message = request.payload;
-        match store::set_audio_analysis(
-            &conn,
-            &message.file_path,
-            &message.analyzer,
-            message.file_size,
-            message.file_mtime,
-            &message.analyzer_version,
-            &message.features_json,
-        ) {
+        match super::persist_cli_cache_message(&conn, &message) {
             Ok(()) => {
                 consecutive_failures = 0;
                 report.record_success();
@@ -575,13 +567,17 @@ async fn cli_analyze_single_track(
                 .map_err(|e| format!("Decode error: {e}"))?;
 
         let path_for_grid = file_path.clone();
-        let stratum_result = tokio::task::spawn_blocking(move || {
-            let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
-            audio::analyze_with_stratum(&samples, sample_rate, grid)
+        let analysis = tokio::task::spawn_blocking(move || {
+            let input = audio::load_rekordbox_grid_input_for_path(&path_for_grid);
+            audio::analyze_with_stratum_input(&samples, sample_rate, input)
         })
         .await
         .map_err(|e| format!("Analysis task failed: {e}"))?
         .map_err(|e| format!("Analysis error: {e}"))?;
+        let audio::StratumAnalysis {
+            result: stratum_result,
+            input_fingerprint,
+        } = analysis;
 
         let features_json = serialize_cache_payload(&stratum_result, "stratum-dsp analysis")?;
         send_cache_message(
@@ -592,6 +588,7 @@ async fn cli_analyze_single_track(
                 file_size,
                 file_mtime,
                 analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+                input_fingerprint,
                 features_json,
             },
             "stratum-dsp analysis",
@@ -656,6 +653,7 @@ async fn cli_run_and_send_essentia(
                     file_size,
                     file_mtime,
                     analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+                    input_fingerprint: String::new(),
                     features_json,
                 },
                 "essentia analysis",
@@ -741,6 +739,11 @@ mod batch_tests {
             file_size: i64::from(id) + 1,
             file_mtime: i64::from(id) + 2,
             analyzer_version: "test-v1".to_string(),
+            input_fingerprint: if analyzer == audio::ANALYZER_STRATUM {
+                audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string()
+            } else {
+                String::new()
+            },
             features_json: "{}".to_string(),
         }
     }

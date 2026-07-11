@@ -123,7 +123,7 @@ Analyze one track. Returns BPM, key, and (with Essentia) energy descriptors.
 | `track_id` | string | **yes** | Track ID |
 | `skip_cached` | boolean | | Skip if already cached (default: `true`) |
 
-Cache is keyed by file path and analysis schema version. A schema version bump invalidates stale entries.
+Cached analysis is validated against the analysis schema plus the canonical audio file identity (path, size, and modification time). Stratum additionally fingerprints the Rekordbox beat grid used for analysis, or a versioned no-grid fallback. A grid change invalidates and recomputes the Stratum result while leaving the Essentia result fresh.
 
 ---
 

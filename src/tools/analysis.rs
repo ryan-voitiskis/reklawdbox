@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::collections::HashMap;
 
 use crate::{audio, store};
 
@@ -7,14 +8,25 @@ pub(super) struct AudioCacheIdentity {
     pub(super) cache_key: String,
     pub(super) file_size: i64,
     pub(super) file_mtime: i64,
+    pub(super) stratum_input_fingerprint: Option<String>,
 }
 
 impl AudioCacheIdentity {
-    pub(super) fn as_store_identity(&self) -> store::AudioAnalysisIdentity<'_> {
+    pub(super) fn as_stratum_store_identity(&self) -> Option<store::AudioAnalysisIdentity<'_>> {
+        Some(store::AudioAnalysisIdentity {
+            file_path: &self.cache_key,
+            file_size: self.file_size,
+            file_mtime: self.file_mtime,
+            input_fingerprint: self.stratum_input_fingerprint.as_deref()?,
+        })
+    }
+
+    pub(super) fn as_essentia_store_identity(&self) -> store::AudioAnalysisIdentity<'_> {
         store::AudioAnalysisIdentity {
             file_path: &self.cache_key,
             file_size: self.file_size,
             file_mtime: self.file_mtime,
+            input_fingerprint: "",
         }
     }
 }
@@ -38,7 +50,59 @@ pub(super) fn audio_cache_identity(raw_file_path: &str) -> Option<AudioCacheIden
         cache_key,
         file_size: metadata.len() as i64,
         file_mtime: file_mtime_unix(&metadata),
+        stratum_input_fingerprint: None,
     })
+}
+
+pub(super) fn audio_cache_identities_with_fingerprint_loader<'a>(
+    raw_file_paths: impl IntoIterator<Item = &'a str>,
+    mut load_fingerprint: impl FnMut(&str) -> String,
+) -> Vec<Option<AudioCacheIdentity>> {
+    let mut fingerprints_by_cache_key = HashMap::new();
+    raw_file_paths
+        .into_iter()
+        .map(|raw_file_path| {
+            let mut identity = audio_cache_identity(raw_file_path)?;
+            let fingerprint = fingerprints_by_cache_key
+                .entry(identity.cache_key.clone())
+                .or_insert_with(|| load_fingerprint(&identity.cache_key))
+                .clone();
+            identity.stratum_input_fingerprint = Some(fingerprint);
+            Some(identity)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(super) fn audio_cache_identity_with_stratum_input_fingerprint(
+    raw_file_path: &str,
+    input_fingerprint: impl Into<String>,
+) -> Option<AudioCacheIdentity> {
+    let mut identity = audio_cache_identity(raw_file_path)?;
+    identity.stratum_input_fingerprint = Some(input_fingerprint.into());
+    Some(identity)
+}
+
+pub(super) fn audio_cache_identities_with_current_stratum_input<'a>(
+    raw_file_paths: impl IntoIterator<Item = &'a str>,
+) -> Vec<Option<AudioCacheIdentity>> {
+    audio_cache_identities_with_fingerprint_loader(raw_file_paths, |cache_key| {
+        audio::load_rekordbox_grid_input_for_path(cache_key).fingerprint
+    })
+}
+
+fn audio_cache_identity_for_analyzer(
+    raw_file_path: &str,
+    analyzer: &str,
+) -> Option<AudioCacheIdentity> {
+    if analyzer == audio::ANALYZER_STRATUM {
+        audio_cache_identities_with_current_stratum_input([raw_file_path])
+            .into_iter()
+            .next()
+            .flatten()
+    } else {
+        audio_cache_identity(raw_file_path)
+    }
 }
 
 pub(super) fn get_fresh_analysis_entry(
@@ -47,16 +111,33 @@ pub(super) fn get_fresh_analysis_entry(
     analyzer: &str,
     schema_version: &str,
 ) -> Result<Option<store::CachedAudioAnalysis>, String> {
-    let Some(identity) = audio_cache_identity(raw_file_path) else {
+    let Some(identity) = audio_cache_identity_for_analyzer(raw_file_path, analyzer) else {
         return Ok(None);
+    };
+    get_fresh_analysis_entry_for_identity(store, &identity, analyzer, schema_version)
+}
+
+pub(super) fn get_fresh_analysis_entry_for_identity(
+    store: &Connection,
+    identity: &AudioCacheIdentity,
+    analyzer: &str,
+    schema_version: &str,
+) -> Result<Option<store::CachedAudioAnalysis>, String> {
+    let store_identity = if analyzer == audio::ANALYZER_STRATUM {
+        identity
+            .as_stratum_store_identity()
+            .ok_or_else(|| "Stratum cache identity is missing its input fingerprint".to_string())?
+    } else {
+        identity.as_essentia_store_identity()
     };
     let cached = store::get_audio_analysis(store, &identity.cache_key, analyzer)
         .map_err(|e| format!("Cache read error: {e}"))?;
     if store::is_audio_analysis_fresh(
         cached.as_ref(),
         schema_version,
-        identity.file_size,
-        identity.file_mtime,
+        store_identity.file_size,
+        store_identity.file_mtime,
+        store_identity.input_fingerprint,
     ) {
         Ok(cached)
     } else {
@@ -70,24 +151,25 @@ pub(super) fn check_analysis_cache(
     analyzer: &str,
     schema_version: &str,
 ) -> Result<Option<String>, String> {
-    let Some(identity) = audio_cache_identity(raw_file_path) else {
+    let Some(identity) = audio_cache_identity_for_analyzer(raw_file_path, analyzer) else {
         return Ok(None);
     };
-    let cached = store::get_audio_analysis(store, &identity.cache_key, analyzer)
-        .map_err(|e| format!("Cache read error: {e}"))?;
-    if store::is_audio_analysis_fresh(
-        cached.as_ref(),
-        schema_version,
-        identity.file_size,
-        identity.file_mtime,
-    ) {
-        Ok(cached.map(|entry| entry.features_json))
-    } else {
-        Ok(None)
-    }
+    check_analysis_cache_for_identity(store, &identity, analyzer, schema_version)
 }
 
-pub(super) async fn analyze_stratum(file_path: &str) -> Result<audio::StratumResult, String> {
+pub(super) fn check_analysis_cache_for_identity(
+    store: &Connection,
+    identity: &AudioCacheIdentity,
+    analyzer: &str,
+    schema_version: &str,
+) -> Result<Option<String>, String> {
+    Ok(
+        get_fresh_analysis_entry_for_identity(store, identity, analyzer, schema_version)?
+            .map(|entry| entry.features_json),
+    )
+}
+
+pub(super) async fn analyze_stratum(file_path: &str) -> Result<audio::StratumAnalysis, String> {
     let path = file_path.to_string();
     let (samples, sample_rate) =
         tokio::task::spawn_blocking(move || audio::decode_to_samples(&path))
@@ -97,8 +179,8 @@ pub(super) async fn analyze_stratum(file_path: &str) -> Result<audio::StratumRes
 
     let path_for_grid = file_path.to_string();
     tokio::task::spawn_blocking(move || {
-        let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
-        audio::analyze_with_stratum(&samples, sample_rate, grid)
+        let input = audio::load_rekordbox_grid_input_for_path(&path_for_grid);
+        audio::analyze_with_stratum_input(&samples, sample_rate, input)
     })
     .await
     .map_err(|e| format!("Analysis task failed: {e}"))?

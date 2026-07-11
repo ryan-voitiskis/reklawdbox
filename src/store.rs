@@ -8,7 +8,7 @@ use crate::db::escape_like;
 pub type AuditIssueRow = (i64, String, String, Option<String>);
 /// (provider, query_artist, query_title, query_album)
 pub type EnrichmentKey = (String, String, String, String);
-const STORE_SCHEMA_VERSION: i32 = 8;
+const STORE_SCHEMA_VERSION: i32 = 9;
 
 pub fn default_path() -> PathBuf {
     dirs::data_dir()
@@ -71,6 +71,7 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             file_size INTEGER NOT NULL,
             file_mtime INTEGER NOT NULL,
             analysis_version TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL DEFAULT '',
             features_json TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (file_path, analyzer)
@@ -148,8 +149,21 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         ",
     )?;
     migrate_enrichment_cache(conn)?;
+    migrate_audio_analysis_cache(conn)?;
     migrate_timbral_norm_stats(conn)?;
     conn.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn migrate_audio_analysis_cache(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !table_has_column(conn, "audio_analysis_cache", "input_fingerprint")? {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE audio_analysis_cache
+             ADD COLUMN input_fingerprint TEXT NOT NULL DEFAULT '';",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -479,6 +493,7 @@ pub struct CachedAudioAnalysis {
     #[allow(dead_code)]
     pub file_mtime: i64,
     pub analysis_version: String,
+    pub input_fingerprint: String,
     pub features_json: String,
     #[allow(dead_code)]
     pub created_at: String,
@@ -489,6 +504,7 @@ pub fn is_audio_analysis_fresh(
     analysis_version: &str,
     file_size: i64,
     file_mtime: i64,
+    input_fingerprint: &str,
 ) -> bool {
     matches!(
         cached,
@@ -496,14 +512,16 @@ pub fn is_audio_analysis_fresh(
             if entry.analysis_version == analysis_version
                 && entry.file_size == file_size
                 && entry.file_mtime == file_mtime
+                && entry.input_fingerprint == input_fingerprint
     )
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioAnalysisIdentity<'a> {
     pub file_path: &'a str,
     pub file_size: i64,
     pub file_mtime: i64,
+    pub input_fingerprint: &'a str,
 }
 
 pub fn get_audio_analysis(
@@ -512,7 +530,7 @@ pub fn get_audio_analysis(
     analyzer: &str,
 ) -> Result<Option<CachedAudioAnalysis>, rusqlite::Error> {
     let mut stmt = conn.prepare_cached(
-        "SELECT file_path, analyzer, file_size, file_mtime, analysis_version, features_json, created_at
+        "SELECT file_path, analyzer, file_size, file_mtime, analysis_version, input_fingerprint, features_json, created_at
          FROM audio_analysis_cache
          WHERE file_path = ?1 AND analyzer = ?2",
     )?;
@@ -523,8 +541,9 @@ pub fn get_audio_analysis(
             file_size: row.get(2)?,
             file_mtime: row.get(3)?,
             analysis_version: row.get(4)?,
-            features_json: row.get(5)?,
-            created_at: row.get(6)?,
+            input_fingerprint: row.get(5)?,
+            features_json: row.get(6)?,
+            created_at: row.get(7)?,
         })
     })?;
     rows.next().transpose()
@@ -557,7 +576,7 @@ pub fn batch_get_audio_analysis(
         let version_pos = chunk.len() + 2;
         let sql = format!(
             "SELECT file_path, analyzer, file_size, file_mtime, \
-                    analysis_version, features_json, created_at \
+                    analysis_version, input_fingerprint, features_json, created_at \
              FROM audio_analysis_cache \
              WHERE file_path IN ({placeholders}) \
                AND analyzer = ?{analyzer_pos} \
@@ -577,8 +596,9 @@ pub fn batch_get_audio_analysis(
                 file_size: row.get(2)?,
                 file_mtime: row.get(3)?,
                 analysis_version: row.get(4)?,
-                features_json: row.get(5)?,
-                created_at: row.get(6)?,
+                input_fingerprint: row.get(5)?,
+                features_json: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         for row in rows {
@@ -598,22 +618,24 @@ pub fn batch_get_fresh_audio_analysis(
     if identities.is_empty() {
         return Ok(HashMap::new());
     }
-    let expected: HashMap<&str, (i64, i64)> = identities
+    let expected = coalesce_audio_analysis_identities(identities);
+    let file_paths: Vec<&str> = expected
         .iter()
-        .map(|identity| {
-            (
-                identity.file_path,
-                (identity.file_size, identity.file_mtime),
-            )
-        })
+        .filter_map(|(&file_path, identity)| identity.is_some().then_some(file_path))
         .collect();
-    let file_paths: Vec<&str> = expected.keys().copied().collect();
     let mut entries = batch_get_audio_analysis(conn, &file_paths, analyzer, analysis_version)?;
     entries.retain(|file_path, entry| {
         expected
             .get(file_path.as_str())
-            .is_some_and(|(file_size, file_mtime)| {
-                is_audio_analysis_fresh(Some(&*entry), analysis_version, *file_size, *file_mtime)
+            .and_then(Option::as_ref)
+            .is_some_and(|(file_size, file_mtime, input_fingerprint)| {
+                is_audio_analysis_fresh(
+                    Some(&*entry),
+                    analysis_version,
+                    *file_size,
+                    *file_mtime,
+                    input_fingerprint,
+                )
             })
     });
     Ok(entries)
@@ -628,24 +650,21 @@ pub fn batch_fresh_audio_analysis_existence(
     if identities.is_empty() {
         return Ok(HashSet::new());
     }
-    let expected: HashMap<&str, (i64, i64)> = identities
-        .iter()
-        .map(|identity| {
-            (
-                identity.file_path,
-                (identity.file_size, identity.file_mtime),
-            )
-        })
-        .collect();
+    let expected = coalesce_audio_analysis_identities(identities);
     let unique_identities: Vec<_> = expected
         .iter()
-        .map(
-            |(&file_path, &(file_size, file_mtime))| AudioAnalysisIdentity {
-                file_path,
-                file_size,
-                file_mtime,
-            },
-        )
+        .filter_map(|(&file_path, identity)| {
+            identity
+                .as_ref()
+                .map(
+                    |&(file_size, file_mtime, input_fingerprint)| AudioAnalysisIdentity {
+                        file_path,
+                        file_size,
+                        file_mtime,
+                        input_fingerprint,
+                    },
+                )
+        })
         .collect();
     // 1 bind var per path + 2 for analyzer and version; 896 + 2 = 898, under 999.
     const MAX_PATHS: usize = 896;
@@ -662,7 +681,7 @@ pub fn batch_fresh_audio_analysis_existence(
         let analyzer_pos = chunk.len() + 1;
         let version_pos = chunk.len() + 2;
         let sql = format!(
-            "SELECT file_path, file_size, file_mtime \
+            "SELECT file_path, file_size, file_mtime, input_fingerprint \
              FROM audio_analysis_cache \
              WHERE file_path IN ({placeholders}) \
                AND analyzer = ?{analyzer_pos} \
@@ -680,13 +699,17 @@ pub fn batch_fresh_audio_analysis_existence(
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
         for row in rows {
-            let (file_path, file_size, file_mtime) = row?;
+            let (file_path, file_size, file_mtime, input_fingerprint) = row?;
             if expected
                 .get(file_path.as_str())
-                .is_some_and(|expected| *expected == (file_size, file_mtime))
+                .and_then(Option::as_ref)
+                .is_some_and(|expected| {
+                    *expected == (file_size, file_mtime, input_fingerprint.as_str())
+                })
             {
                 result.insert(file_path);
             }
@@ -695,6 +718,30 @@ pub fn batch_fresh_audio_analysis_existence(
     Ok(result)
 }
 
+fn coalesce_audio_analysis_identities<'a>(
+    identities: &[AudioAnalysisIdentity<'a>],
+) -> HashMap<&'a str, Option<(i64, i64, &'a str)>> {
+    let mut expected: HashMap<&'a str, Option<(i64, i64, &'a str)>> =
+        HashMap::with_capacity(identities.len());
+    for identity in identities {
+        let value = (
+            identity.file_size,
+            identity.file_mtime,
+            identity.input_fingerprint,
+        );
+        expected
+            .entry(identity.file_path)
+            .and_modify(|current| {
+                if current.is_some_and(|existing| existing != value) {
+                    *current = None;
+                }
+            })
+            .or_insert(Some(value));
+    }
+    expected
+}
+
+#[cfg(test)]
 pub fn set_audio_analysis(
     conn: &Connection,
     file_path: &str,
@@ -704,12 +751,45 @@ pub fn set_audio_analysis(
     analysis_version: &str,
     features_json: &str,
 ) -> Result<(), rusqlite::Error> {
+    set_audio_analysis_with_fingerprint(
+        conn,
+        file_path,
+        analyzer,
+        file_size,
+        file_mtime,
+        analysis_version,
+        "",
+        features_json,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn set_audio_analysis_with_fingerprint(
+    conn: &Connection,
+    file_path: &str,
+    analyzer: &str,
+    file_size: i64,
+    file_mtime: i64,
+    analysis_version: &str,
+    input_fingerprint: &str,
+    features_json: &str,
+) -> Result<(), rusqlite::Error> {
+    let valid_stratum_fingerprint = input_fingerprint
+        == crate::audio::STRATUM_HMM_INPUT_FINGERPRINT
+        || input_fingerprint
+            .strip_prefix("grid:v1:")
+            .is_some_and(|hash| !hash.is_empty());
+    if analyzer == crate::audio::ANALYZER_STRATUM && !valid_stratum_fingerprint {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Stratum input_fingerprint must use grid:v1:... or hmm:v1".to_string(),
+        ));
+    }
     conn.execute(
-        "INSERT INTO audio_analysis_cache (file_path, analyzer, file_size, file_mtime, analysis_version, features_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO audio_analysis_cache (file_path, analyzer, file_size, file_mtime, analysis_version, input_fingerprint, features_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(file_path, analyzer)
-         DO UPDATE SET file_size = ?3, file_mtime = ?4, analysis_version = ?5, features_json = ?6, created_at = datetime('now')",
-        params![file_path, analyzer, file_size, file_mtime, analysis_version, features_json],
+         DO UPDATE SET file_size = ?3, file_mtime = ?4, analysis_version = ?5, input_fingerprint = ?6, features_json = ?7, created_at = datetime('now')",
+        params![file_path, analyzer, file_size, file_mtime, analysis_version, input_fingerprint, features_json],
     )?;
     Ok(())
 }
@@ -1416,6 +1496,197 @@ mod tests {
     }
 
     #[test]
+    fn audio_analysis_input_fingerprint_migrates_legacy_rows_by_analyzer() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE audio_analysis_cache (
+                file_path TEXT NOT NULL,
+                analyzer TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                file_mtime INTEGER NOT NULL,
+                analysis_version TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (file_path, analyzer)
+            );
+            INSERT INTO audio_analysis_cache
+                (file_path, analyzer, file_size, file_mtime, analysis_version, features_json)
+            VALUES
+                ('/legacy/stratum.flac', 'stratum-dsp', 10, 20, 's1', '{}'),
+                ('/legacy/essentia.flac', 'essentia', 30, 40, 'e1', '{}');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+
+        assert!(table_has_column(&conn, "audio_analysis_cache", "input_fingerprint").unwrap());
+        let stratum = get_audio_analysis(&conn, "/legacy/stratum.flac", "stratum-dsp")
+            .unwrap()
+            .unwrap();
+        let essentia = get_audio_analysis(&conn, "/legacy/essentia.flac", "essentia")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stratum.input_fingerprint, "");
+        assert_eq!(essentia.input_fingerprint, "");
+        assert!(!is_audio_analysis_fresh(
+            Some(&stratum),
+            "s1",
+            10,
+            20,
+            "hmm:v1"
+        ));
+        assert!(is_audio_analysis_fresh(Some(&essentia), "e1", 30, 40, ""));
+
+        let stratum_identity = [AudioAnalysisIdentity {
+            file_path: "/legacy/stratum.flac",
+            file_size: 10,
+            file_mtime: 20,
+            input_fingerprint: "hmm:v1",
+        }];
+        let essentia_identity = [AudioAnalysisIdentity {
+            file_path: "/legacy/essentia.flac",
+            file_size: 30,
+            file_mtime: 40,
+            input_fingerprint: "",
+        }];
+        assert!(
+            batch_get_fresh_audio_analysis(&conn, &stratum_identity, "stratum-dsp", "s1")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            batch_fresh_audio_analysis_existence(&conn, &stratum_identity, "stratum-dsp", "s1")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            batch_get_fresh_audio_analysis(&conn, &essentia_identity, "essentia", "e1")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            batch_fresh_audio_analysis_existence(&conn, &essentia_identity, "essentia", "e1")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn audio_analysis_input_fingerprint_controls_single_freshness() {
+        let (_dir, conn) = open_temp_store();
+        set_audio_analysis_with_fingerprint(
+            &conn,
+            "/music/track.flac",
+            "stratum-dsp",
+            10,
+            20,
+            "s1",
+            "grid:v1:first",
+            "{}",
+        )
+        .unwrap();
+        let cached = get_audio_analysis(&conn, "/music/track.flac", "stratum-dsp")
+            .unwrap()
+            .unwrap();
+
+        assert!(is_audio_analysis_fresh(
+            Some(&cached),
+            "s1",
+            10,
+            20,
+            "grid:v1:first"
+        ));
+        assert!(!is_audio_analysis_fresh(
+            Some(&cached),
+            "s1",
+            10,
+            20,
+            "grid:v1:changed"
+        ));
+        assert!(
+            set_audio_analysis(
+                &conn,
+                "/music/legacy-stratum.flac",
+                crate::audio::ANALYZER_STRATUM,
+                10,
+                20,
+                "s1",
+                "{}",
+            )
+            .is_err(),
+            "Stratum writers must supply a versioned non-empty fingerprint"
+        );
+    }
+
+    #[test]
+    fn audio_analysis_input_fingerprint_controls_batch_and_conflicts_fail_closed() {
+        let (_dir, conn) = open_temp_store();
+        for (path, fingerprint) in [
+            ("/music/grid.flac", "grid:v1:grid"),
+            ("/music/hmm.flac", "hmm:v1"),
+        ] {
+            set_audio_analysis_with_fingerprint(
+                &conn,
+                path,
+                "stratum-dsp",
+                10,
+                20,
+                "s1",
+                fingerprint,
+                "{}",
+            )
+            .unwrap();
+        }
+        let identities = [
+            AudioAnalysisIdentity {
+                file_path: "/music/grid.flac",
+                file_size: 10,
+                file_mtime: 20,
+                input_fingerprint: "grid:v1:grid",
+            },
+            AudioAnalysisIdentity {
+                file_path: "/music/hmm.flac",
+                file_size: 10,
+                file_mtime: 20,
+                input_fingerprint: "hmm:v1",
+            },
+        ];
+        assert_eq!(
+            batch_get_fresh_audio_analysis(&conn, &identities, "stratum-dsp", "s1")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            batch_fresh_audio_analysis_existence(&conn, &identities, "stratum-dsp", "s1")
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let conflicting = [
+            identities[0],
+            AudioAnalysisIdentity {
+                input_fingerprint: "grid:v1:conflict",
+                ..identities[0]
+            },
+        ];
+        assert!(
+            batch_get_fresh_audio_analysis(&conn, &conflicting, "stratum-dsp", "s1")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            batch_fresh_audio_analysis_existence(&conn, &conflicting, "stratum-dsp", "s1")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn test_open_creates_schema() {
         let (_dir, conn) = open_temp_store();
         let version: i32 = conn
@@ -1623,13 +1894,14 @@ mod tests {
     fn test_audio_analysis_cache_round_trip() {
         let (_dir, conn) = open_temp_store();
 
-        set_audio_analysis(
+        set_audio_analysis_with_fingerprint(
             &conn,
             "/music/track.flac",
             "stratum-dsp",
             12345678,
             1700000000,
             "1.0.0",
+            "hmm:v1",
             r#"{"bpm":128.0,"key":"Am"}"#,
         )
         .unwrap();
@@ -1656,23 +1928,25 @@ mod tests {
     fn test_audio_analysis_cache_upsert() {
         let (_dir, conn) = open_temp_store();
 
-        set_audio_analysis(
+        set_audio_analysis_with_fingerprint(
             &conn,
             "/music/track.flac",
             "stratum-dsp",
             100,
             200,
             "1.0.0",
+            "hmm:v1",
             "old",
         )
         .unwrap();
-        set_audio_analysis(
+        set_audio_analysis_with_fingerprint(
             &conn,
             "/music/track.flac",
             "stratum-dsp",
             100,
             300,
             "1.1.0",
+            "hmm:v1",
             "new",
         )
         .unwrap();

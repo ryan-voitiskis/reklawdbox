@@ -54,20 +54,22 @@ pub(super) async fn handle_analyze_track_audio(
         let analysis = analyze_stratum(&file_path)
             .await
             .map_err(mcp_internal_error)?;
-        let val = serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(e.to_string()))?;
+        let val = serde_json::to_value(&analysis.result)
+            .map_err(|e| mcp_internal_error(e.to_string()))?;
         let features_json =
             serde_json::to_string(&val).map_err(|e| mcp_internal_error(e.to_string()))?;
         let metadata = tokio::fs::metadata(&file_path)
             .await
             .map_err(|e| mcp_internal_error(format!("Cannot stat file '{file_path}': {e}")))?;
         let store = server.cache_store_conn()?;
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &store,
             &file_path,
             audio::ANALYZER_STRATUM,
             metadata.len() as i64,
             file_mtime_secs(&metadata),
             audio::STRATUM_SCHEMA_VERSION,
+            &analysis.input_fingerprint,
             &features_json,
         )
         .map_err(cache_error)?;
@@ -114,13 +116,14 @@ pub(super) async fn handle_analyze_track_audio(
                         .await
                         .map_err(|e| mcp_internal_error(format!("Cannot stat file: {e}")))?;
                     let store = server.cache_store_conn()?;
-                    store::set_audio_analysis(
+                    store::set_audio_analysis_with_fingerprint(
                         &store,
                         &file_path,
                         audio::ANALYZER_ESSENTIA,
                         metadata.len() as i64,
                         file_mtime_secs(&metadata),
                         audio::ESSENTIA_SCHEMA_VERSION,
+                        "",
                         &features_json,
                     )
                     .map_err(cache_error)?;
@@ -167,6 +170,7 @@ enum CacheWriteMsg {
         file_size: i64,
         file_mtime: i64,
         analyzer_version: String,
+        input_fingerprint: String,
         features_json: String,
     },
 }
@@ -235,7 +239,8 @@ async fn analyze_single_track(
             return Ok::<(serde_json::Value, bool), String>((val, true));
         }
         let analysis = analyze_stratum(&file_path).await?;
-        let val = serde_json::to_value(&analysis).map_err(|e| format!("Serialize error: {e}"))?;
+        let val =
+            serde_json::to_value(&analysis.result).map_err(|e| format!("Serialize error: {e}"))?;
         let features_json =
             serde_json::to_string(&val).map_err(|e| format!("Serialize error: {e}"))?;
         let metadata = tokio::fs::metadata(&file_path)
@@ -248,6 +253,7 @@ async fn analyze_single_track(
                 file_size: metadata.len() as i64,
                 file_mtime: file_mtime_secs(&metadata),
                 analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+                input_fingerprint: analysis.input_fingerprint,
                 features_json,
             })
             .await
@@ -293,6 +299,7 @@ async fn analyze_single_track(
                         file_size: metadata.len() as i64,
                         file_mtime: file_mtime_secs(&metadata),
                         analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+                        input_fingerprint: String::new(),
                         features_json,
                     })
                     .await
@@ -391,15 +398,17 @@ pub(super) async fn handle_analyze_audio_batch(
                     file_size,
                     file_mtime,
                     analyzer_version,
+                    input_fingerprint,
                     features_json,
                 } => {
-                    if let Err(e) = store::set_audio_analysis(
+                    if let Err(e) = store::set_audio_analysis_with_fingerprint(
                         &conn,
                         &file_path,
                         analyzer,
                         file_size,
                         file_mtime,
                         &analyzer_version,
+                        &input_fingerprint,
                         &features_json,
                     ) {
                         tracing::error!(

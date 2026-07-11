@@ -1578,7 +1578,7 @@ fn load_timbral_source_snapshot_for_schema(
 
     let mut stmt = store_conn
         .prepare(
-            "SELECT file_path, file_size, file_mtime, features_json
+            "SELECT file_path, file_size, file_mtime, input_fingerprint, features_json
              FROM audio_analysis_cache
              WHERE analyzer = ?1 AND analysis_version = ?2
              ORDER BY file_path",
@@ -1597,6 +1597,7 @@ fn load_timbral_source_snapshot_for_schema(
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
@@ -1612,7 +1613,7 @@ fn load_timbral_source_snapshot_for_schema(
     let mut expected_dimensions = None;
 
     for row in rows {
-        let (file_path, file_size, file_mtime, features_json) =
+        let (file_path, file_size, file_mtime, input_fingerprint, features_json) =
             row.map_err(|e| format!("Row error: {e}"))?;
 
         let Some(identity) = super::analysis::audio_cache_identity(&file_path) else {
@@ -1627,6 +1628,7 @@ fn load_timbral_source_snapshot_for_schema(
             file_size,
             file_mtime,
             analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+            input_fingerprint,
             features_json: features_json.clone(),
             created_at: String::new(),
         };
@@ -1635,6 +1637,7 @@ fn load_timbral_source_snapshot_for_schema(
             crate::audio::ESSENTIA_SCHEMA_VERSION,
             identity.file_size,
             identity.file_mtime,
+            "",
         ) {
             continue;
         }

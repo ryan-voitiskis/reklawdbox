@@ -96,7 +96,11 @@ flowchart TB
 
 - **Separate cache store.** Enrichment results and audio analysis are cached in a
   local SQLite database (WAL mode), separate from Rekordbox. Cache entries are
-  keyed by schema version and auto-evicted when the analysis pipeline changes.
+  validated against the analysis schema plus the canonical audio file identity
+  (path, size, and modification time). Stratum results also include a versioned
+  fingerprint of the Rekordbox beat grid used for analysis, or of the no-grid
+  fallback, so a grid change invalidates and recomputes only the Stratum result;
+  Essentia freshness is independent of Rekordbox grid changes.
 
 - **Two-tier audio analysis.** [stratum-dsp](https://github.com/ryan-voitiskis/stratum-dsp)
   (Rust, always available) handles BPM and key detection. [Essentia](https://essentia.upf.edu/)

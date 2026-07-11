@@ -264,15 +264,7 @@ fn run_hydrate_cache_writer(
                 format!("{provider} enrichment"),
             ),
             HydrateCacheMsg::AudioAnalysis(analysis) => (
-                store::set_audio_analysis(
-                    &conn,
-                    &analysis.file_path,
-                    &analysis.analyzer,
-                    analysis.file_size,
-                    analysis.file_mtime,
-                    &analysis.analyzer_version,
-                    &analysis.features_json,
-                ),
+                super::persist_cli_cache_message(&conn, analysis),
                 format!("{} analysis", analysis.analyzer),
             ),
         };
@@ -1422,13 +1414,17 @@ async fn cli_analyze_for_hydrate(
             Ok(Ok((samples, sample_rate))) => {
                 let path_for_grid = file_path.clone();
                 let analysis = tokio::task::spawn_blocking(move || {
-                    let grid = audio::load_rekordbox_grid_for_path(&path_for_grid);
-                    audio::analyze_with_stratum(&samples, sample_rate, grid)
+                    let input = audio::load_rekordbox_grid_input_for_path(&path_for_grid);
+                    audio::analyze_with_stratum_input(&samples, sample_rate, input)
                 })
                 .await;
 
                 match analysis {
-                    Ok(Ok(result)) => {
+                    Ok(Ok(analysis)) => {
+                        let audio::StratumAnalysis {
+                            result,
+                            input_fingerprint,
+                        } = analysis;
                         let features_json =
                             match serialize_cache_payload(&result, "stratum-dsp analysis") {
                                 Ok(json) => json,
@@ -1446,6 +1442,7 @@ async fn cli_analyze_for_hydrate(
                                 file_size,
                                 file_mtime,
                                 analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+                                input_fingerprint,
                                 features_json,
                             }),
                             "stratum-dsp analysis",
@@ -1496,6 +1493,7 @@ async fn cli_analyze_for_hydrate(
                         file_size,
                         file_mtime,
                         analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+                        input_fingerprint: String::new(),
                         features_json,
                     }),
                     "essentia analysis",
@@ -1550,6 +1548,11 @@ mod batch_tests {
             file_size: i64::from(id) + 1,
             file_mtime: i64::from(id) + 2,
             analyzer_version: "test-v1".to_string(),
+            input_fingerprint: if analyzer == audio::ANALYZER_STRATUM {
+                audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string()
+            } else {
+                String::new()
+            },
             features_json: "{}".to_string(),
         })
     }

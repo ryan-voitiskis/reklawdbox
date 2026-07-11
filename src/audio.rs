@@ -127,9 +127,58 @@ pub const ANALYZER_STRATUM: &str = "stratum-dsp";
 pub const ANALYZER_ESSENTIA: &str = "essentia";
 
 /// Expected analysis schema versions. Bump these when adding/changing output
-/// fields so that stale cache entries are evicted automatically.
+/// fields so that mismatched cache entries are treated as stale.
 pub const STRATUM_SCHEMA_VERSION: &str = "21";
 pub const ESSENTIA_SCHEMA_VERSION: &str = "2";
+pub const STRATUM_HMM_INPUT_FINGERPRINT: &str = "hmm:v1";
+
+/// The exact Rekordbox beat-grid snapshot selected for one Stratum analysis,
+/// paired with the cache identity derived from that same snapshot.
+#[derive(Debug, Clone)]
+pub struct RekordboxGridInput {
+    pub grid: Option<stratum_dsp::BeatGrid>,
+    pub fingerprint: String,
+}
+
+#[derive(Debug)]
+pub struct StratumAnalysis {
+    pub result: StratumResult,
+    pub input_fingerprint: String,
+}
+
+impl RekordboxGridInput {
+    pub fn from_grid(grid: Option<stratum_dsp::BeatGrid>) -> Self {
+        let fingerprint = grid.as_ref().map_or_else(
+            || STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
+            fingerprint_rekordbox_grid,
+        );
+        Self { grid, fingerprint }
+    }
+}
+
+fn fingerprint_rekordbox_grid(grid: &stratum_dsp::BeatGrid) -> String {
+    use sha2::{Digest, Sha256};
+
+    fn hash_bytes(hasher: &mut Sha256, value: &[u8]) {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+
+    fn hash_series(hasher: &mut Sha256, label: &[u8], values: &[f32]) {
+        hash_bytes(hasher, label);
+        hasher.update((values.len() as u64).to_be_bytes());
+        for value in values {
+            hasher.update(value.to_bits().to_be_bytes());
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hash_bytes(&mut hasher, b"reklawdbox:stratum-grid:v1");
+    hash_series(&mut hasher, b"beats", &grid.beats);
+    hash_series(&mut hasher, b"downbeats", &grid.downbeats);
+    hash_series(&mut hasher, b"bars", &grid.bars);
+    format!("grid:v1:{:x}", hasher.finalize())
+}
 
 const ESSENTIA_TIMEOUT_SECS: u64 = 300;
 
@@ -396,18 +445,37 @@ fn stratum_notation_to_camelot(stratum_notation: &str) -> String {
 /// Look up a track's Rekordbox-tagged beat grid by its file path.
 ///
 /// Opens the master.db read-only, finds the track's `AnalysisDataPath`,
-/// resolves it under the USBANLZ root, and parses the PQTZ tag. Returns
-/// `None` if anything in the chain fails. Each failure path emits a
-/// `tracing::warn` so a misconfigured library (e.g. wrong SQLCipher key
-/// silently degrading every track to HMM) is observable in logs.
+/// resolves it under the USBANLZ root, and parses the PQTZ tag. If anything
+/// in the chain fails, the paired input contains no external grid and the
+/// versioned HMM fingerprint. Each failure path emits a `tracing::warn` so a
+/// misconfigured library (e.g. wrong SQLCipher key silently degrading every
+/// track to HMM) is observable in logs.
 ///
-/// Callers should treat `None` as "no Rekordbox grid available — fall
-/// back to HMM tracking", not as an error.
+/// A missing external grid means "fall back to HMM tracking", not an error.
 ///
 /// Each call opens a fresh DB connection. For batch use this is wasteful
 /// (~ms per track) — callers iterating many tracks may want a variant
 /// that takes a borrowed connection instead.
+#[cfg(not(test))]
+pub fn load_rekordbox_grid_input_for_path(file_path: &str) -> RekordboxGridInput {
+    RekordboxGridInput::from_grid(load_rekordbox_grid_for_path_inner(file_path))
+}
+
+/// Unit tests use explicit synthetic grid inputs and never inspect the user's
+/// Rekordbox library as an accidental side effect of cache probing.
+#[cfg(test)]
+pub fn load_rekordbox_grid_input_for_path(_file_path: &str) -> RekordboxGridInput {
+    RekordboxGridInput::from_grid(None)
+}
+
+/// Compatibility wrapper for callers that only need the selected grid.
+#[allow(dead_code)]
 pub fn load_rekordbox_grid_for_path(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
+    load_rekordbox_grid_input_for_path(file_path).grid
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn load_rekordbox_grid_for_path_inner(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
     use unicode_normalization::UnicodeNormalization;
 
     let db_path = match crate::db::resolve_db_path() {
@@ -636,10 +704,112 @@ pub fn analyze_with_stratum(
     })
 }
 
+pub fn analyze_with_stratum_input(
+    samples: &[f32],
+    sample_rate: u32,
+    input: RekordboxGridInput,
+) -> Result<StratumAnalysis, AudioError> {
+    analyze_with_stratum_input_using(input, |grid| {
+        analyze_with_stratum(samples, sample_rate, grid)
+    })
+}
+
+fn analyze_with_stratum_input_using(
+    input: RekordboxGridInput,
+    analyze: impl FnOnce(Option<stratum_dsp::BeatGrid>) -> Result<StratumResult, AudioError>,
+) -> Result<StratumAnalysis, AudioError> {
+    let RekordboxGridInput { grid, fingerprint } = input;
+    let result = analyze(grid)?;
+    Ok(StratumAnalysis {
+        result,
+        input_fingerprint: fingerprint,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Stdio;
+
+    fn fingerprint_test_grid() -> stratum_dsp::BeatGrid {
+        stratum_dsp::BeatGrid {
+            beats: vec![0.5, 1.0, 1.5, 2.0],
+            downbeats: vec![0.5],
+            bars: vec![0.5, 2.5],
+        }
+    }
+
+    #[test]
+    fn grid_input_fingerprint_is_stable_and_versioned() {
+        let first = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
+        let second = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
+
+        assert_eq!(first.fingerprint, second.fingerprint);
+        assert!(first.fingerprint.starts_with("grid:v1:"));
+        assert!(!first.fingerprint.contains('/'));
+    }
+
+    #[test]
+    fn grid_input_fingerprint_covers_every_semantic_series() {
+        let base = RekordboxGridInput::from_grid(Some(fingerprint_test_grid())).fingerprint;
+
+        let mut beat_changed = fingerprint_test_grid();
+        beat_changed.beats[1] = f32::from_bits(beat_changed.beats[1].to_bits() + 1);
+        let mut downbeat_changed = fingerprint_test_grid();
+        downbeat_changed.downbeats[0] = 1.0;
+        let mut bar_changed = fingerprint_test_grid();
+        bar_changed.bars[1] = 3.0;
+        let mut length_changed = fingerprint_test_grid();
+        length_changed.beats.push(2.5);
+        let mut order_changed = fingerprint_test_grid();
+        order_changed.beats.swap(0, 1);
+
+        for changed in [
+            beat_changed,
+            downbeat_changed,
+            bar_changed,
+            length_changed,
+            order_changed,
+        ] {
+            assert_ne!(
+                RekordboxGridInput::from_grid(Some(changed)).fingerprint,
+                base
+            );
+        }
+    }
+
+    #[test]
+    fn grid_input_fingerprint_distinguishes_hmm_source() {
+        let hmm = RekordboxGridInput::from_grid(None);
+        let grid = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
+
+        assert_eq!(hmm.fingerprint, "hmm:v1");
+        assert!(hmm.grid.is_none());
+        assert_ne!(hmm.fingerprint, grid.fingerprint);
+    }
+
+    #[test]
+    fn grid_compatibility_wrapper_preserves_the_no_live_db_test_seam() {
+        assert!(load_rekordbox_grid_for_path("/synthetic/not-read.flac").is_none());
+    }
+
+    #[test]
+    fn stratum_analysis_keeps_the_fingerprint_paired_with_its_grid_snapshot() {
+        let analyzed_input = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
+        let analyzed_fingerprint = analyzed_input.fingerprint.clone();
+        let mut changed_grid = fingerprint_test_grid();
+        changed_grid.beats[0] = 0.25;
+        let later_current = RekordboxGridInput::from_grid(Some(changed_grid));
+
+        let analyzed = analyze_with_stratum_input_using(analyzed_input, |grid| {
+            assert_eq!(grid.unwrap().beats, fingerprint_test_grid().beats);
+            Ok(StratumResult::default())
+        })
+        .unwrap();
+
+        assert_eq!(analyzed.input_fingerprint, analyzed_fingerprint);
+        assert_ne!(analyzed.input_fingerprint, later_current.fingerprint);
+    }
 
     #[test]
     fn stratum_result_serialization_round_trip() {
@@ -1369,13 +1539,14 @@ def percentile(arr, p):
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_secs() as i64);
 
-        crate::store::set_audio_analysis(
+        crate::store::set_audio_analysis_with_fingerprint(
             &store_conn,
             &file_path,
             "stratum-dsp",
             file_size,
             file_mtime,
             STRATUM_SCHEMA_VERSION,
+            STRATUM_HMM_INPUT_FINGERPRINT,
             &features_json,
         )
         .unwrap();

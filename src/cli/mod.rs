@@ -266,14 +266,32 @@ fn is_cache_fresh(
     schema_version: &str,
     file_size: i64,
     file_mtime: i64,
+    input_fingerprint: &str,
 ) -> bool {
-    store::is_audio_analysis_fresh(cached, schema_version, file_size, file_mtime)
+    store::is_audio_analysis_fresh(
+        cached,
+        schema_version,
+        file_size,
+        file_mtime,
+        input_fingerprint,
+    )
 }
 
 struct CacheProbe {
     cache_key: String,
     file_size: i64,
     file_mtime: i64,
+    stratum_input_fingerprint: String,
+}
+
+impl CacheProbe {
+    fn input_fingerprint_for_analyzer(&self, analyzer: &str) -> &str {
+        if analyzer == audio::ANALYZER_STRATUM {
+            &self.stratum_input_fingerprint
+        } else {
+            ""
+        }
+    }
 }
 
 fn cache_probe_for_path(file_path: &str, skip_cached: bool) -> Option<CacheProbe> {
@@ -282,10 +300,13 @@ fn cache_probe_for_path(file_path: &str, skip_cached: bool) -> Option<CacheProbe
     }
     let cache_key = audio::resolve_audio_path(file_path).ok()?;
     let metadata = std::fs::metadata(&cache_key).ok()?;
+    let stratum_input_fingerprint =
+        audio::load_rekordbox_grid_input_for_path(&cache_key).fingerprint;
     Some(CacheProbe {
         cache_key,
         file_size: metadata.len() as i64,
         file_mtime: file_mtime_unix(&metadata),
+        stratum_input_fingerprint,
     })
 }
 
@@ -302,6 +323,7 @@ fn has_fresh_cache_entry(
             schema_version,
             cache_probe.file_size,
             cache_probe.file_mtime,
+            cache_probe.input_fingerprint_for_analyzer(analyzer),
         ))
     } else {
         Ok(false)
@@ -347,7 +369,24 @@ pub(crate) struct CliCacheWriteMsg {
     pub file_size: i64,
     pub file_mtime: i64,
     pub analyzer_version: String,
+    pub input_fingerprint: String,
     pub features_json: String,
+}
+
+pub(crate) fn persist_cli_cache_message(
+    conn: &rusqlite::Connection,
+    message: &CliCacheWriteMsg,
+) -> Result<(), rusqlite::Error> {
+    store::set_audio_analysis_with_fingerprint(
+        conn,
+        &message.file_path,
+        &message.analyzer,
+        message.file_size,
+        message.file_mtime,
+        &message.analyzer_version,
+        &message.input_fingerprint,
+        &message.features_json,
+    )
 }
 
 pub(crate) struct CacheWriteRequest<T> {
@@ -620,7 +659,7 @@ mod tests {
     use super::{
         CacheProbe, CacheWriteRequest, CliCacheWriteMsg, CliCancellationState,
         cache_status_for_track, cli_batch_outcome, file_mtime_unix, is_cache_fresh,
-        send_cache_message, serialize_cache_payload,
+        persist_cli_cache_message, send_cache_message, serialize_cache_payload,
     };
     use crate::{
         audio, audio::AudioError, audio::StratumResult, store, store::CachedAudioAnalysis,
@@ -635,6 +674,7 @@ mod tests {
             file_size,
             file_mtime,
             analysis_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+            input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
             features_json: "{}".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
         }
@@ -684,6 +724,7 @@ mod tests {
             file_size: 1,
             file_mtime: 2,
             analyzer_version: "v1".to_string(),
+            input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
             features_json: "{}".to_string(),
         }
     }
@@ -713,6 +754,7 @@ mod tests {
             cache_key,
             file_size,
             file_mtime,
+            stratum_input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
         };
 
         let store_path = dir.path().join("cache.sqlite3");
@@ -724,14 +766,20 @@ mod tests {
     fn cache_is_fresh_only_when_version_and_file_identity_match() {
         let entry = cached(123, 456);
         let v = audio::STRATUM_SCHEMA_VERSION;
-        assert!(is_cache_fresh(Some(&entry), v, 123, 456));
-        assert!(!is_cache_fresh(Some(&entry), "outdated", 123, 456));
+        assert!(is_cache_fresh(Some(&entry), v, 123, 456, "hmm:v1"));
+        assert!(!is_cache_fresh(
+            Some(&entry),
+            "outdated",
+            123,
+            456,
+            "hmm:v1"
+        ));
         assert!(
-            !is_cache_fresh(Some(&entry), v, 999, 456),
+            !is_cache_fresh(Some(&entry), v, 999, 456, "hmm:v1"),
             "mismatched file size must be stale"
         );
         assert!(
-            !is_cache_fresh(Some(&entry), v, 123, 999),
+            !is_cache_fresh(Some(&entry), v, 123, 999, "hmm:v1"),
             "mismatched file mtime must be stale"
         );
     }
@@ -742,7 +790,8 @@ mod tests {
             None,
             audio::STRATUM_SCHEMA_VERSION,
             123,
-            456
+            456,
+            "hmm:v1"
         ));
     }
 
@@ -759,23 +808,25 @@ mod tests {
     fn cache_status_skips_track_when_both_fresh_entries_exist() {
         let (_dir, conn, probe) = open_temp_store_with_probe();
 
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "stratum-dsp",
             probe.file_size,
             probe.file_mtime,
             audio::STRATUM_SCHEMA_VERSION,
+            &probe.stratum_input_fingerprint,
             "{}",
         )
         .expect("set stratum");
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "essentia",
             probe.file_size,
             probe.file_mtime,
             audio::ESSENTIA_SCHEMA_VERSION,
+            "",
             "{}",
         )
         .expect("set essentia");
@@ -790,23 +841,25 @@ mod tests {
     fn cache_status_detects_outdated_schema_version() {
         let (_dir, conn, probe) = open_temp_store_with_probe();
 
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "stratum-dsp",
             probe.file_size,
             probe.file_mtime,
             "outdated",
+            &probe.stratum_input_fingerprint,
             "{}",
         )
         .expect("set stale stratum");
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "essentia",
             probe.file_size,
             probe.file_mtime,
             audio::ESSENTIA_SCHEMA_VERSION,
+            "",
             "{}",
         )
         .expect("set fresh essentia");
@@ -821,23 +874,25 @@ mod tests {
     fn cache_status_detects_stale_file_identity() {
         let (_dir, conn, probe) = open_temp_store_with_probe();
 
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "stratum-dsp",
             probe.file_size + 1,
             probe.file_mtime,
             audio::STRATUM_SCHEMA_VERSION,
+            &probe.stratum_input_fingerprint,
             "{}",
         )
         .expect("set stale-size stratum");
-        store::set_audio_analysis(
+        store::set_audio_analysis_with_fingerprint(
             &conn,
             &probe.cache_key,
             "essentia",
             probe.file_size,
             probe.file_mtime + 1,
             audio::ESSENTIA_SCHEMA_VERSION,
+            "",
             "{}",
         )
         .expect("set stale-mtime essentia");
@@ -849,6 +904,58 @@ mod tests {
             !has_essentia,
             "stale essentia cache mtime must be re-analyzed"
         );
+    }
+
+    #[test]
+    fn cache_status_grid_change_marks_only_stratum_pending_then_write_restores_freshness() {
+        let (_dir, conn, mut probe) = open_temp_store_with_probe();
+        store::set_audio_analysis_with_fingerprint(
+            &conn,
+            &probe.cache_key,
+            audio::ANALYZER_STRATUM,
+            probe.file_size,
+            probe.file_mtime,
+            audio::STRATUM_SCHEMA_VERSION,
+            "grid:v1:before",
+            "{}",
+        )
+        .unwrap();
+        store::set_audio_analysis_with_fingerprint(
+            &conn,
+            &probe.cache_key,
+            audio::ANALYZER_ESSENTIA,
+            probe.file_size,
+            probe.file_mtime,
+            audio::ESSENTIA_SCHEMA_VERSION,
+            "",
+            "{}",
+        )
+        .unwrap();
+        probe.stratum_input_fingerprint = "grid:v1:after".to_string();
+
+        let (has_stratum, has_essentia) =
+            cache_status_for_track(&conn, Some(&probe), true, true).unwrap();
+        assert!(!has_stratum);
+        assert!(has_essentia);
+
+        persist_cli_cache_message(
+            &conn,
+            &CliCacheWriteMsg {
+                file_path: probe.cache_key.clone(),
+                analyzer: audio::ANALYZER_STRATUM.to_string(),
+                file_size: probe.file_size,
+                file_mtime: probe.file_mtime,
+                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+                input_fingerprint: probe.stratum_input_fingerprint.clone(),
+                features_json: "{}".to_string(),
+            },
+        )
+        .unwrap();
+
+        let (has_stratum, has_essentia) =
+            cache_status_for_track(&conn, Some(&probe), true, true).unwrap();
+        assert!(has_stratum);
+        assert!(has_essentia);
     }
 
     #[test]

@@ -26,6 +26,32 @@ fn extract_json(result: &CallToolResult) -> serde_json::Value {
     serde_json::from_str(text).expect("tool text content should be valid JSON")
 }
 
+fn set_test_audio_analysis(
+    conn: &Connection,
+    file_path: &str,
+    analyzer: &str,
+    file_size: i64,
+    file_mtime: i64,
+    analysis_version: &str,
+    features_json: &str,
+) -> Result<(), rusqlite::Error> {
+    let input_fingerprint = if analyzer == crate::audio::ANALYZER_STRATUM {
+        crate::audio::STRATUM_HMM_INPUT_FINGERPRINT
+    } else {
+        ""
+    };
+    store::set_audio_analysis_with_fingerprint(
+        conn,
+        file_path,
+        analyzer,
+        file_size,
+        file_mtime,
+        analysis_version,
+        input_fingerprint,
+        features_json,
+    )
+}
+
 async fn call_tool_via_router(
     tool_name: &str,
     arguments: Option<serde_json::Map<String, serde_json::Value>>,
@@ -3038,7 +3064,7 @@ fn seed_build_set_cache(store_conn: &Connection, audio_dir: &std::path::Path) {
             "onset_rate": 2.5 + (*danceability * 2.0),
             "analyzer_version": "essentia-test"
         });
-        store::set_audio_analysis(
+        set_test_audio_analysis(
             store_conn,
             path.to_str().expect("seed path should be UTF-8"),
             "stratum-dsp",
@@ -3048,7 +3074,7 @@ fn seed_build_set_cache(store_conn: &Connection, audio_dir: &std::path::Path) {
             &stratum.to_string(),
         )
         .unwrap_or_else(|e| panic!("stratum cache seed {index} should succeed: {e}"));
-        store::set_audio_analysis(
+        set_test_audio_analysis(
             store_conn,
             path.to_str().expect("seed path should be UTF-8"),
             "essentia",
@@ -3518,7 +3544,7 @@ async fn analyze_track_audio_reports_essentia_unavailable_when_probe_is_none() {
             .expect("temp store path should be UTF-8"),
     )
     .expect("temp internal store should open");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &audio_path_str,
         "stratum-dsp",
@@ -3581,7 +3607,7 @@ fn analyze_track_audio_cache_miss_when_file_unstatable() {
     let store_path = store_dir.path().join("internal.sqlite3");
     let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &missing_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -3602,6 +3628,140 @@ fn analyze_track_audio_cache_miss_when_file_unstatable() {
     assert!(cached.is_none(), "unstatable files must be cache misses");
 }
 
+#[test]
+fn audio_cache_grid_fingerprint_mcp_reads_are_analyzer_specific() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("identity.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path = audio_path.to_string_lossy().to_string();
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        "grid:v1:same",
+        r#"{"bpm":128.0}"#,
+    )
+    .unwrap();
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_ESSENTIA,
+        file_size,
+        file_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        "",
+        r#"{"danceability":0.8}"#,
+    )
+    .unwrap();
+    let same =
+        audio_cache_identity_with_stratum_input_fingerprint(&audio_path, "grid:v1:same").unwrap();
+    let changed =
+        audio_cache_identity_with_stratum_input_fingerprint(&audio_path, "grid:v1:changed")
+            .unwrap();
+
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &same,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_ESSENTIA,
+            crate::audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some(),
+        "Rekordbox grid edits must not invalidate Essentia"
+    );
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        "grid:v1:changed",
+        r#"{"bpm":129.0}"#,
+    )
+    .unwrap();
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some(),
+        "writing the newly analyzed fingerprint must make Stratum fresh"
+    );
+}
+
+#[test]
+fn audio_cache_grid_fingerprint_batch_deduplicates_resolved_paths_and_keeps_mixed_sources() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let grid_path = audio_dir.path().join("grid track.flac");
+    let hmm_path = audio_dir.path().join("hmm.flac");
+    write_test_audio_file(&grid_path, 1000);
+    write_test_audio_file(&hmm_path, 1001);
+    let grid_path = grid_path.to_string_lossy().to_string();
+    let encoded_grid_path = grid_path.replace(' ', "%20");
+    let hmm_path = hmm_path.to_string_lossy().to_string();
+    let mut lookup_keys = Vec::new();
+
+    let identities = audio_cache_identities_with_fingerprint_loader(
+        [
+            grid_path.as_str(),
+            encoded_grid_path.as_str(),
+            hmm_path.as_str(),
+        ],
+        |cache_key| {
+            lookup_keys.push(cache_key.to_string());
+            if cache_key.ends_with("hmm.flac") {
+                "hmm:v1".to_string()
+            } else {
+                "grid:v1:synthetic".to_string()
+            }
+        },
+    );
+    let identities: Vec<_> = identities.into_iter().map(Option::unwrap).collect();
+
+    assert_eq!(lookup_keys, vec![grid_path.clone(), hmm_path.clone()]);
+    assert_eq!(identities[0].cache_key, grid_path);
+    assert_eq!(identities[1].cache_key, identities[0].cache_key);
+    assert_eq!(
+        identities[0].stratum_input_fingerprint,
+        identities[1].stratum_input_fingerprint
+    );
+    assert_eq!(
+        identities[2].stratum_input_fingerprint.as_deref(),
+        Some("hmm:v1")
+    );
+}
+
 #[tokio::test]
 async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
@@ -3618,7 +3778,7 @@ async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() 
             .expect("temp store path should be UTF-8"),
     )
     .expect("temp internal store should open");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &audio_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5360,7 +5520,7 @@ async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
     )
     .expect("temp internal store should open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &decoded_path_str,
         "stratum-dsp",
@@ -5409,7 +5569,7 @@ async fn resolve_track_data_audio_cache_ignores_existing_file_stale_identity() {
     )
     .expect("temp internal store should open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &audio_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5468,7 +5628,7 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
     )
     .expect("temp internal store should open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &fresh_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5478,7 +5638,7 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
         r#"{"bpm":128.0,"key":"Am","analyzer_version":"18"}"#,
     )
     .expect("fresh stratum cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &fresh_path_str,
         crate::audio::ANALYZER_ESSENTIA,
@@ -5488,7 +5648,7 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
         r#"{"danceability":1.5}"#,
     )
     .expect("fresh essentia cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5498,7 +5658,7 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
         r#"{"bpm":140.0,"key":"Cm","analyzer_version":"18"}"#,
     )
     .expect("stale-size stratum cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_path_str,
         crate::audio::ANALYZER_ESSENTIA,
@@ -5598,7 +5758,7 @@ async fn classify_tracks_audio_cache_ignores_stale_file_identity() {
         "key_confidence": 0.88,
         "kick_pattern": "four_on_floor"
     }"#;
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_size_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5608,7 +5768,7 @@ async fn classify_tracks_audio_cache_ignores_stale_file_identity() {
         stale_audio_json,
     )
     .expect("stale-size stratum cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_mtime_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5681,7 +5841,7 @@ async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
             .expect("temp store path should be UTF-8"),
     )
     .expect("temp internal store should open");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &audio_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -5768,7 +5928,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     let norm_title_one = crate::normalize::normalize_for_matching("No Genre One");
     let norm_title_two = crate::normalize::normalize_for_matching("No Genre Two");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &fresh_path_str,
         "stratum-dsp",
@@ -5778,7 +5938,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"bpm":127.1,"key":"Am"}"#,
     )
     .expect("stratum cache should be seeded");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &fresh_path_str,
         "essentia",
@@ -5788,7 +5948,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"danceability":0.81}"#,
     )
     .expect("essentia cache should be seeded");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_schema_path_str,
         "stratum-dsp",
@@ -5798,7 +5958,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"bpm":128.0,"key":"Am"}"#,
     )
     .expect("stale-schema stratum cache should be seeded");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_schema_path_str,
         "essentia",
@@ -5808,7 +5968,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"danceability":0.70}"#,
     )
     .expect("stale-schema essentia cache should be seeded");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_identity_path_str,
         "stratum-dsp",
@@ -5818,7 +5978,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"bpm":129.0,"key":"Am"}"#,
     )
     .expect("stale-size stratum cache should be seeded");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &stale_identity_path_str,
         "essentia",
@@ -6076,7 +6236,7 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     .expect("temp internal store should open");
 
     for (path, file_size, file_mtime) in &deep_paths {
-        store::set_audio_analysis(
+        set_test_audio_analysis(
             &store_conn,
             path,
             crate::audio::ANALYZER_STRATUM,
@@ -6087,7 +6247,7 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         )
         .expect("fresh stratum analysis should seed");
     }
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &techno_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -6219,7 +6379,7 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     .expect("temp internal store should open");
 
     for (path, file_size, file_mtime) in &deep_paths {
-        store::set_audio_analysis(
+        set_test_audio_analysis(
             &store_conn,
             path,
             crate::audio::ANALYZER_STRATUM,
@@ -6230,7 +6390,7 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         )
         .expect("stratum analysis should be seeded");
     }
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &tech_path_str,
         crate::audio::ANALYZER_STRATUM,
@@ -7019,6 +7179,7 @@ fn resolve_single_track_with_stratum_agreement() {
         file_size: 12345,
         file_mtime: 1700000000,
         analysis_version: "0.1.0".to_string(),
+        input_fingerprint: "hmm:v1".to_string(),
         features_json: serde_json::to_string(&stratum_json).unwrap(),
         created_at: "2024-01-01".to_string(),
     };
@@ -7065,6 +7226,7 @@ fn resolve_single_track_with_essentia_cache() {
         file_size: 12345,
         file_mtime: 1700000000,
         analysis_version: "2.1b6.dev1389".to_string(),
+        input_fingerprint: String::new(),
         features_json: serde_json::to_string(&essentia_json).unwrap(),
         created_at: "2024-01-01".to_string(),
     };
@@ -7106,6 +7268,7 @@ fn resolve_single_track_stratum_disagreement() {
         file_size: 12345,
         file_mtime: 1700000000,
         analysis_version: "0.1.0".to_string(),
+        input_fingerprint: "hmm:v1".to_string(),
         features_json: serde_json::to_string(&stratum_json).unwrap(),
         created_at: "2024-01-01".to_string(),
     };
@@ -8162,7 +8325,7 @@ async fn score_transition_returns_expected_axis_scores() {
     )
     .expect("temp internal store should open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &from_path_str,
         "stratum-dsp",
@@ -8172,7 +8335,7 @@ async fn score_transition_returns_expected_axis_scores() {
         r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
     )
     .expect("source stratum cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &to_path_str,
         "stratum-dsp",
@@ -8183,7 +8346,7 @@ async fn score_transition_returns_expected_axis_scores() {
     )
     .expect("destination stratum cache should seed");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &from_path_str,
         "essentia",
@@ -8193,7 +8356,7 @@ async fn score_transition_returns_expected_axis_scores() {
         r#"{"danceability":0.90,"loudness_integrated":-12.0,"onset_rate":3.0}"#,
     )
     .expect("source essentia cache should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         &to_path_str,
         "essentia",
@@ -8287,7 +8450,7 @@ async fn score_transition_balanced_default_penalizes_clash() {
     )
     .expect("temp internal store should open");
 
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         "/tmp/clash-from.flac",
         "stratum-dsp",
@@ -8297,7 +8460,7 @@ async fn score_transition_balanced_default_penalizes_clash() {
         r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
     )
     .expect("from stratum should seed");
-    store::set_audio_analysis(
+    set_test_audio_analysis(
         &store_conn,
         "/tmp/clash-to.flac",
         "stratum-dsp",

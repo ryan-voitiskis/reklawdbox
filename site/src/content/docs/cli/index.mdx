@@ -130,7 +130,7 @@ reklawdbox analyze [options]
 | `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (cores - 2) |
 | `--concurrency` | `-j` | integer | auto | Override analysis concurrency (overrides `--cpu` preset, min `1`, max `16`) |
 
-Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Cache is invalidated when the analysis schema version changes.
+Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Cached analysis is validated against the analysis schema plus the canonical audio file identity (path, size, and modification time). Stratum additionally fingerprints the Rekordbox beat grid used for analysis, or a versioned no-grid fallback, so grid changes invalidate and recompute Stratum without invalidating Essentia.
 
 The command drains and prints its final summary before exiting. A new analysis, cache-write, or worker failure exits nonzero, as does Ctrl+C or any incomplete selected work. No matching tracks and all-cached/no-work runs remain successful.
 

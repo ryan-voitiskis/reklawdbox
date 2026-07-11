@@ -98,13 +98,17 @@ pub(super) fn handle_resolve_tracks_data(
     let essentia_installed = server.essentia_python_path().is_some();
 
     // Pre-compute normalized keys and resolved audio paths.
+    let current_audio_identities =
+        super::analysis::audio_cache_identities_with_current_stratum_input(
+            tracks.iter().map(|track| track.file_path.as_str()),
+        );
     let norm_keys: Vec<_> = tracks
         .iter()
-        .map(|t| {
+        .zip(current_audio_identities)
+        .map(|(t, audio_identity)| {
             let a = crate::normalize::normalize_for_matching(&t.artist);
             let ti = crate::normalize::normalize_for_matching(&t.title);
             let al = crate::normalize::normalize_for_matching(&t.album);
-            let audio_identity = super::analysis::audio_cache_identity(&t.file_path);
             let audio_key = audio_identity
                 .as_ref()
                 .map(|identity| identity.cache_key.clone())
@@ -121,12 +125,16 @@ pub(super) fn handle_resolve_tracks_data(
 
     // Build batch keys.
     let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
-    let audio_identities: Vec<_> = norm_keys
+    let stratum_identities: Vec<_> = norm_keys
+        .iter()
+        .filter_map(|(_, _, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
+        .collect();
+    let essentia_identities: Vec<_> = norm_keys
         .iter()
         .filter_map(|(_, _, _, _, identity)| {
             identity
                 .as_ref()
-                .map(super::analysis::AudioCacheIdentity::as_store_identity)
+                .map(super::analysis::AudioCacheIdentity::as_essentia_store_identity)
         })
         .collect();
     for (a, t, al, _, _) in &norm_keys {
@@ -141,14 +149,14 @@ pub(super) fn handle_resolve_tracks_data(
         let enrich_map = store::batch_get_enrichment(&store, &enrich_keys).map_err(cache_error)?;
         let stratum_map = store::batch_get_fresh_audio_analysis(
             &store,
-            &audio_identities,
+            &stratum_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(cache_error)?;
         let essentia_map = store::batch_get_fresh_audio_analysis(
             &store,
-            &audio_identities,
+            &essentia_identities,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
@@ -260,12 +268,16 @@ pub(super) fn handle_cache_coverage(
     let mut enrichment_has_label = 0usize;
 
     {
+        let current_audio_identities =
+            super::analysis::audio_cache_identities_with_current_stratum_input(
+                tracks.iter().map(|track| track.file_path.as_str()),
+            );
         let track_keys: Vec<_> = tracks
             .iter()
-            .map(|t| {
+            .zip(current_audio_identities)
+            .map(|(t, audio_identity)| {
                 let norm_artist = crate::normalize::normalize_for_matching(&t.artist);
                 let norm_title = crate::normalize::normalize_for_matching(&t.title);
-                let audio_identity = super::analysis::audio_cache_identity(&t.file_path);
                 let audio_key = audio_identity
                     .as_ref()
                     .map(|identity| identity.cache_key.clone())
@@ -288,12 +300,16 @@ pub(super) fn handle_cache_coverage(
                 .collect()
         };
 
-        let audio_identities: Vec<_> = track_keys
+        let stratum_identities: Vec<_> = track_keys
+            .iter()
+            .filter_map(|(_, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
+            .collect();
+        let essentia_identities: Vec<_> = track_keys
             .iter()
             .filter_map(|(_, _, _, identity)| {
                 identity
                     .as_ref()
-                    .map(super::analysis::AudioCacheIdentity::as_store_identity)
+                    .map(super::analysis::AudioCacheIdentity::as_essentia_store_identity)
             })
             .collect();
 
@@ -314,14 +330,14 @@ pub(super) fn handle_cache_coverage(
                 .map_err(cache_error)?;
         let stratum_set = store::batch_fresh_audio_analysis_existence(
             &store,
-            &audio_identities,
+            &stratum_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(cache_error)?;
         let essentia_set = store::batch_fresh_audio_analysis_existence(
             &store,
-            &audio_identities,
+            &essentia_identities,
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )
