@@ -96,7 +96,10 @@ pub(super) struct ServerState {
     pub(super) essentia_setup_lock: tokio::sync::Mutex<()>,
     pub(super) xml_export_lock: tokio::sync::Mutex<()>,
     pub(super) audio_file_mutation_locks: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
+    pub(super) discogs_auth_lock: tokio::sync::Mutex<()>,
     pub(super) discogs_pending: Mutex<Option<discogs::PendingDeviceSession>>,
+    #[cfg(test)]
+    discogs_auth_dependencies: Mutex<Option<DiscogsAuthTestDependencies>>,
     pub(super) db_path: Option<String>,
     /// Explicit store path override (used by tests and batch tasks that need
     /// to open separate read-only / writer connections to the same file).
@@ -230,7 +233,10 @@ impl ReklawdboxServer {
                 essentia_setup_lock: tokio::sync::Mutex::new(()),
                 xml_export_lock: tokio::sync::Mutex::new(()),
                 audio_file_mutation_locks: Mutex::new(HashMap::new()),
+                discogs_auth_lock: tokio::sync::Mutex::new(()),
                 discogs_pending: Mutex::new(None),
+                #[cfg(test)]
+                discogs_auth_dependencies: Mutex::new(None),
                 db_path,
                 store_path: None,
                 changes: ChangeManager::new(),
