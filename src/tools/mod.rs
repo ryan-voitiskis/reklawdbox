@@ -99,6 +99,7 @@ pub(super) fn cache_error(e: rusqlite::Error) -> McpError {
 
 pub(super) struct ServerState {
     pub(super) db: OnceLock<Result<Mutex<Connection>, String>>,
+    pub(super) effective_db_path: OnceLock<Result<PathBuf, String>>,
     pub(super) internal_db: OnceLock<Result<Mutex<Connection>, String>>,
     pub(super) essentia_python: OnceLock<Option<String>>,
     pub(super) essentia_python_override: Mutex<Option<String>>,
@@ -128,17 +129,23 @@ pub struct ReklawdboxServer {
 }
 
 impl ReklawdboxServer {
+    pub(super) fn effective_db_path(&self) -> Result<PathBuf, McpError> {
+        match self.state.effective_db_path.get_or_init(|| {
+            let configured = self.state.db_path.clone().or_else(db::resolve_db_path);
+            resolve_effective_db_path(configured.as_deref())
+        }) {
+            Ok(path) => Ok(path.clone()),
+            Err(message) => Err(mcp_internal_error(message.clone())),
+        }
+    }
+
     pub(super) fn rekordbox_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
         let result = self.state.db.get_or_init(|| {
-            let path = match self.state.db_path.clone().or_else(db::resolve_db_path) {
-                Some(p) => p,
-                None => {
-                    return Err(
-                        "Rekordbox database not found. Set REKORDBOX_DB_PATH env var.".into(),
-                    );
-                }
-            };
-            match db::open(&path) {
+            let path = self.effective_db_path().map_err(|error| error.message)?;
+            let path = path.to_str().ok_or_else(|| {
+                "Effective Rekordbox database path is not valid UTF-8".to_string()
+            })?;
+            match db::open(path) {
                 Ok(conn) => Ok(Mutex::new(conn)),
                 Err(e) => Err(format!("Failed to open Rekordbox database: {e}")),
             }
@@ -234,6 +241,7 @@ impl ReklawdboxServer {
         Self {
             state: Arc::new(ServerState {
                 db: OnceLock::new(),
+                effective_db_path: OnceLock::new(),
                 internal_db: OnceLock::new(),
                 essentia_python: OnceLock::new(),
                 essentia_python_override: Mutex::new(None),
@@ -753,6 +761,59 @@ impl ReklawdboxServer {
     ) -> Result<CallToolResult, McpError> {
         handle_scan_duplicates(self, params.0).await
     }
+}
+
+fn resolve_effective_db_path(configured: Option<&str>) -> Result<PathBuf, String> {
+    let path = configured.map(PathBuf::from).ok_or_else(|| {
+        "Rekordbox database not found. Set REKORDBOX_DB_PATH to a direct master.db file."
+            .to_string()
+    })?;
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        format!(
+            "Rekordbox database path {} is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Rekordbox database path {} must be a direct regular file; symlinks are not supported",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "Rekordbox database path {} must be a regular file named master.db",
+            path.display()
+        ));
+    }
+    if path.file_name() != Some(std::ffi::OsStr::new("master.db")) {
+        return Err(format!(
+            "Rekordbox database path {} must name master.db",
+            path.display()
+        ));
+    }
+
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "Failed to canonicalize Rekordbox database path {}: {error}",
+            path.display()
+        )
+    })?;
+    let canonical_metadata = std::fs::symlink_metadata(&canonical).map_err(|error| {
+        format!(
+            "Canonical Rekordbox database path {} is unavailable: {error}",
+            canonical.display()
+        )
+    })?;
+    if !canonical_metadata.is_file()
+        || canonical.file_name() != Some(std::ffi::OsStr::new("master.db"))
+    {
+        return Err(format!(
+            "Canonical Rekordbox database path {} must be a regular file named master.db",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 #[tool_handler(router = self.tool_router)]

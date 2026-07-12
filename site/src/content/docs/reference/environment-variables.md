@@ -13,7 +13,9 @@ In MCP server mode, reklawdbox is configured through environment variables set i
 | ------------------- | ----------------------------- | ------------------------------------------------------ |
 | `REKORDBOX_DB_PATH` | Path to Rekordbox `master.db` | Auto-detected: `~/Library/Pioneer/rekordbox/master.db` |
 
-The auto-detection path works for standard macOS Rekordbox installations. Only set this if your database is in a non-standard location.
+The auto-detection path works for standard macOS Rekordbox installations. Only set this if your database is in a non-standard location. For server connections and backup-producing commands, a configured path must be an existing, direct regular file named `master.db`; symlinks are rejected before the server opens the database or starts a backup. The restore command is the recovery exception: it can target a missing `master.db` when that file's configured parent directory already exists.
+
+The server resolves this effective path once and uses the same file for its read-only Rekordbox connection and automatic pre-export backups. Manual backup commands also follow `REKORDBOX_DB_PATH` when it is configured instead of falling back to the standard directory.
 
 ## Discogs enrichment
 
@@ -45,7 +47,9 @@ stratum-dsp always runs regardless of Essentia availability. It provides BPM and
 | -------------------------- | ----------------------------------------------------- | --------------- |
 | `REKLAWDBOX_BACKUP_SCRIPT` | Path to a custom backup script run before `write_xml` | Built-in script |
 
-A backup of your Rekordbox database files runs automatically before every `write_xml` export using a script embedded in the binary. Set this variable only if you want to replace the built-in backup with your own script. The script receives `--pre-op` as its first argument.
+A backup of your Rekordbox database files runs automatically before every `write_xml` export using a script embedded in the binary. Set this variable only if you want to replace the built-in backup with your own script. The custom script receives `--pre-op` as its first argument and the exact effective database path in a child-only `REKORDBOX_DB_PATH` variable.
+
+The built-in script reports success only after it creates the archive from that database directory and moves the archive into place. A custom script's zero exit is treated as the operator-supplied script's success attestation; reklawdbox cannot inspect what an arbitrary script archived. A missing custom script, launch error, or nonzero exit blocks the export and leaves staged changes available for retry. Close Rekordbox before exporting for the strongest backup consistency.
 
 ## Storage
 

@@ -59,9 +59,11 @@ reklawdbox backup [options]
 
 {/* /doc-contract:cli */}
 
-With no flags, creates a full backup (~1GB compressed) of the entire Rekordbox data directory.
+With no flags, creates a full backup (~1GB compressed) of the entire Rekordbox data directory. When `REKORDBOX_DB_PATH` is configured, manual database-only and full backups use its parent directory rather than the standard install path. The configured value must be a direct regular file named `master.db`; symlinks are rejected. Close Rekordbox first for the strongest backup consistency.
 
-A database-only backup also runs automatically before every `write_xml` export — you don't need to run this manually for that. This command is for manual backups and restores.
+New full archives always contain one canonical top-level `rekordbox/` directory, even when the configured source directory has a different name. Full restore maps that root into the configured target directory. A database restore can recreate a missing `master.db` when its configured parent directory already exists; if any related allowlisted file remains there, a successful pre-restore safety archive is still mandatory. `--list` does not require a live source database.
+
+A database-only backup also runs automatically before every `write_xml` export — you don't need to run this manually for that. The built-in export path must create and move its archive successfully before XML creation. A configured custom script receives `--pre-op` first plus the effective path in its child `REKORDBOX_DB_PATH`; its zero exit is trusted as the operator's success attestation. A missing or failed custom script blocks the export, while staged changes remain available for retry. This command is for manual backups and restores; neither database-only nor full archives include your audio files.
 
 ---
 

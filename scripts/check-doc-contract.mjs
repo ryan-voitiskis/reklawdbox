@@ -22,6 +22,8 @@ const MCP_OUTPUT_CONTRACT_TOOLS = new Set([
   'enrich_tracks',
   'scan_duplicates',
 ])
+const REQUIRED_XML_BACKUP_SUCCESS_CONDITION =
+  'XML export proceeds only after the built-in backup succeeds or the configured custom script exits zero'
 
 export function compareToolMappings(liveTools, references) {
   const liveNames = [...new Set(liveTools.map((tool) => tool.name))].sort()
@@ -2026,6 +2028,49 @@ export function runtimeHelpTopics(workflows) {
     .map((workflow) => workflow.runtimeHelp.topic)
 }
 
+export function validateXmlBackupContracts(
+  workflows,
+  xmlBackupSuccessCondition,
+) {
+  const source = 'site/src/data/workflows.mjs:1'
+  if (xmlBackupSuccessCondition !== REQUIRED_XML_BACKUP_SUCCESS_CONDITION) {
+    throw new Error(
+      `${source}: XML_BACKUP_SUCCESS_CONDITION must equal the canonical fail-closed condition`,
+    )
+  }
+
+  workflows.forEach((workflow, index) => {
+    const outputs = workflow?.sideEffects?.outputs ?? []
+    const hasXml = outputs.some((entry) =>
+      entry.kind === 'metadata-xml' || entry.kind === 'playlist-xml'
+    )
+    const backups = outputs.filter((entry) => entry.kind === 'backup')
+    const record = `${source}: workflows[${index}] (${
+      workflow?.id ?? 'unknown'
+    })`
+
+    if (!hasXml) {
+      if (backups.length > 0) {
+        throw new Error(`${record} declares a backup without XML output`)
+      }
+      return
+    }
+    if (backups.length !== 1) {
+      throw new Error(
+        `${record} must declare exactly one backup output for XML export`,
+      )
+    }
+    if (backups[0].mode !== 'on-export') {
+      throw new Error(`${record} XML backup mode must be on-export`)
+    }
+    if (backups[0].condition !== xmlBackupSuccessCondition) {
+      throw new Error(
+        `${record} XML backup condition must equal XML_BACKUP_SUCCESS_CONDITION`,
+      )
+    }
+  })
+}
+
 export function validateBuiltLinkSet(htmlDocuments, builtPaths) {
   const issues = []
   for (const document of htmlDocuments) {
@@ -2210,7 +2255,11 @@ async function main() {
   const { toolReferences } = await import(
     pathToFileURL(path.join(root, 'site/src/data/tool-reference.mjs'))
   )
-  const { workflows, validateWorkflows } = await import(
+  const {
+    workflows,
+    validateWorkflows,
+    XML_BACKUP_SUCCESS_CONDITION,
+  } = await import(
     pathToFileURL(path.join(root, 'site/src/data/workflows.mjs'))
   )
   check(() => {
@@ -2220,6 +2269,9 @@ async function main() {
       throw new Error(`site/src/data/workflows.mjs:1: ${error.message}`)
     }
   })
+  check(() =>
+    validateXmlBackupContracts(workflows, XML_BACKUP_SUCCESS_CONDITION)
+  )
 
   const helpTopics = runtimeHelpTopics(workflows)
   const { toolList, help, topicHelp } = await loadMcpInventory(

@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-import { validateWorkflows, workflows } from '../site/src/data/workflows.mjs'
+import {
+  validateWorkflows,
+  workflows,
+  XML_BACKUP_SUCCESS_CONDITION,
+} from '../site/src/data/workflows.mjs'
 import {
   compareRuntimeHelp,
   compareToolMappings,
@@ -17,6 +21,7 @@ import {
   validateMcpOutputContracts,
   validateRuntimeHelpUrls,
   validateSopContracts,
+  validateXmlBackupContracts,
 } from './check-doc-contract.mjs'
 import { decodeProtocolLine, routeProtocolLine } from './lib/mcp-stdio.mjs'
 
@@ -1658,6 +1663,52 @@ test('workflow validator rejects missing IDs, route drift, and noncanonical orde
   const reordered = structuredClone(workflows)
   ;[reordered[0], reordered[1]] = [reordered[1], reordered[0]]
   assert.throws(() => validateWorkflows(reordered), /IDs\/order/)
+})
+
+test('XML workflow backup contracts reject missing, negated, and weaker gates', () => {
+  assert.doesNotThrow(() =>
+    validateXmlBackupContracts(workflows, XML_BACKUP_SUCCESS_CONDITION)
+  )
+  const xmlIndex = workflows.findIndex((workflow) =>
+    workflow.sideEffects.outputs.some((entry) =>
+      entry.kind === 'metadata-xml' || entry.kind === 'playlist-xml'
+    )
+  )
+  assert.notEqual(xmlIndex, -1)
+
+  const missing = structuredClone(workflows)
+  missing[xmlIndex].sideEffects.outputs = missing[
+    xmlIndex
+  ].sideEffects.outputs.filter((entry) => entry.kind !== 'backup')
+  assert.throws(
+    () => validateXmlBackupContracts(missing, XML_BACKUP_SUCCESS_CONDITION),
+    /site\/src\/data\/workflows\.mjs:1: workflows\[\d+\].*exactly one backup/,
+  )
+
+  const negated = structuredClone(workflows)
+  negated[xmlIndex].sideEffects.outputs.find((entry) => entry.kind === 'backup')
+    .condition = `not ${XML_BACKUP_SUCCESS_CONDITION}`
+  assert.throws(
+    () => validateXmlBackupContracts(negated, XML_BACKUP_SUCCESS_CONDITION),
+    /site\/src\/data\/workflows\.mjs:1: workflows\[\d+\].*condition must equal/,
+  )
+
+  const weaker = structuredClone(workflows)
+  weaker[xmlIndex].sideEffects.outputs.find((entry) => entry.kind === 'backup')
+    .condition = 'XML export usually follows a successful backup attempt.'
+  assert.throws(
+    () => validateXmlBackupContracts(weaker, XML_BACKUP_SUCCESS_CONDITION),
+    /site\/src\/data\/workflows\.mjs:1: workflows\[\d+\].*condition must equal/,
+  )
+
+  assert.throws(
+    () =>
+      validateXmlBackupContracts(
+        workflows,
+        'XML export follows a successful backup.',
+      ),
+    /XML_BACKUP_SUCCESS_CONDITION must equal the canonical fail-closed condition/,
+  )
 })
 
 test('docs gates react to Rust dependency manifest changes', () => {

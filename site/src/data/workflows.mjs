@@ -92,11 +92,13 @@ const RUNTIME_HELP = new Map([
   ['library-health', ['health', 9, null]],
 ])
 
+export const XML_BACKUP_SUCCESS_CONDITION =
+  'XML export proceeds only after the built-in backup succeeds or the configured custom script exits zero'
+
 const backupOnExport = {
   kind: 'backup',
   mode: 'on-export',
-  condition:
-    'Created only when write_xml reports backup: success; a configured missing custom backup script currently reports a skipped backup.',
+  condition: XML_BACKUP_SUCCESS_CONDITION,
 }
 
 /** @type {Workflow[]} */
@@ -1437,15 +1439,20 @@ export function validateWorkflows(items) {
     const hasXml = item.sideEffects.outputs.some(
       (entry) => entry.kind === 'metadata-xml' || entry.kind === 'playlist-xml',
     )
-    const backup = item.sideEffects.outputs.find((entry) =>
+    const backups = item.sideEffects.outputs.filter((entry) =>
       entry.kind === 'backup'
     )
     if (
-      hasXml && (!backup || backup.mode !== 'on-export' || !backup.condition)
+      hasXml
+      && (backups.length !== 1
+        || backups[0].mode !== 'on-export'
+        || backups[0].condition !== XML_BACKUP_SUCCESS_CONDITION)
     ) {
-      fail(`${path} XML output requires a conditional on-export backup entry`)
+      fail(
+        `${path} XML output requires exactly one canonical on-export backup entry`,
+      )
     }
-    if (!hasXml && backup) {
+    if (!hasXml && backups.length > 0) {
       fail(`${path} cannot declare backup without XML export`)
     }
 

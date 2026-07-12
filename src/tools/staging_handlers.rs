@@ -313,7 +313,8 @@ pub(super) async fn handle_write_xml(
         return ok_json(&result);
     }
 
-    let backup_status = crate::backup::run_pre_op_backup()
+    let effective_db_path = server.effective_db_path()?;
+    let backup_status = crate::backup::run_pre_op_backup(&effective_db_path)
         .await
         .map_err(|err| mcp_internal_error(format!("pre-op {err}")))?;
 

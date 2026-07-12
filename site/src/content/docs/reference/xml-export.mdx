@@ -118,13 +118,13 @@ Rekordbox XML uses classic notation (`Am`, `Bb`, `F#m`). Camelot is display-only
 
 ## Backup behavior
 
-Every `write_xml` call automatically backs up your Rekordbox database files before writing. The backup is a compressed archive of `master.db` and related files, stored in `~/Music/rekordbox-backups/`. Up to 20 pre-operation backups are kept; older ones are rotated out.
+Every `write_xml` call automatically backs up your Rekordbox database files before writing. The backup is a compressed archive of `master.db` and related allowlisted files from the same effective database directory, stored in `~/Music/rekordbox-backups/`. When `REKORDBOX_DB_PATH` selects a nonstandard library, both the server's read-only connection and this backup use that exact resolved file. Up to 20 pre-operation backups are kept; older ones are rotated out.
 
-If the backup fails, staged changes are restored and the export is blocked — your XML file is never written with a failed backup.
+The built-in backup succeeds only after its archive is created and moved into place. If its path is invalid or any archive step fails, staged changes are restored for retry and the export is blocked — the XML file is not created. These archives cover the database-related allowlist, not your audio files, and they are not a guaranteed online snapshot while Rekordbox is changing the database. Close Rekordbox before exporting for the strongest backup consistency.
 
 You can also manage backups manually with `reklawdbox backup` — see [CLI Commands](/cli/).
 
-To use a custom backup script instead of the built-in one, set `REKLAWDBOX_BACKUP_SCRIPT` in your environment. See [Environment Variables](/reference/environment-variables/).
+To use a custom backup script instead of the built-in one, set `REKLAWDBOX_BACKUP_SCRIPT` in your environment. It receives `--pre-op` first and the effective path in its child `REKORDBOX_DB_PATH`. A zero exit is trusted as that operator-supplied script's success attestation; reklawdbox does not inspect an arbitrary script's archive. A missing script, launch failure, or nonzero exit blocks XML export and keeps the staged changes available for retry. See [Environment Variables](/reference/environment-variables/).
 
 XML files are written to `~/reklawdbox-exports/` by default.
 

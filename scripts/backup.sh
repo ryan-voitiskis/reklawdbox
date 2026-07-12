@@ -13,7 +13,9 @@
 set -euo pipefail
 
 # --- Configuration ---
-RB_DATA="$HOME/Library/Pioneer/rekordbox"
+DEFAULT_RB_DATA="$HOME/Library/Pioneer/rekordbox"
+RB_DATA="$DEFAULT_RB_DATA"
+EFFECTIVE_DB_PATH=""
 BACKUP_DIR="$HOME/Music/rekordbox-backups"
 MAX_FULL_BACKUPS=5
 MAX_DB_BACKUPS=20
@@ -31,6 +33,75 @@ warn() { echo -e "${YELLOW}[backup]${NC} $*"; }
 err()  { echo -e "${RED}[backup]${NC} $*" >&2; }
 
 # --- Preflight checks ---
+canonical_parent_directory() {
+    local path="$1"
+    local parent
+    parent="$(dirname "$path")"
+    if [[ ! -d "$parent" ]]; then
+        err "Rekordbox data directory not found: $parent"
+        exit 1
+    fi
+    (cd "$parent" && pwd -P)
+}
+
+configure_backup_source() {
+    local configured="${REKORDBOX_DB_PATH:-}"
+    local source_path
+    if [[ -n "$configured" ]]; then
+        source_path="$configured"
+    else
+        source_path="$DEFAULT_RB_DATA/master.db"
+    fi
+
+    if [[ -L "$source_path" ]]; then
+        err "Rekordbox database path must be a direct regular file; symlinks are not supported: $source_path"
+        exit 1
+    fi
+    if [[ "$(basename "$source_path")" != "master.db" ]]; then
+        err "Rekordbox database path must name master.db: $source_path"
+        exit 1
+    fi
+    if [[ ! -f "$source_path" ]]; then
+        err "Rekordbox database file not found: $source_path"
+        exit 1
+    fi
+
+    RB_DATA="$(canonical_parent_directory "$source_path")"
+    EFFECTIVE_DB_PATH="$RB_DATA/master.db"
+    if [[ ! "$source_path" -ef "$EFFECTIVE_DB_PATH" ]]; then
+        err "Configured database does not resolve to the selected master.db: $source_path"
+        exit 1
+    fi
+}
+
+configure_restore_target() {
+    local configured="${REKORDBOX_DB_PATH:-}"
+    if [[ -z "$configured" ]]; then
+        RB_DATA="$DEFAULT_RB_DATA"
+        EFFECTIVE_DB_PATH="$RB_DATA/master.db"
+    else
+        if [[ -L "$configured" ]]; then
+            err "Rekordbox database path must be direct; symlinks are not supported: $configured"
+            exit 1
+        fi
+        if [[ "$(basename "$configured")" != "master.db" ]]; then
+            err "Rekordbox database path must name master.db: $configured"
+            exit 1
+        fi
+        if [[ -e "$configured" && ! -f "$configured" ]]; then
+            err "Rekordbox database path is not a regular file: $configured"
+            exit 1
+        fi
+        RB_DATA="$(canonical_parent_directory "$configured")"
+        EFFECTIVE_DB_PATH="$RB_DATA/master.db"
+    fi
+
+    if [[ ! -d "$RB_DATA" ]]; then
+        err "Rekordbox restore target directory not found: $RB_DATA"
+        exit 1
+    fi
+}
+
 check_rekordbox_running() {
     if pgrep -x rekordbox > /dev/null 2>&1; then
         warn "Rekordbox is currently running."
@@ -46,6 +117,10 @@ check_source_exists() {
     if [[ ! -d "$RB_DATA" ]]; then
         err "Rekordbox data directory not found: $RB_DATA"
         err "Is Rekordbox installed?"
+        exit 1
+    fi
+    if [[ ! -f "$EFFECTIVE_DB_PATH" || -L "$EFFECTIVE_DB_PATH" ]]; then
+        err "Rekordbox database source is not a direct regular master.db file: $EFFECTIVE_DB_PATH"
         exit 1
     fi
 }
@@ -125,11 +200,7 @@ backup_full() {
     trap 'rm -f "$tmp_archive"; exit 1' INT TERM
     trap 'rm -f "$tmp_archive"' ERR
 
-    tar -czf "$tmp_archive" \
-        -C "$(dirname "$RB_DATA")" \
-        --exclude='.DS_Store' \
-        --exclude='*.tmp' \
-        "$(basename "$RB_DATA")"
+    write_canonical_full_archive "$tmp_archive"
     mv "$tmp_archive" "$archive"
     trap - ERR INT TERM
 
@@ -137,6 +208,47 @@ backup_full() {
     size=$(du -h "$archive" | cut -f1)
     log "Full backup created: $archive ($size)"
     echo "$archive"
+}
+
+write_canonical_full_archive() {
+    local destination="$1"
+    local backup_dir_canonical
+    backup_dir_canonical="$(cd "$BACKUP_DIR" && pwd -P)"
+    if [[ "$backup_dir_canonical" == "$RB_DATA" ]]; then
+        err "Backup directory cannot be the Rekordbox data directory: $RB_DATA"
+        return 1
+    fi
+
+    local -a archive_excludes=("--exclude=.DS_Store" "--exclude=*.tmp")
+    if [[ "$backup_dir_canonical" == "$RB_DATA/"* ]]; then
+        local nested_backup="${backup_dir_canonical#"$RB_DATA/"}"
+        archive_excludes+=("--exclude=$nested_backup")
+    fi
+    local -a entries=()
+    while IFS= read -r -d '' entry; do
+        entries+=("${entry#./}")
+    done < <(cd "$RB_DATA" && find . -mindepth 1 -maxdepth 1 -print0)
+    if [[ ${#entries[@]} -eq 0 ]]; then
+        err "Rekordbox data directory is empty: $RB_DATA"
+        return 1
+    fi
+    local tar_version
+    tar_version="$(tar --version 2>&1 || true)"
+    if [[ "$tar_version" == *bsdtar* ]]; then
+        tar -czf "$destination" \
+            -C "$RB_DATA" \
+            "${archive_excludes[@]}" \
+            -s ',^,rekordbox/,' \
+            -- \
+            "${entries[@]}"
+    else
+        tar -czf "$destination" \
+            -C "$RB_DATA" \
+            "${archive_excludes[@]}" \
+            --transform='s,^,rekordbox/,' \
+            -- \
+            "${entries[@]}"
+    fi
 }
 
 list_backups() {
@@ -236,7 +348,7 @@ restore_backup() {
 
     # Show what's in the archive
     log "Archive contents:"
-    tar -tzf "$archive" | head -20
+    tar -tzf "$archive" | sed -n '1,20p'
     local file_count
     file_count=$(tar -tzf "$archive" | wc -l | tr -d ' ')
     if [[ "$file_count" -gt 20 ]]; then
@@ -274,17 +386,25 @@ restore_backup() {
             tmp_archive="$(mktemp "${BACKUP_DIR}/.backup_tmp.XXXXXX")"
             trap 'rm -f "$tmp_archive"; exit 1' INT TERM
             trap 'rm -f "$tmp_archive"; err "Safety backup failed; your data is unchanged."' ERR
-            tar -czf "$tmp_archive" \
-                -C "$(dirname "$RB_DATA")" \
-                --exclude='.DS_Store' \
-                --exclude='*.tmp' \
-                "$(basename "$RB_DATA")"
+            write_canonical_full_archive "$tmp_archive"
             mv "$tmp_archive" "$safety_archive"
             trap - ERR INT TERM
             log "Full safety backup created: $safety_archive"
         )
     else
-        backup_db_only "pre-restore"
+        local current_db_file=""
+        local candidate
+        for candidate in "${DB_FILES[@]}"; do
+            if [[ -f "$RB_DATA/$candidate" ]]; then
+                current_db_file="$RB_DATA/$candidate"
+                break
+            fi
+        done
+        if [[ -n "$current_db_file" ]]; then
+            backup_db_only "pre-restore"
+        else
+            log "No current database files to back up; continuing restore."
+        fi
     fi
 
     local staging_dir
@@ -299,18 +419,16 @@ restore_backup() {
         # Full restore: replace the entire directory with the staged snapshot.
         log "Restoring full backup..."
 
-        local rb_name
-        rb_name="$(basename "$RB_DATA")"
         local staged_rb_dir
-        staged_rb_dir="$staging_dir/$rb_name"
+        staged_rb_dir="$staging_dir/rekordbox"
         if [[ ! -d "$staged_rb_dir" ]]; then
-            err "Full backup is missing expected top-level directory: $rb_name"
+            err "Full backup is missing expected top-level directory: rekordbox"
             rm -rf "$staging_dir"
             exit 1
         fi
 
         local unexpected_entry
-        unexpected_entry="$(find "$staging_dir" -mindepth 1 -maxdepth 1 ! -name "$rb_name" -print -quit)"
+        unexpected_entry="$(find "$staging_dir" -mindepth 1 -maxdepth 1 ! -name "rekordbox" -print -quit)"
         if [[ -n "$unexpected_entry" ]]; then
             err "Full backup contains unexpected top-level entry: $(basename "$unexpected_entry")"
             rm -rf "$staging_dir"
@@ -459,6 +577,7 @@ restore_backup() {
 
 case "${1:-}" in
     --db-only)
+        configure_backup_source
         check_source_exists
         check_rekordbox_running || true
         backup_db_only "db"
@@ -466,6 +585,7 @@ case "${1:-}" in
         ;;
     --pre-op)
         # Silent pre-operation backup (called by reklawdbox tools)
+        configure_backup_source
         check_source_exists
         check_rekordbox_running || true
         backup_db_only "pre-op" > /dev/null
@@ -481,7 +601,7 @@ case "${1:-}" in
             list_backups
             exit 1
         fi
-        check_source_exists
+        configure_restore_target
         restore_backup "$2"
         ;;
     --help|-h)
@@ -497,6 +617,7 @@ case "${1:-}" in
         echo "Backups stored in: $BACKUP_DIR"
         ;;
     "")
+        configure_backup_source
         check_source_exists
         check_rekordbox_running || true
         backup_full
