@@ -15,14 +15,18 @@ Score transitions and build DJ sets using six-axis scoring (key, BPM, energy, ge
 
 Score a single transition between two tracks across all six axes plus a weighted composite.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `from_track_id` | string | **yes** | Source track ID |
-| `to_track_id` | string | **yes** | Destination track ID |
-| `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
-| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
-| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
-| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
+{/* doc-contract:mcp tool=score_transition schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `from_track_id` | string | **yes** | | Source track ID |
+| `to_track_id` | string | **yes** | | Destination track ID |
+| `energy_phase` | string | | `["warmup", "build", "peak", "release"]` | Energy phase |
+| `priority` | string \| object | | | Transition weight spec (see [below](#transition-weight-spec)) |
+| `master_tempo` | boolean | | | Master Tempo mode (default: `true`) |
+| `harmonic_style` | string | | `["conservative", "balanced", "adventurous"]` | Harmonic mixing style |
+
+{/* /doc-contract:mcp */}
 
 When `master_tempo` is `false`, the scorer accounts for pitch shift from BPM adjustment when evaluating key compatibility — a track sped up by 3% shifts its effective key by ~0.5 semitones.
 
@@ -32,17 +36,21 @@ When `master_tempo` is `false`, the scorer accounts for pitch shift from BPM adj
 
 Rank pool tracks as transition candidates from a reference track, sorted by composite score.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `from_track_id` | string | **yes** | Source track to transition from |
-| `pool_track_ids` | string[] | | Pool of candidate track IDs to rank |
-| `playlist_id` | string | | Use a playlist as the candidate pool |
-| `target_bpm` | number | | Target BPM — scores how well each candidate fits |
-| `energy_phase` | string | | `"warmup"`, `"build"`, `"peak"`, `"release"` |
-| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
-| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
-| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
-| `limit` | integer | | Max results (default: `10`, max: `50`) |
+{/* doc-contract:mcp tool=query_transition_candidates schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `from_track_id` | string | **yes** | | Source track to transition from |
+| `pool_track_ids` | string[] | | | Pool of candidate track IDs to rank |
+| `playlist_id` | string | | | Use a playlist as the candidate pool |
+| `target_bpm` | number | | | Target BPM — scores how well each candidate fits |
+| `energy_phase` | string | | `["warmup", "build", "peak", "release"]` | Energy phase |
+| `priority` | string \| object | | | Transition weight spec (see [below](#transition-weight-spec)) |
+| `master_tempo` | boolean | | | Master Tempo mode (default: `true`) |
+| `harmonic_style` | string | | `["conservative", "balanced", "adventurous"]` | Harmonic mixing style |
+| `limit` | integer | | | Max results (default: `10`, max: `50`) |
+
+{/* /doc-contract:mcp */}
 
 Provide either `pool_track_ids` or `playlist_id` to define the candidate pool.
 
@@ -52,18 +60,23 @@ Provide either `pool_track_ids` or `playlist_id` to define the candidate pool.
 
 Generate candidate DJ set sequences from a track pool using beam search with energy-curve shaping.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `track_ids` | string[] | **yes** | Pool of candidate track IDs (pre-filtered) |
-| `target_tracks` | integer | **yes** | Desired number of tracks per candidate set |
-| `priority` | string \| object | | Transition weight spec (see [below](#transition-weight-spec)) |
-| `energy_curve` | string or array | | Preset name or custom phase array (default: `"warmup_build_peak_release"`) |
-| `start_track_id` | string | | Force a specific opening track |
-| `beam_width` | integer | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`). Supersedes the deprecated `candidates` parameter. |
-| `harmonic_style` | string | | `"conservative"`, `"balanced"`, `"adventurous"` |
-| `master_tempo` | boolean | | Master Tempo mode (default: `true`) |
-| `bpm_drift_pct` | number | | Max BPM drift from start track as % (default: `6.0`) |
-| `bpm_range` | number[] | | `[start_bpm, end_bpm]` — plans a BPM trajectory across the set |
+{/* doc-contract:mcp tool=build_set schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Item values | Description |
+|-----------|------|:--------:|--------|-------------|-------------|
+| `track_ids` | string[] | **yes** | | | Pool of candidate track IDs (pre-filtered) |
+| `target_tracks` | integer | **yes** | | | Desired number of tracks per candidate set |
+| `priority` | string \| object | | | | Transition weight spec (see [below](#transition-weight-spec)) |
+| `energy_curve` | string or string[] | | `["warmup_build_peak_release", "flat", "peak_only"]` | `["warmup", "build", "peak", "release"]` | Preset or custom phase array |
+| `start_track_id` | string | | | | Force a specific opening track |
+| `beam_width` | integer | | | | Search width: `1` = greedy/fast, higher = broader (default: `3`, max: `8`). Supersedes the deprecated `candidates` parameter. |
+| `candidates` | integer | | | | Deprecated candidate count; use `beam_width` instead |
+| `harmonic_style` | string | | `["conservative", "balanced", "adventurous"]` | | Harmonic mixing style |
+| `master_tempo` | boolean | | | | Master Tempo mode (default: `true`) |
+| `bpm_drift_pct` | number | | | | Max BPM drift from start track as % (default: `6.0`) |
+| `bpm_range` | number[] | | | | `[start_bpm, end_bpm]` — plans a BPM trajectory across the set |
+
+{/* /doc-contract:mcp */}
 
 **Energy curve presets:** `"warmup_build_peak_release"` (default), `"flat"`, `"peak_only"`. Pass a custom array of phase strings for full control (e.g., `["warmup", "build", "build", "peak", "peak", "release"]`).
 
@@ -124,25 +137,39 @@ Score pool compatibility between tracks. Three modes determined by which paramet
 
 **Pairwise mode** — score two tracks:
 
+{/* doc-contract:mcp tool=score_pool_compatibility schema=/ requiredness=conditional */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_a` | string | **yes** | First track ID |
 | `track_b` | string | **yes** | Second track ID |
 
+{/* /doc-contract:mcp */}
+
 **One-vs-pool mode** — score a candidate against a pool:
+
+{/* doc-contract:mcp tool=score_pool_compatibility schema=/ requiredness=conditional */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | **yes** | Candidate track ID |
 | `pool_track_ids` | string[] | **yes** | Pool member track IDs |
 
+{/* /doc-contract:mcp */}
+
 **Cohesion mode** — analyze a pool's internal compatibility:
+
+{/* doc-contract:mcp tool=score_pool_compatibility schema=/ requiredness=conditional */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `pool_track_ids` | string[] | **yes** | Pool track IDs (at least 2) |
 
+{/* /doc-contract:mcp */}
+
 **Common parameters (all modes):**
+
+{/* doc-contract:mcp tool=score_pool_compatibility schema=/ requiredness=conditional */}
 
 | Parameter | Type | Default | Description |
 |-----------|------|:-------:|-------------|
@@ -150,11 +177,15 @@ Score pool compatibility between tracks. Three modes determined by which paramet
 | `reference_bpm` | number | median | Reference BPM for key evaluation |
 | `preset` | string \| object | `"balanced"` | Pool weight spec (see [below](#pool-weight-spec)) |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ## `expand_pool`
 
 Find tracks compatible with an existing pool via iterative greedy expansion. Each addition is guaranteed compatible with the full pool at the time it's added.
+
+{/* doc-contract:mcp tool=expand_pool schema=/ requiredness=global include=shared-search-filters */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -167,6 +198,8 @@ Find tracks compatible with an existing pool via iterative greedy expansion. Eac
 | `playlist_id` | string | | Restrict candidates to a playlist |
 | `max_tracks` | integer | | Cap on candidate universe size |
 
+{/* /doc-contract:mcp */}
+
 Also accepts all [search filter parameters](/mcp-tools/#shared-search-filters) for scoping the candidate universe.
 
 Returns additions with `min_score` (worst compatibility to any member), `mean_score`, and `rationale` (strongest/weakest axes, most compatible member). Stops early if no candidate meets the 0.4 quality threshold.
@@ -177,6 +210,8 @@ Returns additions with `min_score` (worst compatibility to any member), `mean_sc
 
 Analyze a pool's cohesion, coverage, and structure.
 
+{/* doc-contract:mcp tool=describe_pool schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `pool_track_ids` | string[] | | Track IDs in the pool |
@@ -184,6 +219,8 @@ Analyze a pool's cohesion, coverage, and structure.
 | `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
 | `reference_bpm` | number | | Reference BPM (default: median) |
 | `preset` | string \| object | | Pool weight spec (see [below](#pool-weight-spec)) |
+
+{/* /doc-contract:mcp */}
 
 Provide either `pool_track_ids` or `playlist_id`.
 
@@ -194,6 +231,8 @@ Returns: cohesion (mean/min pairwise), medoid track, weak members, energy band, 
 ## `discover_pools`
 
 Discover natural track pools in a library subset using Bron-Kerbosch clique enumeration on a thresholded compatibility graph. Returns overlapping pools with core/edge members and bridge tracks.
+
+{/* doc-contract:mcp tool=discover_pools schema=/ requiredness=global include=shared-search-filters */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -207,6 +246,8 @@ Discover natural track pools in a library subset using Bron-Kerbosch clique enum
 | `master_tempo` | boolean | | Master Tempo mode (default: `false`) |
 | `reference_bpm` | number | | Reference BPM for key evaluation (default: median) |
 | `preset` | string \| object | | Pool weight spec (see [below](#pool-weight-spec)) |
+
+{/* /doc-contract:mcp */}
 
 Also accepts all [search filter parameters](/mcp-tools/#shared-search-filters) for scoping the input tracks.
 
@@ -244,25 +285,37 @@ Save, list, and delete custom weight presets that persist across sessions. Built
 
 Save a custom weight preset for reuse. Weights are auto-renormalized to sum to 1.0.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `name` | string | **yes** | Name for the preset (e.g., `"deep_techno_pool"`) |
-| `scorer_type` | string | **yes** | `"pool"` or `"transition"` |
-| `weights` | object | **yes** | Weight values. For pool: `{bpm, energy, timbral, key, genre, brightness, rhythm}`. For transition: `{key, bpm, energy, genre, brightness, rhythm}` |
+{/* doc-contract:mcp tool=save_weight_preset schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `name` | string | **yes** | | Name for the preset (e.g., `"deep_techno_pool"`) |
+| `scorer_type` | string | **yes** | `["pool", "transition"]` | Scorer type |
+| `weights` | object | **yes** | | Weight values. For pool: `{bpm, energy, timbral, key, genre, brightness, rhythm}`. For transition: `{key, bpm, energy, genre, brightness, rhythm}` |
+
+{/* /doc-contract:mcp */}
 
 ### `list_weight_presets`
 
 List available weight presets (both built-in and custom saved), showing weights for each.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `scorer_type` | string | | Filter by `"pool"` or `"transition"`. Omit for all |
+{/* doc-contract:mcp tool=list_weight_presets schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `scorer_type` | string | | `["pool", "transition"]` | Filter by scorer type; omit for all |
+
+{/* /doc-contract:mcp */}
 
 ### `delete_weight_preset`
 
 Delete a custom saved weight preset. Cannot delete built-in presets.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `name` | string | **yes** | Name of the preset to delete |
-| `scorer_type` | string | **yes** | `"pool"` or `"transition"` |
+{/* doc-contract:mcp tool=delete_weight_preset schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `name` | string | **yes** | | Name of the preset to delete |
+| `scorer_type` | string | **yes** | `["pool", "transition"]` | Scorer type |
+
+{/* /doc-contract:mcp */}

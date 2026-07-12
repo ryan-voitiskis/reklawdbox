@@ -17,6 +17,8 @@ Read and write native metadata tags (ID3v2, Vorbis Comment, RIFF INFO, MP4/iTune
 
 Read metadata tags from audio files.
 
+{/* doc-contract:mcp tool=read_file_tags schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `paths` | string[] | | Explicit file paths |
@@ -28,6 +30,8 @@ Read metadata tags from audio files.
 | `include_cover_art` | boolean | | Include cover art metadata (default: `false`) |
 | `limit` | integer | | Max files to read (default: `200`, max: `2000`) |
 
+{/* /doc-contract:mcp */}
+
 Provide **exactly one** of `paths`, `track_ids`, or `directory`. Passing multiple selectors or none returns an error.
 
 ---
@@ -36,19 +40,27 @@ Provide **exactly one** of `paths`, `track_ids`, or `directory`. Passing multipl
 
 Write or delete metadata tags on audio files.
 
+{/* doc-contract:mcp tool=write_file_tags schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `writes` | array | **yes** | Array of write operations |
 | `dry_run` | boolean | | Preview changes without writing (default: `false`) |
 
+{/* /doc-contract:mcp */}
+
 Each write entry:
 
-| Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
-| `path` | string | **yes** | Path to audio file |
-| `tags` | object | **yes** | Field names mapped to values, or `null` to delete |
-| `wav_targets` | string[] | | WAV only: `"id3v2"`, `"riff_info"` (default: both) |
-| `comment_mode` | string | | How to handle existing comments |
+{/* doc-contract:mcp tool=write_file_tags schema=/properties/writes/items requiredness=global */}
+
+| Field | Type | Required | Values | Item values | Description |
+|-------|------|:--------:|--------|-------------|-------------|
+| `path` | string | **yes** | | | Path to audio file |
+| `tags` | object | **yes** | | | Field names mapped to values, or `null` to delete |
+| `wav_targets` | string[] | | | `["id3v2", "riff_info"]` | WAV tag layers (default: both) |
+| `comment_mode` | string | | `["replace", "prepend", "append"]` | | How to handle existing comments |
+
+{/* /doc-contract:mcp */}
 
 **Comment merge modes:**
 
@@ -101,11 +113,15 @@ an ID3-only or both-layer request. Non-WAV previews omit `changes_by_layer`.
 
 Extract embedded cover art from an audio file and save it to disk.
 
+{/* doc-contract:mcp tool=extract_cover_art schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `path` | string | **yes** | Path to audio file |
 | `output_path` | string | | Save location (default: `cover.{ext}` in same directory) |
 | `picture_type` | string | | Exact [accepted picture type](#accepted-cover-art-picture-types) (default: `"front_cover"`); unknown values are rejected |
+
+{/* /doc-contract:mcp */}
 
 #### Accepted cover-art picture types
 
@@ -117,11 +133,15 @@ Both cover-art tools accept these exact, case-sensitive, untrimmed values: `othe
 
 Embed cover art into one or more audio files.
 
+{/* doc-contract:mcp tool=embed_cover_art schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `image_path` | string | **yes** | Path to image file (JPEG or PNG) |
 | `targets` | string[] | **yes** | Audio files to embed art into |
 | `picture_type` | string | | Exact [accepted picture type](#accepted-cover-art-picture-types) (default: `"front_cover"`); unknown values are rejected |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -135,6 +155,8 @@ Scan the Rekordbox library for structural problems: broken file links, orphan fi
 
 Scan for tracks with missing audio files on disk. Optionally suggests relocated files by case-insensitive filename matching across content roots.
 
+{/* doc-contract:mcp tool=scan_broken_links schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `path_prefix` | string | | Scope to tracks whose file path starts with this prefix |
@@ -142,43 +164,38 @@ Scan for tracks with missing audio files on disk. Optionally suggests relocated 
 | `limit` | integer | | Max broken links to report (default: `200`) |
 | `offset` | integer | | Offset for pagination |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `scan_orphan_files`
 
 Find audio files on disk not imported into Rekordbox. Compares filesystem contents against the database for each content root.
 
+{/* doc-contract:mcp tool=scan_orphan_files schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `path_prefix` | string | | Directory to scan (default: content roots from library) |
 | `limit` | integer | | Max orphan files to report (default: `200`) |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `scan_playlist_coverage`
 
-Find tracks not assigned to any playlist. Supports all search filters for scoping.
+Find tracks not assigned to any playlist. Supports all
+[shared search filters](/mcp-tools/#shared-search-filters) for scoping.
+
+{/* doc-contract:mcp tool=scan_playlist_coverage schema=/ requiredness=global include=shared-search-filters */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `query` | string | | Search query matching title or artist |
-| `artist` | string | | Filter by artist name (partial match) |
-| `genre` | string | | Filter by genre name (partial match) |
-| `rating_min` | integer | | Minimum star rating (1--5) |
-| `bpm_min` | number | | Minimum BPM |
-| `bpm_max` | number | | Maximum BPM |
-| `key` | string | | Filter by musical key (e.g. `"Am"`, `"Cm"`) |
-| `has_genre` | boolean | | Filter by whether track has a genre set |
-| `has_label` | boolean | | Filter by whether track has a label set |
-| `year_zero` | boolean | | Filter to tracks with year = 0 (unset) |
-| `label` | string | | Filter by label name (partial match) |
-| `path` | string | | Filter by file path/folder (substring match) |
-| `path_prefix` | string | | Filter to tracks whose file path starts with this prefix |
-| `added_after` | string | | Only tracks added on or after this ISO date |
-| `added_before` | string | | Only tracks added on or before this ISO date |
-| `has_unknown_genre` | boolean | | Filter to tracks with a non-canonical genre (not in taxonomy and no known alias) |
 | `limit` | integer | | Max uncovered tracks to return (default: `200`) |
 | `offset` | integer | | Offset for pagination |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -186,11 +203,15 @@ Find tracks not assigned to any playlist. Supports all search filters for scopin
 
 Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256). Each group includes a `suggested_keep` recommendation based on audio quality.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `detection_level` | string | | `"metadata"` (default) or `"exact"` (SHA-256 hash) |
-| `path_prefix` | string | | Scope to tracks whose file path starts with this prefix |
-| `limit` | integer | | Max duplicate groups to report (default: `50`) |
+{/* doc-contract:mcp tool=scan_duplicates schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `detection_level` | string | | `["metadata", "exact"]` | Metadata matching (default) or exact SHA-256 hash |
+| `path_prefix` | string | | | Scope to tracks whose file path starts with this prefix |
+| `limit` | integer | | | Max duplicate groups to report (default: `50`) |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -206,12 +227,16 @@ Collection audit tool. The `operation` field determines the action.
 
 Scan a directory tree for convention violations.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `operation` | string | **yes** | `"scan"` |
-| `scope` | string | **yes** | Directory path to audit (must not be empty or root `/`) |
-| `revalidate` | boolean | | Re-read all files including unchanged (default: `false`) |
-| `skip_issue_types` | string[] | | Issue types to exclude (e.g., `["GENRE_SET"]`) |
+{/* doc-contract:mcp tool=audit_state schema=/ requiredness=conditional */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `operation` | string | **yes** | `["scan", "query_issues", "resolve_issues", "get_summary"]` | This mode uses `"scan"` |
+| `scope` | string | **yes** | | Directory path to audit (must not be empty or root `/`) |
+| `revalidate` | boolean | | | Re-read all files including unchanged (default: `false`) |
+| `skip_issue_types` | string[] | | | Issue types to exclude (e.g., `["GENRE_SET"]`) |
+
+{/* /doc-contract:mcp */}
 
 Detects: empty fields, WAV tag drift, filename convention violations, and imported file protection warnings.
 
@@ -221,38 +246,52 @@ The scan summary includes additive `failed_reads`. It counts files whose tags co
 
 Query detected issues from a previous scan.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `operation` | string | **yes** | `"query_issues"` |
-| `scope` | string | **yes** | Directory path prefix to filter (must not be empty or root `/`) |
-| `status` | string | | `"open"`, `"resolved"`, `"accepted"`, `"deferred"` |
-| `issue_type` | string | | Filter by issue type |
-| `limit` | integer | | Max results (default: `100`) |
-| `offset` | integer | | Pagination offset (default: `0`) |
+{/* doc-contract:mcp tool=audit_state schema=/ requiredness=conditional */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `operation` | string | **yes** | `["scan", "query_issues", "resolve_issues", "get_summary"]` | This mode uses `"query_issues"` |
+| `scope` | string | **yes** | | Directory path prefix to filter (must not be empty or root `/`) |
+| `status` | string | | | `"open"`, `"resolved"`, `"accepted"`, `"deferred"` |
+| `issue_type` | string | | | Filter by issue type |
+| `limit` | integer | | | Max results (default: `100`) |
+| `offset` | integer | | | Pagination offset (default: `0`) |
+
+{/* /doc-contract:mcp */}
 
 #### Operation: `resolve_issues`
 
 Mark issues as resolved with a resolution type.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `operation` | string | **yes** | `"resolve_issues"` |
-| `issue_ids` | integer[] | **yes** | Issue IDs to resolve |
-| `resolution` | string | **yes** | `"accepted_as_is"`, `"wont_fix"`, `"deferred"` |
-| `note` | string | | Optional comment |
+{/* doc-contract:mcp tool=audit_state schema=/ requiredness=conditional */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `operation` | string | **yes** | `["scan", "query_issues", "resolve_issues", "get_summary"]` | This mode uses `"resolve_issues"` |
+| `issue_ids` | integer[] | **yes** | | Issue IDs to resolve |
+| `resolution` | string | **yes** | | `"accepted_as_is"`, `"wont_fix"`, `"deferred"` |
+| `note` | string | | | Optional comment |
+
+{/* /doc-contract:mcp */}
 
 #### Operation: `get_summary`
 
 Get an audit summary with issue counts by type and status.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `operation` | string | **yes** | `"get_summary"` |
-| `scope` | string | **yes** | Directory path prefix (must not be empty or root `/`) |
+{/* doc-contract:mcp tool=audit_state schema=/ requiredness=conditional */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `operation` | string | **yes** | `["scan", "query_issues", "resolve_issues", "get_summary"]` | This mode uses `"get_summary"` |
+| `scope` | string | **yes** | | Directory path prefix (must not be empty or root `/`) |
+
+{/* /doc-contract:mcp */}
 
 ---
 
 ### `clear_caches` <Badge text="no params" variant="note" />
+
+{/* doc-contract:mcp tool=clear_caches schema=/ surface=none requiredness=global */}
 
 Clear all internal caches (enrichment, audio analysis, audit state) **and all staged metadata changes**. Preserves Discogs broker session.
 
@@ -266,6 +305,10 @@ Clear all internal caches (enrichment, audio analysis, audit state) **and all st
 
 Get workflow guides with step-by-step instructions.
 
+{/* doc-contract:mcp tool=help schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `topic` | string | | `"genre"`, `"genre audit"`, `"set"`, `"pool"`, `"chapter"`, `"audit"`, `"import"`, `"metadata"` (aliases: `"label"`, `"year"`, `"album"`), `"health"` — or omit for all |
+
+{/* /doc-contract:mcp */}

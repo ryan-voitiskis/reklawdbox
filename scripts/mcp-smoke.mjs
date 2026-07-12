@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
+import { McpStdioClient } from './lib/mcp-stdio.mjs'
 
 const args = process.argv.slice(2)
 let bin = './target/release/reklawdbox'
@@ -34,50 +33,13 @@ if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
 const env = { ...process.env }
 delete env.RUST_LOG
 
-const child = spawn(bin, ['mcp'], {
+const client = new McpStdioClient({
+  bin,
   cwd: process.cwd(),
   env,
-  stdio: ['pipe', 'pipe', 'pipe'],
+  timeoutMs,
 })
-
-const pending = new Map()
-const protocolViolations = []
-let nextId = 1
-let stderr = ''
-let exited = false
-
-const rl = createInterface({ input: child.stdout })
-rl.on('line', (line) => {
-  if (!line.trim()) return
-
-  let message
-  try {
-    message = JSON.parse(line)
-  } catch {
-    protocolViolations.push(line)
-    return
-  }
-
-  if (message.id != null && pending.has(message.id)) {
-    const { resolve, timer } = pending.get(message.id)
-    pending.delete(message.id)
-    clearTimeout(timer)
-    resolve(message.error ? { transportError: message.error } : message.result)
-  }
-})
-
-child.stderr.on('data', (chunk) => {
-  stderr += chunk.toString()
-})
-
-child.on('exit', (code, signal) => {
-  exited = true
-  for (const { resolve, timer } of pending.values()) {
-    clearTimeout(timer)
-    resolve({ childExit: code ?? signal })
-  }
-  pending.clear()
-})
+const protocolViolations = client.protocolViolations
 
 try {
   const summary = await runSmoke()
@@ -86,10 +48,7 @@ try {
   console.error(error instanceof Error ? error.message : String(error))
   process.exitCode = 1
 } finally {
-  child.stdin.end()
-  setTimeout(() => {
-    if (!exited) child.kill('SIGTERM')
-  }, 200)
+  await client.close()
 }
 
 async function runSmoke() {
@@ -104,7 +63,7 @@ async function runSmoke() {
   ensureNoTransportError(initialized, 'initialize')
   notify('notifications/initialized')
 
-  const toolList = await request('tools/list')
+  const toolList = await client.listTools()
   ensureNoTransportError(toolList, 'tools/list')
   const tools = (toolList.tools ?? []).map((tool) => tool.name).sort()
   for (const name of ['help', 'search_tracks', 'calibration_coverage']) {
@@ -234,28 +193,11 @@ async function callTool(name, toolArgs) {
 }
 
 function request(method, params) {
-  const id = nextId
-  nextId += 1
-  const message = { jsonrpc: '2.0', id, method }
-  if (params !== undefined) message.params = params
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      if (!pending.delete(id)) return
-      resolve({
-        timeout: method,
-        stderr: stderr.slice(-2_000),
-      })
-    }, timeoutMs)
-    pending.set(id, { resolve, timer })
-    child.stdin.write(`${JSON.stringify(message)}\n`)
-  })
+  return client.request(method, params)
 }
 
 function notify(method, params) {
-  const message = { jsonrpc: '2.0', method }
-  if (params !== undefined) message.params = params
-  child.stdin.write(`${JSON.stringify(message)}\n`)
+  client.notify(method, params)
 }
 
 function toolText(result) {

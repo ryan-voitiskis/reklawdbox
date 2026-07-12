@@ -85,6 +85,66 @@ async fn call_tool_via_router(
     result
 }
 
+#[test]
+fn help_public_contract() {
+    let menu = handle_help(HelpParams::default()).expect("DB-free help menu should succeed");
+    let payload = extract_json(&menu);
+    let workflows = payload["workflows"]
+        .as_array()
+        .expect("help menu should expose workflow records");
+    assert_eq!(
+        workflows.len(),
+        9,
+        "runtime help menu should contain nine SOPs"
+    );
+    for workflow in workflows {
+        assert!(workflow["name"].is_string());
+        assert!(workflow["summary"].is_string());
+        assert!(workflow["key_tools"].is_array());
+    }
+
+    assert_eq!(
+        payload["reference"], "https://reklawdbox.com/mcp-tools/",
+        "runtime help should link to the built MCP reference"
+    );
+    assert!(
+        !payload.to_string().contains("/reference/tools/"),
+        "runtime help must not retain the retired tool-reference route"
+    );
+
+    let recommended = payload["recommended_order"]
+        .as_str()
+        .expect("help menu should expose a recommended sequence");
+    let numbered = recommended
+        .lines()
+        .filter(|line| line.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        numbered.len(),
+        7,
+        "recommended sequence should contain seven steps"
+    );
+    for (index, line) in numbered.iter().enumerate() {
+        assert!(
+            line.starts_with(&format!("{}. ", index + 1)),
+            "recommended sequence should be consecutively numbered"
+        );
+    }
+
+    let topic = handle_help(HelpParams {
+        topic: Some("genre audit".to_owned()),
+    })
+    .expect("DB-free topic help should succeed");
+    let topic_payload = extract_json(&topic);
+    assert_eq!(topic_payload["workflow"], "Genre Audit");
+    assert!(topic_payload["key_tools"].is_array());
+    assert!(
+        topic_payload["sop"]
+            .as_str()
+            .is_some_and(|sop| !sop.is_empty())
+    );
+}
+
 #[tokio::test]
 async fn playlist_import_help_contract() {
     for topic in ["set", "pool", "chapter"] {

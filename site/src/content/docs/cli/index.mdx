@@ -19,6 +19,26 @@ reklawdbox <command> [options]
 
 CLI commands load env vars from `.mcp.json` automatically — same config as the MCP server.
 
+## Command overview
+
+{/* doc-contract:cli command=root surface=commands */}
+
+| Command | Description |
+|---------|-------------|
+| `analyze` | Batch audio analysis |
+| `backup` | Manage Rekordbox library backups |
+| `hydrate` | Batch enrichment and audio analysis |
+| `read-tags` | Read native audio-file metadata |
+| `write-tags` | Write native audio-file metadata |
+| `extract-art` | Extract embedded cover art |
+| `embed-art` | Embed cover art into audio files |
+| `setup` | Install Essentia or configure a custom broker |
+| `disconnect-broker` | Clear the stored Discogs broker session |
+
+{/* /doc-contract:cli */}
+
+{/* doc-contract:cli command=root surface=none */}
+
 ---
 
 ## `backup`
@@ -29,11 +49,15 @@ Manage Rekordbox library backups. Creates compressed archives of your database f
 reklawdbox backup [options]
 ```
 
+{/* doc-contract:cli command=backup surface=options */}
+
 | Flag | Type | Description |
 |------|------|-------------|
 | `--db-only` | flag | Database files only (~50MB, fast) |
 | `--list` | flag | List existing backups |
 | `--restore` | path | Restore from a backup archive |
+
+{/* /doc-contract:cli */}
 
 With no flags, creates a full backup (~1GB compressed) of the entire Rekordbox data directory.
 
@@ -49,6 +73,8 @@ caches for workflows that consume them.
 ```bash
 reklawdbox hydrate [options]
 ```
+
+{/* doc-contract:cli command=hydrate surface=options */}
 
 | Flag | Short | Type | Default | Description |
 |------|:-----:|------|---------|-------------|
@@ -70,6 +96,8 @@ reklawdbox hydrate [options]
 | `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (cores - 2) |
 | `--concurrency` | `-j` | integer | `4` | Enrichment concurrency (min `1`, max `16`) |
 | `--yes` | `-y` | flag | | Skip confirmation prompt |
+
+{/* /doc-contract:cli */}
 
 Discovers tracks, shows a summary with cache/pending/error counts, prompts for confirmation, then runs all three providers concurrently with progress bars and graceful Ctrl+C. If Discogs auth is needed, it opens the browser flow automatically.
 
@@ -115,6 +143,8 @@ Batch audio analysis. A focused alternative to `hydrate --providers analysis` wi
 reklawdbox analyze [options]
 ```
 
+{/* doc-contract:cli command=analyze surface=options */}
+
 | Flag | Short | Type | Default | Description |
 |------|:-----:|------|---------|-------------|
 | `--playlist` | | string | | Filter by playlist ID |
@@ -134,6 +164,8 @@ reklawdbox analyze [options]
 | `--stratum-only` | | flag | | Skip Essentia, run stratum-dsp only |
 | `--cpu` | | preset | `background` | CPU scheduling: `background` (~50% cores, niced) or `overnight` (cores - 2) |
 | `--concurrency` | `-j` | integer | auto | Override analysis concurrency (overrides `--cpu` preset, min `1`, max `16`) |
+
+{/* /doc-contract:cli */}
 
 Concurrency set by `--cpu` preset: `background` (~50% cores, nice 10), `overnight` (cores - 2). Cached analysis is validated against the analysis schema plus the canonical audio file identity (path, size, and modification time). Stratum additionally fingerprints the Rekordbox beat grid used for analysis, or a versioned no-grid fallback, so grid changes invalidate and recompute Stratum without invalidating Essentia.
 
@@ -159,6 +191,8 @@ Read native metadata tags from audio files.
 reklawdbox read-tags <paths...> [options]
 ```
 
+{/* doc-contract:cli command=read-tags surface=options */}
+
 | Flag | Short | Type | Default | Description |
 |------|:-----:|------|---------|-------------|
 | `<paths>` | | string[] | required | Audio files or directories |
@@ -166,6 +200,8 @@ reklawdbox read-tags <paths...> [options]
 | `--recursive` | `-r` | flag | | Recursively scan directories for audio files |
 | `--cover-art` | | flag | | Include cover art metadata |
 | `--json` | | flag | | Output as JSON (JSONL for multiple files) |
+
+{/* /doc-contract:cli */}
 
 Without `--recursive`, directories are scanned one level deep. WAV files show both ID3v2 and RIFF INFO layers.
 
@@ -189,6 +225,8 @@ Write or delete metadata tags on audio files.
 reklawdbox write-tags <path> [options]
 ```
 
+{/* doc-contract:cli command=write-tags surface=options */}
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `<path>` | string | required | Audio file to write to |
@@ -210,6 +248,8 @@ reklawdbox write-tags <path> [options]
 | `--wav-targets` | list | both | WAV targets: `id3v2`, `riff_info` |
 | `--json-input` | flag | | Read tags from stdin as JSON |
 | `--json` | flag | | Output as JSON |
+
+{/* /doc-contract:cli */}
 
 Set a field to `""` to delete it. Use `--dry-run` to preview. For WAV files,
 human-readable previews show separate `ID3v2` and `RIFF INFO` headings for the
@@ -242,12 +282,16 @@ Extract embedded cover art from an audio file.
 reklawdbox extract-art <path> [options]
 ```
 
+{/* doc-contract:cli command=extract-art surface=options */}
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `<path>` | string | required | Audio file |
 | `--output` | string | `cover.{ext}` | Output path |
 | `--picture-type` | string | `front_cover` | Exact [accepted picture type](#accepted-cover-art-picture-types); unknown values are rejected |
 | `--json` | flag | | Output as JSON |
+
+{/* /doc-contract:cli */}
 
 ### Example
 
@@ -269,12 +313,16 @@ Embed cover art into one or more audio files.
 reklawdbox embed-art <image> <targets...> [options]
 ```
 
+{/* doc-contract:cli command=embed-art surface=options */}
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `<image>` | string | required | Image file (JPEG or PNG) |
 | `<targets>` | string[] | required | Audio files to embed into |
 | `--picture-type` | string | `front_cover` | Exact [accepted picture type](#accepted-cover-art-picture-types); unknown values are rejected |
 | `--json` | flag | | Output as JSON |
+
+{/* /doc-contract:cli */}
 
 ### Example
 
@@ -293,10 +341,14 @@ Installs Essentia into a managed Python venv for audio analysis. Finds Python 3.
 reklawdbox setup [options]
 ```
 
+{/* doc-contract:cli command=setup surface=options */}
+
 | Flag | Short | Description |
 |------|:-----:|-------------|
 | `--broker` | | Configure a custom Discogs broker URL and token (self-hosted brokers only) |
 | `--yes` | `-y` | Accept defaults without prompting (only applies to `--broker`) |
+
+{/* /doc-contract:cli */}
 
 The `--broker` flag opens an interactive prompt for custom Discogs broker configuration, writing settings to `~/Library/Application Support/reklawdbox/config.toml`. The default broker is preconfigured and needs no setup.
 
@@ -315,3 +367,5 @@ so it is safe to run when no matching session exists.
 ```bash
 reklawdbox disconnect-broker
 ```
+
+{/* doc-contract:cli command=disconnect-broker surface=none */}

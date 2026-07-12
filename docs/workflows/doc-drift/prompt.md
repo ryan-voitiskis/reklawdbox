@@ -1,6 +1,24 @@
-You are auditing documentation for drift against the actual codebase. Your
-goal is to find every place where documentation describes something that
-doesn't match what the code actually does, and fix it.
+You are auditing documentation for drift against the actual codebase. Start
+with the automated contract, then investigate semantic accuracy and user
+clarity that the structural checker cannot prove.
+
+## Phase 0: Run the automated contract
+
+Run these checks before launching the narrative audit:
+
+```sh
+cargo build --release
+node --test scripts/check-doc-contract.test.mjs
+(cd site && npm ci && npm run build)
+node scripts/check-doc-contract.mjs \
+  --bin ./target/release/reklawdbox \
+  --dist ./site/dist
+```
+
+Fix structural failures at their canonical boundary. Do not copy the live MCP
+schema, CLI inventory, or workflow order into another snapshot. A green result
+proves marked public surfaces and built links agree with code; it does not prove
+that descriptions, examples, risks, or workflows are correct.
 
 ## Scope
 
@@ -16,50 +34,54 @@ The documentation surfaces to audit are:
    `src/cli/`
 5. **README.md** — project root
 
-## Phase 1: Extract ground truth from code
+## Phase 1: Extract semantic ground truth from code
 
 Launch subagents in parallel to extract the actual state from the codebase:
 
-**Subagent A — MCP tool inventory:**
-Read `src/tools/mod.rs` to get the full list of `#[tool(...)]` declarations.
-For each tool, extract: tool name, description, and the handler function it
-delegates to. Then read each handler's parameter struct to get parameter
-names, types, defaults, and schemars descriptions. Output a structured list.
+**Subagent A — MCP behavior:**
+Trace handlers behind the documented tools. Focus on selection precedence,
+side effects, persistence, defaults applied outside JSON Schema, validation,
+failure behavior, and output meaning. The automated checker already owns the
+marked name/type inventory.
 
-**Subagent B — CLI inventory:**
-Read `src/cli/` to extract all subcommands, their arguments, flags,
-defaults, and help text from clap derive annotations.
+**Subagent B — CLI behavior:**
+Read `src/cli/` to verify workflow behavior, prompts, exit status, cache and
+retry semantics, and operational advice beyond the machine-checked help
+inventory.
 
-**Subagent C — SOP inventory:**
-Read each file in `site/src/partials/sops/` and extract: tool names
-referenced, parameter names referenced, expected tool behavior described,
-and any stated defaults or constraints.
+**Subagent C — SOP semantics:**
+Read each file in `site/src/partials/sops/` and check that sequence, expected
+behavior, stated defaults, constraints, recovery guidance, and safety advice
+match the handlers. Recognized tool calls and named top-level arguments are
+already checked automatically.
 
-**Subagent D — Site docs inventory:**
-Read each file in `site/src/content/docs/` and extract the same: tool names,
-parameter names, described behavior, stated defaults, CLI commands referenced.
+**Subagent D — user journey:**
+Walk the site docs as a new user. Check onboarding, discovery, prerequisites,
+cross-links, terminology, examples, and whether the next safe action is clear.
+Verify current external Rekordbox UI instructions separately.
 
 ## Phase 2: Cross-reference
 
 With all four inventories in hand, systematically check for drift:
 
-### Tools coverage
-- Every MCP tool in the code should appear in the site docs tool reference
-- Every tool's documented parameters should match the actual parameter struct
-- Parameter descriptions in site docs should match schemars descriptions
-- Documented defaults should match actual defaults in code
+### MCP behavior and descriptions
+- Descriptions should match actual handler behavior and output meaning.
+- Defaults applied in handlers should agree with the docs even when the live
+  schema cannot expose them.
+- Selection precedence, cache semantics, side effects, and failure behavior
+  should be explicit where they affect safe use.
 
-### CLI coverage
-- Every CLI subcommand should appear in the CLI docs page
-- Documented flags and arguments should match clap annotations
-- Documented defaults should match actual defaults
+### CLI behavior
+- Prompts, confirmation bypasses, retries, progress, exit status, and partial
+  completion should match the implementation.
+- Examples should remain executable and operationally safe.
 
 ### SOP accuracy
-- Tool names referenced in SOPs must exist
-- Parameter names referenced in SOPs must exist on the stated tool
 - Behavior described in SOPs must match what the handler code does
 - Stated constraints (e.g., "requires cache coverage first") must match
   actual runtime checks
+- Risks, checkpoints, recovery paths, and handoff to the next workflow should
+  be clear to a first-time user
 
 ### README accuracy
 - Feature claims should reflect current capabilities
@@ -71,6 +93,12 @@ With all four inventories in hand, systematically check for drift:
 - Tool descriptions that describe pre-refactor behavior
 - Screenshots or examples using obsolete output formats
 
+### Automated-gate extension review
+- If workflow continuation fields exist, extend checks by consuming them from
+  `site/src/data/workflows.mjs`; never repeat the values in the checker.
+- If generated audience outputs exist, validate their built files and links
+  through `check-doc-contract` without creating a hand-maintained output list.
+
 ## Phase 3: Report and fix
 
 For each finding, categorize as:
@@ -81,9 +109,9 @@ For each finding, categorize as:
   omission would mislead a user; otherwise note for follow-up.
 - **Minor** — wording differences that don't cause confusion. Skip.
 
-Present the categorized findings to the user and wait for confirmation.
-Then implement fixes, prioritizing Incorrect and Stale items. Build the
-site (`cd site && npm run build`) to verify no broken links or build
-errors after changes.
+Present the categorized findings to the user and wait for confirmation. Then
+implement fixes, prioritizing Incorrect and Stale items. Re-run the automated
+contract and site build after changes; also rebuild the Rust binary when an
+embedded SOP changed.
 
 Draft a conventional commit message and present it for approval.

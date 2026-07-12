@@ -49,12 +49,42 @@ run_mcp_smoke() {
   fi
 }
 
+docs_contract_changed() {
+  changed_since_base \
+    site \
+    src/tools \
+    src/types.rs \
+    src/tags.rs \
+    src/cli \
+    src/main.rs \
+    Cargo.toml \
+    Cargo.lock \
+    scripts/mcp-smoke.mjs \
+    scripts/lib/mcp-stdio.mjs \
+    scripts/check-doc-contract.mjs \
+    scripts/check-doc-contract.test.mjs \
+    scripts/release.sh \
+    .github/workflows/docs-pages.yml \
+    docs/workflows/doc-drift \
+    site/src/content/docs/mcp-tools \
+    site/src/content/docs/cli \
+    site/src/partials/sops \
+    site/src/data/workflows.mjs \
+    site/src/data/tool-reference.mjs \
+    site/astro.config.mjs \
+    README.md
+}
+
 run_docs_gate_if_needed() {
-  if changed_since_base site .github/workflows/docs-pages.yml; then
-    echo "Docs site changed since $BASE_TAG; running docs build gate."
+  if docs_contract_changed; then
+    echo "Code-backed documentation contracts changed since $BASE_TAG; running docs gate."
+    node --test scripts/check-doc-contract.test.mjs
     (cd site && npm ci && npm run build)
+    node scripts/check-doc-contract.mjs \
+      --bin ./target/release/reklawdbox \
+      --dist ./site/dist
   else
-    echo "Docs site unchanged since $BASE_TAG; skipping docs build gate."
+    echo "Code-backed documentation contracts unchanged since $BASE_TAG; skipping docs gate."
   fi
 }
 
@@ -69,22 +99,9 @@ run_broker_gate_if_needed() {
 }
 
 check_doc_drift() {
-  echo "Doc drift reminder: if MCP tools, params, CLI flags, README claims, or embedded SOPs changed, run docs/workflows/doc-drift/README.md before release."
-
-  if changed_since_base \
-    src/tools/params.rs \
-    src/tools/mod.rs \
-    site/src/partials/sops \
-    README.md \
-    src/main.rs \
-    src/cli; then
-    if [ "${REKLAWDBOX_DOC_DRIFT_DONE:-}" != "1" ]; then
-      echo "error: release-sensitive tool, CLI, README, or embedded SOP surfaces changed since $BASE_TAG."
-      echo "Run docs/workflows/doc-drift/README.md, then rerun with REKLAWDBOX_DOC_DRIFT_DONE=1."
-      exit 1
-    fi
-
-    echo "REKLAWDBOX_DOC_DRIFT_DONE=1 set; continuing after operator-confirmed doc-drift workflow."
+  if docs_contract_changed; then
+    echo "Automated documentation contracts passed."
+    echo "Semantic reminder: review workflow intent, risks, recovery guidance, external UI steps, and user-facing clarity using docs/workflows/doc-drift/README.md."
   fi
 }
 

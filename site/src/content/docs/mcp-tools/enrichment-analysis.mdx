@@ -28,6 +28,8 @@ The batch surfaces are deliberately narrower:
 
 Look up a single track on Discogs. Returns genre, style, label, year, catalog number, and release metadata.
 
+{/* doc-contract:mcp tool=lookup_discogs schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | | Track ID — auto-fills artist/title/album from library |
@@ -35,6 +37,8 @@ Look up a single track on Discogs. Returns genre, style, label, year, catalog nu
 | `title` | string | | Track title (required if no `track_id`) |
 | `album` | string | | Album/release title for more accurate matching |
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
+
+{/* /doc-contract:mcp */}
 
 <Aside type="note">
   If the session has expired, the response includes an `auth_url` — open it in a browser, approve access, and call again.
@@ -46,12 +50,16 @@ Look up a single track on Discogs. Returns genre, style, label, year, catalog nu
 
 Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and label.
 
+{/* doc-contract:mcp tool=lookup_beatport schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | | Track ID — auto-fills artist/title from library |
 | `artist` | string | | Artist name (required if no `track_id`) |
 | `title` | string | | Track title (required if no `track_id`) |
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -59,6 +67,8 @@ Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and labe
 
 Look up a track on MusicBrainz for year/label data. Returns year from first-release-date and label from the best matching release. Results are cached.
 
+{/* doc-contract:mcp tool=lookup_musicbrainz schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | | Track ID — auto-fills artist/title from library |
@@ -66,11 +76,15 @@ Look up a track on MusicBrainz for year/label data. Returns year from first-rele
 | `title` | string | | Track title (required if no `track_id`) |
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `lookup_bandcamp`
 
 Look up a track on Bandcamp for year/label/tags/cover data. Pass a direct Bandcamp `/track/` or `/album/` `url` when you already found the release page; this bypasses Bandcamp search and refreshes the artist/title cache entry. Album pages use the provided `title` to select the track from Bandcamp JSON-LD. Particularly effective for underground/independent electronic music.
+
+{/* doc-contract:mcp tool=lookup_bandcamp schema=/ requiredness=global */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -80,22 +94,28 @@ Look up a track on Bandcamp for year/label/tags/cover data. Pass a direct Bandca
 | `url` | string | | Direct Bandcamp `/track/` or `/album/` URL; bypasses search |
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `enrich_tracks`
 
 Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `track_ids` | string[] | | Specific track IDs (highest priority selector) |
-| `playlist_id` | string | | Enrich tracks in this playlist |
-| `max_tracks` | integer | | Max tracks to enrich (default: `50`) |
-| `offset` | integer | | Skip first N tracks in result set |
-| `providers` | string[] | | Providers: `"discogs"`, `"beatport"`, `"bandcamp"` (default: `["discogs"]`) |
-| `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
-| `force_refresh` | boolean | | Bypass cache entirely (default: `false`) |
-| `concurrency` | integer | | Max concurrent enrichments (default: `4`, max: `8`) |
+{/* doc-contract:mcp tool=enrich_tracks schema=/ requiredness=global include=shared-search-filters */}
+
+| Parameter | Type | Required | Item values | Description |
+|-----------|------|:--------:|-------------|-------------|
+| `track_ids` | string[] | | | Specific track IDs (highest priority selector) |
+| `playlist_id` | string | | | Enrich tracks in this playlist |
+| `max_tracks` | integer | | | Max tracks to enrich (default: `50`) |
+| `offset` | integer | | | Skip first N tracks in result set |
+| `providers` | string[] | | `["discogs", "beatport", "bandcamp"]` | Providers (default: `["discogs"]`) |
+| `skip_cached` | boolean | | | Skip already-cached tracks (default: `true`) |
+| `force_refresh` | boolean | | | Bypass cache entirely (default: `false`) |
+| `concurrency` | integer | | | Max concurrent enrichments (default: `4`, max: `8`) |
+
+{/* /doc-contract:mcp */}
 
 The response summary reports cache persistence under `summary.cache_writes`:
 
@@ -128,10 +148,14 @@ provider context, and is never also reported as enriched or skipped.
 
 Analyze one track. Returns BPM, key, and (with Essentia) energy descriptors.
 
+{/* doc-contract:mcp tool=analyze_track_audio schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | **yes** | Track ID |
 | `skip_cached` | boolean | | Skip if already cached (default: `true`) |
+
+{/* /doc-contract:mcp */}
 
 Cached analysis is validated against the analysis schema plus the canonical audio file identity (path, size, and modification time). Stratum additionally fingerprints the Rekordbox beat grid used for analysis, or a versioned no-grid fallback. A grid change invalidates and recomputes the Stratum result while leaving the Essentia result fresh.
 
@@ -140,6 +164,8 @@ Cached analysis is validated against the analysis schema plus the canonical audi
 ### `analyze_audio_batch`
 
 Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to analyze.
+
+{/* doc-contract:mcp tool=analyze_audio_batch schema=/ requiredness=global include=shared-search-filters */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
@@ -150,8 +176,12 @@ Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-
 | `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
 | `concurrency` | integer | | Max concurrent analyses (default: `cpus - 2`, min: `1`, max: `4`) |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `setup_essentia` <Badge text="no params" variant="note" />
+
+{/* doc-contract:mcp tool=setup_essentia schema=/ surface=none requiredness=global */}
 
 Install or validate Essentia in a local Python venv. Creates a venv at `~/.local/share/reklawdbox/essentia-venv/` if needed. Activation takes effect immediately — no server restart needed.

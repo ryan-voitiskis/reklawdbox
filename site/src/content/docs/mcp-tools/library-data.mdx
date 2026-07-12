@@ -13,35 +13,28 @@ import { Aside, Badge } from '@astrojs/starlight/components';
 
 ### `read_library` <Badge text="no params" variant="note" />
 
+{/* doc-contract:mcp tool=read_library schema=/ surface=none requiredness=global */}
+
 Returns a library summary: track count, genre distribution, average BPM, key distribution, and rating breakdown.
 
 ---
 
 ### `search_tracks`
 
-Search and filter tracks. All parameters are optional — combine any set of filters.
+Search and filter tracks. All parameters are optional — combine any set of
+[shared search filters](/mcp-tools/#shared-search-filters) with the local
+options below.
+
+{/* doc-contract:mcp tool=search_tracks schema=/ requiredness=global include=shared-search-filters */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `query` | string | | Free-text search matching title or artist |
-| `artist` | string | | Filter by artist (partial match) |
-| `genre` | string | | Filter by genre (partial match) |
-| `rating_min` | integer | | Minimum star rating (1-5) |
-| `bpm_min` | number | | Minimum BPM |
-| `bpm_max` | number | | Maximum BPM |
-| `key` | string | | Filter by musical key (e.g., `"Am"`) |
-| `has_genre` | boolean | | Filter by whether track has a genre set |
-| `has_label` | boolean | | Filter by whether track has a label set |
-| `year_zero` | boolean | | Filter to tracks with year = 0 (unset) |
-| `label` | string | | Filter by label (partial match) |
-| `path` | string | | Filter by file path/folder (substring) |
-| `path_prefix` | string | | Require file path starts with this prefix |
-| `added_after` | string | | ISO date — tracks added on or after |
-| `added_before` | string | | ISO date — tracks added on or before |
 | `playlist` | string | | Filter by playlist ID |
 | `include_samples` | boolean | | Include Rekordbox factory samples (default: `false`) |
 | `limit` | integer | | Max results (default: `50`, max: `200`) |
 | `offset` | integer | | Skip first N results for pagination |
+
+{/* /doc-contract:mcp */}
 
 Factory sample tracks are excluded by default. Set `include_samples: true` to include them.
 
@@ -51,13 +44,19 @@ Factory sample tracks are excluded by default. Set `include_samples: true` to in
 
 Get full details for a single track by ID. Returns Rekordbox metadata only — use `resolve_track_data` for enrichment and audio analysis data.
 
+{/* doc-contract:mcp tool=get_track schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | **yes** | Track ID |
 
+{/* /doc-contract:mcp */}
+
 ---
 
 ### `get_playlists` <Badge text="no params" variant="note" />
+
+{/* doc-contract:mcp tool=get_playlists schema=/ surface=none requiredness=global */}
 
 List all playlists with track counts. Returns the full playlist tree including folders and smart playlists.
 
@@ -67,10 +66,14 @@ List all playlists with track counts. Returns the full playlist tree including f
 
 List tracks in a specific playlist, in playlist order.
 
+{/* doc-contract:mcp tool=get_playlist_tracks schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `playlist_id` | string | **yes** | Playlist ID |
 | `limit` | integer | | Max results (default: `200`) |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -82,10 +85,14 @@ List tracks in a specific playlist, in playlist order.
 
 List recent DJ sessions from Rekordbox play history. Returns session ID, name, date, track count, and estimated wall-clock duration.
 
+{/* doc-contract:mcp tool=get_sessions schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `limit` | integer | | Max sessions to return (default: `20`, max: `100`) |
 | `after` | string | | Only sessions on or after this ISO date (e.g., `"2024-01-01"`) |
+
+{/* /doc-contract:mcp */}
 
 Duration is estimated from the timestamp span of tracks in the session plus the last track's length. Returns `null` for single-track sessions.
 
@@ -95,9 +102,13 @@ Duration is estimated from the timestamp span of tracks in the session plus the 
 
 Get the ordered track list for a specific DJ session. Each track includes a `played_at` timestamp showing when it was loaded during the session.
 
+{/* doc-contract:mcp tool=get_session_tracks schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `session_id` | string | **yes** | Session ID from `get_sessions` |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -105,10 +116,14 @@ Get the ordered track list for a specific DJ session. Each track includes a `pla
 
 Get per-track play statistics scoped by [shared search filters](/mcp-tools/#shared-search-filters). Shows play counts, last played dates, and which sessions each track appeared in.
 
+{/* doc-contract:mcp tool=get_play_stats schema=/ requiredness=global include=shared-search-filters */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `include_unplayed` | boolean | | Also return tracks matching filters that have never been played (default: `false`) |
 | `limit` | integer | | Max results (default: `200`, max: `500`) |
+
+{/* /doc-contract:mcp */}
 
 Results are ordered by play count descending. When `include_unplayed` is `true`, unplayed tracks are appended after played tracks (ordered by title).
 
@@ -124,9 +139,13 @@ Return locally-cached data without external API calls or analysis.
 
 Return all cached enrichment, audio analysis, and staged changes for one track.
 
+{/* doc-contract:mcp tool=resolve_track_data schema=/ requiredness=global */}
+
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `track_id` | string | **yes** | Track ID |
+
+{/* /doc-contract:mcp */}
 
 ---
 
@@ -134,12 +153,16 @@ Return all cached enrichment, audio analysis, and staged changes for one track.
 
 Batch version of `resolve_track_data`. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to resolve.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `track_ids` | string[] | | Specific track IDs (highest priority selector) |
-| `playlist_id` | string | | Resolve tracks in this playlist |
-| `max_tracks` | integer | | Max tracks to return (default: `50`) |
-| `format` | string | | `"full"` (default) or `"classification"` |
+{/* doc-contract:mcp tool=resolve_tracks_data schema=/ requiredness=global include=shared-search-filters */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `track_ids` | string[] | | | Specific track IDs (highest priority selector) |
+| `playlist_id` | string | | | Resolve tracks in this playlist |
+| `max_tracks` | integer | | | Max tracks to return (default: `50`) |
+| `format` | string | | `["full", "classification"]` | `"full"` (default) or `"classification"` |
+
+{/* /doc-contract:mcp */}
 
 The `"classification"` format returns a compact payload (~400-500 bytes/track vs 2-4KB) with only genre classification fields: mapped Discogs genres/styles, Beatport genre, audio features, and completeness flags.
 
@@ -153,11 +176,16 @@ The `"classification"` format returns a compact payload (~400-500 bytes/track vs
 
 Report cache completeness for a track scope. Accepts [shared search filters](/mcp-tools/#shared-search-filters).
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `track_ids` | string[] | | Specific track IDs |
-| `playlist_id` | string | | Check tracks in this playlist |
-| `max_tracks` | integer | | Max tracks to check (default: unbounded) |
+{/* doc-contract:mcp tool=cache_coverage schema=/ requiredness=global include=shared-search-filters */}
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|:--------:|--------|-------------|
+| `track_ids` | string[] | | | Specific track IDs |
+| `playlist_id` | string | | | Check tracks in this playlist |
+| `max_tracks` | integer | | | Max tracks to check (default: unbounded) |
+| `format` | string | | `["full", "classification"]` | `"full"` (default) or `"classification"` |
+
+{/* /doc-contract:mcp */}
 
 Returns exactly four coverage entries for the selected scope:
 

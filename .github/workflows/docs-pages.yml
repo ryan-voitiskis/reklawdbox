@@ -5,10 +5,38 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "src/tools/**"
+      - "src/types.rs"
+      - "src/tags.rs"
+      - "src/cli/**"
+      - "src/main.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/mcp-smoke.mjs"
+      - "scripts/lib/mcp-stdio.mjs"
+      - "scripts/check-doc-contract.mjs"
+      - "scripts/check-doc-contract.test.mjs"
+      - "scripts/release.sh"
+      - "docs/workflows/doc-drift/**"
+      - "README.md"
       - ".github/workflows/docs-pages.yml"
   pull_request:
     paths:
       - "site/**"
+      - "src/tools/**"
+      - "src/types.rs"
+      - "src/tags.rs"
+      - "src/cli/**"
+      - "src/main.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/mcp-smoke.mjs"
+      - "scripts/lib/mcp-stdio.mjs"
+      - "scripts/check-doc-contract.mjs"
+      - "scripts/check-doc-contract.test.mjs"
+      - "scripts/release.sh"
+      - "docs/workflows/doc-drift/**"
+      - "README.md"
       - ".github/workflows/docs-pages.yml"
   workflow_dispatch:
 
@@ -34,13 +62,30 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+
       - name: Install dependencies
         working-directory: site
         run: npm ci
 
+      - name: Test documentation contract parsers
+        run: node --test scripts/check-doc-contract.test.mjs
+
+      - name: Build DB-free runtime
+        run: cargo build --release
+
       - name: Build docs
         working-directory: site
         run: npm run build
+
+      - name: Check live documentation contracts
+        run: node scripts/check-doc-contract.mjs --bin ./target/release/reklawdbox --dist ./site/dist
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'

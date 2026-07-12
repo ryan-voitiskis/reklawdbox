@@ -6,8 +6,9 @@ sidebar:
 ---
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import { toolCounts, toolReferences } from '../../../data/tool-reference.mjs';
 
-reklawdbox provides 51 tools for reading your library, enriching metadata, analyzing audio, building sets, discovering pools, and exporting changes. You don't need to know these to use reklawdbox — the agent picks the right tools automatically. This reference is here if you're curious or want to understand what's happening.
+reklawdbox provides {toolReferences.length} tools for reading your library, enriching metadata, analyzing audio, building sets, discovering pools, and exporting changes. You don't need to know these to use reklawdbox — the agent picks the right tools automatically. This reference is here if you're curious or want to understand what's happening.
 
 ## Tool pipeline
 
@@ -26,29 +27,31 @@ Library & Data ──> Enrichment & Analysis ──> Classification & Staging �
 <CardGrid>
   <Card title="Library & Data" icon="magnifier">
     Search tracks, read playlists, resolve cached enrichment and analysis data.
-    [11 tools](/mcp-tools/library-data/)
+    <a href="/mcp-tools/library-data/">{toolCounts['library-data']} tools</a>
   </Card>
   <Card title="Enrichment & Analysis" icon="cloud-download">
     Look up metadata on Discogs, Beatport, MusicBrainz, and Bandcamp. Analyze audio for BPM, key, and energy descriptors.
-    [8 tools](/mcp-tools/enrichment-analysis/)
+    <a href="/mcp-tools/enrichment-analysis/">{toolCounts['enrichment-analysis']} tools</a>
   </Card>
   <Card title="Classification & Staging" icon="pencil">
     Genre classification, auditing, metadata backfill, staging, and XML export.
-    [11 tools](/mcp-tools/classification-staging/)
+    <a href="/mcp-tools/classification-staging/">{toolCounts['classification-staging']} tools</a>
   </Card>
   <Card title="Mixing & Sequencing" icon="bars-ascending">
     Score transitions, build set sequences, and discover compatible track pools.
-    [10 tools](/mcp-tools/mixing/)
+    <a href="/mcp-tools/mixing/">{toolCounts.mixing} tools</a>
   </Card>
   <Card title="Files & System" icon="setting">
     Read/write native file tags, manage cover art, audit collections, and clear caches.
-    [11 tools](/mcp-tools/files-system/)
+    <a href="/mcp-tools/files-system/">{toolCounts['files-system']} tools</a>
   </Card>
 </CardGrid>
 
 ## Shared search filters
 
 Many tools share a common set of **search filter parameters**. Used by `search_tracks`, `get_play_stats`, `enrich_tracks`, `analyze_audio_batch`, `resolve_tracks_data`, `cache_coverage`, `classify_tracks`, `audit_genres`, `scan_playlist_coverage`, `expand_pool`, and `discover_pools`.
+
+{/* doc-contract:mcp-surface name=shared-search-filters schema=/ requiredness=global */}
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -68,6 +71,8 @@ Many tools share a common set of **search filter parameters**. Used by `search_t
 | `added_after` | string | ISO date — only tracks added on or after |
 | `added_before` | string | ISO date — only tracks added on or before |
 | `has_unknown_genre` | boolean | Filter to tracks with a non-canonical genre (not in taxonomy and no known alias). Tracks with empty genre are excluded. Only `true` is meaningful |
+
+{/* /doc-contract:mcp-surface */}
 
 <Aside type="tip">
   Filters are combinable: `genre: "Techno"` + `bpm_min: 130` + `has_genre: true` scopes to up-tempo techno with genres assigned.
