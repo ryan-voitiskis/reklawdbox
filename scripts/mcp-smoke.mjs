@@ -119,6 +119,12 @@ async function runSmoke() {
     throw new Error("help(topic='genre') did not mention calibration_coverage")
   }
 
+  const auditHelp = await callTool('help', { topic: 'audit' })
+  const auditHelpText = toolText(auditHelp)
+  if (!auditHelpText.includes('Reload Tag')) {
+    throw new Error("help(topic='audit') did not mention Reload Tag")
+  }
+
   const summary = {
     binary: bin,
     server: initialized.serverInfo,
@@ -127,6 +133,10 @@ async function runSmoke() {
     help: {
       topic: 'genre',
       bytes: Buffer.byteLength(helpText),
+    },
+    auditHelp: {
+      topic: 'audit',
+      bytes: Buffer.byteLength(auditHelpText),
     },
     protocolViolations,
   }

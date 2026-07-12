@@ -40,7 +40,15 @@ This fixes artist names, track titles, and file naming conventions. Getting thes
 
 #### Checkpoint
 
-No XML needed here — Collection Audit writes directly to files. Spot-check a few corrected tracks in Rekordbox, then start a fresh session for Session 2.
+No XML needed here — Collection Audit writes directly to files. If the agent
+lists successfully changed imported tracks, select **only** those tracks in
+Rekordbox and choose **Reload Tag**. This is a hard checkpoint: wait for the
+agent to verify a bounded sample of artist/title/album values before starting
+Session 2.
+
+Reload Tag can overwrite intentional Rekordbox database-only edits with values
+from the audio files. For WAV files, label and track number are not available in
+RIFF INFO and will not update through Reload Tag.
 
 ---
 

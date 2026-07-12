@@ -32,6 +32,18 @@ The audit catches these issues and the agent writes both tag formats automatical
 
 Files already imported into Rekordbox are never renamed — Rekordbox stores absolute paths and can't update them through XML. To rename an imported file: delete it from Rekordbox first, rename, then re-import.
 
+## After fixes
+
+For every successful tag change to an imported track, the agent lists the exact
+tracks for you to select in Rekordbox and **Reload Tag** before enrichment. The
+workflow pauses for your confirmation, then verifies a small sample against the
+file tags. Reload Tag can overwrite intentional Rekordbox-only edits with the
+values stored in the audio file, so select only the listed tracks.
+
+WAV Reload Tag reads RIFF INFO, which does not support label or track-number
+fields. Those fields still need XML import or a manual Rekordbox edit when they
+change.
+
 ## File naming conventions
 
 **Album tracks:** `NN Artist Name - Track Title.ext`

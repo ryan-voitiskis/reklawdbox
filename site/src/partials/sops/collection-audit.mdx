@@ -43,7 +43,7 @@ Review summary: `files_in_scope`, `failed_reads`, `new_issues` by type, `total_o
 
 If `failed_reads` > 0, surface the unreadable paths from `warnings` and retry the scan. If a path remains unreadable, report an **incomplete audit** and do not take the clean-result path.
 
-Only when both `total_open` = 0 and `failed_reads` = 0 → skip to Final Report.
+Only when both `total_open` = 0 and `failed_reads` = 0 → skip to Step 6.
 
 ### 2. Review and triage
 
@@ -72,6 +72,18 @@ Present planned writes for approval, then apply:
 ```
 write_file_tags(writes=[{path: "...", tags: {artist: "...", title: "..."}}])
 ```
+
+Track every non-dry-run write result for the Rekordbox handoff:
+
+- Retain the returned path and successful field changes from `fields_written`
+  and `fields_deleted` only when `status="ok"` and at least one field changed.
+  Failed writes and no-op results do not enter the handoff list.
+- For every successful changed path, call the read-only
+  `search_tracks(path="...")` and require an exact `file_path` match before
+  treating the file as imported. Do not assume an audit issue has a track ID.
+- For imported matches, keep the Rekordbox track ID, artist, title, path, changed
+  fields, and intended post-write artist/title/album values. Deduplicate by
+  track ID and exact path. Unimported files need no Reload Tag handoff.
 
 Re-scan to verify fixes (scan auto-marks resolved issues as `fixed`):
 
@@ -134,7 +146,38 @@ Check `failed_reads` before reviewing issue totals. If it is nonzero, surface th
 
 If `total_open` > 0, return to Step 2 or confirm remaining items are intentionally deferred.
 
-### 6. Final report
+### 6. Synchronize changed imported tags in Rekordbox (blocking)
+
+If the deduplicated handoff list is empty, state that no successfully changed
+files were imported into Rekordbox and continue to Step 7.
+
+Otherwise, show the deduplicated list with artist, title, path, and changed
+fields. Warn the user that **Reload Tag replaces Rekordbox-side values with file
+tag values**: intentional database-only edits in fields Rekordbox reloads can be
+overwritten.
+
+Ask the user to select **only** the listed tracks in Rekordbox, right-click, and
+choose **Reload Tag**.
+
+**Pause here. Do not continue until the user confirms Reload Tag is complete.**
+
+After confirmation, verify a bounded sample of up to 5 changed imported tracks
+(all tracks when there are fewer than 5):
+
+1. Read each sample file's artist, title, and album with `read_file_tags`.
+2. Re-read the same exact path with `search_tracks(path="...")` and require an
+   exact `file_path` match.
+3. Compare the Rekordbox database artist/title/album with the file tag values.
+
+Any mismatch means the Reload Tag checkpoint is **incomplete**. Report the
+mismatched paths and values, ask the user to retry the scoped Reload Tag, and do
+not proceed to the final report.
+
+For WAV files, Reload Tag reads RIFF INFO, which has no label or track-number
+fields. Do not claim those fields were synchronized; set them later through XML
+import or manually in Rekordbox when needed.
+
+### 7. Final report
 
 ```
 audit_state(get_summary, scope="/path/")
@@ -142,7 +185,11 @@ audit_state(get_summary, scope="/path/")
 
 Carry `failed_reads` forward from the most recent scan response; `get_summary` reports persisted issue state, not read-attempt counters.
 
-Present: scope, files scanned, `failed_reads`, pass rate, fixes by type, deferred items, and next steps (Rekordbox import, genre classification SOP). Declare the audit clean only when `total_open` = 0 and `failed_reads` = 0; otherwise label it an incomplete audit and list the unreadable paths.
+Present: scope, files scanned, `failed_reads`, pass rate, fixes by type, deferred
+items, Reload Tag checkpoint outcome, and next steps (enrichment, then the genre
+classification SOP). Declare the audit clean only when `total_open` = 0 and
+`failed_reads` = 0; otherwise label it an incomplete audit and list the
+unreadable paths.
 
 ---
 
