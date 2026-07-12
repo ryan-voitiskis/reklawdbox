@@ -35,32 +35,48 @@ Browser authorization wasn't completed. Open the `auth_url` in your browser, app
 
 ### "Discogs broker session is missing or expired"
 
-Call `lookup_discogs` again to start a new auth flow. If that fails, hard reset:
+Use the targeted recovery path below. It preserves enrichment and analysis
+caches, audit history, saved presets, and calibration/profile statistics.
 
 <Steps>
 
-1. Close the MCP host process (e.g., quit Claude Code or Claude Desktop).
+1. Call `lookup_discogs` again. If it returns an `auth_url`, open it, approve
+   access on Discogs, and call `lookup_discogs` again to finish or restart the
+   normal authorization flow.
 
-2. Delete the internal database — or just the session table:
+2. If the stored session is still unusable, run the supported targeted command
+   in a terminal:
 
-   ```bash
-   # delete the whole file
-   rm ~/Library/Application\ Support/reklawdbox/internal.sqlite3
-
-   # or just clear the session table
-   sqlite3 ~/Library/Application\ Support/reklawdbox/internal.sqlite3 \
-     "DELETE FROM broker_discogs_session;"
+   ```sh
+   reklawdbox disconnect-broker
    ```
 
-   <Aside type="tip">
-     Session tokens are also stored in macOS Keychain under service `com.reklawdbox.broker-session`. Removing the DB row is sufficient (prevents the session from being found), but for a thorough reset you can also delete the Keychain entry via Keychain Access or `security delete-generic-password -s com.reklawdbox.broker-session`.
-   </Aside>
+   This clears only the current broker session: its credential in macOS
+   Keychain and its matching metadata in the configured internal state
+   database. `CRATE_DIG_STORE_PATH` is honored when it is set.
 
-3. Restart the MCP host.
+3. Restart or reload the MCP host so it starts without the old in-memory
+   authorization state.
 
-4. Call `lookup_discogs` to start fresh authentication.
+4. Call `lookup_discogs` again and complete the fresh authorization flow.
 
 </Steps>
+
+### Internal state database is corrupt
+
+This is a separate last resort for a database that cannot be opened, not an
+authentication reset. Close the MCP host, identify the effective
+`CRATE_DIG_STORE_PATH` (or the default
+`~/Library/Application Support/reklawdbox/internal.sqlite3`), and **move** the
+file to a backup filename instead of deleting it. Restarting will create a new
+store.
+
+Moving the file removes more than reconstructible caches from the active
+store: it also loses audit history and resolutions, saved scoring presets,
+calibration/profile statistics, and broker session metadata. The broker
+credential is separate in macOS Keychain; moving the database does not clear
+an orphaned Keychain credential. Keep the moved file until recovery is
+complete.
 
 ### "broker ... HTTP 401"
 

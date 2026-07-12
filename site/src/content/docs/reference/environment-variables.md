@@ -51,9 +51,23 @@ A backup of your Rekordbox database files runs automatically before every `write
 
 | Variable               | Description                   | Default                                                     |
 | ---------------------- | ----------------------------- | ----------------------------------------------------------- |
-| `CRATE_DIG_STORE_PATH` | Path to internal cache SQLite | `~/Library/Application Support/reklawdbox/internal.sqlite3` |
+| `CRATE_DIG_STORE_PATH` | Path to internal state SQLite | `~/Library/Application Support/reklawdbox/internal.sqlite3` |
 
-The cache database stores Discogs/Beatport enrichment results, audio analysis output, and broker session tokens. It is safe to delete at any time — data will be re-fetched or re-analyzed on next use.
+The internal state database contains both reconstructible and durable data:
+
+- **Reconstructible caches:** enrichment results and audio-analysis output can
+  be fetched or analyzed again.
+- **Durable workflow state:** audit history, issue resolutions and notes,
+  saved scoring presets, and calibration/profile statistics capture decisions
+  that are not recreated by another enrichment run.
+- **Broker session metadata:** session status and expiry metadata are stored
+  here. The active broker credential is stored separately in macOS Keychain.
+
+`CRATE_DIG_STORE_PATH` selects the database for all of these categories.
+Moving or deleting it loses the durable decisions and settings even though
+cache rows can be rebuilt. For authentication recovery, use the targeted
+[`reklawdbox disconnect-broker` procedure](/troubleshooting/#discogs-broker-session-is-missing-or-expired)
+instead of resetting the whole store.
 
 ## Advanced
 

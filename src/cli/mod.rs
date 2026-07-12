@@ -245,13 +245,22 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return Ok(());
                 }
             };
-            let store_path = store::default_path();
-            let conn = store::open(store_path.to_str().unwrap_or("internal.sqlite3"))?;
+            let store_path = store::resolve_path();
+            let conn = store::open(store_path_as_utf8(&store_path)?)?;
             store::clear_broker_discogs_session(&conn, &cfg.base_url)?;
             eprintln!("broker session cleared for {}", cfg.base_url);
             Ok(())
         }
     }
+}
+
+fn store_path_as_utf8(path: &Path) -> Result<&str, std::io::Error> {
+    path.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "internal state database path is not valid UTF-8",
+        )
+    })
 }
 
 fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
@@ -661,7 +670,7 @@ mod tests {
     use super::{
         CacheProbe, CacheWriteRequest, CliCacheWriteMsg, CliCancellationState,
         cache_status_for_track, cli_batch_outcome, file_mtime_unix, is_cache_fresh,
-        persist_cli_cache_message, send_cache_message, serialize_cache_payload,
+        persist_cli_cache_message, send_cache_message, serialize_cache_payload, store_path_as_utf8,
     };
     use crate::{
         audio, audio::AudioError, audio::StratumResult, store, store::CachedAudioAnalysis,
@@ -680,6 +689,18 @@ mod tests {
             features_json: "{}".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_store_path_is_rejected_without_fallback() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path =
+            std::path::PathBuf::from(OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]));
+        let err = store_path_as_utf8(&path).expect_err("non-UTF-8 path should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     fn sample_stratum_result() -> StratumResult {

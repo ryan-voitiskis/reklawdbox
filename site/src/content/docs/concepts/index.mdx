@@ -26,10 +26,12 @@ That's the whole loop. The agent handles the tedious work, you make the decision
 
 Most workflows need cached data to work well. The [Library Cleanup](/workflows/library-cleanup/) guide walks you through populating caches as part of the process. Fresh cache entries are reused instead of repeating enrichment or analysis.
 
-The internal SQLite store also holds audit and workflow state, calibration data,
-and saved presets. Treat it as persistent application data. Setup can write MCP
-host and broker configuration, and backups and XML exports create additional
-local files.
+Provider enrichment and audio-analysis cache rows are reconstructible, but the
+same internal SQLite store also holds durable audit resolutions and notes,
+saved presets, calibration/profile statistics, and broker session metadata.
+Treat it as persistent application data: moving or deleting it loses those
+decisions and settings. Setup can write MCP host and broker configuration, and
+backups and XML exports create additional local files.
 
 ## Go deeper
 

@@ -299,7 +299,13 @@ The `--broker` flag opens an interactive prompt for custom Discogs broker config
 
 ## `disconnect-broker`
 
-Clear the stored Discogs broker session, forcing a fresh OAuth device auth flow on the next `lookup_discogs` call. Removes the session token from both Keychain and the local SQLite store. Idempotent -- safe to run when no session exists.
+Clear the current Discogs broker session, forcing a fresh OAuth device auth
+flow on the next `lookup_discogs` call. The command removes that broker's
+credential from macOS Keychain and its matching metadata from the internal
+state database selected by `CRATE_DIG_STORE_PATH`. It preserves unrelated
+enrichment and analysis caches, audit history and resolutions, saved presets,
+and calibration/profile statistics. The operation is targeted and idempotent,
+so it is safe to run when no matching session exists.
 
 ```bash
 reklawdbox disconnect-broker
