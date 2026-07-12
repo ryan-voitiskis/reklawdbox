@@ -31,7 +31,11 @@ The audit uses the same decision tree as classification, but compares results ag
 
 ## Prerequisites
 
-All enrichment providers should be at 100% cache coverage. If you're following [Library Cleanup](/workflows/library-cleanup/), Session 2 (enrichment) handles this.
+Run scoped `cache_coverage` for genred tracks. Fill missing core Discogs and
+Beatport searches and Stratum analysis where practical; a cached no-match counts
+as searched. Essentia improves the audio evidence but is not a hard gate. The
+audit can proceed with incomplete evidence, but low or insufficient confidence
+items need individual review instead of bulk approval.
 
 ## Step-by-step
 

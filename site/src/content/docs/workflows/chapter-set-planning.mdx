@@ -18,6 +18,19 @@ Plan a set from my locked chapters.
 
 This assumes you've already built chapters using [Pool Building](/workflows/pool-building/).
 
+Chapter and bridge analysis is read-only. Export is a separate step that writes
+an XML playlist; it does not write the Rekordbox database.
+
+## Prerequisites
+
+- At least two locked chapter playlists and a clear sequenced/unordered choice
+  for each chapter are hard requirements.
+- Bridge and sequence tools still need valid candidates and parameters.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum supplies BPM and key evidence when available. Essentia is
+  recommended for energy, brightness, rhythm, and timbral evidence, but missing
+  optional axes degrade gracefully.
+
 ## Key terms
 
 - **Chapter** — a locked pool you've validated. Can be sequenced (fixed order) or unordered (improvise live).

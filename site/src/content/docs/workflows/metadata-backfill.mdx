@@ -28,7 +28,11 @@ Label conflicts always need your approval. Year conflicts resolve automatically.
 
 ## Prerequisites
 
-All enrichment providers should be at 100% cache coverage before you start. If you're following the [Library Cleanup](/workflows/library-cleanup/) guide, Session 2 handles this.
+Start with scoped `cache_coverage` as a Discogs, Beatport, and audio-analysis
+baseline. A searched no-match is valid completion; unavailable releases do not
+need to produce a match. The workflow uses targeted Bandcamp enrichment,
+individual MusicBrainz lookups, `auto_enrich`, and web research for the gaps
+those baseline sources leave behind.
 
 ## Step-by-step
 

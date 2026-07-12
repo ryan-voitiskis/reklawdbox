@@ -1,20 +1,19 @@
 ## Constraints
 
-- **Read-only.** Chapter set planning never modifies track metadata.
+- **Analysis is read-only; export writes XML.** Chapter and bridge analysis never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
 - **Human controls the result.** Agent proposes chapter order and bridges. User approves all decisions.
-- **Cache-first.** All scoring uses cached data. No external API calls.
+- **Local scoring data.** Scoring reads Rekordbox metadata plus cached Stratum and Essentia analysis. It makes no external API calls.
 - **Chapters first.** This workflow assumes the user has already built and locked chapters (pools saved as playlists) using the Pool Building workflow.
 
 ## Prerequisites
 
 - At least 2 locked chapters (playlists) from the Pool Building workflow. Alternatively, `discover_pools` can find chapter candidates automatically from a library subset using Bron-Kerbosch clique enumeration.
 - User must identify each chapter as **sequenced** (fixed order) or **unordered** (improvise order live)
-
-```
-cache_coverage()
-```
-
-All providers at 100%.
+- Valid bridge candidates and valid pool/set tool parameters.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum supplies BPM and key evidence when available. Essentia is
+  recommended for energy, brightness, rhythm, and timbral evidence, but missing
+  optional axes degrade gracefully.
 
 ## Steps
 

@@ -159,8 +159,26 @@ Report cache completeness for a track scope. Accepts [shared search filters](/mc
 | `playlist_id` | string | | Check tracks in this playlist |
 | `max_tracks` | integer | | Max tracks to check (default: unbounded) |
 
-Returns per-provider cached counts/percentages and gap counts.
+Returns exactly four coverage entries for the selected scope:
+
+| Entry | What coverage means |
+|-------|---------------------|
+| `stratum_dsp` | Fresh built-in audio-analysis cache rows |
+| `essentia` | Fresh optional Essentia cache rows, plus whether Essentia is installed |
+| `discogs` | `searched` and `has_result` counts for Discogs enrichment |
+| `beatport` | `searched` and `has_result` counts for Beatport enrichment |
+
+Bandcamp and MusicBrainz are targeted metadata paths and are not reported by
+this tool.
+
+The gap counts use the same scope: `no_audio_analysis` means no fresh Stratum
+row, `no_enrichment` means neither Discogs nor Beatport has an actual result,
+and `no_data_at_all` means neither audio analyzer nor either metadata provider
+has usable data.
 
 <Aside type="caution">
-  Coverage counts any cached entry — including "no match" and error results. Use `resolve_tracks_data` to inspect actual match quality.
+  For Discogs and Beatport, `searched` excludes errors but includes a legitimate
+  cached no-match. `has_result` counts only exact or fuzzy matches. Error rows
+  count as neither, remain incomplete, and can be retried. Use searched coverage
+  as a completion signal; do not require every searched track to have a match.
 </Aside>

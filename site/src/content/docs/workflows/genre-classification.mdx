@@ -29,7 +29,11 @@ High and medium confidence results can usually be approved in bulk. Low and insu
 
 ## Prerequisites
 
-All enrichment providers should be at 100% cache coverage. If you're following [Library Cleanup](/workflows/library-cleanup/), Session 2 (enrichment) handles this.
+Run scoped `cache_coverage` for ungenred tracks. Fill missing core Discogs and
+Beatport searches and Stratum analysis where practical; a cached no-match counts
+as searched. Essentia improves the audio evidence but is not a hard gate. You
+can proceed with incomplete evidence: affected tracks should fall to low or
+insufficient confidence and receive individual review.
 
 ## Genre taxonomy
 

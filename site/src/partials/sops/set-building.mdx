@@ -1,17 +1,20 @@
 ## Constraints
 
-- **Read-only.** Set building never modifies track metadata. It only creates playlist orderings.
+- **Analysis is read-only; export writes XML.** Scoring never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
 - **Human controls the result.** Agent proposes candidates. User picks, reorders, swaps. Export only what the user approves.
-- **Cache-first.** All transition scoring uses cached audio analysis and enrichment. No external API calls.
+- **Local scoring data.** Transition scoring reads Rekordbox metadata plus cached Stratum and Essentia analysis. It makes no external API calls.
 - **Multiple candidates.** Always present at least 2 candidate orderings unless the pool is too small.
 
 ## Prerequisites
 
-```
-cache_coverage()
-```
-
-All providers must be at 100%. If not, hydrate first (audio analysis, then enrichment).
+- A resolvable candidate pool and valid `build_set` parameters are the only hard
+  readiness requirements.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum can supply BPM or key evidence when Rekordbox values are
+  absent; Rekordbox metadata provides the complementary fallback.
+- Essentia is recommended for richer energy, brightness, and rhythm axes;
+  related pool tools also use its timbral features. Optional axes degrade
+  gracefully when it is unavailable.
 
 ## Steps
 
@@ -74,7 +77,9 @@ Then resolve full data:
 resolve_tracks_data(track_ids=[...], max_tracks=200)
 ```
 
-Filter out tracks missing stratum_dsp analysis or outside BPM range.
+Keep tracks with valid IDs in the candidate pool and annotate missing evidence.
+Apply the user's BPM range to tracks with known BPM; ask how to handle unknown
+BPM instead of silently dropping those tracks.
 
 Present pool summary: track count, genre breakdown, BPM range, key spread.
 

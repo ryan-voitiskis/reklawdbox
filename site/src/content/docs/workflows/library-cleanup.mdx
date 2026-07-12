@@ -62,15 +62,20 @@ Run this in your terminal (not through the agent):
 reklawdbox hydrate --cpu overnight -y
 ```
 
-This fetches metadata from Discogs, Beatport, MusicBrainz, and Bandcamp, plus runs audio analysis on every track. `--cpu overnight` uses most of your cores; `-y` skips the confirmation prompt.
+This warms Discogs, Beatport, built-in Stratum analysis, and optional Essentia
+analysis. Bandcamp and MusicBrainz are targeted sources used later for remaining
+metadata gaps. `--cpu overnight` uses most of your cores; `-y` skips the
+confirmation prompt.
 
-When it finishes, run `reklawdbox hydrate` again — it'll report any remaining gaps. All providers should be at 100% before moving on.
+When it finishes, run `reklawdbox hydrate` again. Session 2 is complete when the
+selected hydration work finishes without pending or retryable failures. A cached
+no-match is a completed search, not a failed run or a required match.
 
 ---
 
 ### Session 3: Metadata Backfill
 
-<Badge text="Requires" variant="note" /> Session 2 complete (all providers at 100%)
+<Badge text="Requires" variant="note" /> Session 2 selected hydration complete
 
 Paste into your agent:
 
@@ -139,7 +144,8 @@ Export to XML, import into Rekordbox. Spot-check the corrections.
 ## Skipping sessions
 
 - **Metadata already clean?** Start at Session 2.
-- **Already enriched?** Re-run `reklawdbox hydrate` — if all providers are at 100%, jump to Session 3.
+- **Already hydrated?** Re-run `reklawdbox hydrate` — if the selected Discogs,
+  Beatport, and analysis work has no pending failures, jump to Session 3.
 - **Labels and years present?** Skip Session 3.
 - **No ungenred tracks?** Skip Session 4.
 - **No existing genre tags?** Skip Session 5.

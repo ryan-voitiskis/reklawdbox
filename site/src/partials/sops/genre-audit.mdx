@@ -11,7 +11,10 @@
 cache_coverage(has_genre=true)
 ```
 
-All providers must be at 100% before proceeding. If not, hydrate first:
+Use the scoped entries as evidence-quality signals. Discogs and Beatport
+`searched` coverage includes cached no-matches; `has_result` is the usable-match
+count, and errors are neither searched nor matched. Fill missing core searches
+and Stratum analysis where practical:
 
 ```
 analyze_audio_batch(has_genre=true, skip_cached=true, max_tracks=200)
@@ -19,7 +22,10 @@ enrich_tracks(has_genre=true, skip_cached=true, providers=["discogs"], max_track
 enrich_tracks(has_genre=true, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
-Repeat until all providers reach 100%. Report progress between batches.
+Essentia improves energy and timbral evidence but is not a hard gate. Proceed
+when coverage is incomplete; the audit will surface low or insufficient
+confidence for individual review. Retry actual errors, but do not require a
+match for a legitimately searched release.
 
 **Recommended:** run `suggest_normalizations()` and stage alias fixes before auditing. This ensures the audit compares against canonical genre names, not aliases that inflate conflict counts.
 

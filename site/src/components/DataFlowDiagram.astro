@@ -23,8 +23,9 @@ const discogsY = 340;
 const beatportY = 440;
 
 // Downstream positions
-const classifyY = 210;
-const setBuildY = 350;
+const classifyY = 140;
+const scoringY = 280;
+const backfillY = 420;
 
 // Box dimensions
 const inputW = 140;
@@ -34,7 +35,7 @@ const toolH = 44;
 const outputW = 180;
 const outputH = 20; // per line, used for text layout
 const downW = 160;
-const downH = 52;
+const downH = 72;
 
 // Helper: rounded rect attributes
 function box(x: number, y: number, w: number, h: number) {
@@ -77,22 +78,25 @@ const procOutputConnections = [
   { x1: col2 + toolW / 2, y1: beatportY, x2: col3 - outputW / 2, y2: beatportY },
 ];
 
-// Output → downstream (all outputs feed into both downstream boxes)
+// Output → downstream. Audio analysis feeds classification and scoring;
+// provider metadata feeds classification and backfill, never scoring.
 const outputDownConnections = [
-  { x1: col3 + outputW / 2, y1: stratumY, x2: col4 - downW / 2, y2: classifyY },
-  { x1: col3 + outputW / 2, y1: stratumY, x2: col4 - downW / 2, y2: setBuildY },
-  { x1: col3 + outputW / 2, y1: essentiaY, x2: col4 - downW / 2, y2: classifyY },
-  { x1: col3 + outputW / 2, y1: essentiaY, x2: col4 - downW / 2, y2: setBuildY },
-  { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: classifyY },
-  { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: setBuildY },
-  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: classifyY },
-  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: setBuildY },
+  { x1: col3 + outputW / 2, y1: stratumY, x2: col4 - downW / 2, y2: classifyY, label: 'Stratum analysis to genre classification' },
+  { x1: col3 + outputW / 2, y1: stratumY, x2: col4 - downW / 2, y2: scoringY, label: 'Stratum analysis to set and pool scoring' },
+  { x1: col3 + outputW / 2, y1: essentiaY, x2: col4 - downW / 2, y2: classifyY, label: 'Essentia analysis to genre classification' },
+  { x1: col3 + outputW / 2, y1: essentiaY, x2: col4 - downW / 2, y2: scoringY, label: 'Essentia analysis to set and pool scoring' },
+  { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: classifyY, label: 'Discogs metadata to genre classification' },
+  { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: backfillY, label: 'Discogs metadata to metadata backfill' },
+  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: classifyY, label: 'Beatport metadata to genre classification' },
+  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: backfillY, label: 'Beatport metadata to metadata backfill' },
 ];
 ---
 
 <figure class="data-flow-diagram">
-  <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
-       aria-label="Data flow diagram showing how audio files and track metadata flow through analysis and enrichment tools into genre classification and set building">
+  <p class="diagram-scroll-hint">Scroll horizontally to explore the full data flow.</p>
+  <div class="diagram-scroll" role="region" aria-label="Scrollable data-flow diagram" tabindex="0">
+    <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-label="Data flow diagram: Stratum and Essentia analysis feed genre classification and set or pool scoring; Discogs and Beatport metadata feed genre classification and metadata backfill">
     <defs>
       <marker id="df-arrow" viewBox="0 0 10 7" refX="9" refY="3.5"
               markerWidth="8" markerHeight="6" orient="auto-start-reverse">
@@ -124,7 +128,10 @@ const outputDownConnections = [
 
     <!-- ─── Connections: output → downstream ─── -->
     {outputDownConnections.map(c => (
-      <path d={arrow(c.x1, c.y1, c.x2, c.y2)} class="connector-light" marker-end="url(#df-arrow)" />
+      <g role="group" aria-label={c.label}>
+        <title>{c.label}</title>
+        <path d={arrow(c.x1, c.y1, c.x2, c.y2)} class="connector-light" marker-end="url(#df-arrow)" />
+      </g>
     ))}
 
     <!-- ═══ INPUT SOURCES ═══ -->
@@ -187,16 +194,28 @@ const outputDownConnections = [
     <!-- ═══ DOWNSTREAM USES ═══ -->
     <!-- Genre Classification -->
     <rect {...box(col4, classifyY, downW, downH)} class="box-downstream" />
-    <text x={col4} y={classifyY - 8} text-anchor="middle" class="downstream-label">Genre Classification</text>
-    <text x={col4} y={classifyY + 10} text-anchor="middle" class="downstream-tool">classify_tracks</text>
+    <text x={col4} y={classifyY - 14} text-anchor="middle" class="downstream-label">Genre Classification</text>
+    <text x={col4} y={classifyY + 4} text-anchor="middle" class="downstream-tool">classify_tracks</text>
+    <text x={col4} y={classifyY + 22} text-anchor="middle" class="downstream-detail">audio + provider evidence</text>
 
-    <!-- Set Building -->
-    <rect {...box(col4, setBuildY, downW, downH + 24)} class="box-downstream" />
-    <text x={col4} y={setBuildY - 18} text-anchor="middle" class="downstream-label">Set Building</text>
-    <text x={col4} y={setBuildY} text-anchor="middle" class="downstream-tool">build_set</text>
-    <text x={col4} y={setBuildY + 16} text-anchor="middle" class="downstream-detail">harmonic compatibility,</text>
-    <text x={col4} y={setBuildY + 30} text-anchor="middle" class="downstream-detail">BPM, energy, genre affinity</text>
-  </svg>
+    <!-- Set and pool scoring -->
+    <rect {...box(col4, scoringY, downW, downH)} class="box-downstream" />
+    <text x={col4} y={scoringY - 14} text-anchor="middle" class="downstream-label">Set &amp; Pool Scoring</text>
+    <text x={col4} y={scoringY + 4} text-anchor="middle" class="downstream-tool">build_set · expand_pool</text>
+    <text x={col4} y={scoringY + 22} text-anchor="middle" class="downstream-detail">Rekordbox + audio caches</text>
+
+    <!-- Metadata backfill -->
+    <rect {...box(col4, backfillY, downW, downH)} class="box-downstream" />
+    <text x={col4} y={backfillY - 14} text-anchor="middle" class="downstream-label">Metadata Backfill</text>
+    <text x={col4} y={backfillY + 4} text-anchor="middle" class="downstream-tool">backfill_* tools</text>
+    <text x={col4} y={backfillY + 22} text-anchor="middle" class="downstream-detail">provider metadata</text>
+    </svg>
+  </div>
+  <figcaption>
+    Audio analysis from Stratum and Essentia supports classification and
+    scoring. Discogs and Beatport metadata support classification and backfill,
+    but set and pool scoring reads Rekordbox metadata and audio caches instead.
+  </figcaption>
 </figure>
 
 <style>
@@ -204,9 +223,23 @@ const outputDownConnections = [
     max-width: 960px;
     margin: 2rem auto;
   }
+  .diagram-scroll {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
   .data-flow-diagram svg {
+    display: block;
     width: 100%;
     height: auto;
+  }
+  .diagram-scroll-hint {
+    display: none;
+  }
+  .data-flow-diagram figcaption {
+    margin-top: 0.75rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    line-height: 1.5;
   }
 
   /* Column headers */
@@ -320,5 +353,21 @@ const outputDownConnections = [
     font-size: 8.5px;
     fill: var(--sl-color-text);
     opacity: 0.5;
+  }
+
+  @media (max-width: 50rem) {
+    .diagram-scroll {
+      border: 1px solid var(--sl-color-gray-5);
+      border-radius: 0.5rem;
+    }
+    .data-flow-diagram svg {
+      min-width: 820px;
+    }
+    .diagram-scroll-hint {
+      display: block;
+      margin: 0 0 0.5rem;
+      color: var(--sl-color-gray-2);
+      font-size: var(--sl-text-sm);
+    }
   }
 </style>

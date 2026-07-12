@@ -16,13 +16,20 @@ Paste into your agent:
 Build a DJ set from my collection.
 ```
 
-Set building is read-only — it doesn't change any track metadata, just creates playlist orderings you can export as XML.
+Scoring and candidate analysis are read-only. Export is a separate step that
+writes an XML playlist; it does not write the Rekordbox database.
 
 ## Prerequisites
 
-- Genre classification should be mostly complete for the tracks you want to use
-- Enrichment and audio analysis caches should be populated (the [Library Cleanup](/workflows/library-cleanup/) guide handles this)
-- Essentia is optional but makes energy, brightness, and rhythm scoring much better
+- The only hard requirements are a resolvable candidate pool and valid tool
+  parameters.
+- Rekordbox BPM, key, and genre make their scoring axes more useful.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum can supply BPM or key evidence when Rekordbox values are
+  absent; scoring also uses the Rekordbox values when available.
+- Essentia is recommended for richer energy, brightness, and rhythm scoring;
+  related pool tools also use its timbral features. Optional axes degrade
+  gracefully when it is unavailable.
 
 ## Energy curves
 

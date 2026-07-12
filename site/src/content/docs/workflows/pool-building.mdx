@@ -16,13 +16,19 @@ Paste into your agent:
 Build a track pool from my collection.
 ```
 
-Pool building is read-only — it discovers compatible groupings and exports them as playlists, never changing your metadata.
+Pool analysis is read-only. Export is a separate step that writes an XML
+playlist; it does not write the Rekordbox database.
 
 ## Prerequisites
 
-- **Essentia analysis** is strongly recommended — without it you lose the timbral axis (the main discovery axis) and brightness/rhythm scoring
-- Enrichment caches should be populated — ask the agent to check cache coverage if unsure
-- Genre classification improves results but isn't required
+- The only hard requirements are valid seed or candidate tracks and valid tool
+  parameters.
+- Rekordbox BPM, key, and genre improve compatibility scoring.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum supplies BPM and key evidence when available, with Rekordbox
+  metadata as the complementary source.
+- Essentia is recommended for energy, brightness, rhythm, and timbral scoring,
+  but unavailable axes degrade gracefully.
 
 ## How it differs from set building
 

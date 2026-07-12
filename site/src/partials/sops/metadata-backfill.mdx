@@ -14,13 +14,17 @@
 
 ## Prerequisites
 
-Check enrichment cache coverage across **all providers** for unlabeled tracks:
+Check the reported baseline for unlabeled tracks:
 
 ```
 cache_coverage(has_label=false)
 ```
 
-Review the `coverage` section for each provider's `searched_percent` and `has_result` counts. Hydrate providers with low coverage before backfilling — the more cached enrichment data available, the more labels and years the backfill tools can fill.
+`cache_coverage` reports scoped Stratum, Essentia, Discogs, and Beatport entries.
+For Discogs and Beatport, use `searched_percent` to find unattempted work and
+`has_result` to understand usable matches. Searched includes legitimate
+no-matches; errors count as neither searched nor matched and remain retryable.
+Essentia is useful evidence but not a prerequisite for metadata backfill.
 
 ### Hydration priority
 
@@ -30,23 +34,29 @@ Review the `coverage` section for each provider's `searched_percent` and `has_re
 enrich_tracks(has_label=false, skip_cached=true, providers=["discogs"], max_tracks=50)
 ```
 
-2. **Bandcamp** (strongest for underground/independent electronic music — high hit rate for labels *and* years):
-
-```
-enrich_tracks(has_label=false, skip_cached=true, providers=["bandcamp"], max_tracks=50)
-```
-
-3. **Beatport** (label data extracted from search results since v0.15; older cache entries lack labels):
+2. **Beatport** (label data extracted from search results since v0.15; older cache entries lack labels):
 
 ```
 enrich_tracks(has_label=false, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
-If Beatport `searched_percent` is 100% but labels are still missing, existing cache entries predate label extraction. Re-enrich with `force_refresh=true` to populate them.
+If Beatport `searched_percent` is complete but labels are still missing, existing
+cache entries may predate label extraction. Re-enrich with `force_refresh=true`
+to populate them.
 
-4. **MusicBrainz** is hydrated automatically by `lookup_musicbrainz` during year research (step 2c) or via `auto_enrich`.
+3. **Bandcamp** is a targeted source for underground and independent releases.
+Use the tool-specific gaps from the backfill response to select work:
 
-Repeat batches until providers reach 100% searched. Report progress between batches.
+```
+enrich_tracks(has_label=false, skip_cached=true, providers=["bandcamp"], max_tracks=50)
+```
+
+4. **MusicBrainz** is an individual lookup used during year research (step 2c)
+or fetched by the relevant `auto_enrich` path.
+
+Run targeted enrichment for actual gaps, retry errors, and accept a cached
+no-match as a completed search. Do not require every provider to match every
+track, and do not invent percentages for targeted sources.
 
 **Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 2). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
 
@@ -190,7 +200,9 @@ The tool scans the entire collection (excluding samples) and tries six sources i
 
 The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. For tracks that already have a non-zero year, the tool checks Discogs enrichment only — if the Discogs year differs from the current year, the track is reported as a conflict. Other providers (Beatport, MusicBrainz, Bandcamp) are not compared against existing years.
 
-The summary includes `remaining_uncached_providers` showing which providers are missing data for remaining year-zero tracks. If providers show gaps, hydrate them and re-run (or use `auto_enrich=true`).
+The summary includes `remaining_uncached_providers` showing which targeted
+sources are missing data for remaining year-zero tracks. Use those gaps to
+choose enrichment, then re-run (or use `auto_enrich=true`).
 
 Note: Beatport date extraction requires enrichment cache entries created after this feature was added. For tracks with older cache entries, re-enrich with `enrich_tracks(providers=["beatport"], force_refresh=true)` to populate the `release_date` field.
 
@@ -220,7 +232,9 @@ Use `enrich_tracks` with the `year_zero` filter to batch-enrich remaining tracks
 enrich_tracks(year_zero=true, skip_cached=true, providers=["bandcamp"], max_tracks=50)
 ```
 
-Repeat until all year-zero tracks are covered. Then **re-run `backfill_years()`** to pick up the new data.
+Run this for the selected Bandcamp gaps, then **re-run `backfill_years()`** to
+pick up new data. A legitimate no-match can remain unresolved and move to web
+research; it does not need to become a provider match.
 
 **Re-run backfill**
 

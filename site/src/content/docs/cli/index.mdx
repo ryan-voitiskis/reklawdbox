@@ -43,7 +43,8 @@ A database-only backup also runs automatically before every `write_xml` export â
 
 ## `hydrate`
 
-Batch enrichment + audio analysis. The recommended way to warm caches before classification or set building.
+Batch Discogs + Beatport enrichment and audio analysis. Use it to warm these
+caches for workflows that consume them.
 
 ```bash
 reklawdbox hydrate [options]
@@ -71,6 +72,10 @@ reklawdbox hydrate [options]
 | `--yes` | `-y` | flag | | Skip confirmation prompt |
 
 Discovers tracks, shows a summary with cache/pending/error counts, prompts for confirmation, then runs all three providers concurrently with progress bars and graceful Ctrl+C. If Discogs auth is needed, it opens the browser flow automatically.
+
+The `analysis` provider runs built-in Stratum analysis and Essentia when its
+optional Python environment is available. Bandcamp and MusicBrainz are not CLI
+hydrate providers; use their targeted MCP lookup and backfill paths instead.
 
 The command drains and prints its final summary before exiting. A new provider, analysis, cache-write, or worker failure exits nonzero, as does Ctrl+C or any incomplete selected work. An all-cached/no-work run and declining the confirmation prompt remain successful.
 

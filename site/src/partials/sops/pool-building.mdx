@@ -1,18 +1,20 @@
 ## Constraints
 
-- **Read-only.** Pool building never modifies track metadata. It discovers compatible groupings.
+- **Analysis is read-only; export writes XML.** Compatibility analysis never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
 - **Human controls the result.** Agent proposes pools and additions. User approves, removes, or adjusts.
-- **Cache-first.** All pool scoring uses cached audio analysis and enrichment. No external API calls.
+- **Local scoring data.** Pool scoring reads Rekordbox metadata plus cached Stratum and Essentia analysis. It makes no external API calls.
 - **Master tempo default.** Default `master_tempo=false` — accounts for pitch shift when scoring key compatibility. Override to `true` only if user confirms they play with master tempo on.
 - **Symmetric scoring.** Pool compatibility is symmetric: score(A,B) == score(B,A). No directional context.
 
 ## Prerequisites
 
-```
-cache_coverage()
-```
-
-All providers must be at 100%. If not, hydrate first (audio analysis, then enrichment). Essentia analysis is especially important — tracks without it lose the timbral axis and brightness/rhythm axes in pool scoring.
+- Valid seed or candidate tracks and valid pool-tool parameters are the only hard
+  readiness requirements.
+- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
+- Built-in Stratum supplies BPM and key evidence when available, with Rekordbox
+  metadata as the complementary source.
+- Essentia is recommended for energy, brightness, rhythm, and timbral axes.
+  Missing optional axes degrade gracefully instead of blocking the pool.
 
 ## Steps
 

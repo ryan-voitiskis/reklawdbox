@@ -12,7 +12,15 @@ import DataFlowDiagram from '../../../components/DataFlowDiagram.astro';
 
 ## Enrichment tools
 
-Look up metadata from Discogs, Beatport, MusicBrainz, and Bandcamp. Results are cached — subsequent calls return instantly unless `force_refresh` is set.
+Single-track lookups cover Discogs, Beatport, MusicBrainz, and Bandcamp. Results
+are cached — subsequent calls return instantly unless `force_refresh` is set.
+
+The batch surfaces are deliberately narrower:
+
+- CLI `hydrate` runs Discogs, Beatport, and audio analysis.
+- MCP `enrich_tracks` runs Discogs, Beatport, and Bandcamp.
+- MusicBrainz is an individual lookup and targeted backfill source; it is not an
+  `enrich_tracks` batch provider.
 
 ---
 
@@ -103,7 +111,9 @@ failure increments `summary.failed`, appears in `failures` with track and
 provider context, and is never also reported as enriched or skipped.
 
 <Aside type="tip">
-  For large libraries, use the CLI `hydrate` command instead — it runs unattended with progress bars and graceful shutdown. See [CLI](/cli/).
+  For large Discogs, Beatport, and audio-analysis runs, use CLI `hydrate` — it
+  runs unattended with progress bars and graceful shutdown. Use `enrich_tracks`
+  when a scoped MCP workflow needs Bandcamp. See [CLI](/cli/).
 </Aside>
 
 ---

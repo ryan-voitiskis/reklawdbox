@@ -12,7 +12,10 @@
 cache_coverage(has_genre=false)
 ```
 
-All providers must be at 100% before proceeding. If not, hydrate first:
+Use the scoped entries as evidence-quality signals. Discogs and Beatport
+`searched` coverage includes cached no-matches; `has_result` is the usable-match
+count, and errors are neither searched nor matched. Fill missing core searches
+and Stratum analysis where practical:
 
 ```
 analyze_audio_batch(has_genre=false, skip_cached=true, max_tracks=200)
@@ -20,7 +23,11 @@ enrich_tracks(has_genre=false, skip_cached=true, providers=["discogs"], max_trac
 enrich_tracks(has_genre=false, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
-Repeat until all providers reach 100%. Report progress between batches.
+Essentia improves energy and timbral evidence but is not a hard gate. Proceed
+when coverage is incomplete; classification will lower affected tracks to low
+or insufficient confidence. Those tracks require individual review, never bulk
+approval. Retry actual errors, but do not require a match for a legitimately
+searched release.
 
 All `classify_tracks` calls support `max_tracks` (default 50, max 200) and `offset` for pagination. Continue until all tracks are covered.
 
