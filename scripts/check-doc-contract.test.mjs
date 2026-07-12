@@ -1847,6 +1847,59 @@ After`,
     )
   })
 
+  for (const indent of [' ', '  ', '   ']) {
+    const indentedOutside =
+      `${valid.content}\n${indent}\`\`\`text\n${indent}write_xml\n${indent}\`\`\``
+    assert.throws(
+      () =>
+        validateFirstSessionPage(
+          document(indentedOutside, 'indented-outside.mdx'),
+          liveTools,
+        ),
+      /exactly one runnable fence; found 2/,
+    )
+  }
+
+  const containerFences = [
+    `${valid.content}\n- hidden call\n    \`\`\`text\n    write_xml\n    \`\`\``,
+    `${valid.content}\n> \`\`\`text\n> write_xml\n> \`\`\``,
+  ]
+  containerFences.forEach((content) => {
+    assert.throws(
+      () =>
+        validateFirstSessionPage(
+          document(content, 'container-fence.mdx'),
+          liveTools,
+        ),
+      /exactly one runnable fence; found 2/,
+    )
+  })
+
+  const indentedInside = valid.content
+    .replace('\n\`\`\`text\n', '\n  \`\`\`text\n')
+    .replace(
+      '\n\`\`\`\n\n<!-- /doc-contract:first-session-prompt -->',
+      '\n  \`\`\`\n\n<!-- /doc-contract:first-session-prompt -->',
+    )
+  assert.throws(
+    () =>
+      validateFirstSessionPage(
+        document(indentedInside, 'indented-inside.mdx'),
+        liveTools,
+      ),
+    /unindented triple-backtick text fence/,
+  )
+
+  const unmatchedOutside = `${valid.content}\n  \`\`\`text\n  write_xml`
+  assert.throws(
+    () =>
+      validateFirstSessionPage(
+        document(unmatchedOutside, 'unmatched-outside.mdx'),
+        liveTools,
+      ),
+    /unmatched Markdown fence opening/,
+  )
+
   assert.throws(() =>
     validateFirstSessionPage(
       fixture(
@@ -1934,6 +1987,24 @@ test('onboarding sources preserve the three-selection journey and version sentin
       goalChooser: sources.goalChooser.replace(
         'workflow.goals.includes(goal.id)',
         'workflow.id === goal.id',
+      ),
+    },
+    {
+      firstSession: sources.firstSession.replaceAll(
+        'factory sampler',
+        'built-in sample',
+      ),
+    },
+    {
+      firstSession: sources.firstSession.replace(
+        'contains only factory sampler\ncontent',
+        'contains only built-in sample\ncontent',
+      ),
+    },
+    {
+      goalChooser: sources.goalChooser.replaceAll(
+        '--sl-color-accent-high',
+        '--sl-color-text-accent',
       ),
     },
     {

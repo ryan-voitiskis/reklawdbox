@@ -2161,14 +2161,83 @@ const FIRST_SESSION_BOUNDARIES = [
   ['XML export', /export XML/],
 ]
 
-function fencedBlocks(source) {
-  return [...source.matchAll(/^(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm)]
-    .map((match) => ({
-      body: match[3],
-      full: match[0],
-      index: match.index,
-      info: match[2].trim(),
-    }))
+function markdownFenceLine(line, closing = false) {
+  let remainder = line
+  let prefix = ''
+  while (true) {
+    const container = remainder.match(
+      /^(?:[ \t]*>[ \t]?|[ \t]*(?:[-+*]|\d+[.)])[ \t]+)/,
+    )
+    if (!container) break
+    prefix += container[0]
+    remainder = remainder.slice(container[0].length)
+  }
+  const indentation = remainder.match(/^[ \t]*/)?.[0] ?? ''
+  prefix += indentation
+  remainder = remainder.slice(indentation.length)
+
+  const fence = remainder.match(/^(`{3,}|~{3,})(.*)$/)
+  if (!fence || (closing && fence[2].trim() !== '')) return null
+  if (fence[1][0] === '`' && !closing && fence[2].includes('`')) return null
+  return { fence: fence[1], info: fence[2], prefix }
+}
+
+function fencedBlocks(source, label = '<source>') {
+  const lines = source.split('\n')
+  const lineStarts = []
+  let offset = 0
+  lines.forEach((line) => {
+    lineStarts.push(offset)
+    offset += line.length + 1
+  })
+
+  const blocks = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = markdownFenceLine(lines[index])
+    if (!opening) continue
+    const openingFence = opening.fence
+    const fenceCharacter = openingFence[0]
+
+    let foundClosing = false
+    for (
+      let closingIndex = index + 1;
+      closingIndex < lines.length;
+      closingIndex += 1
+    ) {
+      const closing = markdownFenceLine(lines[closingIndex], true)
+      if (
+        !closing
+        || closing.fence[0] !== fenceCharacter
+        || closing.fence.length < openingFence.length
+      ) {
+        continue
+      }
+
+      const blockStart = lineStarts[index]
+      const bodyStart = blockStart + lines[index].length + 1
+      const bodyEnd = lineStarts[closingIndex]
+      const blockEnd = bodyEnd + lines[closingIndex].length
+      blocks.push({
+        body: source.slice(bodyStart, bodyEnd),
+        closingFence: closing.fence,
+        closingIndent: closing.prefix.length,
+        full: source.slice(blockStart, blockEnd),
+        index: blockStart,
+        info: opening.info.trim(),
+        openingFence,
+        openingIndent: opening.prefix.length,
+      })
+      foundClosing = true
+      index = closingIndex
+      break
+    }
+    if (!foundClosing) {
+      throw new Error(
+        `${label}:${index + 1}: unmatched Markdown fence opening`,
+      )
+    }
+  }
+  return blocks
 }
 
 /**
@@ -2206,7 +2275,7 @@ export function validateFirstSessionPage(document, liveTools) {
     )
   }
 
-  const fences = fencedBlocks(source)
+  const fences = fencedBlocks(source, document.file)
   if (fences.length !== 1) {
     throw new Error(
       `${document.file}: first-session page must contain exactly one runnable fence; found ${fences.length}`,
@@ -2221,6 +2290,16 @@ export function validateFirstSessionPage(document, liveTools) {
   }
   if (fence.info !== 'text') {
     throw new Error(`${document.file}: first-session prompt fence must be text`)
+  }
+  if (
+    fence.openingIndent !== 0
+    || fence.closingIndent !== 0
+    || fence.openingFence !== '```'
+    || fence.closingFence !== '```'
+  ) {
+    throw new Error(
+      `${document.file}: canonical first-session prompt must use an unindented triple-backtick text fence`,
+    )
   }
   const markerBody = source.slice(bodyStart, closingIndex)
   const relativeFence = fence.index - bodyStart
@@ -2310,6 +2389,16 @@ export function validateOnboardingSources({
     'First 10 minutes must render GoalChooser',
   )
   sourceAssertion(
+    /exclude\s+Rekordbox factory sampler content/i.test(firstSession),
+    'First 10 minutes must disclose factory sampler exclusion',
+  )
+  sourceAssertion(
+    /zero-track[\s\S]{0,300}contains only factory sampler\s+content/i.test(
+      firstSession,
+    ),
+    'First 10 minutes zero-track guidance must cover a samples-only library',
+  )
+  sourceAssertion(
     homepage.includes('/workflows/'),
     'homepage must keep a compact all-workflows link',
   )
@@ -2330,9 +2419,13 @@ export function validateOnboardingSources({
   )
   sourceAssertion(
     !install.includes(FIRST_SESSION_PROMPT)
-      && !fencedBlocks(install).some((fence) =>
-        /(^|[^a-zA-Z0-9_])read_library(?=$|[^a-zA-Z0-9_])/.test(fence.body)
-      ),
+      && !fencedBlocks(
+        install,
+        'site/src/content/docs/getting-started/index.mdx',
+      )
+        .some((fence) =>
+          /(^|[^a-zA-Z0-9_])read_library(?=$|[^a-zA-Z0-9_])/.test(fence.body)
+        ),
     'Install must not duplicate the first-session prompt',
   )
 
@@ -2347,6 +2440,14 @@ export function validateOnboardingSources({
     ['prerequisites', /prerequisites/],
     ['all workflows link', /href="\/workflows\/"/],
     ['reference overview link', /href="\/reference\/"/],
+    [
+      'high-contrast goal labels',
+      /\.goal-number,\s*\.workflow-kind\s*\{[^}]*color:\s*var\(--sl-color-accent-high\)/s,
+    ],
+    [
+      'high-contrast chooser links',
+      /\.workflow-link,\s*\.reference-links a\s*\{[^}]*color:\s*var\(--sl-color-accent-high\)/s,
+    ],
   ]
   chooserRequirements.forEach(([label, pattern]) => {
     sourceAssertion(

@@ -147,7 +147,7 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
 
   .goal-number,
   .workflow-kind {
-    color: var(--sl-color-text-accent);
+    color: var(--sl-color-accent-high);
     font-size: var(--sl-text-xs);
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -224,6 +224,11 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
     align-self: flex-start;
     margin-top: auto;
     font-weight: 700;
+  }
+
+  .workflow-link,
+  .reference-links a {
+    color: var(--sl-color-accent-high);
   }
 
   .workflow-link:focus-visible,

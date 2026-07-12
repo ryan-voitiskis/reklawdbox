@@ -52,9 +52,11 @@ The result should describe the library the host connected to, including:
 - a key distribution.
 
 The underlying result also includes rated and unrated track counts and detected
-content roots. A zero-track result is not a success to wave through: it usually
-means Rekordbox has no imported collection at the detected location, or the host
-is connected to the wrong database path.
+content roots. The track total and every track-derived statistic above exclude
+Rekordbox factory sampler content. The playlist count is independent of that
+track filter. A zero-track result is not a success to wave through: it can mean
+the detected library has no imported music, contains only factory sampler
+content, or the host is connected to the wrong database path.
 
 ## What just happened
 
