@@ -145,7 +145,7 @@ if [[ "$live_canary" == true ]]; then
       --stratum-only \
       --concurrency 1
 
-  cli_store="$canary_dir/home/Library/Application Support/reklawdbox/internal.sqlite3"
+  cli_store="$canary_dir/internal.sqlite3"
   if [[ ! -f "$cli_store" ]]; then
     echo "live canary did not create its isolated CLI cache: $cli_store" >&2
     exit 1
