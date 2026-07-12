@@ -1505,6 +1505,83 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "informational benchmark; run through scripts/benchmark-rust-hotspots.sh"]
+    fn benchmark_batch_audio_cache_reads() {
+        const TRACKS: usize = 500;
+        const ROUNDS: usize = 20;
+        let (_dir, conn) = open_temp_store();
+        let paths: Vec<String> = (0..TRACKS)
+            .map(|index| format!("/generated/track-{index:04}.wav"))
+            .collect();
+        for path in &paths {
+            set_audio_analysis_with_fingerprint(
+                &conn,
+                path,
+                "stratum-dsp",
+                1_024,
+                1_700_000_000,
+                "s1",
+                "hmm:v1",
+                "{}",
+            )
+            .unwrap();
+            set_audio_analysis_with_fingerprint(
+                &conn,
+                path,
+                "essentia",
+                1_024,
+                1_700_000_000,
+                "e1",
+                "",
+                "{}",
+            )
+            .unwrap();
+        }
+        let identities: Vec<AudioAnalysisIdentity<'_>> = paths
+            .iter()
+            .map(|path| AudioAnalysisIdentity {
+                file_path: path,
+                file_size: 1_024,
+                file_mtime: 1_700_000_000,
+                input_fingerprint: "hmm:v1",
+            })
+            .collect();
+
+        let point_start = std::time::Instant::now();
+        for _ in 0..ROUNDS {
+            for path in &paths {
+                std::hint::black_box(get_audio_analysis(&conn, path, "stratum-dsp").unwrap());
+                std::hint::black_box(get_audio_analysis(&conn, path, "essentia").unwrap());
+            }
+        }
+        let point_elapsed = point_start.elapsed();
+
+        let batch_start = std::time::Instant::now();
+        for _ in 0..ROUNDS {
+            let stratum =
+                batch_get_fresh_audio_analysis(&conn, &identities, "stratum-dsp", "s1").unwrap();
+            let essentia = batch_get_audio_analysis(
+                &conn,
+                &paths.iter().map(String::as_str).collect::<Vec<_>>(),
+                "essentia",
+                "e1",
+            )
+            .unwrap();
+            assert_eq!(stratum.len(), TRACKS);
+            assert_eq!(essentia.len(), TRACKS);
+            std::hint::black_box((stratum, essentia));
+        }
+        let batch_elapsed = batch_start.elapsed();
+
+        eprintln!(
+            "BENCHMARK audio_cache_reads tracks={TRACKS} rounds={ROUNDS} point_ms={:.3} batch_ms={:.3} speedup={:.2}x",
+            point_elapsed.as_secs_f64() * 1_000.0,
+            batch_elapsed.as_secs_f64() * 1_000.0,
+            point_elapsed.as_secs_f64() / batch_elapsed.as_secs_f64(),
+        );
+    }
+
     fn open_temp_store() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.sqlite3");

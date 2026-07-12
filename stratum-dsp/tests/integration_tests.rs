@@ -204,6 +204,31 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "informational benchmark; run through scripts/benchmark-rust-hotspots.sh"]
+    fn benchmark_generated_dsp_pipeline() {
+        let samples = synth_kick_track(120.0, 4);
+        let config = AnalysisConfig::default();
+        let iterations = 3_u32;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let result = analyze_audio(
+                std::hint::black_box(&samples),
+                SAMPLE_RATE,
+                std::hint::black_box(config.clone()),
+            )
+            .expect("benchmark analysis should succeed");
+            std::hint::black_box(result);
+        }
+        let elapsed = start.elapsed();
+        eprintln!(
+            "BENCHMARK dsp_pipeline iterations={iterations} total_ms={:.3} mean_ms={:.3} audio_seconds={:.3}",
+            elapsed.as_secs_f64() * 1_000.0,
+            elapsed.as_secs_f64() * 1_000.0 / f64::from(iterations),
+            samples.len() as f64 / f64::from(SAMPLE_RATE),
+        );
+    }
+
+    #[test]
     fn test_analyze_120bpm_kick() {
         let samples = synth_kick_track(120.0, 4);
 
