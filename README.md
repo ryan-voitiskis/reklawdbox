@@ -11,14 +11,14 @@ reimport. The database is never written to directly.
 
 You have a conversation with Claude. Claude calls reklawdbox tools to search
 your library, analyze audio, look up metadata from external sources, classify
-genres, score transitions, and build DJ sets. When changes are proposed, they're
-held in memory until you explicitly export them as an XML file. You then import
-that file into Rekordbox yourself.
+genres, score transitions, and build DJ sets. Proposed Rekordbox metadata
+changes are held in memory until you explicitly export them as an XML file. You
+then import that file into Rekordbox yourself. Separate tag and artwork tools
+can write directly to audio files when called.
 
 The result is an AI-assisted curation workflow where the agent handles the
-tedious work (metadata lookups, genre classification, harmonic analysis,
-set sequencing) while you retain full control over what actually changes in your
-library.
+tedious work (metadata lookups, genre classification, harmonic analysis, set
+sequencing) while you choose which operations to authorize and what to import.
 
 ### Workflows
 
@@ -84,23 +84,34 @@ flowchart TB
 ### Key design decisions
 
 - **Read-only database access.** The Rekordbox `master.db` is opened via
-  SQLCipher with `SQLITE_OPEN_READ_ONLY`. No write path exists in the codebase.
+  SQLCipher with `SQLITE_OPEN_READ_ONLY`. No reklawdbox code path writes
+  `master.db`.
 
-- **Staged mutations.** All proposed changes live in an in-memory `ChangeManager`
-  until explicitly exported. You can preview, modify, or discard staged changes
-  before anything touches disk.
+- **Staged Rekordbox metadata.** Genre, comments, rating, color, label, year, and
+  album changes made through `update_tracks` live in an in-memory
+  `ChangeManager`. You can preview, modify, or discard them before XML export.
 
-- **XML as the write path.** Rekordbox has no scripting API. The only safe
-  programmatic write path is XML import. The server generates
+- **XML as the Rekordbox metadata path.** Rekordbox has no scripting API. The
+  server generates
   Rekordbox-compatible XML that you import yourself via File → Import Collection.
 
-- **Separate cache store.** Enrichment results and audio analysis are cached in a
-  local SQLite database (WAL mode), separate from Rekordbox. Cache entries are
+- **Direct file operations.** Tag and artwork tools can write audio files or
+  create extracted artwork. Tag writes support a dry run, but direct file tools
+  do not share the in-memory `ChangeManager` or a universal rollback layer.
+
+- **Separate local state.** Enrichment results, audio analysis, audit state,
+  calibration data, and presets persist in a local SQLite database (WAL mode),
+  separate from Rekordbox. Setup can also update host configuration, and XML
+  exports and backups create local files. Cache entries are
   validated against the analysis schema plus the canonical audio file identity
   (path, size, and modification time). Stratum results also include a versioned
   fingerprint of the Rekordbox beat grid used for analysis, or of the no-grid
   fallback, so a grid change invalidates and recomputes only the Stratum result;
   Essentia freshness is independent of Rekordbox grid changes.
+
+- **Host permissions remain independent.** Workflow review checkpoints are
+  procedural. Keep the MCP host's normal permission checks enabled and scope
+  approvals to the tools and music paths the workflow needs.
 
 - **Two-tier audio analysis.** [stratum-dsp](https://github.com/ryan-voitiskis/stratum-dsp)
   (Rust, always available) handles BPM and key detection. [Essentia](https://essentia.upf.edu/)

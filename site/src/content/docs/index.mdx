@@ -41,10 +41,11 @@ import { Card, CardGrid, LinkCard, Aside, Steps } from '@astrojs/starlight/compo
 3. **Start a conversation**
 
    ```bash
-   cd ~/Music && claude --dangerously-skip-permissions
+   cd ~/Music && claude
    ```
 
-   The `--dangerously-skip-permissions` flag is needed for multi-step workflows. [Why this is safe →](/getting-started/#start-a-conversation)
+   Keep your host's normal permission checks enabled and approve only the
+   reklawdbox tools and music paths the workflow needs. [Permission and safety details →](/concepts/safety/)
 
 </Steps>
 
@@ -83,10 +84,14 @@ Once your library is clean and enriched:
 
 ## Safe by design
 
-reklawdbox never writes to your Rekordbox database. Changes are staged in memory, reviewed by you, and exported as Rekordbox-compatible XML for reimport. The agent handles the tedious work — you make every final call.
+reklawdbox never writes to your Rekordbox database. Rekordbox metadata changes
+are staged in memory and exported as XML for manual import. File-tag and
+artwork tools are a separate, direct-write path, and the application also
+creates local cache, backup, configuration, and export files.
 
 - **Read-only database access** — your `master.db` is never modified
-- **Human-in-the-loop** — every change requires your approval before export
-- **No background process** — request-response only, nothing runs when you're not using it
+- **Staged Rekordbox metadata** — preview or discard metadata changes before export
+- **Explicit file operations** — preview tag writes when available and review every target
+- **Scoped host permissions** — keep normal prompts enabled and grant only what a workflow needs
 
-<LinkCard title="How it works" href="/concepts/" description="Architecture, safety model, and the tech behind harmonic mixing and pool discovery." />
+<LinkCard title="Safety & Trust" href="/concepts/safety/" description="The boundaries for master.db, staged metadata, direct file writes, local state, and host permissions." />

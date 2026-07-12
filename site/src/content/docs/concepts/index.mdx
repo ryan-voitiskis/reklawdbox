@@ -7,25 +7,32 @@ sidebar:
 
 import { LinkCard } from '@astrojs/starlight/components';
 
-reklawdbox sits between your AI agent and Rekordbox. It reads your database, caches enrichment and audio analysis data, and stages any metadata changes as XML for you to import. Your database is never modified directly.
+reklawdbox sits between your AI agent and Rekordbox. It reads your database,
+caches enrichment and audio analysis data, and stages Rekordbox metadata for
+XML export. Your database is never modified directly. Separate file tools can
+write tags or artwork to audio files when called.
 
 ## The basics
 
 1. **The agent reads your library** — track metadata, playlists, play history. All read-only.
-2. **Enrichment and audio analysis get cached** — Discogs, Beatport, MusicBrainz, and Bandcamp metadata plus audio features from stratum-dsp and Essentia. This cache powers everything downstream: genre classification, set building, transition scoring.
-3. **Changes are staged in memory** — when the agent suggests metadata updates (genre, label, year, etc.), nothing is written until you approve.
-4. **You export and import XML** — the agent produces a Rekordbox-compatible XML file. You import it into Rekordbox yourself.
+2. **Enrichment and audio analysis get cached** — provider metadata and audio features persist in a local SQLite store outside Rekordbox.
+3. **Rekordbox metadata is staged in memory** — `update_tracks` changes can be previewed or discarded before XML export.
+4. **Direct file tools stay explicit** — tag and artwork operations can write audio or image files without changing `master.db`.
+5. **You export and import XML** — export writes a local XML file and runs the backup step; you choose whether to import it into Rekordbox.
 
 That's the whole loop. The agent handles the tedious work, you make the decisions.
 
 ## Caching
 
-Most workflows need cached data to work well. The [Library Cleanup](/workflows/library-cleanup/) guide walks you through populating caches as part of the process. Once cached, data is reused across all workflows — you only enrich and analyze once.
+Most workflows need cached data to work well. The [Library Cleanup](/workflows/library-cleanup/) guide walks you through populating caches as part of the process. Fresh cache entries are reused instead of repeating enrichment or analysis.
 
-The cache is a local SQLite file you can safely delete. Everything gets re-fetched on next use.
+The internal SQLite store also holds audit and workflow state, calibration data,
+and saved presets. Treat it as persistent application data. Setup can write MCP
+host and broker configuration, and backups and XML exports create additional
+local files.
 
 ## Go deeper
 
 <LinkCard title="Architecture" href="/concepts/architecture/" description="System design, data flow, database tables, external services, and the audio analysis pipeline." />
 <LinkCard title="Pool Discovery" href="/concepts/pool-discovery/" description="Symmetric pool scoring, timbral similarity, detuning models, and the greedy expansion algorithm." />
-<LinkCard title="Safety & Trust" href="/concepts/safety/" description="Read-only database access, in-memory staging, XML export, and human approval at every step." />
+<LinkCard title="Safety & Trust" href="/concepts/safety/" description="Read-only master.db access, staged metadata, direct file writes, local state, and host permissions." />

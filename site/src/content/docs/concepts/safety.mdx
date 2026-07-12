@@ -1,15 +1,21 @@
 ---
 title: Safety & Trust
-description: How reklawdbox keeps your Rekordbox library safe — read-only access, staged changes, and human approval at every step.
+description: The enforced and procedural boundaries around Rekordbox data, audio files, local state, and host permissions.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-reklawdbox never writes to your Rekordbox database. Here's how that works in practice.
+reklawdbox never writes to your Rekordbox database. That is an important,
+technically enforced boundary, but it does not mean the whole application is
+read-only: some tools write audio files, artwork, exports, backups, cache data,
+and configuration outside `master.db`.
 
 ## Your database is read-only
 
-reklawdbox opens your Rekordbox `master.db` in read-only mode. It can see your tracks, playlists, and metadata, but it cannot modify anything. The database file is never changed.
+reklawdbox opens your Rekordbox `master.db` through SQLCipher with SQLite's
+read-only flag. It can read your tracks, playlists, and metadata, but no
+reklawdbox code path writes that database. Rekordbox applies the exported
+metadata only when you later import the XML.
 
 It auto-detects your database at the standard Rekordbox location (`~/Library/Pioneer/rekordbox/master.db`). You can override this with the `REKORDBOX_DB_PATH` environment variable if needed.
 
@@ -17,35 +23,47 @@ It auto-detects your database at the standard Rekordbox location (`~/Library/Pio
   Don't open `master.db` in a generic SQLite browser — Rekordbox encrypts it. Without the right decryption support you'll see garbage data or risk corruption.
 </Aside>
 
-## Changes are staged in memory
+## Know which layer you are changing
 
-When the agent suggests metadata changes (genre, comments, rating, color, label, year, album), those changes live in memory only. Nothing is written to disk or to your database.
+| Layer | Boundary | Writes outside `master.db`? | Control point |
+| --- | --- | :---: | --- |
+| Rekordbox database | Opened read-only; reklawdbox has no database write path | No | Technically enforced |
+| Staged Rekordbox metadata | `update_tracks` keeps genre, comments, rating, color, label, year, and album changes in memory | No | Review with `preview_changes`; discard with `clear_changes` |
+| XML export and backup | `write_xml` runs the configured backup step and creates an XML file for manual Rekordbox import | Yes | Review the staged diff and XML before importing it |
+| Audio tags | `write_file_tags` edits tags in the target audio files; `dry_run=true` previews, while the default writes | Yes | Preview first and authorize the write deliberately |
+| Artwork extraction | `extract_cover_art` creates an image file on disk | Yes | Choose and review the output path |
+| Artwork embedding | `embed_cover_art` changes the target audio files | Yes | Authorize the targets deliberately; there is no universal preview or rollback layer |
+| Local application state | Enrichment, analysis, audit state, calibration data, and presets persist in a separate SQLite store | Yes | Treat the internal store as application data, not as `master.db` |
+| Setup and configuration | Setup can install analysis support and update MCP host or broker configuration | Yes | Review the paths and host configuration being changed |
 
-You can review, modify, or throw away staged changes at any point. If the server restarts, staged changes are gone — nothing persists without your say-so.
+Staged Rekordbox metadata disappears when the server process ends unless it
+has been exported. Cache and workflow state are intentionally persistent, and
+backup archives and XML exports are ordinary files on disk.
 
-## Export as XML, import yourself
+See [XML Export](/reference/xml-export/) for the import workflow and
+[Files & System](/mcp-tools/files-system/) for the direct file-tool contracts.
 
-When you're happy with the staged changes, the agent exports a Rekordbox-compatible XML file. You then import that file into Rekordbox yourself through **Preferences > Advanced > rekordbox xml > Imported Library**.
+## Host permissions are a separate defense
 
-Before importing, Rekordbox's XML view lets you browse every track and verify the metadata is correct — this is your final review step.
+Your MCP host decides when to prompt before a tool or filesystem operation.
+Keep its normal permission checks enabled, and grant only the reklawdbox tools
+and music-library paths needed for the workflow. If your host supports scoped
+or remembered approvals, prefer those over disabling checks globally.
 
-XML reimport is additive — it updates or adds tracks, never deletes them. Your existing data stays intact.
+Workflow SOPs also include review and approval checkpoints. Those checkpoints
+are procedural instructions for the agent; they are not a universal runtime
+confirmation layer. A direct-write tool can act as soon as an authorized host
+calls it, so inspect the tool arguments and use available dry runs before
+large file changes.
 
-See [XML Export](/reference/xml-export/) for the full import workflow and format details.
-
-## You approve everything
-
-Every step requires your sign-off:
-
-- The agent proposes changes — you review them before export
-- The agent produces an XML file — you import it into Rekordbox yourself
-- Enrichment lookups (Discogs, Beatport, etc.) only populate a cache — they never touch your track metadata
-
-The agent handles the tedious parts: looking up metadata, normalizing genres, scoring transitions. You make every final decision.
+<Aside type="caution">
+  Direct tag and artwork writes do not have a general rollback mechanism. Keep
+  suitable file backups before bulk edits and test a small scope first.
+</Aside>
 
 ## What reklawdbox does not do
 
-- **No database writes.** The only output is XML files.
-- **No background process.** It only runs when you're talking to it.
+- **No Rekordbox database writes.** `master.db` remains read-only.
+- **No autonomous jobs.** Operations run in response to host requests or CLI commands.
 - **No auto-sync.** Changes in Rekordbox aren't pulled automatically — the agent reads fresh data each time you ask.
 - **macOS Apple Silicon only.** No Windows or Linux support currently.

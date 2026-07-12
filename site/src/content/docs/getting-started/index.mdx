@@ -57,10 +57,20 @@ This installs audio analysis tools (Essentia) and configures both Claude Code an
 For Claude Code, start it from your Music directory:
 
 ```bash
-cd ~/Music && claude --dangerously-skip-permissions
+cd ~/Music && claude
 ```
 
-The `--dangerously-skip-permissions` flag lets the agent call reklawdbox tools without prompting you each time. Without it, you'd need to approve every single tool call, which makes multi-step workflows impractical. This is safe here because reklawdbox never writes to the Rekordbox database — all changes are staged as XML for you to review.
+Keep your host's normal permission checks enabled. Depending on your host and
+settings, a multi-step workflow may ask you to approve tool calls or filesystem
+access. Grant only the reklawdbox tools and music-library paths that workflow
+needs. If your host supports scoped or remembered approvals, use those instead
+of disabling permission checks globally.
+
+The Rekordbox database is technically read-only, but that does not make every
+operation read-only: tag and artwork tools can change audio files, while setup,
+caches, backups, and XML exports write other local files. Workflow approval
+checkpoints are procedural and do not replace host permissions. Read
+[Safety & Trust](/concepts/safety/) before authorizing bulk file operations.
 
 The setup command placed a config file in `~/Music` so the tools load automatically there. In other directories, the tools stay out of the way.
 
