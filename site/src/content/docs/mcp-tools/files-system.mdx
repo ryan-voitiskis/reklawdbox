@@ -210,8 +210,40 @@ Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256).
 | `detection_level` | string | | `["metadata", "exact"]` | Metadata matching (default) or exact SHA-256 hash |
 | `path_prefix` | string | | | Scope to tracks whose file path starts with this prefix |
 | `limit` | integer | | | Max duplicate groups to report (default: `50`) |
+| `offset` | integer | | | Offset into the stable ordered duplicate-group list (default: `0`) |
 
 {/* /doc-contract:mcp */}
+
+{/* doc-contract:mcp-output tool=scan_duplicates schema=/ requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `detection_level` | string | **yes** | Detection mode used for this scan |
+| `group_count` | integer | **yes** | Duplicate groups returned on this page |
+| `total_groups_found` | integer | | Full-scope group count retained for exact-mode compatibility; use `page.total` for continuation |
+| `total_duplicate_tracks` | integer | **yes** | Duplicate tracks in the returned page only |
+| `duplicate_groups` | array | **yes** | Duplicate groups returned by this page |
+| `page` | object | **yes** | Duplicate-group continuation metadata |
+| `hash_errors_count` | integer | | Files that could not be hashed in exact mode |
+
+{/* /doc-contract:mcp-output */}
+
+{/* doc-contract:mcp-output tool=scan_duplicates schema=/properties/page requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `total` | integer | **yes** | Total duplicate groups in the selected scope |
+| `returned` | integer | **yes** | Groups emitted by this page |
+| `offset` | integer | **yes** | Requested group offset |
+| `next_offset` | integer | **yes** | Next group offset when more remain; `null` at the end |
+| `has_more` | boolean | **yes** | Whether another group page remains |
+
+{/* /doc-contract:mcp-output */}
+
+Continue with `offset=page.next_offset` while `page.has_more` is true. Exact
+mode rehashes the scope on each request, and both modes assume the library and
+files stay unchanged during traversal. Restart at zero after scope changes.
+`limit=0` is a terminal no-op page.
 
 ---
 

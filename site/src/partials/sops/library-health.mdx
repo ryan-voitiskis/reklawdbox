@@ -57,6 +57,11 @@ scan_duplicates(detection_level="metadata", limit=50)
 
 Groups tracks by matching artist + title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating). Use `path_prefix` to scope to a specific directory.
 
+Record this page, then continue with
+`offset=page.next_offset` while `page.has_more` is true. `group_count` and
+`total_duplicate_tracks` describe the returned page; `page.total` is the full
+group count for the selected scope.
+
 For higher confidence, run exact-level detection:
 
 ```
@@ -64,6 +69,11 @@ scan_duplicates(detection_level="exact", limit=50)
 ```
 
 This hashes actual audio files and only reports byte-identical duplicates.
+
+Traverse exact results with the same `page.next_offset` loop. Exact mode
+rehashes on every request, so do not modify files or the Rekordbox scope during
+the traversal. If either changes, restart at offset zero. A zero limit is a
+terminal no-op, not a traversal cursor.
 
 **If duplicates found:** Remove duplicates manually in Rekordbox. The `suggested_keep` field indicates which copy to retain.
 

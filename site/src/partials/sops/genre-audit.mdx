@@ -22,6 +22,20 @@ enrich_tracks(has_genre=true, skip_cached=true, providers=["discogs"], max_track
 enrich_tracks(has_genre=true, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
+For each bounded enrichment or audio call, start with `offset=0`, record its
+successes and identity-bearing failures, then continue with
+`offset=page.next_offset` while `page.has_more` is true. The offset indexes the
+underlying stable selector, so cached/current prefixes do not consume work
+slots. After traversing the scope, retry failed explicit `track_ids` separately
+and re-run `cache_coverage(has_genre=true)`. Stop only when the core searched
+and Stratum readiness is sufficient for the audit, or report the unresolved
+failures. A cached no-match is searched, not matched. If the library or selector
+order changes mid-run, discard the cursor and restart at zero. Keep each
+enrichment traversal's `providers`, `skip_cached`, and `force_refresh` values
+fixed. Keep Essentia availability fixed for an audio traversal; if Essentia is
+installed or becomes newly available, or if `skip_cached` changes, restart that
+audio scope at zero.
+
 Essentia improves energy and timbral evidence but is not a hard gate. Proceed
 when coverage is incomplete; the audit will surface low or insufficient
 confidence for individual review. Retry actual errors, but do not require a
@@ -90,7 +104,9 @@ Stage approved changes.
 
 ### 3. Paginate
 
-Repeat Steps 1–2 with `offset` until all tracks are processed.
+Repeat Steps 1–2 with the explicit `audit_genres` offset until all audit tracks
+are processed. This classification offset is separate from the enrichment and
+audio `page.next_offset` traversals above.
 
 Report cumulative progress between batches: `"Batch 3/N: M audited, X changes staged, Y confirmed."`
 

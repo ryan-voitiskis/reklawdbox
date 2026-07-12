@@ -58,6 +58,17 @@ Run targeted enrichment for actual gaps, retry errors, and accept a cached
 no-match as a completed search. Do not require every provider to match every
 track, and do not invent percentages for targeted sources.
 
+For every bounded `enrich_tracks` scope above, begin at `offset=0`, record
+successes and identity-bearing failures, and continue with
+`offset=page.next_offset` while `page.has_more` is true. Cached searches do not
+consume work slots. After traversing the scope, retry failures with explicit
+`track_ids`, then re-run the relevant `cache_coverage`/backfill readiness check.
+Stop only when the needed searched coverage is satisfied or unresolved work is
+reported. These offsets are not durable across library or selector-order
+changes; restart at zero after either changes. Keep `providers`, `skip_cached`,
+and `force_refresh` fixed for a traversal. Changing provider scope or cache
+policy can make earlier indices pending and requires a restart at zero.
+
 **Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 2). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
 
 ## Steps
@@ -84,6 +95,19 @@ The tool scans the entire collection (excluding samples), looks up each track's 
 The summary includes `no_enrichment_by_provider` showing which providers are missing data for the remaining unlabeled tracks. If `no_bandcamp` is high, hydrate Bandcamp and re-run.
 
 Report the summary: "Backfill complete: N labels staged, N already correct, N conflicts, N without enrichment." Then immediately proceed to conflict resolution.
+
+The mutating/auto-enriching call above is the one and only side-effecting pass.
+If `conflict_page.has_more` is true, collect every later conflict page without
+repeating those effects:
+
+```
+backfill_labels(dry_run=true, auto_enrich=false, conflict_offset=CONFLICT_NEXT_OFFSET)
+```
+
+Set `CONFLICT_NEXT_OFFSET` from the prior `conflict_page.next_offset` and repeat
+only while `has_more` is true. `conflicts_truncated=true` is the legacy alias
+for that condition. Keep the library unchanged during retrieval or restart the
+conflict traversal at zero.
 
 #### 1b. Resolve conflicts
 
@@ -235,6 +259,9 @@ enrich_tracks(year_zero=true, skip_cached=true, providers=["bandcamp"], max_trac
 Run this for the selected Bandcamp gaps, then **re-run `backfill_years()`** to
 pick up new data. A legitimate no-match can remain unresolved and move to web
 research; it does not need to become a provider match.
+
+Traverse the Bandcamp call via `page.next_offset`/`page.has_more`, retain
+failures, and retry those explicit IDs only after the full scope traversal.
 
 **Re-run backfill**
 

@@ -23,13 +23,28 @@ enrich_tracks(has_genre=false, skip_cached=true, providers=["discogs"], max_trac
 enrich_tracks(has_genre=false, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
+Traverse each bounded enrichment or audio scope explicitly: begin at
+`offset=0`, record successes and identity-bearing failures, and call again with
+`offset=page.next_offset` while `page.has_more` is true. Cached/current tracks
+do not spend work slots. After the traversal, retry failed explicit
+`track_ids`, then re-run `cache_coverage(has_genre=false)`. Continue until core
+searched and Stratum readiness is sufficient, or report unresolved failures;
+do not turn a searched no-match into a required match. Offsets are valid only
+while the selector and library ordering stay unchanged, so restart from zero
+after imports, deletions, or reordering. Keep `providers`, `skip_cached`, and
+`force_refresh` fixed within each enrichment traversal. If Essentia availability
+or `skip_cached` changes during audio traversal, restart that audio scope at
+zero because earlier tracks may become pending.
+
 Essentia improves energy and timbral evidence but is not a hard gate. Proceed
 when coverage is incomplete; classification will lower affected tracks to low
 or insufficient confidence. Those tracks require individual review, never bulk
 approval. Retry actual errors, but do not require a match for a legitimately
 searched release.
 
-All `classify_tracks` calls support `max_tracks` (default 50, max 200) and `offset` for pagination. Continue until all tracks are covered.
+All `classify_tracks` calls support `max_tracks` (default 50, max 200) and their
+own explicit `offset` pagination. Continue until all tracks are covered; this
+classification offset is separate from batch hydration `page.next_offset`.
 
 ## Steps
 

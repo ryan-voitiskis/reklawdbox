@@ -276,9 +276,11 @@ pub struct EnrichTracksParams {
     pub track_ids: Option<Vec<String>>,
     #[schemars(description = "Enrich tracks in this playlist")]
     pub playlist_id: Option<String>,
-    #[schemars(description = "Max tracks to enrich (default 50)")]
+    #[schemars(
+        description = "Max pending tracks to enrich after cache checks (default 50, max 200)"
+    )]
     pub max_tracks: Option<u32>,
-    #[schemars(description = "Offset for pagination (skip first N tracks in result set)")]
+    #[schemars(description = "Index into the stable underlying selector order (default 0)")]
     pub offset: Option<u32>,
     #[schemars(
         description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])"
@@ -308,9 +310,11 @@ pub struct AnalyzeAudioBatchParams {
     pub track_ids: Option<Vec<String>>,
     #[schemars(description = "Analyze tracks in this playlist")]
     pub playlist_id: Option<String>,
-    #[schemars(description = "Max tracks to analyze (default 20)")]
+    #[schemars(
+        description = "Max pending tracks to analyze after freshness checks (default 20, max 200)"
+    )]
     pub max_tracks: Option<u32>,
-    #[schemars(description = "Offset for pagination (skip first N tracks in result set)")]
+    #[schemars(description = "Index into the stable underlying selector order (default 0)")]
     pub offset: Option<u32>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
@@ -1038,6 +1042,8 @@ pub(super) struct ScanDuplicatesParams {
     pub path_prefix: Option<String>,
     #[schemars(description = "Max duplicate groups to report (default 50)")]
     pub limit: Option<u32>,
+    #[schemars(description = "Offset into the stable ordered duplicate-group list (default 0)")]
+    pub offset: Option<u32>,
 }
 
 impl schemars::JsonSchema for AuditOperation {

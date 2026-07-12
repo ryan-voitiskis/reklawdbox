@@ -80,6 +80,15 @@ pub(super) fn ok_json(value: &impl serde::Serialize) -> Result<CallToolResult, M
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }
 
+pub(super) fn ok_structured_json<T>(value: T) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize + schemars::JsonSchema,
+{
+    let value =
+        serde_json::to_value(value).map_err(|error| mcp_internal_error(error.to_string()))?;
+    Ok(CallToolResult::structured(value))
+}
+
 pub(super) fn db_error(e: rusqlite::Error) -> McpError {
     McpError::internal_error(format!("DB error: {e}"), None)
 }
@@ -369,7 +378,9 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels; reports conflicts (capped at max_conflicts, default 50) where Rekordbox and enrichment disagree. Set auto_enrich=true to automatically fetch Bandcamp data for uncached tracks before backfilling. Use preview_changes then write_xml to export."
+        description = "Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels; pages conflicts with conflict_offset and conflict_page. Set auto_enrich=true to fetch Bandcamp data before backfilling; use dry_run=true and auto_enrich=false for later conflict pages. Use preview_changes then write_xml to export.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<BackfillLabelsOutput>()
+            .expect("backfill_labels output schema should be valid")
     )]
     async fn backfill_labels(
         &self,
@@ -446,7 +457,9 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Batch enrich tracks via Discogs/Beatport/Bandcamp. Select tracks by IDs, playlist, or search filters. Results are cached."
+        description = "Batch enrich pending tracks via Discogs/Beatport/Bandcamp. Cached candidates do not consume max_tracks; continue with page.next_offset while page.has_more. Keep providers, skip_cached, and force_refresh fixed during traversal, or restart at offset 0. Results are cached.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<EnrichTracksOutput>()
+            .expect("enrich_tracks output schema should be valid")
     )]
     async fn enrich_tracks(
         &self,
@@ -466,7 +479,9 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Batch analyze audio files with stratum-dsp and Essentia (when installed). Select tracks by IDs, playlist, or search filters. Results are cached."
+        description = "Batch analyze pending audio files with stratum-dsp and Essentia (when installed). Current cached candidates do not consume max_tracks; continue with page.next_offset while page.has_more. If skip_cached or Essentia availability changes, restart at offset 0. Results are cached.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<AnalyzeAudioBatchOutput>()
+            .expect("analyze_audio_batch output schema should be valid")
     )]
     async fn analyze_audio_batch(
         &self,
@@ -728,7 +743,9 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256). Each group includes a suggested_keep recommendation based on audio quality."
+        description = "Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256). Groups are stably pageable with offset and page.next_offset; each includes a suggested_keep recommendation based on audio quality.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<ScanDuplicatesOutput>()
+            .expect("scan_duplicates output schema should be valid")
     )]
     async fn scan_duplicates(
         &self,

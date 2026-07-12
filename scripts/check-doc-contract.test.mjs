@@ -14,6 +14,7 @@ import {
   validateBuiltLinkSet,
   validateCliContracts,
   validateMcpContracts,
+  validateMcpOutputContracts,
   validateRuntimeHelpUrls,
   validateSopContracts,
 } from './check-doc-contract.mjs'
@@ -46,6 +47,69 @@ function mcpMarker(name, body, attributes = '') {
     attributes ? ` ${attributes}` : ''
   } -->\n${body}\n<!-- /doc-contract:mcp -->`
 }
+
+function outputTool(name, properties = {}, required = []) {
+  return {
+    name,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'object', properties, required },
+  }
+}
+
+function mcpOutputMarker(name, body, schema = '/') {
+  return `<!-- doc-contract:mcp-output tool=${name} schema=${schema} requiredness=global -->\n${body}\n<!-- /doc-contract:mcp-output -->`
+}
+
+function selectedOutputFixture(enrichRows) {
+  const selected = [
+    ['analyze_audio_batch', [['page', 'object', 'yes', 'Continuation']]],
+    ['backfill_labels', [['conflict_page', 'object', 'yes', 'Continuation']]],
+    ['enrich_tracks', enrichRows],
+    ['scan_duplicates', [['page', 'object', 'yes', 'Continuation']]],
+  ]
+  const tools = selected.map(([name, rows]) =>
+    outputTool(
+      name,
+      Object.fromEntries(rows.map(([field, type]) => [field, { type }])),
+      rows.map(([field]) => field),
+    )
+  )
+  const docs = [
+    document(
+      selected.map(([name, rows]) =>
+        mcpOutputMarker(
+          name,
+          table(rows, ['Field', 'Type', 'Required', 'Description']),
+        )
+      ).join('\n'),
+    ),
+  ]
+  return { tools, docs }
+}
+
+test('selected MCP output contracts compare marked fields with live outputSchema', () => {
+  const fixture = selectedOutputFixture([
+    ['summary', 'object', 'yes', 'Batch summary'],
+    ['page', 'object', 'yes', 'Continuation'],
+  ])
+  assert.doesNotThrow(() =>
+    validateMcpOutputContracts(fixture.docs, fixture.tools)
+  )
+})
+
+test('MCP output contracts reject an omitted live response property', () => {
+  const fixture = selectedOutputFixture([
+    ['summary', 'object', 'yes', 'Batch summary'],
+  ])
+  fixture.tools.find((item) => item.name === 'enrich_tracks')
+    .outputSchema.properties.page = { type: 'object' }
+  fixture.tools.find((item) => item.name === 'enrich_tracks')
+    .outputSchema.required.push('page')
+  assert.throws(
+    () => validateMcpOutputContracts(fixture.docs, fixture.tools),
+    /enrich_tracks\.page is missing from marked output schema/,
+  )
+})
 
 test('stdio decoder routes exact result payloads and records violations', async () => {
   assert.deepEqual(decodeProtocolLine('  '), { kind: 'blank' })

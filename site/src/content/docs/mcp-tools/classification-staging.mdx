@@ -125,8 +125,43 @@ Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, B
 | `dry_run` | boolean | | Preview without staging (default: `false`) |
 | `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
 | `max_conflicts` | integer | | Cap on conflict entries in the response (default: `50`) |
+| `conflict_offset` | integer | | Offset into the stable ordered conflict list (default: `0`) |
 
 {/* /doc-contract:mcp */}
+
+{/* doc-contract:mcp-output tool=backfill_labels schema=/ requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `summary` | object | **yes** | Full scan and label-fill counts |
+| `staged` | integer | **yes** | Changes staged by this call |
+| `total_pending` | integer | **yes** | Total changes currently staged in memory |
+| `dry_run` | boolean | **yes** | Whether this call avoided staging |
+| `conflicts` | array | **yes** | Conflict entries returned on this page |
+| `conflict_page` | object | **yes** | Conflict continuation metadata |
+| `conflicts_truncated` | boolean | | Legacy alias present and true only when `conflict_page.has_more` is true |
+| `auto_enriched` | integer | | Bandcamp hits when `auto_enrich=true` |
+| `research_queue` | object | | Remaining unlabeled-track research summary |
+
+{/* /doc-contract:mcp-output */}
+
+{/* doc-contract:mcp-output tool=backfill_labels schema=/properties/conflict_page requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `total` | integer | **yes** | Total conflicts in the stable ordered list |
+| `returned` | integer | **yes** | Conflict entries emitted by this page |
+| `offset` | integer | **yes** | Requested conflict offset |
+| `next_offset` | integer | **yes** | Next conflict offset when more remain; `null` at the end |
+| `has_more` | boolean | **yes** | Whether another conflict page remains |
+
+{/* /doc-contract:mcp-output */}
+
+Run the intended mutating or auto-enriching pass once. Retrieve later conflict
+pages with `dry_run=true`, `auto_enrich=false`, and
+`conflict_offset=conflict_page.next_offset`; this avoids repeating staging or
+provider side effects. A zero page size and an offset beyond the end are
+terminal no-ops.
 
 ---
 

@@ -371,7 +371,7 @@ fn search_tracks_with_limit_policy(
     let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
     apply_search_filters(&mut sql, params, &mut bind_values);
 
-    sql.push_str(" ORDER BY c.Title");
+    sql.push_str(" ORDER BY c.Title, c.ID");
     if let Some(mut limit) = params.limit.or(default_limit) {
         if let Some(max_limit) = max_limit {
             limit = limit.min(max_limit);
@@ -438,7 +438,7 @@ fn get_playlist_tracks_with_limit_policy(
 {TRACK_JOINS}
 INNER JOIN djmdSongPlaylist sp ON sp.ContentID = c.ID
 WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0
-ORDER BY sp.TrackNo"
+ORDER BY sp.TrackNo, c.ID"
     );
     if let Some(limit) = resolved_limit {
         write!(sql, " LIMIT {limit}").unwrap();
@@ -1080,6 +1080,11 @@ pub(crate) struct DuplicateGroup {
     pub track_ids: Vec<String>,
 }
 
+pub(crate) struct MetadataDuplicatePage {
+    pub groups: Vec<DuplicateGroup>,
+    pub total: usize,
+}
+
 pub(crate) fn tracks_not_in_any_playlist(
     conn: &Connection,
     search: &SearchParams,
@@ -1143,13 +1148,24 @@ pub(crate) fn tracks_not_in_any_playlist(
 
 /// Find metadata duplicates: groups by LOWER(TRIM(artist)) + LOWER(TRIM(title)).
 /// Returns separate artist/title fields to avoid separator collision in display keys.
+#[cfg(test)]
 pub(crate) fn find_metadata_duplicates(
     conn: &Connection,
     path_prefix: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<DuplicateGroup>, rusqlite::Error> {
     let limit = limit.unwrap_or(50).min(200);
-    let mut sql = String::from(
+    Ok(find_metadata_duplicates_page(conn, path_prefix, limit, 0)?.groups)
+}
+
+pub(crate) fn find_metadata_duplicates_page(
+    conn: &Connection,
+    path_prefix: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<MetadataDuplicatePage, rusqlite::Error> {
+    let limit = limit.min(200);
+    let mut grouped_sql = String::from(
         "SELECT LOWER(TRIM(COALESCE(a.Name, ''))) AS dup_artist, \
                 LOWER(TRIM(COALESCE(c.Title, ''))) AS dup_title, \
                 GROUP_CONCAT(c.ID) AS track_ids \
@@ -1163,21 +1179,29 @@ pub(crate) fn find_metadata_duplicates(
 
     if let Some(prefix) = path_prefix {
         let idx = bind_values.len() + 1;
-        write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
+        write!(grouped_sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
         bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
     }
 
-    sql.push_str(
+    grouped_sql.push_str(
         " GROUP BY LOWER(TRIM(COALESCE(a.Name, ''))), LOWER(TRIM(COALESCE(c.Title, ''))) \
          HAVING COUNT(*) > 1 AND LOWER(TRIM(COALESCE(c.Title, ''))) != ''",
     );
-    write!(sql, " ORDER BY COUNT(*) DESC LIMIT {limit}").unwrap();
-
-    let mut stmt = conn.prepare(&sql)?;
     let bind_params: Vec<&dyn rusqlite::types::ToSql> = bind_values
         .iter()
         .map(std::convert::AsRef::as_ref)
         .collect();
+    let total_sql = format!("SELECT COUNT(*) FROM ({grouped_sql}) duplicate_groups");
+    let total_i64: i64 = conn.query_row(&total_sql, bind_params.as_slice(), |row| row.get(0))?;
+    let total = usize::try_from(total_i64).unwrap_or(usize::MAX);
+
+    let mut sql = grouped_sql;
+    write!(
+        sql,
+        " ORDER BY COUNT(*) DESC, dup_artist, dup_title LIMIT {limit} OFFSET {offset}"
+    )
+    .unwrap();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<(String, String, String)> = stmt
         .query_map(bind_params.as_slice(), |row| {
             Ok((
@@ -1188,20 +1212,23 @@ pub(crate) fn find_metadata_duplicates(
         })?
         .collect::<Result<_, _>>()?;
 
-    Ok(rows
+    let groups = rows
         .into_iter()
         .map(|(artist, title, ids_str)| {
-            let track_ids: Vec<String> = ids_str
+            let mut track_ids: Vec<String> = ids_str
                 .split(',')
                 .map(std::string::ToString::to_string)
                 .collect();
+            track_ids.sort();
+            track_ids.dedup();
             DuplicateGroup {
                 artist,
                 title,
                 track_ids,
             }
         })
-        .collect())
+        .collect();
+    Ok(MetadataDuplicatePage { groups, total })
 }
 
 pub(crate) fn all_track_paths(
@@ -1895,6 +1922,61 @@ mod tests {
     }
 
     #[test]
+    fn pending_batch_page_playlist_equal_positions_use_stable_id_tiebreaker() {
+        let conn = create_test_db();
+        conn.execute(
+            "INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo) \
+             VALUES ('sp-tie', 'p1', 't2', 1)",
+            [],
+        )
+        .unwrap();
+
+        let first = get_playlist_tracks_unbounded_page(&conn, "p1", Some(1), Some(0)).unwrap();
+        let second = get_playlist_tracks_unbounded_page(&conn, "p1", Some(1), Some(1)).unwrap();
+        let repeated = get_playlist_tracks_unbounded_page(&conn, "p1", Some(2), Some(0)).unwrap();
+        assert_eq!(first[0].id, "t1");
+        assert_eq!(second[0].id, "t2");
+        assert_eq!(
+            repeated
+                .iter()
+                .map(|track| track.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t1", "t2"]
+        );
+    }
+
+    #[test]
+    fn pending_batch_page_search_equal_titles_use_stable_id_tiebreaker() {
+        let conn = create_test_db();
+        conn.execute(
+            "UPDATE djmdContent SET Title = 'Equal Title' WHERE ID IN ('t1', 't2')",
+            [],
+        )
+        .unwrap();
+        let mut search = SearchParams {
+            query: Some("Equal Title".to_string()),
+            limit: Some(1),
+            offset: Some(0),
+            ..Default::default()
+        };
+        let first = search_tracks_unbounded(&conn, &search).unwrap();
+        search.offset = Some(1);
+        let second = search_tracks_unbounded(&conn, &search).unwrap();
+        search.limit = Some(2);
+        search.offset = Some(0);
+        let repeated = search_tracks_unbounded(&conn, &search).unwrap();
+        assert_eq!(first[0].id, "t1");
+        assert_eq!(second[0].id, "t2");
+        assert_eq!(
+            repeated
+                .iter()
+                .map(|track| track.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t1", "t2"]
+        );
+    }
+
+    #[test]
     fn test_library_stats() {
         let conn = create_test_db();
         let stats = get_library_stats(&conn).unwrap();
@@ -2178,6 +2260,41 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert!(groups[0].track_ids.contains(&"t1".to_string()));
         assert!(groups[0].track_ids.contains(&"t1_dup".to_string()));
+    }
+
+    #[test]
+    fn scan_duplicates_page_metadata_reports_total_and_stable_adjacent_pages() {
+        let conn = create_test_db();
+        conn.execute_batch(
+            "INSERT INTO djmdContent (ID, Title, ArtistID, FolderPath, FileType) \
+             VALUES ('t1_dup', 'Archangel', 'a1', '/tmp/archangel-copy.flac', 5); \
+             INSERT INTO djmdContent (ID, Title, ArtistID, FolderPath, FileType) \
+             VALUES ('t2_dup', 'Endorphin', 'a1', '/tmp/endorphin-copy.flac', 5);",
+        )
+        .unwrap();
+
+        let first = find_metadata_duplicates_page(&conn, None, 1, 0).unwrap();
+        let second = find_metadata_duplicates_page(&conn, None, 1, 1).unwrap();
+        let repeated = find_metadata_duplicates_page(&conn, None, 1, 0).unwrap();
+
+        assert_eq!(first.total, 2);
+        assert_eq!(second.total, 2);
+        assert_eq!(first.groups.len(), 1);
+        assert_eq!(second.groups.len(), 1);
+        assert_eq!(first.groups[0].title, "archangel");
+        assert_eq!(second.groups[0].title, "endorphin");
+        assert_eq!(first.groups[0].track_ids, ["t1", "t1_dup"]);
+        assert_eq!(
+            repeated.groups[0].track_ids, first.groups[0].track_ids,
+            "identical pages should retain stable group and track order"
+        );
+
+        let zero = find_metadata_duplicates_page(&conn, None, 0, 0).unwrap();
+        let beyond = find_metadata_duplicates_page(&conn, None, 50, 50).unwrap();
+        assert_eq!(zero.total, 2);
+        assert!(zero.groups.is_empty());
+        assert_eq!(beyond.total, 2);
+        assert!(beyond.groups.is_empty());
     }
 
     #[test]

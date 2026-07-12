@@ -4,7 +4,10 @@ use std::sync::Arc;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use super::{ReklawdboxServer, db_error, mcp_internal_error, ok_json, scan_audio_directory};
+use super::{
+    OffsetPage, ReklawdboxServer, db_error, mcp_internal_error, offset_page_bounds, ok_json,
+    ok_structured_json, scan_audio_directory,
+};
 use crate::audio;
 use crate::db;
 use crate::tools::params::{
@@ -265,22 +268,44 @@ pub(super) async fn handle_scan_duplicates(
     }
 }
 
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(super) struct ScanDuplicatesOutput {
+    detection_level: String,
+    group_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_groups_found: Option<usize>,
+    total_duplicate_tracks: usize,
+    duplicate_groups: Vec<serde_json::Value>,
+    page: OffsetPage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hash_errors_count: Option<usize>,
+}
+
+fn sort_exact_duplicate_groups(groups: &mut [(String, Vec<String>)]) {
+    for (_, ids) in groups.iter_mut() {
+        ids.sort();
+    }
+    groups.sort_by(|(left_hash, left_ids), (right_hash, right_ids)| {
+        right_ids
+            .len()
+            .cmp(&left_ids.len())
+            .then_with(|| left_hash.cmp(right_hash))
+    });
+}
+
 async fn handle_duplicates_metadata(
     server: &ReklawdboxServer,
     params: ScanDuplicatesParams,
 ) -> Result<CallToolResult, McpError> {
     let conn = server.rekordbox_conn()?;
-    let groups = db::find_metadata_duplicates(&conn, params.path_prefix.as_deref(), params.limit)
-        .map_err(db_error)?;
-
-    if groups.is_empty() {
-        return ok_json(&serde_json::json!({
-            "detection_level": "metadata",
-            "group_count": 0,
-            "total_duplicate_tracks": 0,
-            "duplicate_groups": [],
-        }));
-    }
+    let limit = params.limit.unwrap_or(50).min(200);
+    let offset = params.offset.unwrap_or(0);
+    let duplicate_page =
+        db::find_metadata_duplicates_page(&conn, params.path_prefix.as_deref(), limit, offset)
+            .map_err(db_error)?;
+    let groups = duplicate_page.groups;
+    let (_, mut page) = offset_page_bounds(duplicate_page.total, offset as usize, limit as usize);
+    page.returned = groups.len();
 
     let all_ids: Vec<String> = groups
         .iter()
@@ -318,20 +343,24 @@ async fn handle_duplicates_metadata(
         }));
     }
 
-    let result = serde_json::json!({
-        "detection_level": "metadata",
-        "group_count": dup_groups.len(),
-        "total_duplicate_tracks": total_dup_tracks,
-        "duplicate_groups": dup_groups,
-    });
-
-    ok_json(&result)
+    page.returned = dup_groups.len();
+    ok_structured_json(ScanDuplicatesOutput {
+        detection_level: "metadata".to_string(),
+        group_count: dup_groups.len(),
+        total_groups_found: None,
+        total_duplicate_tracks: total_dup_tracks,
+        duplicate_groups: dup_groups,
+        page,
+        hash_errors_count: None,
+    })
 }
 
 async fn handle_duplicates_exact(
     server: &ReklawdboxServer,
     params: ScanDuplicatesParams,
 ) -> Result<CallToolResult, McpError> {
+    let limit = params.limit.unwrap_or(50).min(200) as usize;
+    let offset = params.offset.unwrap_or(0) as usize;
     // Scoped to drop conn before await
     let track_paths = {
         let conn = server.rekordbox_conn()?;
@@ -357,12 +386,16 @@ async fn handle_duplicates_exact(
     .map_err(|e| mcp_internal_error(format!("Task join error: {e}")))?;
 
     if size_groups.is_empty() {
-        return ok_json(&serde_json::json!({
-            "detection_level": "exact",
-            "group_count": 0,
-            "total_duplicate_tracks": 0,
-            "duplicate_groups": [],
-        }));
+        let (_, page) = offset_page_bounds(0, offset, limit);
+        return ok_structured_json(ScanDuplicatesOutput {
+            detection_level: "exact".to_string(),
+            group_count: 0,
+            total_groups_found: Some(0),
+            total_duplicate_tracks: 0,
+            duplicate_groups: Vec::new(),
+            page,
+            hash_errors_count: None,
+        });
     }
 
     let sem = Arc::new(tokio::sync::Semaphore::new(8));
@@ -400,21 +433,22 @@ async fn handle_duplicates_exact(
     }
     hash_groups.retain(|_, v| v.len() > 1);
 
-    let total_groups_found = hash_groups.len();
-    let limit = params.limit.unwrap_or(50).min(200) as usize;
-    let groups_to_report: Vec<_> = hash_groups.into_iter().take(limit).collect();
+    let mut ordered_hash_groups: Vec<_> = hash_groups.into_iter().collect();
+    sort_exact_duplicate_groups(&mut ordered_hash_groups);
+    let total_groups_found = ordered_hash_groups.len();
+    let (group_range, mut page) = offset_page_bounds(total_groups_found, offset, limit);
+    let groups_to_report: Vec<_> = ordered_hash_groups[group_range].to_vec();
 
     if groups_to_report.is_empty() {
-        let mut result = serde_json::json!({
-            "detection_level": "exact",
-            "group_count": 0,
-            "total_duplicate_tracks": 0,
-            "duplicate_groups": [],
+        return ok_structured_json(ScanDuplicatesOutput {
+            detection_level: "exact".to_string(),
+            group_count: 0,
+            total_groups_found: Some(total_groups_found),
+            total_duplicate_tracks: 0,
+            duplicate_groups: Vec::new(),
+            page,
+            hash_errors_count: (hash_errors_count > 0).then_some(hash_errors_count),
         });
-        if hash_errors_count > 0 {
-            result["hash_errors_count"] = serde_json::json!(hash_errors_count);
-        }
-        return ok_json(&result);
     }
 
     let all_ids: Vec<String> = groups_to_report
@@ -455,19 +489,16 @@ async fn handle_duplicates_exact(
         }));
     }
 
-    let mut result = serde_json::json!({
-        "detection_level": "exact",
-        "group_count": dup_groups.len(),
-        "total_groups_found": total_groups_found,
-        "total_duplicate_tracks": total_dup_tracks,
-        "duplicate_groups": dup_groups,
-    });
-
-    if hash_errors_count > 0 {
-        result["hash_errors_count"] = serde_json::json!(hash_errors_count);
-    }
-
-    ok_json(&result)
+    page.returned = dup_groups.len();
+    ok_structured_json(ScanDuplicatesOutput {
+        detection_level: "exact".to_string(),
+        group_count: dup_groups.len(),
+        total_groups_found: Some(total_groups_found),
+        total_duplicate_tracks: total_dup_tracks,
+        duplicate_groups: dup_groups,
+        page,
+        hash_errors_count: (hash_errors_count > 0).then_some(hash_errors_count),
+    })
 }
 
 fn hash_file(path: &str) -> std::io::Result<String> {
@@ -568,5 +599,56 @@ mod tests {
     fn test_pick_suggested_keep_empty() {
         let result: Option<String> = pick_suggested_keep(&[]);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn scan_duplicates_page_exact_order_is_stable_and_non_overlapping() {
+        let mut groups = vec![
+            (
+                "hash-z".to_string(),
+                vec!["t4".to_string(), "t3".to_string()],
+            ),
+            (
+                "hash-a".to_string(),
+                vec!["t2".to_string(), "t1".to_string(), "t0".to_string()],
+            ),
+            (
+                "hash-b".to_string(),
+                vec!["t6".to_string(), "t5".to_string()],
+            ),
+        ];
+        sort_exact_duplicate_groups(&mut groups);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|(hash, _)| hash.as_str())
+                .collect::<Vec<_>>(),
+            ["hash-a", "hash-b", "hash-z"]
+        );
+        assert_eq!(groups[0].1, ["t0", "t1", "t2"]);
+
+        let (first, first_page) = offset_page_bounds(groups.len(), 0, 2);
+        let (second, second_page) = offset_page_bounds(groups.len(), 2, 2);
+        assert_eq!(first, 0..2);
+        assert_eq!(second, 2..3);
+        assert_eq!(first_page.next_offset, Some(2));
+        assert!(first_page.has_more);
+        assert_eq!(second_page.next_offset, None);
+        assert!(!second_page.has_more);
+    }
+
+    #[test]
+    fn scan_duplicates_page_zero_and_beyond_end_are_terminal() {
+        let (zero, zero_page) = offset_page_bounds(5, 2, 0);
+        assert_eq!(zero, 2..2);
+        assert_eq!(zero_page.returned, 0);
+        assert_eq!(zero_page.next_offset, None);
+        assert!(!zero_page.has_more);
+
+        let (beyond, beyond_page) = offset_page_bounds(5, usize::MAX, 50);
+        assert_eq!(beyond, 5..5);
+        assert_eq!(beyond_page.returned, 0);
+        assert_eq!(beyond_page.next_offset, None);
+        assert!(!beyond_page.has_more);
     }
 }

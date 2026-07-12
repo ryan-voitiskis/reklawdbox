@@ -85,6 +85,164 @@ async fn call_tool_via_router(
     result
 }
 
+fn assert_structured_matches_text(result: &CallToolResult, tool_name: &str) {
+    let structured = result
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("{tool_name} should return structured content"));
+    assert_eq!(
+        structured,
+        &extract_json(result),
+        "{tool_name} structured content and compatibility JSON text should match"
+    );
+}
+
+#[tokio::test]
+async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
+    let router = ReklawdboxServer::tool_router();
+    for (tool_name, continuation_field) in [
+        ("enrich_tracks", "page"),
+        ("analyze_audio_batch", "page"),
+        ("backfill_labels", "conflict_page"),
+        ("scan_duplicates", "page"),
+    ] {
+        let tool = router
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+        let schema = serde_json::to_value(tool).expect("tool metadata should serialize");
+        assert!(
+            schema["outputSchema"].is_object(),
+            "{tool_name} should advertise outputSchema"
+        );
+        assert!(
+            schema["outputSchema"]["properties"][continuation_field].is_object(),
+            "{tool_name} outputSchema should require {continuation_field}"
+        );
+    }
+
+    let db_conn = create_selector_pagination_test_db();
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+
+    let enrich = server
+        .enrich_tracks(Parameters(EnrichTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["t1".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(0),
+            offset: Some(0),
+            providers: None,
+            skip_cached: Some(true),
+            force_refresh: Some(false),
+            concurrency: Some(1),
+        }))
+        .await
+        .expect("zero-work enrichment should succeed");
+    assert_structured_matches_text(&enrich, "enrich_tracks");
+
+    let audio = server
+        .analyze_audio_batch(Parameters(AnalyzeAudioBatchParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["t1".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(0),
+            offset: Some(0),
+            skip_cached: Some(true),
+            concurrency: Some(1),
+        }))
+        .await
+        .expect("zero-work audio batch should succeed");
+    assert_structured_matches_text(&audio, "analyze_audio_batch");
+
+    let labels = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(true),
+            auto_enrich: Some(false),
+            max_conflicts: Some(0),
+            conflict_offset: Some(0),
+        }))
+        .await
+        .expect("dry-run label backfill should succeed");
+    assert_structured_matches_text(&labels, "backfill_labels");
+
+    let duplicates = server
+        .scan_duplicates(Parameters(ScanDuplicatesParams::default()))
+        .await
+        .expect("empty metadata duplicate scan should succeed");
+    assert_structured_matches_text(&duplicates, "scan_duplicates");
+}
+
+#[tokio::test]
+async fn backfill_labels_conflict_page_later_dry_run_does_not_repeat_staging() {
+    let db_conn = create_selector_pagination_test_db();
+    db_conn
+        .execute("UPDATE djmdContent SET LabelID = NULL WHERE ID = 't3'", [])
+        .expect("unlabeled staging fixture should update");
+    let tracks = db::get_tracks_by_ids(
+        &db_conn,
+        &["t1".to_string(), "t2".to_string(), "t3".to_string()],
+    )
+    .expect("label fixture tracks should load");
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    {
+        let store_conn = server.cache_store_conn().expect("test store should open");
+        for track in &tracks {
+            let label = if track.id == "t3" {
+                "Filled Label"
+            } else {
+                "Conflicting Label"
+            };
+            let response = serde_json::json!({"label": label}).to_string();
+            store::set_enrichment(
+                &store_conn,
+                "discogs",
+                &crate::normalize::normalize_for_matching(&track.artist),
+                &crate::normalize::normalize_for_matching(&track.title),
+                Some(&crate::normalize::normalize_for_matching(&track.album)),
+                Some("exact"),
+                Some(&response),
+            )
+            .expect("label cache fixture should write");
+        }
+    }
+
+    let first = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(false),
+            auto_enrich: Some(false),
+            max_conflicts: Some(1),
+            conflict_offset: Some(0),
+        }))
+        .await
+        .expect("mutating label pass should succeed");
+    let first_payload = extract_json(&first);
+    assert_eq!(first_payload["staged"], 1);
+    assert_eq!(first_payload["conflict_page"]["returned"], 1);
+    assert_eq!(first_payload["conflict_page"]["next_offset"], 1);
+    assert_eq!(first_payload["conflicts_truncated"], true);
+    let pending_after_first = server.state.changes.pending_ids();
+    assert_eq!(pending_after_first, vec!["t3".to_string()]);
+
+    let second = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(true),
+            auto_enrich: Some(false),
+            max_conflicts: Some(1),
+            conflict_offset: Some(1),
+        }))
+        .await
+        .expect("later dry-run conflict page should succeed");
+    let second_payload = extract_json(&second);
+    assert_eq!(second_payload["staged"], 0);
+    assert_eq!(second_payload["conflict_page"]["offset"], 1);
+    assert_eq!(second_payload["conflict_page"]["returned"], 1);
+    assert_eq!(
+        second_payload["conflict_page"]["next_offset"],
+        serde_json::Value::Null
+    );
+    assert!(second_payload.get("conflicts_truncated").is_none());
+    assert_eq!(server.state.changes.pending_ids(), pending_after_first);
+}
+
 #[test]
 fn help_public_contract() {
     let menu = handle_help(HelpParams::default()).expect("DB-free help menu should succeed");
@@ -2812,6 +2970,44 @@ fn selector_pagination_explicit_ids_follow_caller_order_after_deduplication() {
 }
 
 #[test]
+fn pending_batch_page_explicit_ids_keep_caller_order_and_apply_cap() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec![
+        "t3".to_string(),
+        "t1".to_string(),
+        "t1".to_string(),
+        "t2".to_string(),
+    ];
+    let selection = resolve_pending_tracks(
+        &conn,
+        Some(&ids),
+        None,
+        SearchFilterParams::default(),
+        Some(10),
+        Some(0),
+        50,
+        2,
+        false,
+        |tracks| Ok(vec![false; tracks.len()]),
+    )
+    .expect("pending explicit-ID selector should resolve");
+
+    assert_eq!(track_ids(&selection.selected), ["t3", "t1"]);
+    assert_eq!(
+        selection.page,
+        BatchPage {
+            matched_tracks: 3,
+            start_offset: 0,
+            examined_tracks: 2,
+            selected_tracks: 2,
+            fully_cached_skipped: 0,
+            next_offset: Some(2),
+            has_more: true,
+        }
+    );
+}
+
+#[test]
 fn selector_pagination_unknown_genre_search_filters_before_offset() {
     let conn = create_selector_pagination_test_db();
     let tracks = resolve_tracks(
@@ -5526,12 +5722,21 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         .await
         .expect("enrich_tracks should succeed when everything is cached");
     let first_payload = extract_json(&first_result);
-    assert_eq!(first_payload["summary"]["total"], 2);
+    assert_eq!(first_payload["summary"]["total"], 0);
     assert_eq!(first_payload["summary"]["enriched"], 0);
-    assert_eq!(first_payload["summary"]["cached"], 2);
+    assert_eq!(first_payload["summary"]["cached"], 0);
     assert_eq!(first_payload["summary"]["skipped"], 0);
     assert_eq!(first_payload["summary"]["failed"], 0);
     assert_cache_write_summary(&first_payload, 0, 0, 0);
+    assert_eq!(first_payload["page"]["matched_tracks"], 2);
+    assert_eq!(first_payload["page"]["examined_tracks"], 2);
+    assert_eq!(first_payload["page"]["selected_tracks"], 0);
+    assert_eq!(first_payload["page"]["fully_cached_skipped"], 2);
+    assert_eq!(
+        first_payload["page"]["next_offset"],
+        serde_json::Value::Null
+    );
+    assert_eq!(first_payload["page"]["has_more"], false);
     assert_eq!(
         first_payload["failures"]
             .as_array()
@@ -5558,12 +5763,13 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         .await
         .expect("second enrich_tracks run should also be fully cached");
     let second_payload = extract_json(&second_result);
-    assert_eq!(second_payload["summary"]["total"], 2);
+    assert_eq!(second_payload["summary"]["total"], 0);
     assert_eq!(second_payload["summary"]["enriched"], 0);
-    assert_eq!(second_payload["summary"]["cached"], 2);
+    assert_eq!(second_payload["summary"]["cached"], 0);
     assert_eq!(second_payload["summary"]["skipped"], 0);
     assert_eq!(second_payload["summary"]["failed"], 0);
     assert_cache_write_summary(&second_payload, 0, 0, 0);
+    assert_eq!(second_payload["page"]["fully_cached_skipped"], 2);
 
     let store = server
         .cache_store_conn()
@@ -5658,13 +5864,15 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
         .expect("enrich_tracks should resolve from cache for both providers");
     let payload = extract_json(&result);
 
-    assert_eq!(payload["summary"]["tracks_total"], 1);
-    assert_eq!(payload["summary"]["total"], 2);
-    assert_eq!(payload["summary"]["cached"], 2);
+    assert_eq!(payload["summary"]["tracks_total"], 0);
+    assert_eq!(payload["summary"]["total"], 0);
+    assert_eq!(payload["summary"]["cached"], 0);
     assert_eq!(payload["summary"]["enriched"], 0);
     assert_eq!(payload["summary"]["skipped"], 0);
     assert_eq!(payload["summary"]["failed"], 0);
     assert_cache_write_summary(&payload, 0, 0, 0);
+    assert_eq!(payload["page"]["matched_tracks"], 1);
+    assert_eq!(payload["page"]["fully_cached_skipped"], 1);
 }
 
 #[tokio::test]

@@ -16,6 +16,12 @@ const GENERATED_ROOT_CLI_OPTIONS = new Set([
 ])
 const SITE_ORIGIN = 'https://reklawdbox.com'
 const PARTIAL_ALTERNATIVE = Symbol('partial-alternative-schema')
+const MCP_OUTPUT_CONTRACT_TOOLS = new Set([
+  'analyze_audio_batch',
+  'backfill_labels',
+  'enrich_tracks',
+  'scan_duplicates',
+])
 
 export function compareToolMappings(liveTools, references) {
   const liveNames = [...new Set(liveTools.map((tool) => tool.name))].sort()
@@ -36,7 +42,7 @@ export function parseContractMarkers(documents) {
   for (const document of documents) {
     const source = document.content
     const startPattern =
-      /(?:<!--\s*|\{\/\*\s*)doc-contract:(mcp-surface|mcp|cli)\s+([^\n]*?)(?:\s*-->|\s*\*\/\})/g
+      /(?:<!--\s*|\{\/\*\s*)doc-contract:(mcp-output|mcp-surface|mcp|cli)\s+([^\n]*?)(?:\s*-->|\s*\*\/\})/g
     let match
     while ((match = startPattern.exec(source)) !== null) {
       const [opening, kind, rawAttributes] = match
@@ -286,6 +292,7 @@ function normalizeDocumentedTypeSurface(value, marker, name) {
     ['object', 'object'],
     ['array', 'array'],
     ['list', 'array'],
+    ['null', 'null'],
   ])
   for (const part of parts) {
     const array = part.match(/^(string|integer|number|boolean|object)\s*\[\]$/)
@@ -1294,6 +1301,193 @@ export function validateMcpContracts(documents, liveTools, references = []) {
   if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
 }
 
+export function validateMcpOutputContracts(
+  documents,
+  liveTools,
+  references = [],
+) {
+  const markers = parseContractMarkers(documents).filter((marker) =>
+    marker.kind === 'mcp-output'
+  )
+  const liveByName = new Map(liveTools.map((tool) => [tool.name, tool]))
+  const referenceByName = new Map(
+    references.map((reference) => [reference.name, reference]),
+  )
+  const groups = new Map()
+  const rootMarked = new Set()
+  const issues = []
+
+  for (const marker of markers) {
+    if (!Object.hasOwn(marker.attributes, 'schema')) {
+      throw markerError(marker, 'mcp-output marker needs explicit schema=')
+    }
+    if (!Object.hasOwn(marker.attributes, 'requiredness')) {
+      throw markerError(
+        marker,
+        'mcp-output marker needs explicit requiredness=',
+      )
+    }
+    markerRequiredness(marker)
+    const toolName = marker.attributes.tool
+    if (!toolName) throw markerError(marker, 'MCP output marker needs tool=')
+    if (!MCP_OUTPUT_CONTRACT_TOOLS.has(toolName)) {
+      issues.push(
+        `${marker.file}:${marker.line}: ${toolName} is not a selected MCP output contract`,
+      )
+      continue
+    }
+    const tool = liveByName.get(toolName)
+    if (!tool) {
+      issues.push(`${marker.file}:${marker.line}: unknown MCP tool ${toolName}`)
+      continue
+    }
+    if (!tool.outputSchema) {
+      issues.push(
+        `${marker.file}:${marker.line}: ${toolName} does not advertise outputSchema`,
+      )
+      continue
+    }
+    const reference = referenceByName.get(toolName)
+    if (reference) {
+      const slug = reference.route.split('/').filter(Boolean).at(-1)
+      const expectedFile = `site/src/content/docs/mcp-tools/${slug}.mdx`
+      const actualFile = marker.file.replaceAll(path.sep, '/')
+      if (!actualFile.endsWith(expectedFile)) {
+        issues.push(
+          `${marker.file}:${marker.line}: ${toolName} output contract belongs in ${expectedFile}`,
+        )
+      }
+    }
+    const schemaPath = markerSchemaPath(marker)
+    if (schemaPath === '/') rootMarked.add(toolName)
+    const key = `${toolName}\u0000${schemaPath}`
+    if (!groups.has(key)) {
+      groups.set(key, { toolName, schemaPath, markers: [] })
+    }
+    groups.get(key).markers.push(marker)
+  }
+
+  for (const toolName of MCP_OUTPUT_CONTRACT_TOOLS) {
+    const tool = liveByName.get(toolName)
+    if (!tool) {
+      issues.push(
+        `src/tools/mod.rs:1: selected MCP output tool missing: ${toolName}`,
+      )
+    } else if (!tool.outputSchema) {
+      issues.push(
+        `src/tools/mod.rs:1: selected MCP output tool has no outputSchema: ${toolName}`,
+      )
+    } else if (!rootMarked.has(toolName)) {
+      const reference = referenceByName.get(toolName)
+      const slug = reference?.route.split('/').filter(Boolean).at(-1)
+      issues.push(
+        `${
+          slug
+            ? `site/src/content/docs/mcp-tools/${slug}.mdx`
+            : 'src/tools/mod.rs'
+        }:1: ${toolName} has no root doc-contract:mcp-output surface`,
+      )
+    }
+  }
+
+  for (const group of groups.values()) {
+    const tool = liveByName.get(group.toolName)
+    if (!tool?.outputSchema) continue
+    const root = tool.outputSchema
+    const firstMarker = group.markers[0]
+    let properties
+    let required
+    try {
+      const node = schemaAt(root, group.schemaPath)
+      if (!schemaSupportsObjectSurface(root, node)) {
+        throw new Error('does not resolve to an object schema')
+      }
+      const surface = schemaProperties(root, group.schemaPath)
+      properties = surface.properties
+      required = surface.required
+    } catch (error) {
+      issues.push(
+        `${firstMarker.file}:${firstMarker.line}: ${group.toolName} output schema path ${group.schemaPath} failed: ${error.message}`,
+      )
+      continue
+    }
+
+    const rows = []
+    try {
+      for (const marker of group.markers) rows.push(...parseMcpRows(marker))
+    } catch (error) {
+      issues.push(error.message)
+      continue
+    }
+    const documented = new Map()
+    for (const row of rows) {
+      const property = properties[row.name]
+      if (!property) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: ${group.toolName}.${row.name} is not in live output schema ${group.schemaPath}`,
+        )
+        continue
+      }
+      let liveTypes
+      let liveItemTypes
+      try {
+        liveTypes = schemaTypes(root, property)
+        liveItemTypes = [...schemaArrayDetails(root, property).itemTypes].sort()
+      } catch (error) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: ${group.toolName}.${row.name} output schema composition is unsupported: ${error.message}`,
+        )
+        continue
+      }
+      if (
+        liveTypes.length
+        && JSON.stringify(row.types) !== JSON.stringify(liveTypes)
+      ) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: ${group.toolName}.${row.name} output type is ${
+            row.types.join('|') || 'unknown'
+          }, live schema is ${liveTypes.join('|') || 'unknown'}`,
+        )
+      }
+      if (
+        row.itemTypes.length
+        && JSON.stringify(row.itemTypes) !== JSON.stringify(liveItemTypes)
+      ) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: ${group.toolName}.${row.name} output array item type is ${
+            row.itemTypes.join('|')
+          }, live schema is ${liveItemTypes.join('|') || 'unconstrained'}`,
+        )
+      }
+      if (
+        row.requiredness === 'global'
+        && row.required !== required.has(row.name)
+      ) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: ${group.toolName}.${row.name} output requiredness disagrees with live schema`,
+        )
+      }
+      const signature = rowSignature(row)
+      if (documented.has(row.name) && documented.get(row.name) !== signature) {
+        issues.push(
+          `${row.marker.file}:${row.marker.line}: conflicting duplicate output field ${group.toolName}.${row.name}`,
+        )
+      } else {
+        documented.set(row.name, signature)
+      }
+    }
+    for (const name of Object.keys(properties).sort()) {
+      if (!documented.has(name)) {
+        issues.push(
+          `${firstMarker.file}:${firstMarker.line}: ${group.toolName}.${name} is missing from marked output schema ${group.schemaPath}`,
+        )
+      }
+    }
+  }
+
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
 function sopPropertiesByTool(liveTools) {
   const propertiesByName = new Map()
   for (const tool of liveTools) {
@@ -2038,6 +2232,9 @@ async function main() {
   )).map((file) => path.join('site/src/content/docs/mcp-tools', file))
   const mcpDocuments = await readDocuments(root, mcpFiles)
   check(() => validateMcpContracts(mcpDocuments, liveTools, toolReferences))
+  check(() =>
+    validateMcpOutputContracts(mcpDocuments, liveTools, toolReferences)
+  )
 
   const sopFiles = (await listFiles(
     path.join(root, 'site/src/partials/sops'),

@@ -18,9 +18,11 @@ pub(super) struct BackfillLabelsParams {
     )]
     pub auto_enrich: Option<bool>,
     #[schemars(
-        description = "Max conflict entries to include in the response (default 50). Use search_tracks to page through remaining conflicts."
+        description = "Max conflict entries to include in the response (default 50). Use conflict_offset and conflict_page.next_offset to continue."
     )]
     pub max_conflicts: Option<usize>,
+    #[schemars(description = "Offset into the stable ordered label-conflict list (default 0)")]
+    pub conflict_offset: Option<usize>,
 }
 
 /// Filters out Discogs "Not On Label" entries (self-released, no useful signal).
@@ -38,6 +40,19 @@ fn extract_label(entry: Option<&store::EnrichmentCacheEntry>) -> Option<String> 
         .and_then(|v| v.as_str())
         .filter(|l| !l.is_empty())
         .and_then(normalize_label)
+}
+
+fn sort_label_conflicts(conflicts: &mut [serde_json::Value]) {
+    conflicts.sort_by(|left, right| {
+        let key = |value: &serde_json::Value| {
+            (
+                normalize::normalize_for_matching(value["artist"].as_str().unwrap_or_default()),
+                normalize::normalize_for_matching(value["title"].as_str().unwrap_or_default()),
+                value["track_id"].as_str().unwrap_or_default().to_string(),
+            )
+        };
+        key(left).cmp(&key(right))
+    });
 }
 
 #[derive(Default)]
@@ -171,7 +186,48 @@ fn scan_labels(
         }
     }
 
+    sort_label_conflicts(&mut result.conflicts);
     result
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(super) struct LabelProviderMissingSummary {
+    no_discogs: usize,
+    no_musicbrainz: usize,
+    no_bandcamp: usize,
+    no_beatport: usize,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(super) struct BackfillLabelsSummary {
+    total_scanned: usize,
+    filled: usize,
+    already_labeled: usize,
+    conflicts: usize,
+    no_enrichment: usize,
+    no_enrichment_by_provider: LabelProviderMissingSummary,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(super) struct LabelResearchQueue {
+    total_unlabeled: usize,
+    top_artists: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(super) struct BackfillLabelsOutput {
+    summary: BackfillLabelsSummary,
+    staged: usize,
+    total_pending: usize,
+    dry_run: bool,
+    conflicts: Vec<serde_json::Value>,
+    conflict_page: OffsetPage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflicts_truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_enriched: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    research_queue: Option<LabelResearchQueue>,
 }
 
 pub(super) async fn handle_backfill_labels(
@@ -346,43 +402,16 @@ pub(super) async fn handle_backfill_labels(
     let pending = server.state.changes.pending_ids().len();
 
     let max_conflicts = params.max_conflicts.unwrap_or(50);
+    let conflict_offset = params.conflict_offset.unwrap_or(0);
     let total_conflicts = scan.conflicts.len();
-    let conflicts_truncated = total_conflicts > max_conflicts;
-    scan.conflicts.truncate(max_conflicts);
-
-    let mut result = serde_json::json!({
-        "summary": {
-            "total_scanned": tracks.len(),
-            "filled": scan.filled,
-            "already_labeled": scan.already_labeled,
-            "conflicts": total_conflicts,
-            "no_enrichment": scan.no_enrichment,
-            "no_enrichment_by_provider": {
-                "no_discogs": scan.no_discogs,
-                "no_musicbrainz": scan.no_musicbrainz,
-                "no_bandcamp": scan.no_bandcamp,
-                "no_beatport": scan.no_beatport,
-            },
-        },
-        "staged": staged_count,
-        "total_pending": pending,
-        "dry_run": dry_run,
-        "conflicts": scan.conflicts,
-    });
-    if conflicts_truncated {
-        result["conflicts_truncated"] = serde_json::json!(true);
-    }
-
-    if auto_enrich {
-        result.as_object_mut().unwrap().insert(
-            "auto_enriched".to_string(),
-            serde_json::json!(auto_enriched),
-        );
-    }
+    let (conflict_range, conflict_page) =
+        offset_page_bounds(total_conflicts, conflict_offset, max_conflicts);
+    let conflicts = scan.conflicts[conflict_range].to_vec();
+    let conflicts_truncated = conflict_page.has_more.then_some(true);
 
     // Excludes tracks just staged — they're unlabeled in the read-only DB
     // but will resolve on export, so they don't need research.
-    let unlabeled_count = {
+    let (unlabeled_count, research_queue) = {
         let rb_conn = server.rekordbox_conn()?;
         let search_params = db::SearchParams {
             has_label: Some(false),
@@ -396,7 +425,7 @@ pub(super) async fn handle_backfill_labels(
             .collect();
         let count = unlabeled.len();
 
-        if count > 0 {
+        let research_queue = if count > 0 {
             // Group by artist, sorted by count descending
             let mut by_artist: std::collections::HashMap<&str, usize> =
                 std::collections::HashMap::new();
@@ -404,22 +433,26 @@ pub(super) async fn handle_backfill_labels(
                 *by_artist.entry(&t.artist).or_insert(0) += 1;
             }
             let mut artist_counts: Vec<_> = by_artist.into_iter().collect();
-            artist_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
+            artist_counts.sort_by(|left, right| {
+                right.1.cmp(&left.1).then_with(|| {
+                    normalize::normalize_for_matching(left.0)
+                        .cmp(&normalize::normalize_for_matching(right.0))
+                })
+            });
             let top_artists: Vec<_> = artist_counts
                 .iter()
                 .take(20)
                 .map(|(artist, count)| serde_json::json!({"artist": artist, "count": count}))
                 .collect();
 
-            result.as_object_mut().unwrap().insert(
-                "research_queue".to_string(),
-                serde_json::json!({
-                    "total_unlabeled": count,
-                    "top_artists": top_artists,
-                }),
-            );
-        }
-        count
+            Some(LabelResearchQueue {
+                total_unlabeled: count,
+                top_artists,
+            })
+        } else {
+            None
+        };
+        (count, research_queue)
     };
 
     // Always write (including 0) so the gate clears after a successful re-run.
@@ -430,7 +463,29 @@ pub(super) async fn handle_backfill_labels(
             .store(unlabeled_count as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
-    ok_json(&result)
+    ok_structured_json(BackfillLabelsOutput {
+        summary: BackfillLabelsSummary {
+            total_scanned: tracks.len(),
+            filled: scan.filled,
+            already_labeled: scan.already_labeled,
+            conflicts: total_conflicts,
+            no_enrichment: scan.no_enrichment,
+            no_enrichment_by_provider: LabelProviderMissingSummary {
+                no_discogs: scan.no_discogs,
+                no_musicbrainz: scan.no_musicbrainz,
+                no_bandcamp: scan.no_bandcamp,
+                no_beatport: scan.no_beatport,
+            },
+        },
+        staged: staged_count,
+        total_pending: pending,
+        dry_run,
+        conflicts,
+        conflict_page,
+        conflicts_truncated,
+        auto_enriched: auto_enrich.then_some(auto_enriched),
+        research_queue,
+    })
 }
 
 #[cfg(test)]
@@ -505,5 +560,60 @@ mod tests {
         assert_eq!(r.no_beatport, 0);
         assert!(r.to_stage.is_empty());
         assert!(r.uncached_bandcamp.is_empty());
+    }
+
+    #[test]
+    fn backfill_labels_conflict_page_is_stable_and_non_overlapping() {
+        let mut conflicts = vec![
+            serde_json::json!({"track_id": "t3", "artist": "Zulu", "title": "One"}),
+            serde_json::json!({"track_id": "t2", "artist": "Alpha", "title": "Same"}),
+            serde_json::json!({"track_id": "t1", "artist": "Alpha", "title": "Same"}),
+        ];
+        sort_label_conflicts(&mut conflicts);
+        let ids: Vec<_> = conflicts
+            .iter()
+            .map(|conflict| conflict["track_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["t1", "t2", "t3"]);
+
+        let (first_range, first) = offset_page_bounds(conflicts.len(), 0, 2);
+        let (second_range, second) = offset_page_bounds(conflicts.len(), 2, 2);
+        assert_eq!(first_range, 0..2);
+        assert_eq!(second_range, 2..3);
+        assert_eq!(
+            first,
+            OffsetPage {
+                total: 3,
+                returned: 2,
+                offset: 0,
+                next_offset: Some(2),
+                has_more: true,
+            }
+        );
+        assert_eq!(
+            second,
+            OffsetPage {
+                total: 3,
+                returned: 1,
+                offset: 2,
+                next_offset: None,
+                has_more: false,
+            }
+        );
+    }
+
+    #[test]
+    fn backfill_labels_conflict_page_zero_and_beyond_end_are_terminal() {
+        let (zero_range, zero) = offset_page_bounds(3, 1, 0);
+        assert_eq!(zero_range, 1..1);
+        assert_eq!(zero.returned, 0);
+        assert_eq!(zero.next_offset, None);
+        assert!(!zero.has_more);
+
+        let (beyond_range, beyond) = offset_page_bounds(3, usize::MAX, 10);
+        assert_eq!(beyond_range, 3..3);
+        assert_eq!(beyond.returned, 0);
+        assert_eq!(beyond.next_offset, None);
+        assert!(!beyond.has_more);
     }
 }

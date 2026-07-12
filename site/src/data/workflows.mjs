@@ -180,7 +180,7 @@ export const workflows = [
     duration:
       'Several sessions; hydration can run overnight and review time is scope-dependent.',
     resumability:
-      'Session boundaries are checkpoints and caches/audit state persist. Staged metadata is in memory, so export it before restarting the MCP host.',
+      'Session boundaries are checkpoints and caches/audit state persist. Bounded enrichment/audio preparation advances through page.next_offset while page.has_more, records failures, and retries failed explicit track IDs after traversal; restart at offset zero after selector/library-order changes, enrichment provider/cache-policy changes, or changed audio skip_cached/Essentia availability. Staged metadata is in memory, so export it before restarting the MCP host.',
     approval: [
       'Approve direct file fixes and complete the scoped Reload Tag checkpoint after Session 1.',
       'Review conflicts and low-confidence recommendations before staging them.',
@@ -353,7 +353,7 @@ export const workflows = [
     duration:
       'Scope-dependent; automatic passes are followed by conflict review and gap research.',
     resumability:
-      'Provider caches persist, but staged metadata and the research gate belong to the current MCP process. Export before restarting or re-run the staging passes.',
+      'Provider caches persist. Bounded enrichment advances through page.next_offset while page.has_more, then retries failed explicit track IDs; restart at zero if selector order, providers, skip_cached, or force_refresh changes. Run the label-mutating pass once and fetch later conflicts with dry_run=true, auto_enrich=false, and conflict_page.next_offset. Staged metadata and the research gate belong to the current MCP process, so export before restarting or re-run the staging passes.',
     approval: [
       'Resolve label conflicts and approve researched labels or uncertain years.',
       'Acknowledge that every remaining label and year gap was genuinely researched before bypassing the label gate.',
@@ -436,7 +436,7 @@ export const workflows = [
     duration:
       'Scope-dependent; low and insufficient confidence tracks require individual review.',
     resumability:
-      'Pagination uses a caller-managed offset and has no durable workflow cursor. Caches persist, but staged genres are lost when the MCP process restarts unless exported.',
+      'Enrichment/audio preparation traverses page.next_offset while page.has_more, records failures, and retries failed explicit track IDs after the scope; restart after selector/library-order changes, enrichment provider/cache-policy changes, or changed audio skip_cached/Essentia availability. Classification keeps its separate caller-managed offset. Caches persist, but staged genres are lost when the MCP process restarts unless exported.',
     approval: [
       'Choose which confidence tiers, if any, may be staged in bulk.',
       'Review low and insufficient confidence tracks individually.',
@@ -519,7 +519,7 @@ export const workflows = [
     duration:
       'Scope-dependent; only conflicts and manual-review tracks are presented.',
     resumability:
-      'Pagination has no durable workflow cursor. Caches persist, but staged corrections must be exported before the MCP process restarts.',
+      'Enrichment/audio preparation traverses page.next_offset while page.has_more, then retries failed explicit track IDs; restart after selector/library-order changes, enrichment provider/cache-policy changes, or changed audio skip_cached/Essentia availability. Audit pagination keeps its separate caller-managed offset. Caches persist, but staged corrections must be exported before the MCP process restarts.',
     approval: [
       'Approve or reject each conflict group; low-confidence items require individual judgment.',
       'Review preview_changes and approve XML export.',
@@ -922,7 +922,7 @@ export const workflows = [
     duration:
       'Scope-dependent; filesystem traversal and exact duplicate hashing can take longer on large libraries.',
     resumability:
-      'Results are point-in-time snapshots rather than saved workflow state. Re-run the affected scan after any manual Rekordbox or filesystem action.',
+      'Results are point-in-time snapshots rather than saved workflow state. Duplicate groups traverse page.next_offset while page.has_more; exact mode rehashes each request. Restart at offset zero, and re-run affected scans, after any Rekordbox scope or filesystem change.',
     approval: [
       'No approval is needed for the read-only scan.',
       'Review every recommendation before taking the separate manual action in Rekordbox or on disk.',

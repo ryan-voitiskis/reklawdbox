@@ -108,14 +108,53 @@ Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filter
 |-----------|------|:--------:|-------------|-------------|
 | `track_ids` | string[] | | | Specific track IDs (highest priority selector) |
 | `playlist_id` | string | | | Enrich tracks in this playlist |
-| `max_tracks` | integer | | | Max tracks to enrich (default: `50`) |
-| `offset` | integer | | | Skip first N tracks in result set |
+| `max_tracks` | integer | | | Max pending tracks to admit after cache checks (default: `50`, max: `200`) |
+| `offset` | integer | | | Index into the stable underlying selector order (default: `0`) |
 | `providers` | string[] | | `["discogs", "beatport", "bandcamp"]` | Providers (default: `["discogs"]`) |
 | `skip_cached` | boolean | | | Skip already-cached tracks (default: `true`) |
 | `force_refresh` | boolean | | | Bypass cache entirely (default: `false`) |
 | `concurrency` | integer | | | Max concurrent enrichments (default: `4`, max: `8`) |
 
 {/* /doc-contract:mcp */}
+
+With `skip_cached=true`, cached candidates do not consume `max_tracks` slots.
+Starting at `offset`, the server checks ordered candidates until it admits the
+requested pending work or reaches the end of the scope. A cached no-match is a
+completed search; cache errors remain pending.
+
+{/* doc-contract:mcp-output tool=enrich_tracks schema=/ requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `summary` | object | **yes** | Counts for the selected work page |
+| `failures` | array | **yes** | Retryable failures with track, provider, and stage context |
+| `page` | object | **yes** | Underlying-selector continuation metadata |
+
+{/* /doc-contract:mcp-output */}
+
+{/* doc-contract:mcp-output tool=enrich_tracks schema=/properties/page requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `matched_tracks` | integer | **yes** | Total tracks in the logical selector at call time |
+| `start_offset` | integer | **yes** | Underlying selector index supplied by the caller |
+| `examined_tracks` | integer | **yes** | Candidates inspected from `start_offset` |
+| `selected_tracks` | integer | **yes** | Pending tracks admitted under `max_tracks` |
+| `fully_cached_skipped` | integer | **yes** | Complete candidates skipped without spending a work slot |
+| `next_offset` | integer | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
+| `has_more` | boolean | **yes** | Whether an unexamined underlying candidate remains |
+
+{/* /doc-contract:mcp-output */}
+
+Continue from `page.next_offset` while `page.has_more` is true. Record failures
+while traversing, then retry those explicit `track_ids` separately. Offsets are
+stable only while the selector scope and library ordering are unchanged; after
+an import, deletion, or reorder, restart at zero. Keep `providers`,
+`skip_cached`, and `force_refresh` unchanged for the whole traversal; changing
+any of them changes which earlier candidates count as complete and also
+requires a restart at zero. `max_tracks=0` reports the matched scope but
+intentionally returns a terminal no-op page, so use a positive cap for
+traversal.
 
 The response summary reports cache persistence under `summary.cache_writes`:
 
@@ -171,12 +210,51 @@ Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-
 |-----------|------|:--------:|-------------|
 | `track_ids` | string[] | | Specific track IDs (highest priority selector) |
 | `playlist_id` | string | | Analyze tracks in this playlist |
-| `max_tracks` | integer | | Max tracks to analyze (default: `20`) |
-| `offset` | integer | | Skip first N tracks in result set |
+| `max_tracks` | integer | | Max pending tracks to admit after freshness checks (default: `20`, max: `200`) |
+| `offset` | integer | | Index into the stable underlying selector order (default: `0`) |
 | `skip_cached` | boolean | | Skip already-cached tracks (default: `true`) |
 | `concurrency` | integer | | Max concurrent analyses (default: `cpus - 2`, min: `1`, max: `4`) |
 
 {/* /doc-contract:mcp */}
+
+Current Stratum results are skipped before work slots are assigned. When
+Essentia is available, a track is complete only when both current analyzer
+results exist; when it is unavailable, missing Essentia does not keep the track
+pending.
+
+{/* doc-contract:mcp-output tool=analyze_audio_batch schema=/ requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `summary` | object | **yes** | Counts for the selected analysis page |
+| `results` | object[] | **yes** | Per-track analysis results |
+| `failures` | array | **yes** | Retryable failures with track, analyzer, and stage context |
+| `page` | object | **yes** | Underlying-selector continuation metadata |
+| `essentia_setup_hint` | string | | Setup guidance when Essentia is unavailable |
+
+{/* /doc-contract:mcp-output */}
+
+{/* doc-contract:mcp-output tool=analyze_audio_batch schema=/properties/page requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `matched_tracks` | integer | **yes** | Total tracks in the logical selector at call time |
+| `start_offset` | integer | **yes** | Underlying selector index supplied by the caller |
+| `examined_tracks` | integer | **yes** | Candidates inspected from `start_offset` |
+| `selected_tracks` | integer | **yes** | Pending tracks admitted under `max_tracks` |
+| `fully_cached_skipped` | integer | **yes** | Current candidates skipped without spending a work slot |
+| `next_offset` | integer | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
+| `has_more` | boolean | **yes** | Whether an unexamined underlying candidate remains |
+
+{/* /doc-contract:mcp-output */}
+
+Traverse `next_offset` while `has_more`, retain failures, and retry failed
+`track_ids` after the scope traversal. Restart at zero if the selector or
+library order changes. Keep Essentia availability unchanged during traversal;
+also keep `skip_cached` unchanged. If either changes, including Essentia being
+installed, removed, or newly detectable, restart at zero because earlier tracks
+may have changed completion state. A zero cap is an inspection-free terminal
+no-op.
 
 ---
 
