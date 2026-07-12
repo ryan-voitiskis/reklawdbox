@@ -6,7 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import SetBuildingSOP from '../../../partials/sops/set-building.mdx'
+
+<WorkflowContract id="set-building" />
 
 Builds ordered tracklists scored across six axes: key compatibility, BPM, energy, genre, brightness, and rhythm. The agent explores multiple paths and presents candidates for you to compare.
 
@@ -15,9 +18,6 @@ Paste into your agent:
 ```
 Build a DJ set from my collection.
 ```
-
-Scoring and candidate analysis are read-only. Export is a separate step that
-writes an XML playlist; it does not write the Rekordbox database.
 
 ## Prerequisites
 

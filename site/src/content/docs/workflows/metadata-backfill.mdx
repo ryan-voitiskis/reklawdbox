@@ -6,7 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import MetadataBackfillSOP from '../../../partials/sops/metadata-backfill.mdx'
+
+<WorkflowContract id="metadata-backfill" />
 
 Fills missing labels, years, and albums using data from Discogs, Beatport, Bandcamp, MusicBrainz, file tags, and folder paths. Labels are the strongest genre signal for electronic music, and years give era context that improves classification.
 

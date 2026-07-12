@@ -6,7 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import CollectionAuditSOP from '../../../partials/sops/collection-audit.mdx'
+
+<WorkflowContract id="collection-audit" />
 
 Fixes artist names, track titles, file naming, and tagging issues so everything is clean before enrichment. Genre tagging is a separate step — see [Genre Classification](/workflows/genre-classification/).
 

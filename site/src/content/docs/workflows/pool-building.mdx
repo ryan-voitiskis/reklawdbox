@@ -6,7 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import PoolBuildingSOP from '../../../partials/sops/pool-building.mdx'
+
+<WorkflowContract id="pool-building" />
 
 Builds unordered pools of tracks that mix well together in any direction. Unlike [Set Building](/workflows/set-building/) (which produces a fixed sequence), pools are crates for live improvisation — any permutation works.
 
@@ -15,9 +18,6 @@ Paste into your agent:
 ```
 Build a track pool from my collection.
 ```
-
-Pool analysis is read-only. Export is a separate step that writes an XML
-playlist; it does not write the Rekordbox database.
 
 ## Prerequisites
 

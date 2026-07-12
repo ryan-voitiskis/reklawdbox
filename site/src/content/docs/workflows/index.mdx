@@ -1,67 +1,29 @@
 ---
 title: Workflows
-description: All reklawdbox workflows — library cleanup, genre classification, set building, and more.
+description: Choose a reklawdbox workflow by outcome, prerequisites, and what it can change.
 sidebar:
   order: 0
 ---
 
-import { LinkCard, CardGrid, Card } from '@astrojs/starlight/components';
+import WorkflowCatalog from '../../../components/WorkflowCatalog.astro'
 
-Every workflow follows the same pattern: scope tracks, gather evidence, present recommendations, get your approval, stage and export. The agent does the tedious work; you make the final call.
+## What are you trying to do?
 
-<LinkCard title="Library Cleanup — start here" href="/workflows/library-cleanup/" description="Five sessions that build on each other — the recommended starting point for every new user." />
+Choose by the result you want and the effects you are comfortable with. Workflows
+do not share one lifecycle: some only scan, some write tags or organize files,
+some stage metadata for review, and some create XML for a separate Rekordbox
+handoff.
 
-## Library cleanup
+Each card shows collection impact, network use, local state, files created,
+prerequisites, scope, and the final Rekordbox step before you commit to a path.
+Conditional and optional effects are labelled explicitly.
 
-<CardGrid>
-  <Card title="Collection Audit" icon="warning">
-    Fix naming, tagging, and convention issues.
-    [Get started](/workflows/collection-audit/)
-  </Card>
-  <Card title="Metadata Backfill" icon="add-document">
-    Fill missing labels, years, and albums from enrichment data.
-    [Get started](/workflows/metadata-backfill/)
-  </Card>
-  <Card title="Genre Classification" icon="pencil">
-    Classify genres using Discogs, Beatport, and audio analysis.
-    [Get started](/workflows/genre-classification/)
-  </Card>
-  <Card title="Genre Audit" icon="approve-check">
-    Verify existing genre tags against evidence.
-    [Get started](/workflows/genre-audit/)
-  </Card>
-</CardGrid>
+**Not sure where to begin?** Start with [Library Health](/workflows/library-health/).
+It is network-free and collection-read-only. Its runtime still depends on library
+size, and any suggested fixes are separate manual actions.
 
-## Mixing & sets
+Before choosing a workflow that writes files or exports XML, read
+[Safety & Trust](/concepts/safety/). For provider and cache readiness, see
+[Enrichment & Analysis](/mcp-tools/enrichment-analysis/).
 
-<CardGrid>
-  <Card title="Set Building" icon="list-format">
-    Build transition-scored sequences with energy curves.
-    [Get started](/workflows/set-building/)
-  </Card>
-  <Card title="Pool Building" icon="puzzle">
-    Find compatible track pools for live improvisation.
-    [Get started](/workflows/pool-building/)
-  </Card>
-  <Card title="Chapter Set Planning" icon="open-book">
-    Plan a full set from locked chapters with bridge tracks.
-    [Get started](/workflows/chapter-set-planning/)
-  </Card>
-  <Card title="DJ Prompts" icon="download">
-    Gig prep, collection analysis, practice, and music discovery.
-    [Browse prompts](/workflows/dj-prompts/)
-  </Card>
-</CardGrid>
-
-## Day-to-day
-
-<CardGrid>
-  <Card title="Batch Import" icon="document">
-    Prepare newly acquired music for Rekordbox import.
-    [Get started](/workflows/batch-import/)
-  </Card>
-  <Card title="Library Health" icon="heart">
-    Scan for broken links, orphan files, duplicates, and gaps.
-    [Get started](/workflows/library-health/)
-  </Card>
-</CardGrid>
+<WorkflowCatalog />

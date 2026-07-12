@@ -1,0 +1,360 @@
+---
+import { workflows } from '../data/workflows.mjs'
+
+const impactLabels = {
+  'read-only': 'Collection read-only',
+  'staged-metadata': 'Stages metadata for XML',
+  'direct-audio-files': 'Writes audio-file tags or names',
+  'direct-library-files': 'Writes and organizes library files',
+  mixed: 'Direct file writes and staged metadata',
+}
+
+const effectLabels = {
+  'audio-tags': 'Audio tags',
+  'embedded-artwork': 'Embedded artwork',
+  'extracted-artwork': 'Extracted artwork',
+  'downloaded-artwork': 'Downloaded artwork',
+  'move-rename': 'File or directory moves/renames',
+  'archive-extraction': 'Archive extraction',
+  'archive-move': 'Archive moves',
+  'directory-create-remove': 'Directory creation/removal',
+  'enrichment-cache': 'Enrichment cache',
+  'audio-cache': 'Audio-analysis cache',
+  'audit-state': 'Audit state',
+  preset: 'Saved scoring preset',
+  'timbral-normalization': 'Timbral normalization statistics',
+  'provider-session': 'Provider session',
+  backup: 'Rekordbox database backup',
+  'metadata-xml': 'Metadata XML file',
+  'playlist-xml': 'Playlist XML file',
+  'artwork-file': 'Artwork file',
+  'organized-library-files': 'Organized library files',
+  'reload-tag': 'Reload Tag for changed imported tracks',
+  'library-file-import': 'Import files or folders into Collection',
+  'manual-cover-art': 'Add WAV cover art manually',
+  'manual-relocate': 'Relocate files in Rekordbox',
+  'import-or-delete-orphans': 'Import or remove orphan files',
+  'assign-playlists': 'Assign tracks to playlists',
+  'remove-duplicates': 'Review and remove duplicates',
+}
+
+const modeLabels = {
+  always: 'Always',
+  conditional: 'When needed',
+  optional: 'Optional',
+  'on-export': 'On export',
+}
+
+const networkLabels = {
+  none: 'No network',
+  conditional: 'Network when needed',
+  required: 'Network required',
+}
+
+const formatEffect = (entry) => effectLabels[entry.kind] ?? entry.kind
+const detail = (entry) => entry.condition ?? ''
+---
+
+<ul class="workflow-catalog">
+  {workflows.map((workflow) => (
+    <li>
+      <a class="workflow-card" href={workflow.route}>
+        <article>
+        <header>
+          <div>
+            <p class="workflow-card__eyebrow">{workflow.kind === 'catalog' ? 'Recipe collection' : 'Workflow'}</p>
+            <h2>{workflow.title}</h2>
+          </div>
+          <span class={`impact impact--${workflow.libraryImpact}`}>{impactLabels[workflow.libraryImpact]}</span>
+        </header>
+
+        <p class="workflow-card__summary">{workflow.summary}</p>
+        <p class="workflow-card__audience"><strong>Best for:</strong> {workflow.audience}</p>
+
+        {workflow.kind === 'catalog' && (
+          <div class="variant-note">
+            <strong>Behavior varies by recipe.</strong>
+            <span>{workflow.variants.map((variant) => variant.title).join(' · ')}</span>
+          </div>
+        )}
+
+        <dl class="workflow-card__facts">
+          <div>
+            <dt>Network</dt>
+            <dd>
+              <strong>{networkLabels[workflow.network.level]}</strong>
+              <span>{workflow.network.condition ?? workflow.network.reason}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>Direct files</dt>
+            <dd>
+              {workflow.sideEffects.directUserFiles.length === 0
+                ? <span>None</span>
+                : (
+                  <ul>
+                    {workflow.sideEffects.directUserFiles.map((entry) => (
+                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{detail(entry) && <span> — {detail(entry)}</span>}</li>
+                    ))}
+                  </ul>
+                )}
+            </dd>
+          </div>
+          <div>
+            <dt>Local state</dt>
+            <dd>
+              {workflow.sideEffects.localStateWrites.length === 0
+                ? <span>None</span>
+                : (
+                  <ul>
+                    {workflow.sideEffects.localStateWrites.map((entry) => (
+                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{detail(entry) && <span> — {detail(entry)}</span>}</li>
+                    ))}
+                  </ul>
+                )}
+            </dd>
+          </div>
+          <div>
+            <dt>Files created</dt>
+            <dd>
+              {workflow.sideEffects.outputs.length === 0
+                ? <span>None</span>
+                : (
+                  <ul>
+                    {workflow.sideEffects.outputs.map((entry) => (
+                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{detail(entry) && <span> — {detail(entry)}</span>}</li>
+                    ))}
+                  </ul>
+                )}
+            </dd>
+          </div>
+          <div>
+            <dt>Prerequisites</dt>
+            <dd><ul>{workflow.prerequisites.map((item) => <li>{item}</li>)}</ul></dd>
+          </div>
+          <div>
+            <dt>Scope & time</dt>
+            <dd><span>{workflow.scope}</span><span>{workflow.duration}</span></dd>
+          </div>
+          <div>
+            <dt>Rekordbox handoff</dt>
+            <dd>
+              {workflow.rekordboxHandoff.length === 0
+                ? <span>None</span>
+                : (
+                  <ul>
+                    {workflow.rekordboxHandoff.map((entry) => (
+                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{detail(entry) && <span> — {detail(entry)}</span>}</li>
+                    ))}
+                  </ul>
+                )}
+            </dd>
+          </div>
+        </dl>
+
+        {workflow.sideEffects.stagedMetadata.flushesExistingOnExport && (
+          <p class="flush-warning"><strong>Before playlist export:</strong> existing staged metadata will also be written to XML and cleared from memory.</p>
+        )}
+
+        <span class="workflow-card__cta" aria-hidden="true">Open workflow <span>→</span></span>
+        </article>
+      </a>
+    </li>
+  ))}
+</ul>
+
+<style>
+  .workflow-catalog {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    gap: 1rem;
+    margin-block: 1.5rem;
+    padding: 0;
+    list-style: none;
+  }
+
+  .workflow-catalog > li {
+    min-width: 0;
+  }
+
+  .workflow-card {
+    display: block;
+    height: 100%;
+    color: inherit;
+    text-decoration: none;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .workflow-card:hover {
+    border-color: var(--sl-color-accent);
+    transform: translateY(-1px);
+  }
+
+  .workflow-card:focus-visible {
+    outline: 3px solid var(--sl-color-accent);
+    outline-offset: 3px;
+  }
+
+  article {
+    display: flex;
+    min-height: 100%;
+    flex-direction: column;
+    gap: 1rem;
+    padding: clamp(1rem, 3vw, 1.35rem);
+  }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  h2,
+  p,
+  dl,
+  dd,
+  ul {
+    margin: 0;
+  }
+
+  h2 {
+    font-size: 1.35rem;
+  }
+
+  .workflow-card__eyebrow {
+    color: var(--sl-color-gray-3);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .impact,
+  .mode {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+
+  .impact {
+    max-width: 13rem;
+    padding: 0.35rem 0.6rem;
+    color: var(--sl-color-text);
+    background: var(--sl-color-gray-6);
+  }
+
+  .impact--read-only {
+    border-color: var(--sl-color-green);
+    background: var(--sl-color-green-low);
+  }
+
+  .impact--staged-metadata {
+    border-color: var(--sl-color-blue);
+    background: var(--sl-color-blue-low);
+  }
+
+  .impact--direct-audio-files,
+  .impact--direct-library-files,
+  .impact--mixed {
+    border-color: var(--sl-color-orange);
+    background: var(--sl-color-orange-low);
+  }
+
+  .workflow-card__summary {
+    font-size: 1.03rem;
+    line-height: 1.55;
+  }
+
+  .workflow-card__audience,
+  .variant-note,
+  .flush-warning {
+    font-size: 0.9rem;
+  }
+
+  .variant-note,
+  .flush-warning {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    border-left: 3px solid var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent-low) 45%, transparent);
+  }
+
+  .flush-warning {
+    border-left-color: var(--sl-color-orange);
+    background: var(--sl-color-orange-low);
+  }
+
+  .workflow-card__facts {
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .workflow-card__facts > div {
+    display: grid;
+    grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--card-border);
+  }
+
+  dt {
+    color: var(--sl-color-gray-3);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  dd {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 0;
+    font-size: 0.83rem;
+    line-height: 1.45;
+  }
+
+  dd ul {
+    display: grid;
+    gap: 0.4rem;
+    padding-left: 1rem;
+  }
+
+  .mode {
+    margin-inline-start: 0.25rem;
+    padding: 0.12rem 0.35rem;
+    color: var(--sl-color-gray-2);
+    white-space: nowrap;
+  }
+
+  .workflow-card__cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: auto;
+    color: var(--sl-color-text-accent);
+    font-weight: 700;
+  }
+
+  @media (max-width: 30rem) {
+    .workflow-card__facts > div {
+      grid-template-columns: 1fr;
+      gap: 0.35rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .workflow-card {
+      transition: none;
+    }
+  }
+</style>

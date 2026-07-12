@@ -6,9 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import LibraryHealthSOP from '../../../partials/sops/library-health.mdx'
 
-Scans your library for structural issues: broken links, orphan files on disk, duplicate tracks, and playlist coverage gaps. All read-only — nothing is modified, moved, or deleted.
+<WorkflowContract id="library-health" />
 
 Paste into your agent:
 

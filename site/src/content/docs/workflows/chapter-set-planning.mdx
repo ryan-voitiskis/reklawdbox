@@ -6,7 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import ChapterSetPlanningSOP from '../../../partials/sops/chapter-set-planning.mdx'
+
+<WorkflowContract id="chapter-set-planning" />
 
 Plan a full night from **chapters** (pools you've already built and validated) connected by **bridge tracks**. Each chapter is an improvisation-ready crate; bridges handle the transitions between them.
 
@@ -17,9 +20,6 @@ Plan a set from my locked chapters.
 ```
 
 This assumes you've already built chapters using [Pool Building](/workflows/pool-building/).
-
-Chapter and bridge analysis is read-only. Export is a separate step that writes
-an XML playlist; it does not write the Rekordbox database.
 
 ## Prerequisites
 

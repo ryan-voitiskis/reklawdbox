@@ -103,6 +103,7 @@ export default defineConfig({
       ],
       sidebar: [
         { slug: 'getting-started', label: 'Install' },
+        { slug: 'workflows', label: 'Choose a workflow' },
         {
           label: 'Library Cleanup',
           items: [
@@ -120,7 +121,6 @@ export default defineConfig({
             { slug: 'workflows/pool-building' },
             { slug: 'workflows/chapter-set-planning' },
             { slug: 'concepts/harmonic-mixing' },
-            { slug: 'workflows/dj-prompts' },
           ],
         },
         {
@@ -129,6 +129,10 @@ export default defineConfig({
             { slug: 'workflows/batch-import' },
             { slug: 'workflows/library-health' },
           ],
+        },
+        {
+          label: 'Ideas & Discovery',
+          items: [{ slug: 'workflows/dj-prompts' }],
         },
         {
           label: 'How It Works',
@@ -144,6 +148,7 @@ export default defineConfig({
           label: 'Reference',
           collapsed: true,
           items: [
+            { slug: 'reference', label: 'Reference overview' },
             {
               label: 'MCP Tools',
               items: [

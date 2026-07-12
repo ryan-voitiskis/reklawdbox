@@ -1,0 +1,442 @@
+---
+import { workflows } from '../data/workflows.mjs'
+
+const { id } = Astro.props
+const workflow = workflows.find((entry) => entry.id === id)
+
+if (!workflow) {
+  throw new Error(`Unknown workflow contract ID: ${id}`)
+}
+
+const impactLabels = {
+  'read-only': 'Collection read-only',
+  'staged-metadata': 'Stages metadata for XML',
+  'direct-audio-files': 'Writes audio-file tags or names',
+  'direct-library-files': 'Writes and organizes library files',
+  mixed: 'Direct file writes and staged metadata',
+}
+
+const effectLabels = {
+  'audio-tags': 'Audio tags',
+  'embedded-artwork': 'Embedded artwork',
+  'extracted-artwork': 'Extracted artwork',
+  'downloaded-artwork': 'Downloaded artwork',
+  'move-rename': 'File or directory moves/renames',
+  'archive-extraction': 'Archive extraction',
+  'archive-move': 'Archive moves',
+  'directory-create-remove': 'Directory creation/removal',
+  'enrichment-cache': 'Enrichment cache',
+  'audio-cache': 'Audio-analysis cache',
+  'audit-state': 'Audit state',
+  preset: 'Saved scoring preset',
+  'timbral-normalization': 'Timbral normalization statistics',
+  'provider-session': 'Provider session',
+  backup: 'Rekordbox database backup',
+  'metadata-xml': 'Metadata XML file',
+  'playlist-xml': 'Playlist XML file',
+  'artwork-file': 'Artwork file',
+  'organized-library-files': 'Organized library files',
+  'reload-tag': 'Reload Tag for changed imported tracks',
+  'library-file-import': 'Import files or folders into Collection',
+  'manual-cover-art': 'Add WAV cover art manually',
+  'manual-relocate': 'Relocate files in Rekordbox',
+  'import-or-delete-orphans': 'Import or remove orphan files',
+  'assign-playlists': 'Assign tracks to playlists',
+  'remove-duplicates': 'Review and remove duplicates',
+}
+
+const modeLabels = {
+  always: 'Always',
+  conditional: 'When needed',
+  optional: 'Optional',
+  'on-export': 'On export',
+}
+
+const networkLabels = {
+  none: 'No network',
+  conditional: 'Network when needed',
+  required: 'Network required',
+}
+
+const formatEffect = (entry) => effectLabels[entry.kind] ?? entry.kind
+---
+
+<section class="workflow-contract" aria-labelledby={`workflow-contract-${workflow.id}`}>
+  <header>
+    <div>
+      <p class="contract-eyebrow">Before you begin</p>
+      <h2 id={`workflow-contract-${workflow.id}`}>Workflow contract</h2>
+    </div>
+    <span class={`impact impact--${workflow.libraryImpact}`}>{impactLabels[workflow.libraryImpact]}</span>
+  </header>
+
+  <p class="contract-summary">{workflow.summary}</p>
+
+  {workflow.kind === 'catalog' && (
+    <p class="variant-banner"><strong>This page is a recipe catalog.</strong> Network use, local state, prerequisites, duration, and result vary by recipe; compare the six contracts below.</p>
+  )}
+
+  <dl class="contract-overview">
+    <div>
+      <dt>Best for</dt>
+      <dd>{workflow.audience}</dd>
+    </div>
+    <div>
+      <dt>Network</dt>
+      <dd><strong>{networkLabels[workflow.network.level]}</strong><span>{workflow.network.condition ?? workflow.network.reason}</span></dd>
+    </div>
+    <div>
+      <dt>Scope</dt>
+      <dd>{workflow.scope}</dd>
+    </div>
+    <div>
+      <dt>Time</dt>
+      <dd>{workflow.duration}</dd>
+    </div>
+    <div>
+      <dt>Resuming</dt>
+      <dd>{workflow.resumability}</dd>
+    </div>
+    <div>
+      <dt>Result</dt>
+      <dd>{workflow.output}</dd>
+    </div>
+  </dl>
+
+  <div class="contract-sections">
+    <section>
+      <h3>What can change</h3>
+      <dl class="effect-list">
+        <div>
+          <dt>Staged metadata</dt>
+          <dd>{workflow.sideEffects.stagedMetadata.creates ? 'This workflow creates in-memory metadata changes for XML export.' : 'This workflow does not create staged metadata.'}</dd>
+        </div>
+        <div>
+          <dt>Direct user files</dt>
+          <dd>
+            {workflow.sideEffects.directUserFiles.length === 0
+              ? 'None.'
+              : <ul>{workflow.sideEffects.directUserFiles.map((entry) => (
+                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+              ))}</ul>}
+          </dd>
+        </div>
+        <div>
+          <dt>Local state</dt>
+          <dd>
+            {workflow.sideEffects.localStateWrites.length === 0
+              ? 'None.'
+              : <ul>{workflow.sideEffects.localStateWrites.map((entry) => (
+                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+              ))}</ul>}
+          </dd>
+        </div>
+        <div>
+          <dt>Files created</dt>
+          <dd>
+            {workflow.sideEffects.outputs.length === 0
+              ? 'None.'
+              : <ul>{workflow.sideEffects.outputs.map((entry) => (
+                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+              ))}</ul>}
+          </dd>
+        </div>
+      </dl>
+
+      {workflow.sideEffects.stagedMetadata.flushesExistingOnExport && (
+        <p class="flush-warning"><strong>Existing staged changes:</strong> playlist export also writes any metadata already staged by another workflow and clears it from memory. Run <code>preview_changes</code> before export and complete the separate metadata XML handoff when needed.</p>
+      )}
+    </section>
+
+    <section>
+      <h3>Before you start</h3>
+      <ul>{workflow.prerequisites.map((item) => <li>{item}</li>)}</ul>
+    </section>
+
+    <section>
+      <h3>Approval checkpoints</h3>
+      <ul>{workflow.approval.map((item) => <li>{item}</li>)}</ul>
+    </section>
+
+    <section>
+      <h3>Recovery</h3>
+      <ul>{workflow.recovery.map((item) => <li>{item}</li>)}</ul>
+    </section>
+
+    <section>
+      <h3>Rekordbox handoff</h3>
+      {workflow.rekordboxHandoff.length === 0
+        ? <p>None. This workflow produces recommendations only.</p>
+        : <ol>{workflow.rekordboxHandoff.map((entry) => (
+          <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+        ))}</ol>}
+    </section>
+  </div>
+
+  {workflow.variants.length > 0 && (
+    <section class="variant-contracts" aria-labelledby={`recipe-contracts-${workflow.id}`}>
+      <h3 id={`recipe-contracts-${workflow.id}`}>Choose a recipe</h3>
+      <div class="variant-grid">
+        {workflow.variants.map((variant) => (
+          <article>
+            <h4>{variant.title}</h4>
+            <p>{variant.summary}</p>
+            <dl>
+              <div>
+                <dt>Network</dt>
+                <dd><strong>{networkLabels[variant.network.level]}</strong><span>{variant.network.condition ?? variant.network.reason}</span></dd>
+              </div>
+              <div>
+                <dt>Local state</dt>
+                <dd>
+                  {variant.localStateWrites.length === 0
+                    ? 'None.'
+                    : <ul>{variant.localStateWrites.map((entry) => (
+                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+                    ))}</ul>}
+                </dd>
+              </div>
+              <div>
+                <dt>Needs</dt>
+                <dd><ul>{variant.prerequisites.map((item) => <li>{item}</li>)}</ul></dd>
+              </div>
+              <div>
+                <dt>Time</dt>
+                <dd>{variant.duration}</dd>
+              </div>
+              <div>
+                <dt>Result</dt>
+                <dd>{variant.output}</dd>
+              </div>
+            </dl>
+          </article>
+        ))}
+      </div>
+    </section>
+  )}
+</section>
+
+<style>
+  .workflow-contract {
+    display: grid;
+    gap: 1.25rem;
+    margin-block: 1.5rem 2rem;
+    padding: clamp(1rem, 3vw, 1.5rem);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+  }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  h2,
+  h3,
+  h4,
+  p,
+  dl,
+  dd,
+  ul,
+  ol {
+    margin: 0;
+  }
+
+  h2 {
+    font-size: 1.45rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+  }
+
+  h4 {
+    font-size: 1rem;
+  }
+
+  .contract-eyebrow {
+    color: var(--sl-color-gray-3);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .impact,
+  .mode {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+
+  .impact {
+    max-width: 14rem;
+    padding: 0.35rem 0.6rem;
+    color: var(--sl-color-text);
+    background: var(--sl-color-gray-6);
+  }
+
+  .impact--read-only {
+    border-color: var(--sl-color-green);
+    background: var(--sl-color-green-low);
+  }
+
+  .impact--staged-metadata {
+    border-color: var(--sl-color-blue);
+    background: var(--sl-color-blue-low);
+  }
+
+  .impact--direct-audio-files,
+  .impact--direct-library-files,
+  .impact--mixed {
+    border-color: var(--sl-color-orange);
+    background: var(--sl-color-orange-low);
+  }
+
+  .contract-summary {
+    max-width: 58rem;
+    font-size: 1.05rem;
+    line-height: 1.55;
+  }
+
+  .variant-banner,
+  .flush-warning {
+    padding: 0.8rem 1rem;
+    border-left: 3px solid var(--sl-color-accent);
+    background: color-mix(in srgb, var(--sl-color-accent-low) 45%, transparent);
+    font-size: 0.9rem;
+  }
+
+  .flush-warning {
+    border-left-color: var(--sl-color-orange);
+    background: var(--sl-color-orange-low);
+  }
+
+  .contract-overview {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1.25rem;
+  }
+
+  .contract-overview > div,
+  .effect-list > div,
+  .variant-contracts article dl > div {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .contract-overview > div {
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--card-border);
+  }
+
+  dt {
+    color: var(--sl-color-gray-3);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  dd {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .contract-sections {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .contract-sections > section {
+    display: grid;
+    align-content: start;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+  }
+
+  .contract-sections > section:first-child,
+  .contract-sections > section:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .effect-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+  }
+
+  ul,
+  ol {
+    display: grid;
+    gap: 0.4rem;
+    padding-left: 1.15rem;
+  }
+
+  li {
+    line-height: 1.45;
+  }
+
+  .mode {
+    margin-inline-start: 0.25rem;
+    padding: 0.12rem 0.35rem;
+    color: var(--sl-color-gray-2);
+    white-space: nowrap;
+  }
+
+  .variant-contracts {
+    display: grid;
+    gap: 0.8rem;
+  }
+
+  .variant-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .variant-grid article {
+    display: grid;
+    align-content: start;
+    gap: 0.65rem;
+    padding: 0.9rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+  }
+
+  .variant-grid article > p {
+    font-size: 0.9rem;
+  }
+
+  .variant-grid article dl {
+    display: grid;
+    gap: 0.65rem;
+    font-size: 0.82rem;
+  }
+
+  @media (max-width: 42rem) {
+    .contract-overview,
+    .contract-sections,
+    .effect-list,
+    .variant-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .contract-sections > section:first-child,
+    .contract-sections > section:last-child {
+      grid-column: auto;
+    }
+  }
+</style>

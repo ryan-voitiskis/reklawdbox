@@ -6,9 +6,10 @@ sidebar:
 ---
 
 import { Card, CardGrid, LinkCard, Aside, Badge } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
-Five sessions that build on each other. Follow them in order — each one depends on the last.
+<WorkflowContract id="library-cleanup" />
 
 Before you start, consider running a [Library Health](/workflows/library-health/) scan to catch broken links, orphan files, and duplicates. Fixing structural issues first saves you from redoing work later.
 

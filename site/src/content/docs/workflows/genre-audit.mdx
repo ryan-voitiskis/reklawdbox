@@ -6,9 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import GenreAuditSOP from '../../../partials/sops/genre-audit.mdx'
 
-Checks your existing genre tags against Discogs, Beatport, and audio evidence. Only conflicts and questionable tags are surfaced — tracks where the evidence confirms the genre are skipped. Every change needs your approval.
+<WorkflowContract id="genre-audit" />
 
 Paste into your agent:
 

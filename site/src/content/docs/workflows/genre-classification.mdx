@@ -6,9 +6,10 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import WorkflowContract from '../../../components/WorkflowContract.astro'
 import GenreClassificationSOP from '../../../partials/sops/genre-classification.mdx'
 
-Classifies ungenred tracks using evidence from Discogs, Beatport, label mappings, and audio analysis. Results are grouped by confidence level and every change needs your approval.
+<WorkflowContract id="genre-classification" />
 
 Paste into your agent:
 
