@@ -5,12 +5,14 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{audio, db, store, tools};
+#[cfg(test)]
+use crate::audio;
+use crate::{db, store, tools};
 
 use super::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
     cache_probe_for_path, cache_status_for_track, cli_batch_outcome, send_cache_message,
-    serialize_cache_payload, task_join_error_summary,
+    task_join_error_summary,
 };
 
 #[derive(clap::Args)]
@@ -551,121 +553,61 @@ async fn cli_analyze_single_track(
     essentia_python: Option<&str>,
     cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<CliCacheWriteMsg>>,
 ) -> Result<CliTrackResult, CliTrackFailure> {
-    let file_path =
-        audio::resolve_audio_path(raw_file_path).map_err(|_| "File not found".to_string())?;
-    let metadata = std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
-    let file_size = metadata.len() as i64;
-    let file_mtime = super::file_mtime_unix(&metadata);
-    let track_start = Instant::now();
-
-    if needs_stratum {
-        let path_clone = file_path.clone();
-        let (samples, sample_rate) =
-            tokio::task::spawn_blocking(move || audio::decode_to_samples(&path_clone))
-                .await
-                .map_err(|e| format!("Decode task failed: {e}"))?
-                .map_err(|e| format!("Decode error: {e}"))?;
-
-        let path_for_grid = file_path.clone();
-        let analysis = tokio::task::spawn_blocking(move || {
-            let input = audio::load_rekordbox_grid_input_for_path(&path_for_grid);
-            audio::analyze_with_stratum_input(&samples, sample_rate, input)
-        })
-        .await
-        .map_err(|e| format!("Analysis task failed: {e}"))?
-        .map_err(|e| format!("Analysis error: {e}"))?;
-        let audio::StratumAnalysis {
-            result: stratum_result,
-            input_fingerprint,
-        } = analysis;
-
-        let features_json = serialize_cache_payload(&stratum_result, "stratum-dsp analysis")?;
-        send_cache_message(
-            cache_tx,
-            CliCacheWriteMsg {
-                file_path: file_path.clone(),
-                analyzer: audio::ANALYZER_STRATUM.to_string(),
-                file_size,
-                file_mtime,
-                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
-                input_fingerprint,
-                features_json,
-            },
-            "stratum-dsp analysis",
-        )
-        .await
-        .map_err(CliTrackFailure::CacheWrite)?;
-
-        if needs_essentia && let Some(python) = essentia_python {
-            let essentia_ok =
-                cli_run_and_send_essentia(python, &file_path, file_size, file_mtime, cache_tx)
-                    .await?;
-            return Ok(CliTrackResult {
-                kind: CliTrackOutcome::StratumAndEssentia {
-                    bpm: stratum_result.bpm,
-                    key_camelot: stratum_result.key_camelot,
-                    essentia_ok,
-                },
-                elapsed: track_start.elapsed().as_secs_f64(),
-            });
-        }
-
-        Ok(CliTrackResult {
-            kind: CliTrackOutcome::StratumOnly {
-                bpm: stratum_result.bpm,
-                key_camelot: stratum_result.key_camelot,
-            },
-            elapsed: track_start.elapsed().as_secs_f64(),
-        })
-    } else if needs_essentia {
-        if let Some(python) = essentia_python {
-            let ok = cli_run_and_send_essentia(python, &file_path, file_size, file_mtime, cache_tx)
-                .await?;
-            return Ok(CliTrackResult {
-                kind: CliTrackOutcome::EssentiaOnly { ok },
-                elapsed: track_start.elapsed().as_secs_f64(),
-            });
-        }
-        Err("Essentia not available".to_string().into())
-    } else {
-        Err("Nothing to analyze".to_string().into())
-    }
-}
-
-async fn cli_run_and_send_essentia(
-    python: &str,
-    file_path: &str,
-    file_size: i64,
-    file_mtime: i64,
-    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<CliCacheWriteMsg>>,
-) -> Result<bool, CliTrackFailure> {
-    match audio::run_essentia(python, file_path)
-        .await
-        .map_err(|e| e.to_string())
-    {
-        Ok(features) => {
-            let features_json = serialize_cache_payload(&features, "essentia analysis")?;
-            send_cache_message(
-                cache_tx,
-                CliCacheWriteMsg {
-                    file_path: file_path.to_string(),
-                    analyzer: audio::ANALYZER_ESSENTIA.to_string(),
-                    file_size,
-                    file_mtime,
-                    analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-                    input_fingerprint: String::new(),
-                    features_json,
-                },
-                "essentia analysis",
-            )
+    let report = super::analysis_job::run(
+        raw_file_path,
+        needs_stratum,
+        needs_essentia,
+        essentia_python,
+        false,
+    )
+    .await?;
+    for message in report.cache_messages {
+        let analyzer = message.analyzer.clone();
+        send_cache_message(cache_tx, message, &format!("{analyzer} analysis"))
             .await
             .map_err(CliTrackFailure::CacheWrite)?;
-            Ok(true)
+    }
+
+    match report.stratum {
+        Some(Ok(stratum)) => {
+            if report.essentia.is_some() {
+                let essentia_ok = report.essentia.is_some_and(|result| {
+                    if let Err(error) = &result {
+                        tracing::error!("{error}");
+                    }
+                    result.is_ok()
+                });
+                return Ok(CliTrackResult {
+                    kind: CliTrackOutcome::StratumAndEssentia {
+                        bpm: stratum.bpm,
+                        key_camelot: stratum.key_camelot,
+                        essentia_ok,
+                    },
+                    elapsed: report.elapsed_seconds,
+                });
+            }
+            Ok(CliTrackResult {
+                kind: CliTrackOutcome::StratumOnly {
+                    bpm: stratum.bpm,
+                    key_camelot: stratum.key_camelot,
+                },
+                elapsed: report.elapsed_seconds,
+            })
         }
-        Err(e) => {
-            tracing::error!("Essentia error for {file_path}: {e}");
-            Ok(false)
-        }
+        Some(Err(error)) => Err(CliTrackFailure::Processing(error)),
+        None => match report.essentia {
+            Some(result) => {
+                let ok = result.is_ok();
+                if let Err(error) = result {
+                    tracing::error!("{error}");
+                }
+                Ok(CliTrackResult {
+                    kind: CliTrackOutcome::EssentiaOnly { ok },
+                    elapsed: report.elapsed_seconds,
+                })
+            }
+            None => Err("Essentia not available".to_string().into()),
+        },
     }
 }
 

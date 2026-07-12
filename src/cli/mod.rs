@@ -1,3 +1,4 @@
+mod analysis_job;
 mod analyze;
 mod backup;
 mod hydrate;
@@ -363,6 +364,7 @@ fn cache_status_for_track(
     Ok((has_stratum, has_essentia))
 }
 
+#[derive(Debug)]
 pub(crate) struct CliCacheWriteMsg {
     pub file_path: String,
     pub analyzer: String,

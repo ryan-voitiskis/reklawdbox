@@ -7,12 +7,14 @@ use tokio_util::sync::CancellationToken;
 
 use console::style;
 
-use crate::{audio, beatport, db, discogs, normalize, store, tools};
+#[cfg(test)]
+use crate::audio;
+use crate::{beatport, db, discogs, normalize, store, tools};
 
 use super::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
-    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, file_mtime_unix,
-    send_cache_message, serialize_cache_payload, task_join_error_summary,
+    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, send_cache_message,
+    serialize_cache_payload, task_join_error_summary,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1389,125 +1391,42 @@ async fn cli_analyze_for_hydrate(
     cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<HydrateCacheMsg>>,
 ) -> HydrateAnalysisOutcome {
     let mut outcome = HydrateAnalysisOutcome::default();
-    let file_path = match audio::resolve_audio_path(raw_file_path) {
-        Ok(p) => p,
-        Err(_) => {
+    let report = match super::analysis_job::run(
+        raw_file_path,
+        needs_stratum,
+        needs_essentia,
+        essentia_python,
+        true,
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(error) => {
+            tracing::error!("Analysis job failed for {raw_file_path}: {error}");
             outcome.operation_failed = true;
             return outcome;
         }
     };
-    let metadata = match std::fs::metadata(&file_path) {
-        Ok(m) => m,
-        Err(_) => {
-            outcome.operation_failed = true;
-            return outcome;
-        }
-    };
-    let file_size = metadata.len() as i64;
-    let file_mtime = file_mtime_unix(&metadata);
-    if needs_stratum {
-        let path_clone = file_path.clone();
-        let decode_result =
-            tokio::task::spawn_blocking(move || audio::decode_to_samples(&path_clone)).await;
 
-        match decode_result {
-            Ok(Ok((samples, sample_rate))) => {
-                let path_for_grid = file_path.clone();
-                let analysis = tokio::task::spawn_blocking(move || {
-                    let input = audio::load_rekordbox_grid_input_for_path(&path_for_grid);
-                    audio::analyze_with_stratum_input(&samples, sample_rate, input)
-                })
-                .await;
-
-                match analysis {
-                    Ok(Ok(analysis)) => {
-                        let audio::StratumAnalysis {
-                            result,
-                            input_fingerprint,
-                        } = analysis;
-                        let features_json =
-                            match serialize_cache_payload(&result, "stratum-dsp analysis") {
-                                Ok(json) => json,
-                                Err(e) => {
-                                    tracing::error!("{e}");
-                                    outcome.operation_failed = true;
-                                    return outcome;
-                                }
-                            };
-                        if let Err(e) = send_cache_message(
-                            cache_tx,
-                            HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
-                                file_path: file_path.clone(),
-                                analyzer: audio::ANALYZER_STRATUM.to_string(),
-                                file_size,
-                                file_mtime,
-                                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
-                                input_fingerprint,
-                                features_json,
-                            }),
-                            "stratum-dsp analysis",
-                        )
-                        .await
-                        {
-                            tracing::error!("{e}");
-                            outcome.cache_write_failed = true;
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!("stratum-dsp analysis failed for {file_path}: {e}");
-                        outcome.operation_failed = true;
-                    }
-                    Err(e) => {
-                        tracing::error!("stratum-dsp analysis task failed for {file_path}: {e}");
-                        outcome.operation_failed = true;
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                tracing::error!("Audio decode failed for {file_path}: {e}");
-                outcome.operation_failed = true;
-            }
-            Err(e) => {
-                tracing::error!("Audio decode task failed for {file_path}: {e}");
-                outcome.operation_failed = true;
-            }
-        }
+    if let Some(Err(error)) = report.stratum {
+        tracing::error!("stratum-dsp analysis failed for {raw_file_path}: {error}");
+        outcome.operation_failed = true;
     }
-
-    if needs_essentia && let Some(python) = essentia_python {
-        match audio::run_essentia(python, &file_path).await {
-            Ok(features) => {
-                let features_json = match serialize_cache_payload(&features, "essentia analysis") {
-                    Ok(json) => json,
-                    Err(e) => {
-                        tracing::error!("{e}");
-                        outcome.operation_failed = true;
-                        return outcome;
-                    }
-                };
-                if let Err(e) = send_cache_message(
-                    cache_tx,
-                    HydrateCacheMsg::AudioAnalysis(CliCacheWriteMsg {
-                        file_path: file_path.clone(),
-                        analyzer: audio::ANALYZER_ESSENTIA.to_string(),
-                        file_size,
-                        file_mtime,
-                        analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-                        input_fingerprint: String::new(),
-                        features_json,
-                    }),
-                    "essentia analysis",
-                )
-                .await
-                {
-                    tracing::error!("{e}");
-                    outcome.cache_write_failed = true;
-                }
-            }
-            Err(e) => {
-                tracing::error!("Essentia analysis failed for {file_path}: {e}");
-                outcome.operation_failed = true;
-            }
+    if let Some(Err(error)) = report.essentia {
+        tracing::error!("Essentia analysis failed for {raw_file_path}: {error}");
+        outcome.operation_failed = true;
+    }
+    for message in report.cache_messages {
+        let analyzer = message.analyzer.clone();
+        if let Err(error) = send_cache_message(
+            cache_tx,
+            HydrateCacheMsg::AudioAnalysis(message),
+            &format!("{analyzer} analysis"),
+        )
+        .await
+        {
+            tracing::error!("{error}");
+            outcome.cache_write_failed = true;
         }
     }
 
