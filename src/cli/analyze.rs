@@ -174,7 +174,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     )?;
     let conn = db::open(&db_path)?;
 
-    let store_path = store::default_path();
+    let store_path = store::resolve_path();
     let store_path_str = store_path
         .to_str()
         .ok_or("Invalid store path encoding")?

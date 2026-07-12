@@ -235,15 +235,19 @@ pub(super) async fn handle_write_file_tags(
                 let _guard = mutation_lock.lock().await;
                 let mut group_results = Vec::with_capacity(entries.len());
 
-                for (index, entry) in entries {
+                for (index, mut entry) in entries {
                     let path_display = entry.path.display().to_string();
-                    let result = tokio::task::spawn_blocking(move || tags::write_file_tags(&entry))
-                        .await
-                        .unwrap_or_else(|e| tags::FileWriteResult::Error {
-                            path: path_display,
-                            status: "error".to_string(),
-                            error: format!("task join error: {e}"),
-                        });
+                    entry.path = canonical_path.clone();
+                    let reported_path = path_display.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        tags::write_file_tags(&entry).with_reported_path(reported_path)
+                    })
+                    .await
+                    .unwrap_or_else(|e| tags::FileWriteResult::Error {
+                        path: path_display,
+                        status: "error".to_string(),
+                        error: format!("task join error: {e}"),
+                    });
                     group_results.push((index, result));
                 }
 

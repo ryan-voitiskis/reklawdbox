@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
+use std::io::Write as IoWrite;
 use std::path::Path;
 
 use crate::types::Track;
@@ -215,7 +216,14 @@ pub fn write_xml_with_playlists(
     }
     let xml = generate_xml_with_playlists(tracks, playlists)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    fs::write(path, xml)
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::Builder::new()
+        .prefix(".reklawdbox-xml-")
+        .tempfile_in(parent)?;
+    temp.write_all(xml.as_bytes())?;
+    temp.as_file_mut().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -532,6 +540,20 @@ mod tests {
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("<DJ_PLAYLISTS"));
+    }
+
+    #[test]
+    fn write_xml_atomically_replaces_existing_file_without_temp_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("export.xml");
+        std::fs::write(&path, "stale export").unwrap();
+
+        write_xml(&[make_test_track()], &path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("<?xml"));
+        assert!(!content.contains("stale export"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     // ==================== Integration tests (real DB) ====================

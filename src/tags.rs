@@ -259,6 +259,15 @@ pub enum FileWriteResult {
     },
 }
 
+impl FileWriteResult {
+    pub(crate) fn with_reported_path(mut self, reported_path: String) -> Self {
+        match &mut self {
+            Self::Ok { path, .. } | Self::Error { path, .. } => *path = reported_path,
+        }
+        self
+    }
+}
+
 /// A single field change in a dry-run result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DryRunChange {

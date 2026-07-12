@@ -359,13 +359,18 @@ pub(super) async fn handle_write_xml(
         })
         .collect();
 
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    static EXPORT_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f");
+    let sequence = EXPORT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let output_path = params.output_path.map_or_else(
         || {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("reklawdbox-exports")
-                .join(format!("reklawdbox-{timestamp}.xml"))
+                .join(format!(
+                    "reklawdbox-{timestamp}-{}-{sequence}.xml",
+                    std::process::id()
+                ))
         },
         PathBuf::from,
     );

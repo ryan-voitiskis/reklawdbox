@@ -17,6 +17,14 @@ pub fn default_path() -> PathBuf {
         .join("internal.sqlite3")
 }
 
+pub fn resolve_path() -> PathBuf {
+    resolve_path_from(std::env::var_os("CRATE_DIG_STORE_PATH"))
+}
+
+fn resolve_path_from(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured.map_or_else(default_path, PathBuf::from)
+}
+
 pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
     let store_path = std::path::Path::new(path);
     if let Some(parent) = store_path.parent() {
@@ -1487,6 +1495,15 @@ pub fn delete_missing_audit_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_store_path_is_used_verbatim() {
+        let configured = PathBuf::from("/tmp/reklawdbox-isolated.sqlite3");
+        assert_eq!(
+            resolve_path_from(Some(configured.clone().into_os_string())),
+            configured
+        );
+    }
 
     fn open_temp_store() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();

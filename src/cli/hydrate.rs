@@ -338,7 +338,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         "Cannot find Rekordbox database. Set REKORDBOX_DB_PATH or ensure Rekordbox is installed.",
     )?;
     let conn = db::open(&db_path)?;
-    let store_path = store::default_path();
+    let store_path = store::resolve_path();
     let store_path_str = store_path
         .to_str()
         .ok_or("Invalid store path encoding")?

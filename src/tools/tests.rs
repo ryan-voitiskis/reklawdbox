@@ -2058,6 +2058,42 @@ async fn audio_file_mutation_duplicate_alias_writes_preserve_input_order() {
     assert_eq!(comment.as_deref(), Some("before | base | after"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn audio_file_mutation_dual_layer_wav_preserves_symlink_and_updates_target() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("target.wav");
+    let symlink_path = temp_dir.path().join("alias.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    std::os::unix::fs::symlink(&audio_path, &symlink_path).expect("audio symlink should create");
+
+    let server = ReklawdboxServer::new(None);
+    let output = server
+        .write_file_tags(Parameters(WriteFileTagsParams {
+            writes: vec![WriteFileTagsEntry {
+                path: symlink_path.to_string_lossy().to_string(),
+                tags: HashMap::from([("comment".to_string(), Some("through-link".to_string()))]),
+                wav_targets: None,
+                comment_mode: None,
+            }],
+            dry_run: Some(false),
+        }))
+        .await
+        .expect("dual-layer symlink write should succeed");
+
+    let payload = extract_json(&output);
+    assert_eq!(payload["summary"]["files_written"], 1);
+    assert!(
+        std::fs::symlink_metadata(&symlink_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let (comment, _) =
+        audio_file_mutation_state(&audio_path).expect("target tags should remain readable");
+    assert_eq!(comment.as_deref(), Some("through-link"));
+}
+
 #[tokio::test]
 async fn audio_file_mutation_tag_and_art_requests_share_one_lock() {
     let temp_dir = tempfile::tempdir().expect("temp audio directory should create");

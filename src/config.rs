@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 
 const CONFIG_FILENAME: &str = "config.toml";
@@ -75,19 +76,37 @@ pub unsafe fn apply_env(cfg: &Config) {
 /// Sets owner-only permissions (0600) on the written file.
 pub fn save(cfg: &Config) -> Result<(), String> {
     let path = config_path().ok_or("Could not determine config directory")?;
+    save_to_path(cfg, &path)
+}
+
+fn save_to_path(cfg: &Config, path: &std::path::Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config directory: {e}"))?;
     }
     let contents =
         toml::to_string_pretty(cfg).map_err(|e| format!("Failed to serialize config: {e}"))?;
-    std::fs::write(&path, contents).map_err(|e| format!("Failed to write config: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Config path has no parent directory".to_string())?;
+    let mut temp = tempfile::Builder::new()
+        .prefix(".config-")
+        .tempfile_in(parent)
+        .map_err(|e| format!("Failed to create temporary config: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        temp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("Failed to set config file permissions: {e}"))?;
     }
+    temp.write_all(contents.as_bytes())
+        .map_err(|e| format!("Failed to write config: {e}"))?;
+    temp.as_file_mut()
+        .sync_all()
+        .map_err(|e| format!("Failed to sync config: {e}"))?;
+    temp.persist(path)
+        .map_err(|e| format!("Failed to replace config: {}", e.error))?;
     Ok(())
 }
 
@@ -145,5 +164,36 @@ token = "abc123"
         if let Some(path) = config_path() {
             assert!(path.ends_with("reklawdbox/config.toml"));
         }
+    }
+
+    #[test]
+    fn save_atomically_replaces_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "old contents").unwrap();
+        let cfg = Config {
+            discogs: DiscogsConfig {
+                broker: BrokerSection {
+                    url: Some("https://example.com".to_string()),
+                    token: Some("secret".to_string()),
+                },
+            },
+            genre_overrides: HashMap::new(),
+        };
+
+        save_to_path(&cfg, &path).unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("secret"));
+        assert!(!saved.contains("old contents"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

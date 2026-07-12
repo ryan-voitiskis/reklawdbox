@@ -1042,12 +1042,18 @@ pub fn paths_imported_in_scope(
 }
 
 pub fn resolve_db_path() -> Option<String> {
-    if let Ok(path) = std::env::var("REKORDBOX_DB_PATH")
-        && std::path::Path::new(&path).exists()
-    {
-        return Some(path);
+    resolve_db_path_from(std::env::var_os("REKORDBOX_DB_PATH"), default_db_path)
+}
+
+fn resolve_db_path_from(
+    configured: Option<std::ffi::OsString>,
+    default: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(path) = configured {
+        let path = std::path::PathBuf::from(path);
+        return path.is_file().then(|| path.to_string_lossy().into_owned());
     }
-    default_db_path()
+    default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1336,33 @@ pub(crate) fn open_real_db() -> Option<Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_missing_db_fails_closed_without_using_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.db");
+        let fallback_called = std::cell::Cell::new(false);
+
+        let resolved = resolve_db_path_from(Some(missing.into_os_string()), || {
+            fallback_called.set(true);
+            Some("/real/library/master.db".to_string())
+        });
+
+        assert!(resolved.is_none());
+        assert!(!fallback_called.get());
+    }
+
+    #[test]
+    fn configured_existing_db_wins_over_default() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let configured = file.path().to_path_buf();
+
+        let resolved = resolve_db_path_from(Some(configured.clone().into_os_string()), || {
+            Some("/real/library/master.db".to_string())
+        });
+
+        assert_eq!(resolved.as_deref(), configured.to_str());
+    }
 
     pub fn create_test_db() -> Connection {
         let conn = open_test();
