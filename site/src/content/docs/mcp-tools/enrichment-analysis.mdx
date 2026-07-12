@@ -126,7 +126,7 @@ completed search; cache errors remain pending.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `summary` | object | **yes** | Counts for the selected work page |
+| `summary` | object | **yes** | Counts for the inspected continuation page, including fully cached candidates |
 | `failures` | array | **yes** | Retryable failures with track, provider, and stage context |
 | `page` | object | **yes** | Underlying-selector continuation metadata |
 
@@ -141,10 +141,15 @@ completed search; cache errors remain pending.
 | `examined_tracks` | integer | **yes** | Candidates inspected from `start_offset` |
 | `selected_tracks` | integer | **yes** | Pending tracks admitted under `max_tracks` |
 | `fully_cached_skipped` | integer | **yes** | Complete candidates skipped without spending a work slot |
-| `next_offset` | integer | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
+| `next_offset` | integer \| null | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
 | `has_more` | boolean | **yes** | Whether an unexamined underlying candidate remains |
 
 {/* /doc-contract:mcp-output */}
+
+`summary.tracks_total` is `page.examined_tracks`; provider totals and cached
+counts include fully cached candidates skipped before work admission. The
+response remains bounded because only selected pending work can produce
+failures or other per-track task output.
 
 Continue from `page.next_offset` while `page.has_more` is true. Record failures
 while traversing, then retry those explicit `track_ids` separately. Offsets are
@@ -226,7 +231,7 @@ pending.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `summary` | object | **yes** | Counts for the selected analysis page |
+| `summary` | object | **yes** | Counts for the inspected continuation page, including fully current candidates |
 | `results` | object[] | **yes** | Per-track analysis results |
 | `failures` | array | **yes** | Retryable failures with track, analyzer, and stage context |
 | `page` | object | **yes** | Underlying-selector continuation metadata |
@@ -243,10 +248,15 @@ pending.
 | `examined_tracks` | integer | **yes** | Candidates inspected from `start_offset` |
 | `selected_tracks` | integer | **yes** | Pending tracks admitted under `max_tracks` |
 | `fully_cached_skipped` | integer | **yes** | Current candidates skipped without spending a work slot |
-| `next_offset` | integer | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
+| `next_offset` | integer \| null | **yes** | Underlying index after the last examined candidate when more remain; `null` at the end |
 | `has_more` | boolean | **yes** | Whether an unexamined underlying candidate remains |
 
 {/* /doc-contract:mcp-output */}
+
+`summary.total` is `page.examined_tracks`. Its Stratum cache count, and its
+Essentia cache count when Essentia is available, include fully current
+candidates skipped before work admission. `results` remains bounded to selected
+pending tracks.
 
 Traverse `next_offset` while `has_more`, retain failures, and retry failed
 `track_ids` after the scope traversal. Restart at zero if the selector or

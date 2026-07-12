@@ -247,6 +247,19 @@ pub(super) struct AnalyzeAudioBatchOutput {
     essentia_setup_hint: Option<String>,
 }
 
+fn audio_page_summary_counts(
+    page: &BatchPage,
+    selected_stratum_cached: usize,
+    selected_essentia_cached: usize,
+    essentia_available: bool,
+) -> (usize, usize, usize) {
+    let fully_current = page.fully_cached_skipped;
+    let cached = selected_stratum_cached.saturating_add(fully_current);
+    let essentia_cached =
+        selected_essentia_cached.saturating_add(if essentia_available { fully_current } else { 0 });
+    (page.examined_tracks, cached, essentia_cached)
+}
+
 fn audio_join_failures(
     track_id: &str,
     artist: &str,
@@ -564,7 +577,7 @@ pub(super) async fn handle_analyze_audio_batch(
     let tracks = selection.selected;
     let page = selection.page;
 
-    let total = tracks.len();
+    let selected_tracks = tracks.len();
 
     let concurrency = match params.concurrency {
         Some(n) => n.clamp(1, 4),
@@ -582,7 +595,7 @@ pub(super) async fn handle_analyze_audio_batch(
         tokio::task::spawn_blocking(move || run_audio_cache_writer(&writer_store_path, cache_rx));
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-    let mut handles = Vec::with_capacity(total);
+    let mut handles = Vec::with_capacity(selected_tracks);
 
     for track in &tracks {
         let permit = sem
@@ -697,11 +710,13 @@ pub(super) async fn handle_analyze_audio_batch(
         })
         .collect();
 
+    let (total, cached, essentia_cached) =
+        audio_page_summary_counts(&page, progress.cached, essentia_cached, essentia_available);
     let result = AnalyzeAudioBatchOutput {
         summary: AudioBatchSummary {
             total,
             analyzed: progress.processed,
-            cached: progress.cached,
+            cached,
             failed: progress.failures.len(),
             essentia_available,
             essentia_analyzed,
@@ -830,6 +845,11 @@ mod pending_page_tests {
                 has_more: true,
             }
         );
+        assert_eq!(
+            audio_page_summary_counts(&selection.page, 0, 0, false),
+            (2, 1, 0),
+            "the fully current prefix should remain visible in the page summary"
+        );
 
         let continuation = pending_batch_page(&tracks, 2, 1, |_| Ok(vec![false]))
             .expect("missing-file continuation should resolve");
@@ -856,10 +876,23 @@ mod pending_page_tests {
                 .expect("stratum-only completion should resolve"),
             [true]
         );
+        let stratum_only_page = pending_batch_page(&tracks, 0, 1, |_| Ok(vec![true]))
+            .expect("stratum-only completed page should resolve");
+        assert_eq!(
+            audio_page_summary_counts(&stratum_only_page.page, 0, 0, false),
+            (1, 1, 0)
+        );
         assert_eq!(
             audio_completion_flags(&conn, &tracks, true)
                 .expect("essentia-required completion should resolve"),
             [false]
+        );
+        let essentia_pending_page = pending_batch_page(&tracks, 0, 1, |_| Ok(vec![false]))
+            .expect("Essentia-pending page should resolve");
+        assert_eq!(
+            audio_page_summary_counts(&essentia_pending_page.page, 1, 0, true),
+            (1, 1, 0),
+            "a selected track's current Stratum result should remain counted"
         );
 
         seed_current(
@@ -872,6 +905,21 @@ mod pending_page_tests {
             audio_completion_flags(&conn, &tracks, true)
                 .expect("dual-analyzer completion should resolve"),
             [true]
+        );
+        let dual_current_page = pending_batch_page(&tracks, 0, 1, |_| Ok(vec![true]))
+            .expect("dual-current page should resolve");
+        assert_eq!(
+            audio_page_summary_counts(&dual_current_page.page, 0, 0, true),
+            (1, 1, 1)
+        );
+
+        let zero_page = pending_batch_page(&tracks, 0, 0, |_| {
+            panic!("zero work cap must not inspect cache state")
+        })
+        .expect("zero-cap page should resolve");
+        assert_eq!(
+            audio_page_summary_counts(&zero_page.page, 0, 0, true),
+            (0, 0, 0)
         );
     }
 

@@ -709,6 +709,18 @@ pub(super) struct EnrichTracksOutput {
     page: BatchPage,
 }
 
+fn enrich_page_summary_counts(
+    page: &BatchPage,
+    provider_count: usize,
+    selected_cached: usize,
+) -> (usize, usize, usize) {
+    let tracks_total = page.examined_tracks;
+    let total = tracks_total.saturating_mul(provider_count);
+    let fully_cached = page.fully_cached_skipped.saturating_mul(provider_count);
+    let cached = selected_cached.saturating_add(fully_cached);
+    (tracks_total, total, cached)
+}
+
 fn enrichment_join_failures(
     track_id: &str,
     artist: &str,
@@ -1095,8 +1107,7 @@ pub(super) async fn handle_enrich_tracks(
     let tracks = selection.selected;
     let page = selection.page;
 
-    let total_tracks = tracks.len();
-    let total = total_tracks.saturating_mul(providers.len());
+    let selected_tracks = tracks.len();
 
     let concurrency = params.concurrency.map_or(4, |n| n.clamp(1, 8)) as usize;
 
@@ -1113,7 +1124,7 @@ pub(super) async fn handle_enrich_tracks(
     let beatport_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
     let bandcamp_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
 
-    let mut handles = Vec::with_capacity(total_tracks);
+    let mut handles = Vec::with_capacity(selected_tracks);
 
     for track in &tracks {
         let permit = sem
@@ -1212,12 +1223,14 @@ pub(super) async fn handle_enrich_tracks(
         }
     };
 
+    let (tracks_total, total, cached) =
+        enrich_page_summary_counts(&page, providers.len(), progress.cached);
     let result = EnrichTracksOutput {
         summary: EnrichTracksSummary {
-            tracks_total: total_tracks,
+            tracks_total,
             total,
             enriched: progress.processed,
-            cached: progress.cached,
+            cached,
             skipped: progress.skipped,
             failed: progress.failures.len(),
             concurrency,
@@ -1323,6 +1336,11 @@ mod pending_page_tests {
                 has_more: false,
             }
         );
+        assert_eq!(
+            enrich_page_summary_counts(&selection.page, 2, 1),
+            (2, 4, 3),
+            "the inspected page should count one no-match-complete track and the selected track's cached provider"
+        );
     }
 
     #[test]
@@ -1344,6 +1362,14 @@ mod pending_page_tests {
         )
         .expect("completion lookup should succeed");
         assert_eq!(complete, [false]);
+
+        let selection = pending_batch_page(&tracks, 0, 1, |_| Ok(complete.clone()))
+            .expect("partial-provider page should resolve");
+        assert_eq!(
+            enrich_page_summary_counts(&selection.page, 3, 1),
+            (1, 3, 1),
+            "error entries stay pending while successful provider cache hits remain counted"
+        );
     }
 
     #[test]

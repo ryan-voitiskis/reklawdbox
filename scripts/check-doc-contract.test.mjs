@@ -97,6 +97,45 @@ test('selected MCP output contracts compare marked fields with live outputSchema
   )
 })
 
+test('required nullable output fields retain null while optional fields do not', () => {
+  const fixture = selectedOutputFixture([
+    ['summary', 'object', 'yes', 'Batch summary'],
+    ['page', 'object', 'yes', 'Continuation'],
+    ['hint', 'string', '', 'Optional hint'],
+  ])
+  const enrich = fixture.tools.find((item) => item.name === 'enrich_tracks')
+  enrich.outputSchema.required = ['summary', 'page']
+  enrich.outputSchema.properties.hint = { type: ['string', 'null'] }
+  enrich.outputSchema.properties.page = {
+    type: 'object',
+    properties: {
+      next_offset: { type: ['integer', 'null'] },
+    },
+    required: ['next_offset'],
+  }
+  fixture.docs[0].content += '\n'
+    + mcpOutputMarker(
+      'enrich_tracks',
+      table([
+        ['`next_offset`', 'integer \\| null', '**yes**', 'Next cursor'],
+      ], ['Field', 'Type', 'Required', 'Description']),
+      '/properties/page',
+    )
+
+  assert.doesNotThrow(() =>
+    validateMcpOutputContracts(fixture.docs, fixture.tools)
+  )
+
+  const wrongDocs = fixture.docs.map((item) => ({
+    ...item,
+    content: item.content.replace('integer \\| null', 'integer'),
+  }))
+  assert.throws(
+    () => validateMcpOutputContracts(wrongDocs, fixture.tools),
+    /enrich_tracks\.next_offset output type is integer, live schema is integer\|null/,
+  )
+})
+
 test('MCP output contracts reject an omitted live response property', () => {
   const fixture = selectedOutputFixture([
     ['summary', 'object', 'yes', 'Batch summary'],

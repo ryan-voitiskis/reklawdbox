@@ -528,7 +528,7 @@ function schemaTypeConstraint(root, node, seen = new Set()) {
   return constraint
 }
 
-function schemaTypes(root, node) {
+function schemaTypes(root, node, { includeNull = false } = {}) {
   const constraint = schemaTypeConstraint(root, node)
   if (constraint === null) {
     return []
@@ -543,7 +543,9 @@ function schemaTypes(root, node) {
     'null',
   ])
   const unsupported = [...constraint].filter((type) => !supported.has(type))
-  const types = [...constraint].filter((type) => type !== 'null').sort()
+  const types = [...constraint]
+    .filter((type) => includeNull || type !== 'null')
+    .sort()
   if (unsupported.length || !types.length) {
     throw new Error(
       `type composition has no supported non-null type${
@@ -1431,7 +1433,9 @@ export function validateMcpOutputContracts(
       let liveTypes
       let liveItemTypes
       try {
-        liveTypes = schemaTypes(root, property)
+        liveTypes = schemaTypes(root, property, {
+          includeNull: required.has(row.name),
+        })
         liveItemTypes = [...schemaArrayDetails(root, property).itemTypes].sort()
       } catch (error) {
         issues.push(

@@ -152,7 +152,7 @@ Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, B
 | `total` | integer | **yes** | Total conflicts in the stable ordered list |
 | `returned` | integer | **yes** | Conflict entries emitted by this page |
 | `offset` | integer | **yes** | Requested conflict offset |
-| `next_offset` | integer | **yes** | Next conflict offset when more remain; `null` at the end |
+| `next_offset` | integer \| null | **yes** | Next conflict offset when more remain; `null` at the end |
 | `has_more` | boolean | **yes** | Whether another conflict page remains |
 
 {/* /doc-contract:mcp-output */}

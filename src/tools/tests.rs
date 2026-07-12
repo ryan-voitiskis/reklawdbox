@@ -97,6 +97,92 @@ fn assert_structured_matches_text(result: &CallToolResult, tool_name: &str) {
     );
 }
 
+fn resolve_local_schema<'a>(
+    root: &'a serde_json::Value,
+    schema: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    schema
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix('#'))
+        .and_then(|pointer| root.pointer(pointer))
+        .unwrap_or(schema)
+}
+
+fn schema_allows_type(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    expected: &str,
+) -> bool {
+    let schema = resolve_local_schema(root, schema);
+    schema["type"].as_str() == Some(expected)
+        || schema["type"]
+            .as_array()
+            .is_some_and(|types| types.iter().any(|value| value.as_str() == Some(expected)))
+        || ["anyOf", "oneOf"].iter().any(|keyword| {
+            schema[*keyword].as_array().is_some_and(|alternatives| {
+                alternatives
+                    .iter()
+                    .any(|alternative| schema_allows_type(root, alternative, expected))
+            })
+        })
+}
+
+fn assert_terminal_cursor_contract(
+    tool_name: &str,
+    continuation_field: &str,
+    result: &CallToolResult,
+) {
+    let router = ReklawdboxServer::tool_router();
+    let tool = router
+        .get(tool_name)
+        .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+    let tool_schema = serde_json::to_value(tool).expect("tool metadata should serialize");
+    let output_schema = &tool_schema["outputSchema"];
+    assert!(
+        output_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == continuation_field)),
+        "{tool_name} should require {continuation_field}"
+    );
+    let continuation_schema = resolve_local_schema(
+        output_schema,
+        &output_schema["properties"][continuation_field],
+    );
+    assert!(
+        continuation_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "next_offset")),
+        "{tool_name} should require {continuation_field}.next_offset"
+    );
+    let cursor_schema = &continuation_schema["properties"]["next_offset"];
+    assert!(
+        schema_allows_type(output_schema, cursor_schema, "integer"),
+        "{tool_name} next_offset should allow integers"
+    );
+    assert!(
+        schema_allows_type(output_schema, cursor_schema, "null"),
+        "{tool_name} next_offset should allow terminal nulls; schema was {cursor_schema}"
+    );
+
+    let structured = result
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("{tool_name} should return structured content"));
+    let continuation = structured[continuation_field]
+        .as_object()
+        .unwrap_or_else(|| panic!("{tool_name} should return {continuation_field} as an object"));
+    assert!(
+        continuation.contains_key("next_offset"),
+        "{tool_name} terminal payload should retain required next_offset"
+    );
+    assert_eq!(
+        continuation["next_offset"],
+        serde_json::Value::Null,
+        "{tool_name} terminal payload should encode next_offset as null"
+    );
+}
+
 #[tokio::test]
 async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
     let router = ReklawdboxServer::tool_router();
@@ -138,6 +224,10 @@ async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
         .await
         .expect("zero-work enrichment should succeed");
     assert_structured_matches_text(&enrich, "enrich_tracks");
+    assert_terminal_cursor_contract("enrich_tracks", "page", &enrich);
+    assert_eq!(extract_json(&enrich)["summary"]["tracks_total"], 0);
+    assert_eq!(extract_json(&enrich)["summary"]["total"], 0);
+    assert_eq!(extract_json(&enrich)["summary"]["cached"], 0);
 
     let audio = server
         .analyze_audio_batch(Parameters(AnalyzeAudioBatchParams {
@@ -152,6 +242,10 @@ async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
         .await
         .expect("zero-work audio batch should succeed");
     assert_structured_matches_text(&audio, "analyze_audio_batch");
+    assert_terminal_cursor_contract("analyze_audio_batch", "page", &audio);
+    assert_eq!(extract_json(&audio)["summary"]["total"], 0);
+    assert_eq!(extract_json(&audio)["summary"]["cached"], 0);
+    assert_eq!(extract_json(&audio)["summary"]["essentia_cached"], 0);
 
     let labels = server
         .backfill_labels(Parameters(BackfillLabelsParams {
@@ -163,12 +257,14 @@ async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
         .await
         .expect("dry-run label backfill should succeed");
     assert_structured_matches_text(&labels, "backfill_labels");
+    assert_terminal_cursor_contract("backfill_labels", "conflict_page", &labels);
 
     let duplicates = server
         .scan_duplicates(Parameters(ScanDuplicatesParams::default()))
         .await
         .expect("empty metadata duplicate scan should succeed");
     assert_structured_matches_text(&duplicates, "scan_duplicates");
+    assert_terminal_cursor_contract("scan_duplicates", "page", &duplicates);
 }
 
 #[tokio::test]
@@ -5722,9 +5818,10 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         .await
         .expect("enrich_tracks should succeed when everything is cached");
     let first_payload = extract_json(&first_result);
-    assert_eq!(first_payload["summary"]["total"], 0);
+    assert_eq!(first_payload["summary"]["tracks_total"], 2);
+    assert_eq!(first_payload["summary"]["total"], 2);
     assert_eq!(first_payload["summary"]["enriched"], 0);
-    assert_eq!(first_payload["summary"]["cached"], 0);
+    assert_eq!(first_payload["summary"]["cached"], 2);
     assert_eq!(first_payload["summary"]["skipped"], 0);
     assert_eq!(first_payload["summary"]["failed"], 0);
     assert_cache_write_summary(&first_payload, 0, 0, 0);
@@ -5763,9 +5860,10 @@ async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
         .await
         .expect("second enrich_tracks run should also be fully cached");
     let second_payload = extract_json(&second_result);
-    assert_eq!(second_payload["summary"]["total"], 0);
+    assert_eq!(second_payload["summary"]["tracks_total"], 2);
+    assert_eq!(second_payload["summary"]["total"], 2);
     assert_eq!(second_payload["summary"]["enriched"], 0);
-    assert_eq!(second_payload["summary"]["cached"], 0);
+    assert_eq!(second_payload["summary"]["cached"], 2);
     assert_eq!(second_payload["summary"]["skipped"], 0);
     assert_eq!(second_payload["summary"]["failed"], 0);
     assert_cache_write_summary(&second_payload, 0, 0, 0);
@@ -5864,15 +5962,123 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
         .expect("enrich_tracks should resolve from cache for both providers");
     let payload = extract_json(&result);
 
-    assert_eq!(payload["summary"]["tracks_total"], 0);
-    assert_eq!(payload["summary"]["total"], 0);
-    assert_eq!(payload["summary"]["cached"], 0);
+    assert_eq!(payload["summary"]["tracks_total"], 1);
+    assert_eq!(payload["summary"]["total"], 2);
+    assert_eq!(payload["summary"]["cached"], 2);
     assert_eq!(payload["summary"]["enriched"], 0);
     assert_eq!(payload["summary"]["skipped"], 0);
     assert_eq!(payload["summary"]["failed"], 0);
     assert_cache_write_summary(&payload, 0, 0, 0);
     assert_eq!(payload["page"]["matched_tracks"], 1);
     assert_eq!(payload["page"]["fully_cached_skipped"], 1);
+}
+
+fn create_fully_current_audio_batch_server(
+    essentia_available: bool,
+) -> (ReklawdboxServer, TempDir, TempDir) {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let first_path = audio_dir.path().join("current-one.flac");
+    let second_path = audio_dir.path().join("current-two.flac");
+    let (first_size, first_mtime) = write_test_audio_file(&first_path, 64);
+    let (second_size, second_mtime) = write_test_audio_file(&second_path, 96);
+    let first_path = first_path.to_string_lossy().to_string();
+    let second_path = second_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("current-one", &first_path);
+    insert_test_track(&db_conn, "current-two", "Current Two", "g1", &second_path);
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+    for (path, size, mtime) in [
+        (&first_path, first_size, first_mtime),
+        (&second_path, second_size, second_mtime),
+    ] {
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::audio::ANALYZER_STRATUM,
+            size,
+            mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":128.0}"#,
+        )
+        .expect("current Stratum cache should seed");
+        if essentia_available {
+            set_test_audio_analysis(
+                &store_conn,
+                path,
+                crate::audio::ANALYZER_ESSENTIA,
+                size,
+                mtime,
+                crate::audio::ESSENTIA_SCHEMA_VERSION,
+                r#"{"energy":0.5}"#,
+            )
+            .expect("current Essentia cache should seed");
+        }
+    }
+
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
+    server
+        .state
+        .essentia_python
+        .set(essentia_available.then(|| "/unused/test-essentia-python".to_string()))
+        .expect("Essentia availability should initialize exactly once");
+    (server, audio_dir, store_dir)
+}
+
+#[tokio::test]
+async fn analyze_audio_batch_fully_current_reports_page_scoped_cache_counts() {
+    for essentia_available in [false, true] {
+        let (server, _audio_dir, _store_dir) =
+            create_fully_current_audio_batch_server(essentia_available);
+        let result = server
+            .analyze_audio_batch(Parameters(AnalyzeAudioBatchParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["current-one".to_string(), "current-two".to_string()]),
+                playlist_id: None,
+                max_tracks: Some(10),
+                offset: Some(0),
+                skip_cached: Some(true),
+                concurrency: Some(1),
+            }))
+            .await
+            .expect("fully current audio page should succeed without analyzer work");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["summary"]["total"], 2);
+        assert_eq!(payload["summary"]["analyzed"], 0);
+        assert_eq!(payload["summary"]["cached"], 2);
+        assert_eq!(payload["summary"]["failed"], 0);
+        assert_eq!(payload["summary"]["essentia_available"], essentia_available);
+        assert_eq!(payload["summary"]["essentia_analyzed"], 0);
+        assert_eq!(
+            payload["summary"]["essentia_cached"],
+            if essentia_available { 2 } else { 0 }
+        );
+        assert_eq!(payload["summary"]["essentia_failed"], 0);
+        assert_eq!(payload["page"]["examined_tracks"], 2);
+        assert_eq!(payload["page"]["selected_tracks"], 0);
+        assert_eq!(payload["page"]["fully_cached_skipped"], 2);
+        assert_eq!(payload["page"]["next_offset"], serde_json::Value::Null);
+        assert_eq!(payload["page"]["has_more"], false);
+        assert!(
+            payload["results"]
+                .as_array()
+                .expect("audio results should be an array")
+                .is_empty(),
+            "fully current candidates must not inflate bounded result payloads"
+        );
+    }
 }
 
 #[tokio::test]

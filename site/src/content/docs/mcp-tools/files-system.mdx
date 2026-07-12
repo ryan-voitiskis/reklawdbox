@@ -235,7 +235,7 @@ Detect duplicate tracks by metadata (artist+title) or exact file hash (SHA-256).
 | `total` | integer | **yes** | Total duplicate groups in the selected scope |
 | `returned` | integer | **yes** | Groups emitted by this page |
 | `offset` | integer | **yes** | Requested group offset |
-| `next_offset` | integer | **yes** | Next group offset when more remain; `null` at the end |
+| `next_offset` | integer \| null | **yes** | Next group offset when more remain; `null` at the end |
 | `has_more` | boolean | **yes** | Whether another group page remains |
 
 {/* /doc-contract:mcp-output */}

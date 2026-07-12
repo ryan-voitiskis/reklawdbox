@@ -35,6 +35,10 @@ pub(super) fn apply_offset_limit(
     tracks.into_iter().skip(offset).take(limit).collect()
 }
 
+fn required_nullable_offset_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    <Option<usize> as schemars::JsonSchema>::json_schema(generator)
+}
+
 /// Public continuation metadata for bounded work selectors.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub(super) struct BatchPage {
@@ -43,7 +47,7 @@ pub(super) struct BatchPage {
     pub(super) examined_tracks: usize,
     pub(super) selected_tracks: usize,
     pub(super) fully_cached_skipped: usize,
-    #[schemars(required)]
+    #[schemars(required, schema_with = "required_nullable_offset_schema")]
     pub(super) next_offset: Option<usize>,
     pub(super) has_more: bool,
 }
@@ -53,7 +57,7 @@ pub(super) struct OffsetPage {
     pub(super) total: usize,
     pub(super) returned: usize,
     pub(super) offset: usize,
-    #[schemars(required)]
+    #[schemars(required, schema_with = "required_nullable_offset_schema")]
     pub(super) next_offset: Option<usize>,
     pub(super) has_more: bool,
 }
