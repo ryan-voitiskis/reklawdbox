@@ -3798,6 +3798,63 @@ fn audio_cache_grid_fingerprint_batch_deduplicates_resolved_paths_and_keeps_mixe
     );
 }
 
+#[test]
+fn track_profile_batch_preserves_order_and_uses_fresh_cached_features() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store = crate::store::open(store_path.to_str().unwrap()).unwrap();
+    let mut tracks = Vec::new();
+
+    for (index, fallback_bpm) in [(0, 0.0), (1, 126.0)] {
+        let audio_path = audio_dir.path().join(format!("profile-{index}.wav"));
+        let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1_000 + index);
+        let mut track =
+            make_test_track(&format!("profile-{index}"), "Deep House", fallback_bpm, "");
+        track.file_path = audio_path.to_string_lossy().to_string();
+        set_test_audio_analysis(
+            &store,
+            &track.file_path,
+            crate::audio::ANALYZER_STRATUM,
+            file_size,
+            file_mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            &format!(
+                r#"{{"bpm":{},"key_camelot":"{}A"}}"#,
+                124 + index,
+                8 + index
+            ),
+        )
+        .unwrap();
+        set_test_audio_analysis(
+            &store,
+            &track.file_path,
+            crate::audio::ANALYZER_ESSENTIA,
+            file_size,
+            file_mtime,
+            crate::audio::ESSENTIA_SCHEMA_VERSION,
+            r#"{"danceability":0.8,"spectral_centroid_mean":1200.0}"#,
+        )
+        .unwrap();
+        tracks.push(track);
+    }
+
+    let profiles = build_track_profiles(tracks, &store).unwrap();
+
+    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles[0].track.id, "profile-0");
+    assert_eq!(profiles[1].track.id, "profile-1");
+    assert_eq!(profiles[0].bpm, 124.0, "missing Rekordbox BPM uses Stratum");
+    assert_eq!(
+        profiles[1].bpm, 126.0,
+        "plausible Rekordbox BPM remains authoritative"
+    );
+    assert_eq!(profiles[0].key_display, "8A");
+    assert_eq!(profiles[1].key_display, "9A");
+    assert_eq!(profiles[0].brightness, Some(1200.0));
+    assert!(profiles.iter().all(|profile| profile.energy > 0.0));
+}
+
 #[tokio::test]
 async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");

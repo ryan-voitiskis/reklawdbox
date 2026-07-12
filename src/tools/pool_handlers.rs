@@ -51,10 +51,14 @@ pub(super) fn handle_score_pool_compatibility(
             };
 
             let store = server.cache_store_conn()?;
-            let profile_a = build_track_profile(track_a, &store)
+            let mut profiles = build_track_profiles(vec![track_a, track_b], &store)
                 .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
-            let profile_b = build_track_profile(track_b, &store)
-                .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
+            let profile_b = profiles
+                .pop()
+                .expect("two input tracks produce two profiles");
+            let profile_a = profiles
+                .pop()
+                .expect("two input tracks produce two profiles");
 
             let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
@@ -318,21 +322,15 @@ pub(super) fn handle_expand_pool(
         )?
     };
 
-    let mut candidate_profiles: Vec<TrackProfile> = Vec::new();
-    for track in candidate_tracks {
-        if seed_ids.contains(&track.id) {
-            continue;
-        }
-        match build_track_profile(track, &store) {
-            Ok(p) => {
-                if !cross_genre && !seed_families.contains(&p.genre_family) {
-                    continue;
-                }
-                candidate_profiles.push(p);
-            }
-            Err(_) => continue,
-        }
-    }
+    let candidate_tracks: Vec<_> = candidate_tracks
+        .into_iter()
+        .filter(|track| !seed_ids.contains(&track.id))
+        .collect();
+    let candidate_profiles = build_profiles(candidate_tracks, &store).profiles;
+    let mut candidate_profiles: Vec<_> = candidate_profiles
+        .into_iter()
+        .filter(|profile| cross_genre || seed_families.contains(&profile.genre_family))
+        .collect();
 
     let candidates_scanned = candidate_profiles.len();
 
@@ -612,19 +610,20 @@ struct BuildProfilesResult {
 }
 
 fn build_profiles(tracks: Vec<crate::types::Track>, store: &Connection) -> BuildProfilesResult {
-    let mut profiles = Vec::new();
-    let mut skipped = Vec::new();
-    for track in tracks {
-        let id = track.id.clone();
-        match build_track_profile(track, store) {
-            Ok(p) => profiles.push(p),
-            Err(e) => {
-                tracing::warn!(track_id = %id, error = %e, "Skipping track: profile build failed");
-                skipped.push(id);
+    let skipped: Vec<_> = tracks.iter().map(|track| track.id.clone()).collect();
+    match build_track_profiles(tracks, store) {
+        Ok(profiles) => BuildProfilesResult {
+            profiles,
+            skipped: Vec::new(),
+        },
+        Err(error) => {
+            tracing::warn!(%error, "Skipping profile batch: cache read failed");
+            BuildProfilesResult {
+                profiles: Vec::new(),
+                skipped,
             }
         }
     }
-    BuildProfilesResult { profiles, skipped }
 }
 
 enum PoolMode {

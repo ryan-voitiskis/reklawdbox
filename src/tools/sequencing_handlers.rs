@@ -39,12 +39,14 @@ pub(super) fn handle_score_transition(
 
     let (from_profile, to_profile) = {
         let store = server.cache_store_conn()?;
-        let from = build_track_profile(from_track, &store).map_err(|e| {
-            mcp_internal_error(format!("Failed to build source track profile: {e}"))
-        })?;
-        let to = build_track_profile(to_track, &store).map_err(|e| {
-            mcp_internal_error(format!("Failed to build destination track profile: {e}"))
-        })?;
+        let mut profiles = build_track_profiles(vec![from_track, to_track], &store)
+            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?;
+        let to = profiles
+            .pop()
+            .expect("two input tracks produce two profiles");
+        let from = profiles
+            .pop()
+            .expect("two input tracks produce two profiles");
         (from, to)
     };
 
@@ -154,29 +156,21 @@ pub(super) fn handle_query_transition_candidates(
         ));
     }
 
-    let from_profile = {
+    let mut profile_tracks = Vec::with_capacity(pool_tracks.len() + 1);
+    profile_tracks.push(from_track);
+    profile_tracks.extend(
+        pool_tracks
+            .into_iter()
+            .filter(|track| track.id != params.source_track_id),
+    );
+    let mut profiles = {
         let store = server.cache_store_conn()?;
-        build_track_profile(from_track, &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build source track profile: {e}")))?
+        build_track_profiles(profile_tracks, &store)
+            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
     };
-
-    let mut pool_profiles: Vec<TrackProfile> = Vec::new();
-    let mut skipped_profiles = 0u32;
-    {
-        let store = server.cache_store_conn()?;
-        for track in pool_tracks {
-            if track.id == params.source_track_id {
-                continue; // exclude from-track from pool
-            }
-            match build_track_profile(track, &store) {
-                Ok(profile) => pool_profiles.push(profile),
-                Err(_) => {
-                    skipped_profiles += 1;
-                    continue;
-                }
-            }
-        }
-    }
+    let from_profile = profiles.remove(0);
+    let pool_profiles = profiles;
+    let skipped_profiles = 0u32;
 
     let ctx = ScoringContext::default();
     let reference_bpm = params.target_bpm.unwrap_or(from_profile.bpm);
@@ -326,15 +320,14 @@ pub(super) fn handle_build_set(
         ));
     }
 
-    let mut profiles_by_id: HashMap<String, TrackProfile> = HashMap::new();
-    {
+    let profiles_by_id: HashMap<String, TrackProfile> = {
         let store = server.cache_store_conn()?;
-        for track in tracks {
-            let profile = build_track_profile(track, &store)
-                .map_err(|e| mcp_internal_error(format!("Failed to build track profile: {e}")))?;
-            profiles_by_id.insert(profile.track.id.clone(), profile);
-        }
-    }
+        build_track_profiles(tracks, &store)
+            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
+            .into_iter()
+            .map(|profile| (profile.track.id.clone(), profile))
+            .collect()
+    };
 
     if let Some(opening_track_id) = params.opening_track_id.as_deref()
         && !profiles_by_id.contains_key(opening_track_id)

@@ -609,20 +609,69 @@ pub(super) fn build_track_profile(
     track: crate::types::Track,
     store_conn: &Connection,
 ) -> Result<TrackProfile, String> {
-    let stratum_json = get_fresh_analysis_entry(
+    build_track_profiles(vec![track], store_conn)?
+        .pop()
+        .ok_or_else(|| "Track profile batch unexpectedly returned no result".to_string())
+}
+
+pub(super) fn build_track_profiles(
+    tracks: Vec<crate::types::Track>,
+    store_conn: &Connection,
+) -> Result<Vec<TrackProfile>, String> {
+    let identities = audio_cache_identities_with_current_stratum_input(
+        tracks.iter().map(|track| track.file_path.as_str()),
+    );
+    let stratum_identities: Vec<_> = identities
+        .iter()
+        .filter_map(|identity| identity.as_ref()?.as_stratum_store_identity())
+        .collect();
+    let essentia_identities: Vec<_> = identities
+        .iter()
+        .filter_map(|identity| {
+            identity
+                .as_ref()
+                .map(AudioCacheIdentity::as_essentia_store_identity)
+        })
+        .collect();
+    let stratum = crate::store::batch_get_fresh_audio_analysis(
         store_conn,
-        &track.file_path,
+        &stratum_identities,
         crate::audio::ANALYZER_STRATUM,
         crate::audio::STRATUM_SCHEMA_VERSION,
-    )?
-    .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
-    let essentia_data = get_fresh_analysis_entry(
+    )
+    .map_err(|error| format!("Stratum cache read error: {error}"))?;
+    let essentia = crate::store::batch_get_fresh_audio_analysis(
         store_conn,
-        &track.file_path,
+        &essentia_identities,
         crate::audio::ANALYZER_ESSENTIA,
         crate::audio::ESSENTIA_SCHEMA_VERSION,
-    )?
-    .and_then(|cached| {
+    )
+    .map_err(|error| format!("Essentia cache read error: {error}"))?;
+
+    Ok(tracks
+        .into_iter()
+        .zip(identities)
+        .map(|(track, identity)| {
+            let cache_key = identity
+                .as_ref()
+                .map(|identity| identity.cache_key.as_str());
+            build_track_profile_from_cache(
+                track,
+                cache_key.and_then(|key| stratum.get(key)),
+                cache_key.and_then(|key| essentia.get(key)),
+            )
+        })
+        .collect())
+}
+
+fn build_track_profile_from_cache(
+    track: crate::types::Track,
+    stratum_entry: Option<&crate::store::CachedAudioAnalysis>,
+    essentia_entry: Option<&crate::store::CachedAudioAnalysis>,
+) -> TrackProfile {
+    let stratum_json = stratum_entry
+        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
+    let essentia_data = essentia_entry.and_then(|cached| {
         serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok()
     });
 
@@ -676,7 +725,7 @@ pub(super) fn build_track_profile(
         })
     });
 
-    Ok(TrackProfile {
+    TrackProfile {
         track,
         camelot_key,
         key_display,
@@ -688,7 +737,7 @@ pub(super) fn build_track_profile(
         canonical_genre,
         genre_family,
         timbral,
-    })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -54,6 +54,7 @@ pub(super) fn audio_cache_identity(raw_file_path: &str) -> Option<AudioCacheIden
     })
 }
 
+#[cfg(test)]
 pub(super) fn audio_cache_identities_with_fingerprint_loader<'a>(
     raw_file_paths: impl IntoIterator<Item = &'a str>,
     mut load_fingerprint: impl FnMut(&str) -> String,
@@ -86,9 +87,31 @@ pub(super) fn audio_cache_identity_with_stratum_input_fingerprint(
 pub(super) fn audio_cache_identities_with_current_stratum_input<'a>(
     raw_file_paths: impl IntoIterator<Item = &'a str>,
 ) -> Vec<Option<AudioCacheIdentity>> {
-    audio_cache_identities_with_fingerprint_loader(raw_file_paths, |cache_key| {
-        audio::load_rekordbox_grid_input_for_path(cache_key).fingerprint
-    })
+    let mut identities: Vec<_> = raw_file_paths
+        .into_iter()
+        .map(audio_cache_identity)
+        .collect();
+    let mut unique_cache_keys = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for identity in identities.iter().flatten() {
+        if seen.insert(identity.cache_key.as_str()) {
+            unique_cache_keys.push(identity.cache_key.clone());
+        }
+    }
+    let cache_key_refs: Vec<_> = unique_cache_keys.iter().map(String::as_str).collect();
+    let fingerprints: HashMap<String, String> = unique_cache_keys
+        .iter()
+        .cloned()
+        .zip(
+            audio::load_rekordbox_grid_inputs_for_paths(&cache_key_refs)
+                .into_iter()
+                .map(|input| input.fingerprint),
+        )
+        .collect();
+    for identity in identities.iter_mut().flatten() {
+        identity.stratum_input_fingerprint = fingerprints.get(&identity.cache_key).cloned();
+    }
+    identities
 }
 
 fn audio_cache_identity_for_analyzer(

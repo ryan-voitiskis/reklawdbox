@@ -453,12 +453,13 @@ fn stratum_notation_to_camelot(stratum_notation: &str) -> String {
 ///
 /// A missing external grid means "fall back to HMM tracking", not an error.
 ///
-/// Each call opens a fresh DB connection. For batch use this is wasteful
-/// (~ms per track) — callers iterating many tracks may want a variant
-/// that takes a borrowed connection instead.
+/// Batch callers share one read-only SQLCipher connection across every path.
 #[cfg(not(test))]
 pub fn load_rekordbox_grid_input_for_path(file_path: &str) -> RekordboxGridInput {
-    RekordboxGridInput::from_grid(load_rekordbox_grid_for_path_inner(file_path))
+    load_rekordbox_grid_inputs_for_paths(&[file_path])
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RekordboxGridInput::from_grid(None))
 }
 
 /// Unit tests use explicit synthetic grid inputs and never inspect the user's
@@ -468,35 +469,60 @@ pub fn load_rekordbox_grid_input_for_path(_file_path: &str) -> RekordboxGridInpu
     RekordboxGridInput::from_grid(None)
 }
 
+#[cfg(not(test))]
+pub fn load_rekordbox_grid_inputs_for_paths(file_paths: &[&str]) -> Vec<RekordboxGridInput> {
+    if file_paths.is_empty() {
+        return Vec::new();
+    }
+    let Some(db_path) = crate::db::resolve_db_path() else {
+        tracing::warn!(
+            "Rekordbox grid lookup: no master.db found (set REKORDBOX_DB_PATH); \
+             falling back to HMM for all tracks"
+        );
+        return file_paths
+            .iter()
+            .map(|_| RekordboxGridInput::from_grid(None))
+            .collect();
+    };
+    let conn = match crate::db::open(&db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(
+                "Rekordbox grid lookup: could not open master.db ({error}); falling back to HMM"
+            );
+            return file_paths
+                .iter()
+                .map(|_| RekordboxGridInput::from_grid(None))
+                .collect();
+        }
+    };
+    file_paths
+        .iter()
+        .map(|path| {
+            RekordboxGridInput::from_grid(load_rekordbox_grid_for_path_with_conn(&conn, path))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub fn load_rekordbox_grid_inputs_for_paths(file_paths: &[&str]) -> Vec<RekordboxGridInput> {
+    file_paths
+        .iter()
+        .map(|_| RekordboxGridInput::from_grid(None))
+        .collect()
+}
+
 /// Compatibility wrapper for callers that only need the selected grid.
 #[allow(dead_code)]
 pub fn load_rekordbox_grid_for_path(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
     load_rekordbox_grid_input_for_path(file_path).grid
 }
 
-#[cfg_attr(test, allow(dead_code))]
-fn load_rekordbox_grid_for_path_inner(file_path: &str) -> Option<stratum_dsp::BeatGrid> {
+fn load_rekordbox_grid_for_path_with_conn(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> Option<stratum_dsp::BeatGrid> {
     use unicode_normalization::UnicodeNormalization;
-
-    let db_path = match crate::db::resolve_db_path() {
-        Some(p) => p,
-        None => {
-            tracing::warn!(
-                "Rekordbox grid lookup: no master.db found (set REKORDBOX_DB_PATH); \
-                 falling back to HMM for all tracks"
-            );
-            return None;
-        }
-    };
-    let conn = match crate::db::open(&db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                "Rekordbox grid lookup: could not open master.db ({e}); falling back to HMM"
-            );
-            return None;
-        }
-    };
 
     // macOS HFS+/APFS sometimes hands out NFD-decomposed paths while
     // Rekordbox stored the original NFC form (or vice versa). Try the path
@@ -729,6 +755,18 @@ fn analyze_with_stratum_input_using(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_lookup_with_shared_connection_handles_empty_analysis_path() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE djmdContent (FolderPath TEXT, AnalysisDataPath TEXT);\
+             INSERT INTO djmdContent VALUES ('/generated/track.wav', '');",
+        )
+        .unwrap();
+
+        assert!(load_rekordbox_grid_for_path_with_conn(&conn, "/generated/track.wav").is_none());
+    }
     use std::process::Stdio;
 
     fn fingerprint_test_grid() -> stratum_dsp::BeatGrid {
