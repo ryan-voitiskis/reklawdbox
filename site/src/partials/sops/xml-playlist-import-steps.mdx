@@ -1,0 +1,11 @@
+Use the playlist path in Rekordbox for the exported playlist name and order:
+
+1. **Keep the XML file available** — Note the path reported by `write_xml`. Do not move or delete the file until the imported playlist is verified.
+2. **Open the XML browser** — If `rekordbox xml` is hidden, enable it under **Preferences → View → Layout → Media Browser**. Under **Preferences → Advanced → Database → rekordbox xml**, set **Imported Library** to the exported XML file.
+3. **Preview the generated playlist** — Expand **rekordbox xml → Playlists**, select only the generated playlist, and check its name and track order before importing it.
+4. **Import the playlist** — Drag that playlist to the desired location under Rekordbox **Playlists**. If the current UI offers **Playlist → Import Playlist** for the selected rekordbox xml playlist, that action can be used instead.
+5. **Verify before cleanup** — In the imported playlist, confirm the track count, the first and last tracks, and representative transitions through the order. Keep the XML file until these checks pass.
+
+**This is not the metadata-import path.** **rekordbox xml → All Tracks → Import To Collection** applies staged track metadata; importing the playlist does not. Complete that separate flow when the XML also contains staged metadata changes.
+
+The XML export is the agent's stopping point. Report the path, then wait for the user to complete and confirm these Rekordbox steps. Do not say the playlist is installed before that confirmation.

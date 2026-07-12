@@ -1,3 +1,5 @@
+import XmlPlaylistImportSteps from './xml-playlist-import-steps.mdx';
+
 ## Constraints
 
 - **Analysis is read-only; export writes XML.** Scoring never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
@@ -146,4 +148,7 @@ write_xml(playlists=[{"name": "Set Name", "track_ids": [...]}])
 
 Note: `write_xml` also exports and clears any staged metadata changes. Use `preview_changes` first if other workflows have pending edits.
 
-Report output path. Remind user: File → Import Collection in Rekordbox.
+Report the output path, then stop for the user to complete and confirm the
+playlist handoff:
+
+<XmlPlaylistImportSteps />

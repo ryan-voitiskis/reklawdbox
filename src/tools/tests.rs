@@ -85,6 +85,41 @@ async fn call_tool_via_router(
     result
 }
 
+#[tokio::test]
+async fn playlist_import_help_contract() {
+    for topic in ["set", "pool", "chapter"] {
+        let arguments = serde_json::json!({ "topic": topic }).as_object().cloned();
+        let result = call_tool_via_router("help", arguments).await;
+        let payload = extract_json(&result);
+        let sop = payload["sop"]
+            .as_str()
+            .unwrap_or_else(|| panic!("help topic '{topic}' should return SOP text"));
+        let lower = sop.to_lowercase();
+
+        for required in [
+            "rekordbox xml",
+            "playlists",
+            "drag",
+            "track count",
+            "first and last",
+            "track order",
+        ] {
+            assert!(
+                lower.contains(required),
+                "help topic '{topic}' should include playlist import guidance containing '{required}'"
+            );
+        }
+        assert!(
+            !sop.contains("import XmlPlaylistImportSteps"),
+            "help topic '{topic}' must not expose the MDX component import"
+        );
+        assert!(
+            !sop.contains("<XmlPlaylistImportSteps />"),
+            "help topic '{topic}' must not expose an unresolved MDX component tag"
+        );
+    }
+}
+
 const GOLDEN_GENRES_FIXTURE_PATH: &str = "src/tools/fixtures/golden_genres.json";
 
 #[derive(Debug, Deserialize)]

@@ -1,3 +1,5 @@
+import XmlPlaylistImportSteps from './xml-playlist-import-steps.mdx';
+
 ## Constraints
 
 - **Analysis is read-only; export writes XML.** Compatibility analysis never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
@@ -120,6 +122,10 @@ write_xml(playlists=[{"name": "Pool: Deep House 126", "track_ids": [...]}])
 
 Note: `write_xml` also exports and clears any staged metadata changes. Use `preview_changes` first if other workflows have pending edits.
 
-Report output path. Remind user: File → Import Collection in Rekordbox.
+Report the output path, then stop for the user to complete and confirm the
+playlist handoff:
 
-The pool is now a locked **chapter** — ready for live performance or further set planning.
+<XmlPlaylistImportSteps />
+
+Only after the user confirms the imported playlist and order should the pool be
+treated as a locked **chapter** for live performance or further set planning.

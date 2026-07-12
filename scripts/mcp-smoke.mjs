@@ -125,6 +125,45 @@ async function runSmoke() {
     throw new Error("help(topic='audit') did not mention Reload Tag")
   }
 
+  const playlistImportHelp = []
+  for (const topic of ['set', 'pool', 'chapter']) {
+    const result = await callTool('help', { topic })
+    const payload = parseToolJson(result, `help(topic='${topic}')`)
+    const sop = payload.sop ?? ''
+    const normalized = sop.toLowerCase()
+
+    for (
+      const required of [
+        'rekordbox xml',
+        'playlists',
+        'drag',
+        'track count',
+        'track order',
+      ]
+    ) {
+      if (!normalized.includes(required)) {
+        throw new Error(
+          `help(topic='${topic}') did not include playlist import guidance containing '${required}'`,
+        )
+      }
+    }
+    if (sop.includes('import XmlPlaylistImportSteps')) {
+      throw new Error(
+        `help(topic='${topic}') exposed the playlist import component import`,
+      )
+    }
+    if (sop.includes('<XmlPlaylistImportSteps />')) {
+      throw new Error(
+        `help(topic='${topic}') exposed an unresolved playlist import component tag`,
+      )
+    }
+
+    playlistImportHelp.push({
+      topic,
+      bytes: Buffer.byteLength(sop),
+    })
+  }
+
   const summary = {
     binary: bin,
     server: initialized.serverInfo,
@@ -138,6 +177,7 @@ async function runSmoke() {
       topic: 'audit',
       bytes: Buffer.byteLength(auditHelpText),
     },
+    playlistImportHelp,
     protocolViolations,
   }
 

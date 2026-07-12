@@ -1,3 +1,5 @@
+import XmlPlaylistImportSteps from './xml-playlist-import-steps.mdx';
+
 ## Constraints
 
 - **Analysis is read-only; export writes XML.** Chapter and bridge analysis never modifies track metadata. `write_xml` creates the approved playlist export without writing the Rekordbox database.
@@ -154,4 +156,7 @@ write_xml(playlists=[{
 
 Optionally export each chapter as a separate playlist too.
 
-Report output path. Remind user: File → Import Collection in Rekordbox.
+Report the output path, then stop for the user to complete and confirm the
+playlist handoff:
+
+<XmlPlaylistImportSteps />

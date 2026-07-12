@@ -7,6 +7,7 @@ sidebar:
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
+import XmlPlaylistImportSteps from '../../../partials/sops/xml-playlist-import-steps.mdx';
 
 ## XML structure
 
@@ -52,11 +53,29 @@ Playlists are included when `write_xml` is called with the `playlists` parameter
 
 ## Importing into Rekordbox
 
+An export can contain staged track metadata, playlist name and order, or both.
+Use each applicable handoff independently:
+
+| What you exported | Handoff and verification |
+|---|---|
+| Track metadata | Set **Imported Library**, then use **rekordbox xml → All Tracks → Import To Collection**. Verify the intended field values. |
+| Playlist name and order | Use **rekordbox xml → Playlists**, then drag/import the generated playlist under Rekordbox **Playlists**. Verify its name, track count, first and last tracks, and representative order. |
+
+Playlist exports are produced by [Set Building](/workflows/set-building/),
+[Pool Building](/workflows/pool-building/), and
+[Chapter Set Planning](/workflows/chapter-set-planning/).
+
+### Apply staged track metadata
+
 <XmlImportSteps />
 
 <Aside type="tip">
   On the confirmation dialog, tick **"Don't ask me again"** if you're importing a large batch — it applies to every track that already exists in your collection.
 </Aside>
+
+### Import a playlist and its order
+
+<XmlPlaylistImportSteps />
 
 ---
 

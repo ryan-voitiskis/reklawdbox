@@ -18,6 +18,12 @@ const SOP_LIBRARY_HEALTH: &str = include_str!("../../site/src/partials/sops/libr
 const SOP_POOL_BUILDING: &str = include_str!("../../site/src/partials/sops/pool-building.mdx");
 const SOP_CHAPTER_SET_PLANNING: &str =
     include_str!("../../site/src/partials/sops/chapter-set-planning.mdx");
+const SOP_XML_PLAYLIST_IMPORT_STEPS: &str =
+    include_str!("../../site/src/partials/sops/xml-playlist-import-steps.mdx");
+
+const XML_PLAYLIST_IMPORT_COMPONENT_IMPORT: &str =
+    "import XmlPlaylistImportSteps from './xml-playlist-import-steps.mdx';";
+const XML_PLAYLIST_IMPORT_COMPONENT_TAG: &str = "<XmlPlaylistImportSteps />";
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
@@ -33,6 +39,7 @@ struct Workflow {
     summary: &'static str,
     key_tools: &'static [&'static str],
     sop: &'static str,
+    expand_playlist_import: bool,
 }
 
 const WORKFLOWS: &[Workflow] = &[
@@ -49,6 +56,7 @@ const WORKFLOWS: &[Workflow] = &[
             "extract_cover_art",
         ],
         sop: SOP_BATCH_IMPORT,
+        expand_playlist_import: false,
     },
     Workflow {
         name: "Genre Classification",
@@ -62,6 +70,7 @@ const WORKFLOWS: &[Workflow] = &[
             "update_tracks",
         ],
         sop: SOP_GENRE_CLASSIFICATION,
+        expand_playlist_import: false,
     },
     Workflow {
         name: "Set Building",
@@ -76,6 +85,7 @@ const WORKFLOWS: &[Workflow] = &[
             "score_transition",
         ],
         sop: SOP_SET_BUILDING,
+        expand_playlist_import: true,
     },
     Workflow {
         name: "Pool Building",
@@ -88,6 +98,7 @@ const WORKFLOWS: &[Workflow] = &[
             "write_xml",
         ],
         sop: SOP_POOL_BUILDING,
+        expand_playlist_import: true,
     },
     Workflow {
         name: "Chapter Set Planning",
@@ -102,6 +113,7 @@ const WORKFLOWS: &[Workflow] = &[
             "write_xml",
         ],
         sop: SOP_CHAPTER_SET_PLANNING,
+        expand_playlist_import: true,
     },
     Workflow {
         name: "Collection Audit",
@@ -109,6 +121,7 @@ const WORKFLOWS: &[Workflow] = &[
         summary: "Detect and fix naming, tagging, and convention violations.",
         key_tools: &["audit_state", "read_file_tags", "write_file_tags"],
         sop: SOP_COLLECTION_AUDIT,
+        expand_playlist_import: false,
     },
     Workflow {
         name: "Genre Audit",
@@ -121,6 +134,7 @@ const WORKFLOWS: &[Workflow] = &[
             "update_tracks",
         ],
         sop: SOP_GENRE_AUDIT,
+        expand_playlist_import: false,
     },
     Workflow {
         name: "Metadata Backfill",
@@ -144,6 +158,7 @@ const WORKFLOWS: &[Workflow] = &[
             "update_tracks",
         ],
         sop: SOP_METADATA_BACKFILL,
+        expand_playlist_import: false,
     },
     Workflow {
         name: "Library Health",
@@ -164,8 +179,34 @@ const WORKFLOWS: &[Workflow] = &[
             "scan_duplicates",
         ],
         sop: SOP_LIBRARY_HEALTH,
+        expand_playlist_import: false,
     },
 ];
+
+fn expand_playlist_import_steps(sop: &str) -> Result<String, McpError> {
+    let import_count = sop
+        .lines()
+        .filter(|line| *line == XML_PLAYLIST_IMPORT_COMPONENT_IMPORT)
+        .count();
+    let tag_count = sop.matches(XML_PLAYLIST_IMPORT_COMPONENT_TAG).count();
+
+    if import_count != 1 || tag_count != 1 {
+        return Err(McpError::internal_error(
+            format!(
+                "playlist import SOP composition requires exactly one component import and tag; found {import_count} import(s) and {tag_count} tag(s)"
+            ),
+            None,
+        ));
+    }
+
+    let import_line = format!("{XML_PLAYLIST_IMPORT_COMPONENT_IMPORT}\n");
+    let without_import = sop.replacen(&import_line, "", 1);
+    Ok(without_import.replacen(
+        XML_PLAYLIST_IMPORT_COMPONENT_TAG,
+        SOP_XML_PLAYLIST_IMPORT_STEPS,
+        1,
+    ))
+}
 
 pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError> {
     let result = if let Some(ref topic) = params.topic {
@@ -184,11 +225,18 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
             .map(|(w, _)| w);
 
         match matched {
-            Some(w) => serde_json::json!({
-                "workflow": w.name,
-                "key_tools": w.key_tools,
-                "sop": w.sop,
-            }),
+            Some(w) => {
+                let sop = if w.expand_playlist_import {
+                    expand_playlist_import_steps(w.sop)?
+                } else {
+                    w.sop.to_owned()
+                };
+                serde_json::json!({
+                    "workflow": w.name,
+                    "key_tools": w.key_tools,
+                    "sop": sop,
+                })
+            }
             None => serde_json::json!({
                 "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, pool, chapter, audit, metadata, label, year, album, health."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
