@@ -12,7 +12,7 @@ hero:
     alt: reklawdbox logo — a crab gripping a vinyl record
   actions:
     - text: Install
-      link: '#install'
+      link: '/getting-started/'
       icon: right-arrow
     - text: GitHub
       link: https://github.com/ryan-voitiskis/reklawdbox
@@ -20,67 +20,34 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, LinkCard, Aside, Steps } from '@astrojs/starlight/components';
+import { LinkCard, Steps } from '@astrojs/starlight/components';
 
-## Install
+## Your first three choices
 
 <Steps>
 
-1. **Tap and install**
+1. **Install and connect**
 
-   ```bash
-   brew tap ryan-voitiskis/reklawdbox && brew install reklawdbox
-   ```
+   Choose the supported Homebrew or source-build path, configure your host,
+   then reconnect it.
 
-2. **Run setup** — installs audio analysis tools and configures Claude Code + Claude Desktop
+   <LinkCard title="Install" href="/getting-started/" description="Install the binary, connect Claude Code, Claude Desktop, or Codex, and verify the host setup." />
 
-   ```bash
-   reklawdbox setup
-   ```
+2. **Get one safe first result**
 
-3. **Start a conversation**
+   Ask for a bounded library summary using one read-only, local tool. This
+   confirms the connection before you choose a larger workflow.
 
-   ```bash
-   cd ~/Music && claude
-   ```
+   <LinkCard title="First 10 minutes" href="/getting-started/first-session/" description="Copy one read-only prompt and understand exactly what it does not change." />
 
-   Keep your host's normal permission checks enabled and approve only the
-   reklawdbox tools and music paths the workflow needs. [Permission and safety details →](/concepts/safety/)
+3. **Choose a goal with the trade-offs visible**
+
+   Compare collection impact, direct file writes, local state, outputs, and
+   prerequisites before opening a workflow.
 
 </Steps>
 
-<LinkCard title="Full setup guide" href="/getting-started/" description="Build from source, manual MCP config, Discogs authorization, and troubleshooting." />
-
-## Start here: Library Cleanup
-
-You probably have metadata issues. Library Cleanup walks you through five sessions that fix naming conventions, enrich tracks from Discogs, Beatport, MusicBrainz, and Bandcamp, backfill missing labels and years, classify genres, and verify the results.
-
-It's the foundation for everything else — enrichment data powers genre classification, and classified genres are used by set building and pool discovery.
-
-<LinkCard title="Library Cleanup" href="/workflows/library-cleanup/" description="Five sessions that build on each other — the recommended starting point for every new user." />
-
-## Creative tools
-
-Once your library is clean and enriched:
-
-<CardGrid>
-  <Card title="Set Building" icon="list-format">
-    Build transition-scored sequences with energy curve shaping — key, BPM, energy, genre, brightness, and rhythm.
-    [Build a set](/workflows/set-building/)
-  </Card>
-  <Card title="Pool Building" icon="puzzle">
-    Discover compatible track pools for live improvisation. Symmetric scoring finds tracks that mix well in any direction.
-    [Build a pool](/workflows/pool-building/)
-  </Card>
-  <Card title="Gig Prep" icon="download">
-    Describe your gig — venue, time slot, vibe — and the agent translates context into curated pools and sequences.
-    [Prep for a gig](/workflows/dj-prompts/)
-  </Card>
-  <Card title="Chapter Sets" icon="open-book">
-    Plan multi-chapter sets with bridge tracks between sections. Lock your chapters, let the agent connect them.
-    [Plan chapters](/workflows/chapter-set-planning/)
-  </Card>
-</CardGrid>
+Already know what you need? [Browse all workflows →](/workflows/)
 
 ## Safe by design
 

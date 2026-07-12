@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
+  goalDefinitions,
   validateWorkflows,
   workflows,
   XML_BACKUP_SUCCESS_CONDITION,
@@ -11,14 +12,19 @@ import {
   compareRuntimeHelp,
   compareToolMappings,
   extractSopCalls,
+  FIRST_SESSION_PROMPT,
   parseApplicationCliHelp,
+  parseDocsGatePathInventories,
   parseRootCliHelp,
   parseRootCliOptions,
   runtimeHelpTopics,
   validateBuiltLinkSet,
   validateCliContracts,
+  validateDocsGatePathInventories,
+  validateFirstSessionPage,
   validateMcpContracts,
   validateMcpOutputContracts,
+  validateOnboardingSources,
   validateRuntimeHelpUrls,
   validateSopContracts,
   validateXmlBackupContracts,
@@ -1711,7 +1717,250 @@ test('XML workflow backup contracts reject missing, negated, and weaker gates', 
   )
 })
 
-test('docs gates react to Rust dependency manifest changes', () => {
+test('goal definitions and workflow memberships are exact and exhaustive', () => {
+  assert.deepEqual(
+    goalDefinitions.map(({ id, title }) => [id, title]),
+    [
+      ['inspect-health', 'Inspect collection health'],
+      ['clean-library', 'Clean existing metadata'],
+      ['prepare-downloads', 'Prepare newly downloaded music'],
+      ['classify-genres', 'Classify or audit genres'],
+      ['build-for-mixing', 'Build for mixing'],
+      ['explore-dj-ideas', 'Explore DJ ideas'],
+    ],
+  )
+  assert.equal(
+    workflows.flatMap((workflow) => workflow.goals).length,
+    workflows.length,
+  )
+  assert.equal(
+    new Set(workflows.flatMap((workflow) => workflow.goals)).size,
+    goalDefinitions.length,
+  )
+  assert.doesNotThrow(() => validateWorkflows(workflows, goalDefinitions))
+
+  const missingDefinition = structuredClone(goalDefinitions).slice(1)
+  assert.throws(
+    () => validateWorkflows(workflows, missingDefinition),
+    /goal definitions must contain exactly/,
+  )
+
+  const duplicatedDefinition = structuredClone(goalDefinitions)
+  duplicatedDefinition[1] = structuredClone(duplicatedDefinition[0])
+  assert.throws(
+    () => validateWorkflows(workflows, duplicatedDefinition),
+    /goalDefinitions\[1\]/,
+  )
+
+  const reorderedDefinitions = structuredClone(goalDefinitions)
+  ;[reorderedDefinitions[0], reorderedDefinitions[1]] = [
+    reorderedDefinitions[1],
+    reorderedDefinitions[0],
+  ]
+  assert.throws(
+    () => validateWorkflows(workflows, reorderedDefinitions),
+    /goalDefinitions\[0\]/,
+  )
+
+  for (
+    const mutate of [
+      (definitions) => {
+        definitions[0].id = 'unknown-goal'
+      },
+      (definitions) => {
+        definitions[0].summary = ''
+      },
+      (definitions) => {
+        definitions[0].extra = true
+      },
+    ]
+  ) {
+    const definitions = structuredClone(goalDefinitions)
+    mutate(definitions)
+    assert.throws(() => validateWorkflows(workflows, definitions))
+  }
+
+  for (
+    const goals of [
+      [],
+      ['unknown-goal'],
+      ['clean-library', 'clean-library'],
+      ['clean-library', 'inspect-health'],
+    ]
+  ) {
+    const records = structuredClone(workflows)
+    records[0].goals = goals
+    assert.throws(() => validateWorkflows(records, goalDefinitions), /goals/)
+  }
+
+  const wrongMembership = structuredClone(workflows)
+  wrongMembership.find((workflow) => workflow.id === 'library-health').goals = [
+    'clean-library',
+  ]
+  assert.throws(
+    () => validateWorkflows(wrongMembership, goalDefinitions),
+    /goals/,
+  )
+})
+
+test('first-session prompt is structurally singular and capability-bounded', () => {
+  const liveTools = [
+    tool('read_library'),
+    tool('write_xml'),
+    tool('lookup_discogs'),
+  ]
+  const fixture = (prompt = FIRST_SESSION_PROMPT) =>
+    document(
+      `Before
+<!-- doc-contract:first-session-prompt tool=read_library -->
+
+\`\`\`text
+${prompt}
+\`\`\`
+
+<!-- /doc-contract:first-session-prompt -->
+After`,
+      'first-session.mdx',
+    )
+
+  const valid = fixture()
+  assert.doesNotThrow(() => validateFirstSessionPage(valid, liveTools))
+
+  const malformedCases = [
+    valid.content.replace(
+      '<!-- doc-contract:first-session-prompt tool=read_library -->',
+      '',
+    ),
+    valid.content.replace('<!-- /doc-contract:first-session-prompt -->', ''),
+    valid.content.replace('tool=read_library', 'tool=read_librar'),
+    `${valid.content}\n${valid.content}`,
+    valid.content.replace(
+      '\`\`\`text',
+      '<!-- doc-contract:first-session-prompt tool=read_library -->\n\`\`\`text',
+    ),
+    valid.content.replace('\`\`\`text', '\`\`\`json'),
+    `${valid.content}\n\`\`\`text\nwrite_xml\n\`\`\``,
+  ]
+  malformedCases.forEach((content) => {
+    assert.throws(() =>
+      validateFirstSessionPage(document(content, 'malformed.mdx'), liveTools)
+    )
+  })
+
+  assert.throws(() =>
+    validateFirstSessionPage(
+      fixture(
+        FIRST_SESSION_PROMPT.replace(
+          "Use only reklawdbox's read_library tool.",
+          "Use reklawdbox's read_library and write_xml tools.",
+        ),
+      ),
+      liveTools,
+    )
+  )
+
+  const boundaryOmissions = [
+    ['external services', 'outside services'],
+    ['analyze audio', 'inspect audio'],
+    ['use or populate enrichment/audio\ncaches', 'use existing data'],
+    ['write files', 'change files'],
+    ['stage changes', 'prepare changes'],
+    ['export XML', 'make XML'],
+  ]
+  boundaryOmissions.forEach(([boundary, replacement]) => {
+    assert.throws(() =>
+      validateFirstSessionPage(
+        fixture(FIRST_SESSION_PROMPT.replace(boundary, replacement)),
+        liveTools,
+      )
+    )
+  })
+
+  const parameterized = structuredClone(liveTools)
+  parameterized[0].inputSchema.properties = { limit: { type: 'integer' } }
+  assert.throws(
+    () => validateFirstSessionPage(valid, parameterized),
+    /parameter-free/,
+  )
+
+  const composedParameter = structuredClone(liveTools)
+  composedParameter[0].inputSchema = {
+    type: 'object',
+    $defs: {
+      arguments: {
+        type: 'object',
+        properties: { limit: { type: 'integer' } },
+      },
+    },
+    allOf: [{ $ref: '#/$defs/arguments' }],
+  }
+  assert.throws(
+    () => validateFirstSessionPage(valid, composedParameter),
+    /parameter-free/,
+  )
+})
+
+test('onboarding sources preserve the three-selection journey and version sentinel', () => {
+  const read = (relative) =>
+    readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8')
+  const sources = {
+    homepage: read('site/src/content/docs/index.mdx'),
+    install: read('site/src/content/docs/getting-started/index.mdx'),
+    firstSession: read(
+      'site/src/content/docs/getting-started/first-session.mdx',
+    ),
+    goalChooser: read('site/src/components/GoalChooser.astro'),
+    astroConfig: read('site/astro.config.mjs'),
+    cargoToml: read('Cargo.toml'),
+    builtPaths: new Set(['getting-started/first-session/index.html']),
+  }
+  assert.doesNotThrow(() => validateOnboardingSources(sources))
+
+  const invalid = [
+    { homepage: sources.homepage.replace("link: '/getting-started/'", '') },
+    {
+      install: sources.install.replaceAll(
+        '/getting-started/first-session/',
+        '/getting-started/',
+      ),
+    },
+    {
+      install:
+        `${sources.install}\n\`\`\`text\n${FIRST_SESSION_PROMPT}\n\`\`\``,
+    },
+    { homepage: `${sources.homepage}\nStart here: Library Cleanup` },
+    { homepage: `${sources.homepage}\n/workflows/library-cleanup/` },
+    {
+      goalChooser: sources.goalChooser.replace(
+        'workflow.goals.includes(goal.id)',
+        'workflow.id === goal.id',
+      ),
+    },
+    {
+      astroConfig: sources.astroConfig.replace(
+        "slug: 'getting-started/first-session'",
+        "slug: 'after-workflows'",
+      ),
+    },
+    {
+      astroConfig: sources.astroConfig.replace(
+        "label: 'First 10 minutes'",
+        "label: 'First result'",
+      ),
+    },
+    { homepage: sources.homepage.replace(/v\d+\.\d+\.\d+\s+—/, '') },
+    {
+      homepage: sources.homepage.replace(/v\d+\.\d+\.\d+\s+—/, 'v9.9.9 —'),
+    },
+    { homepage: `${sources.homepage}\nv0.30.0 — duplicate` },
+    { builtPaths: new Set() },
+  ]
+  invalid.forEach((changes) => {
+    assert.throws(() => validateOnboardingSources({ ...sources, ...changes }))
+  })
+})
+
+test('docs gates preserve both manifests in push, pull request, and release inventories', () => {
   const workflow = readFileSync(
     new URL('../.github/workflows/docs-pages.yml', import.meta.url),
     'utf8',
@@ -1723,11 +1972,34 @@ test('docs gates react to Rust dependency manifest changes', () => {
     new URL('./release.sh', import.meta.url),
     'utf8',
   )
-  const inventory = release.match(
-    /docs_contract_changed\(\) \{([\s\S]*?)\n\}/,
-  )?.[1] ?? ''
-  assert.match(inventory, /\bCargo\.toml\b/)
-  assert.match(inventory, /\bCargo\.lock\b/)
+  const inventories = parseDocsGatePathInventories(workflow, release)
+  assert.doesNotThrow(() => validateDocsGatePathInventories(inventories))
+
+  for (const manifest of ['Cargo.toml', 'Cargo.lock']) {
+    for (const inventoryName of ['push', 'pullRequest', 'release']) {
+      const incomplete = structuredClone(inventories)
+      incomplete[inventoryName] = incomplete[inventoryName].filter(
+        (entry) => entry !== manifest,
+      )
+      assert.throws(
+        () => validateDocsGatePathInventories(incomplete),
+        new RegExp(manifest.replace('.', '\\.')),
+      )
+    }
+  }
+
+  const missingExistingCiPath = structuredClone(inventories)
+  missingExistingCiPath.push = missingExistingCiPath.push.filter(
+    (entry) => entry !== 'site/**',
+  )
+  assert.throws(() => validateDocsGatePathInventories(missingExistingCiPath))
+
+  const missingExistingReleasePath = structuredClone(inventories)
+  missingExistingReleasePath.release = missingExistingReleasePath.release
+    .filter((entry) => entry !== 'site')
+  assert.throws(() =>
+    validateDocsGatePathInventories(missingExistingReleasePath)
+  )
 })
 
 test('runtime help keeps 11 pages, 9 menu entries, and 7 recommendations separate', () => {

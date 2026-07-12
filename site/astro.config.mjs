@@ -103,6 +103,10 @@ export default defineConfig({
       ],
       sidebar: [
         { slug: 'getting-started', label: 'Install' },
+        {
+          slug: 'getting-started/first-session',
+          label: 'First 10 minutes',
+        },
         { slug: 'workflows', label: 'Choose a workflow' },
         {
           label: 'Library Cleanup',

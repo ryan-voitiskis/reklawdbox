@@ -36,6 +36,7 @@
  *   summary: string,
  *   audience: string,
  *   kind: WorkflowKind,
+ *   goals: string[],
  *   libraryImpact: LibraryImpact,
  *   sideEffects: {
  *     stagedMetadata: { creates: boolean, flushesExistingOnExport: boolean },
@@ -70,6 +71,55 @@ const WORKFLOW_IDS = [
   'library-health',
   'dj-prompts',
 ]
+
+const GOAL_BLUEPRINTS = [
+  {
+    id: 'inspect-health',
+    title: 'Inspect collection health',
+    summary:
+      'Check collection structure and file health without changing your collection.',
+    workflows: ['library-health'],
+  },
+  {
+    id: 'clean-library',
+    title: 'Clean existing metadata',
+    summary:
+      'Audit files, fill metadata gaps, or follow the complete cleanup sequence.',
+    workflows: ['library-cleanup', 'collection-audit', 'metadata-backfill'],
+  },
+  {
+    id: 'prepare-downloads',
+    title: 'Prepare newly downloaded music',
+    summary:
+      'Tag, add artwork to, rename, and organize a new batch before Rekordbox import.',
+    workflows: ['batch-import'],
+  },
+  {
+    id: 'classify-genres',
+    title: 'Classify or audit genres',
+    summary:
+      'Assign missing genres or compare existing genres with available evidence.',
+    workflows: ['genre-classification', 'genre-audit'],
+  },
+  {
+    id: 'build-for-mixing',
+    title: 'Build for mixing',
+    summary:
+      'Sequence a set, grow a compatible pool, or connect chapters using local evidence.',
+    workflows: ['set-building', 'pool-building', 'chapter-set-planning'],
+  },
+  {
+    id: 'explore-dj-ideas',
+    title: 'Explore DJ ideas',
+    summary:
+      'Use local library context for guided DJ planning or evaluate candidates you supply.',
+    workflows: ['dj-prompts'],
+  },
+]
+
+export const goalDefinitions = GOAL_BLUEPRINTS.map(
+  ({ id, title, summary }) => ({ id, title, summary }),
+)
 
 const DJ_VARIANTS = [
   ['gig-prep', 'Gig Prep'],
@@ -112,6 +162,7 @@ export const workflows = [
     audience:
       'New users and anyone preparing a disorganized library for reliable enrichment and DJ workflows.',
     kind: 'workflow',
+    goals: ['clean-library'],
     libraryImpact: 'mixed',
     sideEffects: {
       stagedMetadata: {
@@ -219,6 +270,7 @@ export const workflows = [
     audience:
       'Users cleaning artist, title, tag-layer, filename, and directory conventions.',
     kind: 'workflow',
+    goals: ['clean-library'],
     libraryImpact: 'direct-audio-files',
     sideEffects: {
       stagedMetadata: {
@@ -308,6 +360,7 @@ export const workflows = [
     audience:
       'Users preparing missing metadata for stronger search and genre-classification evidence.',
     kind: 'workflow',
+    goals: ['clean-library'],
     libraryImpact: 'staged-metadata',
     sideEffects: {
       stagedMetadata: {
@@ -386,6 +439,7 @@ export const workflows = [
     audience:
       'Users assigning consistent DJ-oriented genres to ungenred or noncanonical tracks.',
     kind: 'workflow',
+    goals: ['classify-genres'],
     libraryImpact: 'staged-metadata',
     sideEffects: {
       stagedMetadata: {
@@ -469,6 +523,7 @@ export const workflows = [
     audience:
       'Users verifying existing genre tags after classification, imports, or taxonomy changes.',
     kind: 'workflow',
+    goals: ['classify-genres'],
     libraryImpact: 'staged-metadata',
     sideEffects: {
       stagedMetadata: {
@@ -551,6 +606,7 @@ export const workflows = [
     audience:
       'DJs planning a fixed sequence with a chosen duration, energy arc, and transition priorities.',
     kind: 'workflow',
+    goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
     sideEffects: {
       stagedMetadata: {
@@ -628,6 +684,7 @@ export const workflows = [
     audience:
       'DJs building flexible crates whose tracks should mix well in any order.',
     kind: 'workflow',
+    goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
     sideEffects: {
       stagedMetadata: {
@@ -711,6 +768,7 @@ export const workflows = [
     audience:
       'DJs planning a longer performance from multiple approved pools or chapters.',
     kind: 'workflow',
+    goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
     sideEffects: {
       stagedMetadata: {
@@ -795,6 +853,7 @@ export const workflows = [
     audience:
       'Users preparing downloads, albums, loose tracks, or ZIP archives for a consistent library layout.',
     kind: 'workflow',
+    goals: ['prepare-downloads'],
     libraryImpact: 'direct-library-files',
     sideEffects: {
       stagedMetadata: {
@@ -900,6 +959,7 @@ export const workflows = [
     audience:
       'Users exploring a library safely or checking structure before and after larger changes.',
     kind: 'workflow',
+    goals: ['inspect-health'],
     libraryImpact: 'read-only',
     sideEffects: {
       stagedMetadata: {
@@ -969,6 +1029,7 @@ export const workflows = [
     audience:
       'DJs who want a guided conversation rather than one fixed operational workflow.',
     kind: 'catalog',
+    goals: ['explore-dj-ideas'],
     libraryImpact: 'read-only',
     sideEffects: {
       stagedMetadata: {
@@ -1285,11 +1346,42 @@ function validateVariant(variant, expected, path) {
   nonEmptyString(variant.output, `${path}.output`)
 }
 
+function validateGoalDefinitions(definitions) {
+  if (
+    !Array.isArray(definitions) || definitions.length !== GOAL_BLUEPRINTS.length
+  ) {
+    fail(
+      `goal definitions must contain exactly ${GOAL_BLUEPRINTS.length} records`,
+    )
+  }
+
+  definitions.forEach((definition, index) => {
+    const path = `goalDefinitions[${index}]`
+    if (
+      !definition || typeof definition !== 'object' || Array.isArray(definition)
+    ) {
+      fail(`${path} must be an object`)
+    }
+    const fields = Object.keys(definition).sort()
+    if (JSON.stringify(fields) !== JSON.stringify(['id', 'summary', 'title'])) {
+      fail(`${path} must contain exactly id, title, summary`)
+    }
+    const expected = GOAL_BLUEPRINTS[index]
+    if (definition.id !== expected.id || definition.title !== expected.title) {
+      fail(`${path} must be ${expected.id} — ${expected.title}`)
+    }
+    nonEmptyString(definition.summary, `${path}.summary`)
+  })
+}
+
 /**
  * Validate a workflow array without reading source files or adding dependencies.
  * @param {Workflow[]} items
+ * @param {{ id: string, title: string, summary: string }[]} [definitions]
  */
-export function validateWorkflows(items) {
+export function validateWorkflows(items, definitions = goalDefinitions) {
+  validateGoalDefinitions(definitions)
+
   if (!Array.isArray(items) || items.length !== WORKFLOW_IDS.length) {
     fail(`expected exactly ${WORKFLOW_IDS.length} records`)
   }
@@ -1308,6 +1400,7 @@ export function validateWorkflows(items) {
     'summary',
     'audience',
     'kind',
+    'goals',
     'libraryImpact',
     'sideEffects',
     'network',
@@ -1341,6 +1434,7 @@ export function validateWorkflows(items) {
     nonEmptyString(item.duration, `${path}.duration`)
     nonEmptyString(item.resumability, `${path}.resumability`)
     nonEmptyString(item.output, `${path}.output`)
+    stringArray(item.goals, `${path}.goals`)
     stringArray(item.prerequisites, `${path}.prerequisites`)
     stringArray(item.approval, `${path}.approval`)
     stringArray(item.recovery, `${path}.recovery`)
@@ -1355,6 +1449,20 @@ export function validateWorkflows(items) {
       )
     }
     if (!KINDS.has(item.kind)) fail(`${path}.kind is unknown`)
+    const expectedGoal = GOAL_BLUEPRINTS.find((goal) =>
+      goal.workflows.includes(item.id)
+    )
+    if (
+      !expectedGoal
+      || item.goals.length !== 1
+      || item.goals[0] !== expectedGoal.id
+    ) {
+      fail(
+        `${path}.goals must be exactly ${
+          expectedGoal?.id ?? 'one canonical goal'
+        }`,
+      )
+    }
     if (!LIBRARY_IMPACTS.has(item.libraryImpact)) {
       fail(`${path}.libraryImpact is unknown`)
     }
@@ -1526,6 +1634,23 @@ export function validateWorkflows(items) {
     fail(
       'runtime help must contain exactly seven contiguous recommended positions',
     )
+  }
+
+  const covered = new Set()
+  GOAL_BLUEPRINTS.forEach((goal) => {
+    const members = items
+      .filter((item) => item.goals.includes(goal.id))
+      .map((item) => item.id)
+    if (JSON.stringify(members) !== JSON.stringify(goal.workflows)) {
+      fail(`${goal.id} membership/order must be ${goal.workflows.join(', ')}`)
+    }
+    members.forEach((id) => {
+      if (covered.has(id)) fail(`${id} is assigned to more than one goal`)
+      covered.add(id)
+    })
+  })
+  if (covered.size !== WORKFLOW_IDS.length) {
+    fail('goal groups must cover all eleven workflows exactly once')
   }
 
   return items

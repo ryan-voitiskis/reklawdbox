@@ -1,0 +1,247 @@
+---
+import { goalDefinitions, workflows } from '../data/workflows.mjs'
+
+const impactLabels = {
+  'read-only': 'Collection read-only',
+  'staged-metadata': 'Stages Rekordbox metadata',
+  'direct-audio-files': 'Writes audio-file tags or names',
+  'direct-library-files': 'Writes and organizes library files',
+  mixed: 'Writes audio files and stages Rekordbox metadata',
+}
+
+const effectLabels = {
+  'audio-tags': 'audio tags',
+  'embedded-artwork': 'embedded artwork',
+  'extracted-artwork': 'extracted artwork',
+  'downloaded-artwork': 'downloaded artwork',
+  'move-rename': 'file or directory moves/renames',
+  'archive-extraction': 'archive extraction',
+  'archive-move': 'archive moves',
+  'directory-create-remove': 'directory creation/removal',
+  'enrichment-cache': 'enrichment cache',
+  'audio-cache': 'audio-analysis cache',
+  'audit-state': 'audit state',
+  preset: 'saved scoring preset',
+  'timbral-normalization': 'timbral normalization statistics',
+  'provider-session': 'provider session',
+  backup: 'Rekordbox database backup',
+  'metadata-xml': 'metadata XML',
+  'playlist-xml': 'playlist XML',
+  'artwork-file': 'artwork file',
+  'organized-library-files': 'organized library files',
+}
+
+const modeLabels = {
+  always: 'always',
+  conditional: 'when needed',
+  optional: 'optional',
+  'on-export': 'on export',
+}
+
+const describeEffects = (effects) =>
+  effects.length === 0
+    ? 'None'
+    : effects
+      .map((effect) =>
+        `${effectLabels[effect.kind] ?? effect.kind} (${modeLabels[effect.mode]})`
+      )
+      .join('; ')
+
+const groups = goalDefinitions.map((goal) => ({
+  ...goal,
+  workflows: workflows.filter((workflow) => workflow.goals.includes(goal.id)),
+}))
+
+if (groups.some((goal) => goal.workflows.length === 0)) {
+  throw new Error('Every onboarding goal must resolve at least one workflow')
+}
+---
+
+<div class="goal-chooser">
+  {groups.map((goal, goalIndex) => (
+    <section class="goal-group" aria-labelledby={`goal-${goal.id}`}>
+      <header class="goal-header">
+        <p class="goal-number">Goal {goalIndex + 1}</p>
+        <h2 id={`goal-${goal.id}`}>{goal.title}</h2>
+        <p>{goal.summary}</p>
+      </header>
+
+      <ul class="workflow-grid">
+        {goal.workflows.map((workflow) => (
+          <li>
+            <article class="workflow-choice">
+              <div>
+                <p class="workflow-kind">
+                  {workflow.kind === 'catalog' ? 'Prompt collection' : 'Workflow'}
+                </p>
+                <h3>{workflow.title}</h3>
+                <p>{workflow.summary}</p>
+              </div>
+
+              <dl>
+                <div>
+                  <dt>Collection</dt>
+                  <dd>{impactLabels[workflow.libraryImpact]}</dd>
+                </div>
+                <div>
+                  <dt>Direct user files</dt>
+                  <dd>{describeEffects(workflow.sideEffects.directUserFiles)}</dd>
+                </div>
+                <div>
+                  <dt>Local state</dt>
+                  <dd>{describeEffects(workflow.sideEffects.localStateWrites)}</dd>
+                </div>
+                <div>
+                  <dt>Files created</dt>
+                  <dd>{describeEffects(workflow.sideEffects.outputs)}</dd>
+                </div>
+                <div>
+                  <dt>Before you start</dt>
+                  <dd>
+                    {workflow.prerequisites[0]}
+                    {workflow.prerequisites.length > 1 && (
+                      <span class="more-prerequisites">
+                        {' '}+ {workflow.prerequisites.length - 1} more on the workflow page
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+
+              <a class="workflow-link" href={workflow.route}>
+                Open {workflow.title} <span aria-hidden="true">→</span>
+              </a>
+            </article>
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))}
+
+  <nav class="reference-links" aria-label="More ways to explore">
+    <a href="/workflows/">Browse all workflows <span aria-hidden="true">→</span></a>
+    <a href="/reference/">Reference overview <span aria-hidden="true">→</span></a>
+  </nav>
+</div>
+
+<style>
+  .goal-chooser {
+    display: grid;
+    gap: 2.5rem;
+    margin-block: 2rem;
+  }
+
+  .goal-group {
+    min-width: 0;
+    scroll-margin-top: 5rem;
+  }
+
+  .goal-header {
+    margin-bottom: 1rem;
+  }
+
+  .goal-header h2,
+  .goal-header p {
+    margin-block: 0.25rem;
+  }
+
+  .goal-number,
+  .workflow-kind {
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+    gap: 1rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .workflow-grid > li {
+    min-width: 0;
+  }
+
+  .workflow-choice {
+    display: flex;
+    height: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: 1rem;
+    padding: clamp(1rem, 3vw, 1.25rem);
+    overflow-wrap: anywhere;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-black);
+  }
+
+  .workflow-choice h3,
+  .workflow-choice p,
+  .workflow-choice dl,
+  .workflow-choice dd {
+    margin: 0;
+  }
+
+  .workflow-choice h3 {
+    margin-block: 0.2rem 0.5rem;
+  }
+
+  .workflow-choice dl {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .workflow-choice dl > div {
+    display: grid;
+    gap: 0.15rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+
+  .workflow-choice dt {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .workflow-choice dd {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+  }
+
+  .more-prerequisites {
+    color: var(--sl-color-gray-3);
+  }
+
+  .workflow-link {
+    align-self: flex-start;
+    margin-top: auto;
+    font-weight: 700;
+  }
+
+  .workflow-link:focus-visible,
+  .reference-links a:focus-visible {
+    outline: 3px solid var(--sl-color-accent-high);
+    outline-offset: 4px;
+    border-radius: 0.2rem;
+  }
+
+  .reference-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+
+  .reference-links a {
+    font-weight: 700;
+  }
+</style>

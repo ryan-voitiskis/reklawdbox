@@ -1,22 +1,25 @@
 ---
 title: Install
-description: Install reklawdbox and get it connected to your AI agent.
+description: Install reklawdbox and connect it to a supported MCP host.
 sidebar:
   order: 0
 ---
 
-import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/components';
 
 ## Prerequisites
 
 - **macOS on Apple Silicon** — M1 or later
 - **Rekordbox 7.x** installed with at least one collection imported
-- **AI agent** — one of:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (recommended)
-  - Claude Desktop and Codex — hopefully soon
+- **Python 3.9 or newer** for the automatic setup path
+- **An MCP host:**
+  - Claude Code — configured automatically at the `~/Music` scope;
+  - Claude Desktop — configured automatically when its installation is detected;
+  - Codex — supported through the manual configuration below.
 
 <Aside type="tip">
-  Use the latest models. I've only tested it with Claude Opus 4.6 — older or smaller models may struggle with multi-step workflows.
+  Use a capable current model for multi-step workflows. The first session is a
+  much smaller connection check.
 </Aside>
 
 ## Install
@@ -40,21 +43,45 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
   </TabItem>
 </Tabs>
 
-## Setup
+## Automatic setup
 
-```bash
-reklawdbox setup
-```
+<Tabs>
+  <TabItem label="Homebrew">
+    ```bash
+    reklawdbox setup
+    ```
+  </TabItem>
+  <TabItem label="Built from source">
+    Run the binary you just built rather than assuming it is on your `PATH`:
 
-This installs audio analysis tools (Essentia) and configures both Claude Code and Claude Desktop so the agent can use reklawdbox.
+    ```bash
+    ./target/release/reklawdbox setup
+    ```
+  </TabItem>
+</Tabs>
 
-<Aside type="note">
-  Essentia needs Python 3.9+. If you don't have Python, grab it from [python.org](https://www.python.org/downloads/) or `brew install python`.
+The setup command first installs and validates the optional Essentia audio
+analysis environment. It then writes Claude Code configuration to
+`~/Music/.mcp.json` and configures Claude Desktop when that app is detected.
+
+<Aside type="note" title="Want to skip Essentia?">
+  Essentia is not used by the first session. If Python, virtual-environment, or
+  Essentia installation is unavailable—or you simply do not want it—skip the
+  automatic setup command and use [Manual configuration](#manual-configuration)
+  with the absolute path to the installed or source-built binary.
 </Aside>
 
-## Start a conversation
+## Reconnect your host
 
-For Claude Code, start it from your Music directory:
+Configuration changes are picked up differently by each host:
+
+- **Claude Code:** start it inside `~/Music`, then run `/mcp` or start a new
+  conversation.
+- **Claude Desktop:** quit and reopen the app, then start a new conversation.
+- **Codex:** after adding the server manually, start a new task.
+
+For Claude Code, this starts the host in the same directory where automatic
+setup placed `.mcp.json`:
 
 ```bash
 cd ~/Music && claude
@@ -66,45 +93,46 @@ access. Grant only the reklawdbox tools and music-library paths that workflow
 needs. If your host supports scoped or remembered approvals, use those instead
 of disabling permission checks globally.
 
-The Rekordbox database is technically read-only, but that does not make every
+The Rekordbox database is opened read-only, but that does not make every
 operation read-only: tag and artwork tools can change audio files, while setup,
 caches, backups, and XML exports write other local files. Workflow approval
 checkpoints are procedural and do not replace host permissions. Read
 [Safety & Trust](/concepts/safety/) before authorizing bulk file operations.
 
-The setup command placed a config file in `~/Music` so the tools load automatically there. In other directories, the tools stay out of the way.
+## Verify the connection
 
-For Claude Desktop, the tools load globally — just open a new conversation.
+Once the host has reconnected, continue to the dedicated first session. It uses
+one local, read-only library call and explains the expected result and its
+boundaries; there is no duplicate prompt to choose between here.
 
-## Verify it works
+<LinkCard title="First 10 minutes" href="/getting-started/first-session/" description="Confirm the connection with one bounded, read-only result." />
 
-Paste this into your agent:
-
-```text
-Show me a summary of my Rekordbox library.
-```
-
-You should see your track count, playlist count, and genre distribution. If something's wrong, check [Troubleshooting](/troubleshooting/).
+If tools are missing or the library cannot be opened, check
+[Troubleshooting](/troubleshooting/) before continuing.
 
 ## Discogs authorization
 
-Discogs provides labels, catalog numbers, and release metadata that power genre classification. It's preconfigured — no setup needed.
+Discogs provides labels, catalog numbers, and release metadata for later
+enrichment and genre workflows. It is not used by the first session.
 
 <Steps>
 
-1. Ask the agent to look up any track on Discogs. On first use, you'll get an authorization URL — open it in your browser.
+1. Ask the agent to look up a track on Discogs only when a later workflow needs
+   it. On first use, you will receive an authorization URL to open in your
+   browser.
 
-2. After authorizing, it works automatically from then on.
+2. After authorizing, future Discogs calls use that session automatically.
 
 </Steps>
 
 ## Manual configuration
 
-If `reklawdbox setup` didn't configure things correctly, or you want to add reklawdbox to other directories, you can set it up manually.
+Use this path when automatic setup does not support your host, when you want a
+different scope, or when you want to connect without installing Essentia.
 
 <Tabs>
   <TabItem label="Claude Code">
-    Create a `.mcp.json` in the directory you want the tools available:
+    Create a `.mcp.json` in the directory where you want the tools available:
 
     ```json
     {
@@ -116,10 +144,12 @@ If `reklawdbox setup` didn't configure things correctly, or you want to add rekl
     }
     ```
 
-    If you built from source, use the full path to your binary instead.
+    If you built from source, replace the command with the absolute path to
+    `target/release/reklawdbox` in your checkout.
   </TabItem>
   <TabItem label="Claude Desktop">
-    Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+    Add the server to
+    `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
     ```json
     {
@@ -130,16 +160,20 @@ If `reklawdbox setup` didn't configure things correctly, or you want to add rekl
       }
     }
     ```
+
+    If you built from source, use the absolute path to the source-built binary.
   </TabItem>
   <TabItem label="Codex">
+    Homebrew install:
+
     ```bash
     codex mcp add reklawdbox -- /opt/homebrew/bin/reklawdbox
     ```
+
+    If you built from source, replace the final argument with the absolute path
+    to `target/release/reklawdbox` in your checkout.
   </TabItem>
 </Tabs>
 
-After changing config, reload your agent. In Claude Code, run `/mcp` or start a new conversation. In Claude Desktop, quit and reopen the app.
-
-## Next steps
-
-Start with [Library Cleanup](/workflows/library-cleanup/) — five sessions that clean your metadata, enrich your tracks, and classify genres. It's the foundation for everything else.
+After changing configuration, follow the host-specific reconnect steps above,
+then continue to [First 10 minutes](/getting-started/first-session/).

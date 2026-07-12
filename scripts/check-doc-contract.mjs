@@ -2143,6 +2143,386 @@ export function validateRuntimeHelpUrls(payloads, builtPaths) {
   if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
 }
 
+export const FIRST_SESSION_PROMPT =
+  `Use only reklawdbox's read_library tool. Show me:
+- my total track and playlist counts
+- my top genres
+- my average BPM and key distribution
+
+Do not call external services, analyze audio, use or populate enrichment/audio
+caches, write files, stage changes, or export XML.`
+
+const FIRST_SESSION_BOUNDARIES = [
+  ['external services', /external services/],
+  ['audio analysis', /analyze audio/],
+  ['enrichment/audio caches', /use or populate enrichment\/audio\s+caches/],
+  ['file writes', /write files/],
+  ['staged changes', /stage changes/],
+  ['XML export', /export XML/],
+]
+
+function fencedBlocks(source) {
+  return [...source.matchAll(/^(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm)]
+    .map((match) => ({
+      body: match[3],
+      full: match[0],
+      index: match.index,
+      info: match[2].trim(),
+    }))
+}
+
+/**
+ * Validate the source-only shape of the bounded first-session prompt against
+ * the live MCP tool inventory.
+ * @param {{ file: string, content: string }} document
+ * @param {object[]} liveTools
+ */
+export function validateFirstSessionPage(document, liveTools) {
+  const source = document.content.replaceAll('\r\n', '\n')
+  const openingLines = [...source.matchAll(
+    /^(?:<!-- doc-contract:first-session-prompt tool=read_library -->|\{\/\* <!-- doc-contract:first-session-prompt tool=read_library --> \*\/\})$/gm,
+  )]
+  const closingLines = [...source.matchAll(
+    /^(?:<!-- \/doc-contract:first-session-prompt -->|\{\/\* <!-- \/doc-contract:first-session-prompt --> \*\/\})$/gm,
+  )]
+  const markerTokens = source.match(/\/?doc-contract:first-session-prompt/g)
+    ?? []
+  if (
+    openingLines.length !== 1
+    || closingLines.length !== 1
+    || markerTokens.length !== 2
+  ) {
+    throw new Error(
+      `${document.file}: first-session prompt needs exactly one well-formed marker pair`,
+    )
+  }
+
+  const openingIndex = openingLines[0].index
+  const bodyStart = openingIndex + openingLines[0][0].length
+  const closingIndex = closingLines[0].index
+  if (openingIndex < 0 || closingIndex < bodyStart) {
+    throw new Error(
+      `${document.file}: first-session prompt markers are unmatched`,
+    )
+  }
+
+  const fences = fencedBlocks(source)
+  if (fences.length !== 1) {
+    throw new Error(
+      `${document.file}: first-session page must contain exactly one runnable fence; found ${fences.length}`,
+    )
+  }
+  const [fence] = fences
+  const fenceEnd = fence.index + fence.full.length
+  if (fence.index < bodyStart || fenceEnd > closingIndex) {
+    throw new Error(
+      `${document.file}: the sole runnable fence must be inside the first-session marker`,
+    )
+  }
+  if (fence.info !== 'text') {
+    throw new Error(`${document.file}: first-session prompt fence must be text`)
+  }
+  const markerBody = source.slice(bodyStart, closingIndex)
+  const relativeFence = fence.index - bodyStart
+  if (
+    `${markerBody.slice(0, relativeFence)}${
+      markerBody.slice(relativeFence + fence.full.length)
+    }`.trim() !== ''
+  ) {
+    throw new Error(
+      `${document.file}: first-session marker may contain only its text fence`,
+    )
+  }
+
+  const prompt = fence.body.replace(/\n$/, '')
+  for (const [label, pattern] of FIRST_SESSION_BOUNDARIES) {
+    if (!pattern.test(prompt)) {
+      throw new Error(
+        `${document.file}: first-session prompt is missing the ${label} boundary`,
+      )
+    }
+  }
+  if (prompt !== FIRST_SESSION_PROMPT) {
+    throw new Error(
+      `${document.file}: first-session prompt must match the canonical text exactly`,
+    )
+  }
+
+  const readLibrary = liveTools.find((tool) => tool.name === 'read_library')
+  if (!readLibrary) {
+    throw new Error(`${document.file}: live tools do not include read_library`)
+  }
+  let inputSurface
+  try {
+    inputSurface = schemaProperties(readLibrary.inputSchema ?? {}, '/')
+  } catch (error) {
+    throw new Error(
+      `${document.file}: read_library input schema composition is unsupported: ${error.message}`,
+    )
+  }
+  if (
+    Object.keys(inputSurface.properties).length !== 0
+    || inputSurface.required.size !== 0
+  ) {
+    throw new Error(`${document.file}: read_library must remain parameter-free`)
+  }
+  for (const tool of liveTools) {
+    if (tool.name === 'read_library') continue
+    const toolPattern = new RegExp(
+      `(^|[^a-zA-Z0-9_])${tool.name.replaceAll('_', '\\_')}(?=$|[^a-zA-Z0-9_])`,
+    )
+    if (toolPattern.test(prompt)) {
+      throw new Error(
+        `${document.file}: first-session prompt names a second live tool: ${tool.name}`,
+      )
+    }
+  }
+}
+
+function sourceAssertion(condition, label) {
+  if (!condition) throw new Error(`onboarding source contract: ${label}`)
+}
+
+/** Validate source-level onboarding navigation and composition. */
+export function validateOnboardingSources({
+  homepage,
+  install,
+  firstSession,
+  goalChooser,
+  astroConfig,
+  cargoToml,
+  builtPaths,
+}) {
+  sourceAssertion(
+    homepage.includes("link: '/getting-started/'"),
+    'homepage primary action must link to Install',
+  )
+  sourceAssertion(
+    homepage.includes('/getting-started/first-session/'),
+    'homepage must link to First 10 minutes',
+  )
+  sourceAssertion(
+    install.includes('/getting-started/first-session/'),
+    'Install must link forward to First 10 minutes',
+  )
+  sourceAssertion(
+    firstSession.includes('<GoalChooser />'),
+    'First 10 minutes must render GoalChooser',
+  )
+  sourceAssertion(
+    homepage.includes('/workflows/'),
+    'homepage must keep a compact all-workflows link',
+  )
+  sourceAssertion(
+    !/Start here: Library Cleanup|recommended starting point for every new user/
+      .test(
+        `${homepage}\n${install}`,
+      ),
+    'universal Library Cleanup onboarding language must be absent',
+  )
+  sourceAssertion(
+    !/\/workflows\/[a-z0-9-]+\//.test(homepage),
+    'homepage must not link directly to an individual workflow',
+  )
+  sourceAssertion(
+    !homepage.includes('GoalChooser'),
+    'homepage must not render GoalChooser',
+  )
+  sourceAssertion(
+    !install.includes(FIRST_SESSION_PROMPT)
+      && !fencedBlocks(install).some((fence) =>
+        /(^|[^a-zA-Z0-9_])read_library(?=$|[^a-zA-Z0-9_])/.test(fence.body)
+      ),
+    'Install must not duplicate the first-session prompt',
+  )
+
+  const chooserRequirements = [
+    ['goal definitions', /goalDefinitions/],
+    ['workflow records', /workflows/],
+    ['canonical goal membership', /workflow\.goals\.includes\(goal\.id\)/],
+    ['collection impact', /libraryImpact/],
+    ['direct user files', /directUserFiles/],
+    ['local state', /localStateWrites/],
+    ['outputs', /outputs/],
+    ['prerequisites', /prerequisites/],
+    ['all workflows link', /href="\/workflows\/"/],
+    ['reference overview link', /href="\/reference\/"/],
+  ]
+  chooserRequirements.forEach(([label, pattern]) => {
+    sourceAssertion(
+      pattern.test(goalChooser),
+      `GoalChooser is missing ${label}`,
+    )
+  })
+  sourceAssertion(
+    !/client:(?:load|only)/.test(goalChooser),
+    'GoalChooser must render without client hydration',
+  )
+
+  const sidebarEntries = [
+    /\{\s*slug:\s*'getting-started',\s*label:\s*'Install',?\s*\}/,
+    /\{\s*slug:\s*'getting-started\/first-session',\s*label:\s*'First 10 minutes',?\s*\}/,
+    /\{\s*slug:\s*'workflows',\s*label:\s*'Choose a workflow',?\s*\}/,
+  ].map((pattern) => astroConfig.search(pattern))
+  sourceAssertion(
+    sidebarEntries.every((index) => index >= 0)
+      && sidebarEntries[0] < sidebarEntries[1]
+      && sidebarEntries[1] < sidebarEntries[2],
+    'sidebar order must be Install, First 10 minutes, Choose a workflow',
+  )
+
+  const crateVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+  sourceAssertion(
+    Boolean(crateVersion),
+    'Cargo.toml package version is missing',
+  )
+  const sentinels = [...homepage.matchAll(/v(\d+\.\d+\.\d+)\s+—/g)]
+  sourceAssertion(
+    sentinels.length === 1,
+    'homepage must contain exactly one version sentinel',
+  )
+  sourceAssertion(
+    sentinels[0]?.[1] === crateVersion,
+    `homepage version sentinel must match Cargo.toml ${crateVersion}`,
+  )
+  if (builtPaths) {
+    sourceAssertion(
+      builtPaths.has('getting-started/first-session/index.html'),
+      'built First 10 minutes route is missing',
+    )
+  }
+}
+
+const REQUIRED_CI_DOC_PATHS = [
+  'site/**',
+  'src/tools/**',
+  'src/types.rs',
+  'src/tags.rs',
+  'src/cli/**',
+  'src/main.rs',
+  'Cargo.toml',
+  'Cargo.lock',
+  'scripts/mcp-smoke.mjs',
+  'scripts/lib/mcp-stdio.mjs',
+  'scripts/check-doc-contract.mjs',
+  'scripts/check-doc-contract.test.mjs',
+  'scripts/release.sh',
+  'docs/workflows/doc-drift/**',
+  'README.md',
+  '.github/workflows/docs-pages.yml',
+]
+
+const REQUIRED_RELEASE_DOC_PATHS = [
+  'site',
+  'src/tools',
+  'src/types.rs',
+  'src/tags.rs',
+  'src/cli',
+  'src/main.rs',
+  'Cargo.toml',
+  'Cargo.lock',
+  'scripts/mcp-smoke.mjs',
+  'scripts/lib/mcp-stdio.mjs',
+  'scripts/check-doc-contract.mjs',
+  'scripts/check-doc-contract.test.mjs',
+  'scripts/release.sh',
+  '.github/workflows/docs-pages.yml',
+  'docs/workflows/doc-drift',
+  'site/src/content/docs/mcp-tools',
+  'site/src/content/docs/cli',
+  'site/src/partials/sops',
+  'site/src/data/workflows.mjs',
+  'site/src/data/tool-reference.mjs',
+  'site/astro.config.mjs',
+  'README.md',
+]
+
+function unquotePath(value) {
+  const trimmed = value.trim().replace(/\\\s*$/, '').trim()
+  if (
+    trimmed.length >= 2
+    && trimmed[0] === trimmed.at(-1)
+    && ['"', "'"].includes(trimmed[0])
+  ) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function parseWorkflowEventPaths(source, event) {
+  const lines = source.replaceAll('\r\n', '\n').split('\n')
+  const eventIndex = lines.findIndex((line) => line === `  ${event}:`)
+  if (eventIndex < 0) throw new Error(`docs workflow is missing on.${event}`)
+  let pathsIndex = -1
+  for (let index = eventIndex + 1; index < lines.length; index += 1) {
+    if (/^  \S/.test(lines[index])) break
+    if (lines[index] === '    paths:') {
+      pathsIndex = index
+      break
+    }
+  }
+  if (pathsIndex < 0) {
+    throw new Error(`docs workflow is missing on.${event}.paths`)
+  }
+  const paths = []
+  for (let index = pathsIndex + 1; index < lines.length; index += 1) {
+    const match = lines[index].match(/^      -\s+(.+)$/)
+    if (!match) break
+    paths.push(unquotePath(match[1]))
+  }
+  return paths
+}
+
+function parseReleaseDocsContractPaths(source) {
+  const start = source.indexOf('docs_contract_changed() {')
+  if (start < 0) {
+    throw new Error('release script is missing docs_contract_changed()')
+  }
+  const end = source.indexOf('\n}', start)
+  if (end < 0) throw new Error('release docs_contract_changed() is unmatched')
+  const lines = source.slice(start, end).split('\n')
+  const command = lines.findIndex((line) =>
+    line.trim() === 'changed_since_base \\'
+  )
+  if (command < 0) {
+    throw new Error('docs_contract_changed() must call changed_since_base')
+  }
+  return lines
+    .slice(command + 1)
+    .map(unquotePath)
+    .filter(Boolean)
+}
+
+/** Parse the three docs-gate path inventories without reading the filesystem. */
+export function parseDocsGatePathInventories(workflowSource, releaseSource) {
+  return {
+    push: parseWorkflowEventPaths(workflowSource, 'push'),
+    pullRequest: parseWorkflowEventPaths(workflowSource, 'pull_request'),
+    release: parseReleaseDocsContractPaths(releaseSource),
+  }
+}
+
+/** Require both manifest triggers and every pre-existing docs-contract path. */
+export function validateDocsGatePathInventories(inventories) {
+  const expectations = [
+    ['push', inventories.push, REQUIRED_CI_DOC_PATHS],
+    ['pull_request', inventories.pullRequest, REQUIRED_CI_DOC_PATHS],
+    ['release', inventories.release, REQUIRED_RELEASE_DOC_PATHS],
+  ]
+  for (const [label, actual, required] of expectations) {
+    const missing = required.filter((requiredPath) =>
+      !actual.includes(requiredPath)
+    )
+    if (missing.length) {
+      throw new Error(
+        `docs ${label} trigger is missing required paths: ${
+          missing.join(', ')
+        }`,
+      )
+    }
+  }
+}
+
 export async function readDocuments(root, relativeFiles) {
   return Promise.all(
     relativeFiles.map(async (file) => ({
@@ -2256,6 +2636,7 @@ async function main() {
     pathToFileURL(path.join(root, 'site/src/data/tool-reference.mjs'))
   )
   const {
+    goalDefinitions,
     workflows,
     validateWorkflows,
     XML_BACKUP_SUCCESS_CONDITION,
@@ -2264,13 +2645,41 @@ async function main() {
   )
   check(() => {
     try {
-      validateWorkflows(workflows)
+      validateWorkflows(workflows, goalDefinitions)
     } catch (error) {
       throw new Error(`site/src/data/workflows.mjs:1: ${error.message}`)
     }
   })
   check(() =>
     validateXmlBackupContracts(workflows, XML_BACKUP_SUCCESS_CONDITION)
+  )
+
+  const [
+    homepageDocument,
+    installDocument,
+    firstSessionDocument,
+    goalChooserDocument,
+    astroConfigDocument,
+  ] = await readDocuments(root, [
+    'site/src/content/docs/index.mdx',
+    'site/src/content/docs/getting-started/index.mdx',
+    'site/src/content/docs/getting-started/first-session.mdx',
+    'site/src/components/GoalChooser.astro',
+    'site/astro.config.mjs',
+  ])
+  const cargoToml = await fs.readFile(path.join(root, 'Cargo.toml'), 'utf8')
+  const docsWorkflow = await fs.readFile(
+    path.join(root, '.github/workflows/docs-pages.yml'),
+    'utf8',
+  )
+  const releaseScript = await fs.readFile(
+    path.join(root, 'scripts/release.sh'),
+    'utf8',
+  )
+  check(() =>
+    validateDocsGatePathInventories(
+      parseDocsGatePathInventories(docsWorkflow, releaseScript),
+    )
   )
 
   const helpTopics = runtimeHelpTopics(workflows)
@@ -2281,6 +2690,7 @@ async function main() {
   )
   const liveTools = toolList.tools ?? []
   check(() => compareToolMappings(liveTools, toolReferences))
+  check(() => validateFirstSessionPage(firstSessionDocument, liveTools))
 
   const mcpFiles = (await listFiles(
     path.join(root, 'site/src/content/docs/mcp-tools'),
@@ -2335,6 +2745,17 @@ async function main() {
   const distRoot = path.resolve(root, options.dist)
   const distFiles = await listFiles(distRoot)
   const builtPaths = new Set(distFiles)
+  check(() =>
+    validateOnboardingSources({
+      homepage: homepageDocument.content,
+      install: installDocument.content,
+      firstSession: firstSessionDocument.content,
+      goalChooser: goalChooserDocument.content,
+      astroConfig: astroConfigDocument.content,
+      cargoToml,
+      builtPaths,
+    })
+  )
   for (const workflow of workflows) {
     const route = workflow.route.replace(/^\//, '')
     if (!builtPaths.has(path.join(route, 'index.html'))) {

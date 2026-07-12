@@ -1,0 +1,86 @@
+---
+title: First 10 minutes
+description: Confirm that reklawdbox can read your library with one bounded, read-only first result.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import GoalChooser from '../../../components/GoalChooser.astro';
+
+## Before you start
+
+This page covers the first ten minutes **after installation and connection**.
+Package installation, source compilation, host restart, and troubleshooting are
+not part of that time estimate.
+
+Before continuing, make sure:
+
+- [installation and host configuration are complete](/getting-started/);
+- you reconnected the host after changing its MCP configuration; and
+- Rekordbox 7.x has a library available on this Mac.
+
+Automatic `reklawdbox setup` attempts to install Essentia before it configures a
+host. Manual host configuration can instead connect directly to the Homebrew or
+source-built binary without Essentia. This first result does not use Essentia.
+
+## Copy this first prompt
+
+Paste this into the newly connected host as one message:
+
+{/* <!-- doc-contract:first-session-prompt tool=read_library --> */}
+
+```text
+Use only reklawdbox's read_library tool. Show me:
+- my total track and playlist counts
+- my top genres
+- my average BPM and key distribution
+
+Do not call external services, analyze audio, use or populate enrichment/audio
+caches, write files, stage changes, or export XML.
+```
+
+{/* <!-- /doc-contract:first-session-prompt --> */}
+
+## What you should see
+
+The result should describe the library the host connected to, including:
+
+- total track and playlist counts;
+- a genre distribution, from which the host can show the most common genres;
+- the average BPM; and
+- a key distribution.
+
+The underlying result also includes rated and unrated track counts and detected
+content roots. A zero-track result is not a success to wave through: it usually
+means Rekordbox has no imported collection at the detected location, or the host
+is connected to the wrong database path.
+
+## What just happened
+
+`read_library` made one read through reklawdbox's enforced read-only Rekordbox
+database path. It did not make an external request, analyze audio, require or
+populate enrichment/audio caches, write a file, stage a metadata change, or
+create an XML export.
+
+<Aside type="note" title="A deliberately small proof">
+  This confirms that the host, server, and Rekordbox library can talk to one
+  another. It is not a full collection-health scan.
+</Aside>
+
+## If it did not work
+
+- **No reklawdbox tools appear:** follow the
+  [host connection checks](/troubleshooting/#mcp-host-connection).
+- **The host needs a different configuration:** return to
+  [Manual configuration](/getting-started/#manual-configuration), then reconnect.
+- **The tool cannot find or open Rekordbox:** use the
+  [database connection guide](/troubleshooting/#database-connection).
+
+## Choose what to do next
+
+Each option below links directly to a workflow. Read its collection impact,
+direct-file behavior, local state, created files, and prerequisite summary
+before choosing.
+
+<GoalChooser />
