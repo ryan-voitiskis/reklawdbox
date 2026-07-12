@@ -445,6 +445,23 @@ restore_backup() {
 
         local rollback_dir
         rollback_dir="${RB_DATA}.restore-backup-${TIMESTAMP}"
+        if [[ -e "$rollback_dir" || -L "$rollback_dir" ]]; then
+            err "Restore rollback path already exists; refusing to overwrite it: $rollback_dir"
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local backup_dir_canonical
+        if ! backup_dir_canonical="$(cd "$BACKUP_DIR" && pwd -P)"; then
+            err "Failed to resolve backup directory before restore: $BACKUP_DIR"
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+        local nested_backup_relative=""
+        if [[ "$backup_dir_canonical" == "$RB_DATA/"* ]]; then
+            nested_backup_relative="${backup_dir_canonical#"$RB_DATA/"}"
+        fi
+
         if ! mv "$RB_DATA" "$rollback_dir"; then
             err "Failed to move existing data aside for restore. Your data is unchanged."
             rm -rf "$staging_dir"
@@ -454,6 +471,70 @@ restore_backup() {
             err "Failed to move restored data into place; attempting rollback."
             if ! mv "$rollback_dir" "$RB_DATA"; then
                 err "Rollback failed. Previous data is at: $rollback_dir"
+            fi
+            rm -rf "$staging_dir"
+            exit 1
+        fi
+
+        local backup_return_failed=0
+        local rollback_backup_directory=""
+        local restored_backup_directory=""
+        if [[ -n "$nested_backup_relative" ]]; then
+            rollback_backup_directory="$rollback_dir/$nested_backup_relative"
+            restored_backup_directory="$RB_DATA/$nested_backup_relative"
+            if [[ ! -d "$rollback_backup_directory" ]]; then
+                err "Nested backup directory is missing from the rollback copy: $rollback_backup_directory"
+                backup_return_failed=1
+            elif [[ -e "$restored_backup_directory" || -L "$restored_backup_directory" ]]; then
+                err "Restored data conflicts with the preserved backup directory: $restored_backup_directory"
+                backup_return_failed=1
+            elif ! mkdir -p "$(dirname "$restored_backup_directory")"; then
+                err "Failed to recreate the nested backup directory parent: $(dirname "$restored_backup_directory")"
+                backup_return_failed=1
+            elif ! mv "$rollback_backup_directory" "$restored_backup_directory"; then
+                err "Failed to return the nested backup directory after restore."
+                backup_return_failed=1
+            fi
+        fi
+
+        if [[ "$backup_return_failed" -eq 1 ]]; then
+            err "Nested backup preservation failed; attempting rollback."
+            local failed_restore_root=""
+            local failed_restored_directory=""
+            local rb_parent
+            rb_parent="$(dirname "$RB_DATA")"
+            if ! failed_restore_root="$(mktemp -d "$rb_parent/.reklawdbox-failed-restore.XXXXXX")"; then
+                err "Restored data remains at: $RB_DATA"
+                err "Previous data remains at: $rollback_dir"
+                err "Backups remain with one of the library copies above."
+                rm -rf "$staging_dir"
+                exit 1
+            fi
+            failed_restored_directory="$failed_restore_root/restored-library"
+            if ! mv "$RB_DATA" "$failed_restored_directory"; then
+                err "Could not move the restored data aside for rollback."
+                err "Restored data remains at: $RB_DATA"
+                err "Previous data remains at: $rollback_dir"
+                err "Backups remain with one of the library copies above."
+                rmdir "$failed_restore_root" 2>/dev/null || true
+                rm -rf "$staging_dir"
+                exit 1
+            fi
+            if ! mv "$rollback_dir" "$RB_DATA"; then
+                err "Rollback failed. Previous data remains at: $rollback_dir"
+                if ! mv "$failed_restored_directory" "$RB_DATA"; then
+                    err "Restored data remains at: $failed_restored_directory"
+                fi
+                rmdir "$failed_restore_root" 2>/dev/null || true
+                err "Backups remain with one of the library copies above."
+                rm -rf "$staging_dir"
+                exit 1
+            fi
+            if [[ -z "$nested_backup_relative" ]] \
+                || [[ -d "$RB_DATA/$nested_backup_relative" ]]; then
+                rm -rf "$failed_restore_root"
+            else
+                err "Previous data was restored, but its backups remain under: $failed_restored_directory"
             fi
             rm -rf "$staging_dir"
             exit 1

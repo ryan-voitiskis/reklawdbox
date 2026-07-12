@@ -1761,6 +1761,17 @@ fn run_embedded_backup_script(
     db_path: Option<&std::path::Path>,
     stdin: Option<&str>,
 ) -> std::process::Output {
+    run_embedded_backup_script_with_temp_dir(args, home, db_path, stdin, &home.join("tmp"))
+}
+
+#[cfg(unix)]
+fn run_embedded_backup_script_with_temp_dir(
+    args: &[&str],
+    home: &std::path::Path,
+    db_path: Option<&std::path::Path>,
+    stdin: Option<&str>,
+    temp_dir: &std::path::Path,
+) -> std::process::Output {
     use std::io::Write as _;
     use std::os::unix::process::CommandExt as _;
     use std::process::{Command, Stdio};
@@ -1771,8 +1782,7 @@ fn run_embedded_backup_script(
     let fake_bin = home.join("test-bin");
     std::fs::create_dir_all(&fake_bin).expect("fake binary directory should create");
     write_executable_script(&fake_bin.join("pgrep"), "#!/bin/sh\nexit 1\n");
-    let temp_dir = home.join("tmp");
-    std::fs::create_dir_all(&temp_dir).expect("child temp directory should create");
+    std::fs::create_dir_all(temp_dir).expect("child temp directory should create");
 
     let mut command = Command::new("/bin/bash");
     command
@@ -1780,7 +1790,7 @@ fn run_embedded_backup_script(
         .args(args)
         .env_clear()
         .env("HOME", home)
-        .env("TMPDIR", &temp_dir)
+        .env("TMPDIR", temp_dir)
         .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
         .env("LANG", "C")
         .process_group(0)
@@ -1882,7 +1892,11 @@ fn tar_members(archive: &std::path::Path) -> Vec<String> {
 }
 
 #[cfg(unix)]
-fn create_db_backup_archive(archive: &std::path::Path, source: &std::path::Path, members: &[&str]) {
+fn create_backup_archive_fixture(
+    archive: &std::path::Path,
+    source: &std::path::Path,
+    members: &[&str],
+) {
     let output = std::process::Command::new("tar")
         .args(["-czf"])
         .arg(archive)
@@ -5528,7 +5542,7 @@ fn backup_script_custom_path_restores_missing_db_safely() {
     std::fs::write(archive_source.join("master.db-wal"), b"restored wal")
         .expect("restore WAL fixture should create");
     let archive = temp.path().join("db-restore-input.tar.gz");
-    create_db_backup_archive(&archive, &archive_source, &["master.db", "master.db-wal"]);
+    create_backup_archive_fixture(&archive, &archive_source, &["master.db", "master.db-wal"]);
 
     let empty_home = temp.path().join("Empty Target Home");
     let empty_standard = empty_home.join("Library/Pioneer/rekordbox");
@@ -5702,6 +5716,144 @@ fn backup_script_custom_path_full_round_trip_uses_canonical_root() {
             .iter()
             .all(|member| member == "rekordbox" || member.starts_with("rekordbox/")),
         "full safety archive should also use the canonical root: {safety_members:?}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_nested_backup_directory_survives_full_restore() {
+    let temp = tempfile::tempdir().expect("nested backup fixture should create");
+    let home_and_library = temp.path().join("Nested Home And Library");
+    let external_child_temp = temp.path().join("External Child Temp");
+    std::fs::create_dir(&home_and_library).expect("nested configured library should create");
+    let db_path = home_and_library.join("master.db");
+    std::fs::write(&db_path, b"original nested master")
+        .expect("nested configured master should create");
+    std::fs::write(home_and_library.join("library-sentinel.txt"), b"original")
+        .expect("nested library sentinel should create");
+
+    let backup_output = run_embedded_backup_script_with_temp_dir(
+        &[],
+        &home_and_library,
+        Some(&db_path),
+        None,
+        &external_child_temp,
+    );
+    assert!(
+        backup_output.status.success(),
+        "nested full backup should succeed: {}",
+        child_output_text(&backup_output)
+    );
+    let input_archives = backup_archives(&home_and_library, "full_");
+    assert_eq!(input_archives.len(), 1);
+    let input_archive = input_archives[0].clone();
+    assert!(input_archive.exists());
+
+    std::fs::write(&db_path, b"mutated nested master")
+        .expect("nested configured master should mutate");
+    let archive_arg = input_archive
+        .to_str()
+        .expect("nested archive path should be UTF-8");
+    let restore_output = run_embedded_backup_script_with_temp_dir(
+        &["--restore", archive_arg],
+        &home_and_library,
+        Some(&db_path),
+        Some("YES\n"),
+        &external_child_temp,
+    );
+    assert!(
+        restore_output.status.success(),
+        "nested full restore should succeed: {}",
+        child_output_text(&restore_output)
+    );
+    assert_eq!(
+        std::fs::read(&db_path).expect("nested restored master should exist"),
+        b"original nested master"
+    );
+    assert!(
+        input_archive.exists(),
+        "full restore must preserve its input archive when the backup directory is nested"
+    );
+    assert!(
+        tar_members(&input_archive).contains(&"rekordbox/master.db".to_string()),
+        "preserved input archive should remain readable"
+    );
+    let safety_archives = backup_archives(&home_and_library, "full_pre-restore_");
+    assert_eq!(
+        safety_archives.len(),
+        1,
+        "full restore must preserve its new safety archive when the backup directory is nested"
+    );
+    assert!(safety_archives[0].exists());
+    assert!(
+        tar_members(&safety_archives[0]).contains(&"rekordbox/master.db".to_string()),
+        "preserved safety archive should remain readable"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_nested_backup_restore_failure_rolls_back_safely() {
+    let temp = tempfile::tempdir().expect("nested rollback fixture should create");
+    let home_and_library = temp.path().join("Nested Rollback Home And Library");
+    let external_child_temp = temp.path().join("External Rollback Child Temp");
+    let backup_dir = home_and_library.join("Music/rekordbox-backups");
+    std::fs::create_dir_all(&backup_dir).expect("nested rollback backup directory should create");
+    let db_path = home_and_library.join("master.db");
+    std::fs::write(&db_path, b"current library must survive")
+        .expect("nested rollback master should create");
+
+    let crafted_source = temp.path().join("Crafted Conflicting Full Archive");
+    let crafted_library = crafted_source.join("rekordbox");
+    std::fs::create_dir_all(crafted_library.join("Music/rekordbox-backups"))
+        .expect("crafted nested backup destination should create");
+    std::fs::write(crafted_library.join("master.db"), b"must not install")
+        .expect("crafted master should create");
+    std::fs::write(
+        crafted_library.join("Music/rekordbox-backups/conflict.txt"),
+        b"must not replace preserved backups",
+    )
+    .expect("crafted backup conflict should create");
+    let input_archive = backup_dir.join("full_conflicting-backup-dir.tar.gz");
+    create_backup_archive_fixture(&input_archive, &crafted_source, &["rekordbox"]);
+
+    let archive_arg = input_archive
+        .to_str()
+        .expect("nested rollback archive path should be UTF-8");
+    let restore_output = run_embedded_backup_script_with_temp_dir(
+        &["--restore", archive_arg],
+        &home_and_library,
+        Some(&db_path),
+        Some("YES\n"),
+        &external_child_temp,
+    );
+    assert!(
+        !restore_output.status.success(),
+        "conflicting restored backup directory must fail closed"
+    );
+    assert!(child_output_text(&restore_output).contains("attempting rollback"));
+    assert_eq!(
+        std::fs::read(&db_path).expect("current master should be rolled back"),
+        b"current library must survive"
+    );
+    assert!(
+        input_archive.exists(),
+        "input archive must survive rollback"
+    );
+    assert!(
+        tar_members(&input_archive).contains(&"rekordbox/master.db".to_string()),
+        "rolled-back input archive should remain readable"
+    );
+    assert!(
+        !backup_dir.join("conflict.txt").exists(),
+        "failed restored backup contents must not replace preserved backups"
+    );
+    let safety_archives = backup_archives(&home_and_library, "full_pre-restore_");
+    assert_eq!(safety_archives.len(), 1);
+    assert!(safety_archives[0].exists());
+    assert!(
+        tar_members(&safety_archives[0]).contains(&"rekordbox/master.db".to_string()),
+        "rolled-back safety archive should remain readable"
     );
 }
 
