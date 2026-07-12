@@ -5,39 +5,61 @@ sidebar:
   order: 8
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import LibraryHealthSOP from '../../../partials/sops/library-health.mdx'
+
+## Outcome
+
+Get a point-in-time, read-only report of broken links, orphan files, playlist
+gaps, and duplicate groups, with suggested manual follow-up and no collection
+changes.
 
 <WorkflowContract id="library-health" />
 
-Paste into your agent:
+## Phases
+
+1. **Confirm access.** Connect to the intended Rekordbox library and make sure
+   every content root you want checked is readable.
+2. **Scan structure.** Check broken links, files on disk but absent from
+   Rekordbox, tracks missing from playlists, and metadata or exact-file
+   duplicate groups.
+3. **Review the evidence.** Separate credible relocation suggestions and true
+   duplicates from intentional copies, archives, or unassigned tracks.
+4. **Act outside the scan.** Make only the manual Rekordbox or filesystem
+   changes you approve, then rerun the affected scans.
+
+## Decisions and approval checkpoints
+
+- Run this before [Library Cleanup](/workflows/library-cleanup/), after moving
+  files or importing a large batch, or as periodic maintenance.
+- The scan needs no enrichment, cache coverage, network access, or approval.
+- Review every recommendation before relocating, importing, assigning, or
+  deleting anything. Similar artist/title text is not proof that two tracks are
+  interchangeable.
+
+## What changes and how to recover
+
+The health workflow writes no metadata, files, caches, or workflow state. Its
+results are snapshots rather than a durable cursor. Duplicate groups use
+`page.next_offset` while `page.has_more`; exact mode hashes files again on every
+request. Restart from offset zero after scope or filesystem changes, and rerun
+all affected scans after manual fixes. If a root is unreadable, correct access
+or narrow the scope before trusting the report.
+
+## Finish in Rekordbox
+
+Relocate confirmed broken links, import or remove confirmed orphans, assign
+tracks you intend to keep, and review duplicate removal in Rekordbox. The scan
+does not perform those actions for you. Rerun the relevant check and compare
+counts before declaring the issue resolved.
+
+## Start this workflow
 
 ```
 Run a full health scan on my library.
 ```
 
-No enrichment or cache coverage needed — all scanning is built-in.
-
-## When to scan
-
-- Before starting [Library Cleanup](/workflows/library-cleanup/) — catch structural issues first
-- After moving or reorganizing files on disk
-- After a large batch import
-- Periodically, as general maintenance
-
-## What it checks
-
-1. **Broken links** — tracks in Rekordbox pointing to files that no longer exist. Suggests relocations when a match is found elsewhere.
-2. **Orphan files** — audio files on disk that aren't imported into Rekordbox.
-3. **Playlist coverage** — tracks not assigned to any playlist.
-4. **Duplicates** — matching artist + title, or exact file hash matches.
-
-## Step-by-step
-
-<LibraryHealthSOP />
-
 ## Next steps
 
 - [Collection Audit](/workflows/collection-audit/) — fix naming and tagging issues
 - [Library Cleanup](/workflows/library-cleanup/) — the full five-session cleanup guide
+- [Agent SOP: Library Health](/agent/library-health/) — advanced, model-facing operational instructions

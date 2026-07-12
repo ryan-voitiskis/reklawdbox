@@ -5,51 +5,70 @@ sidebar:
   order: 4
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import SetBuildingSOP from '../../../partials/sops/set-building.mdx'
+
+## Outcome
+
+Compare transition-scored ordered set candidates, refine the best sequence with
+your own musical judgment, and optionally export the approved playlist for
+Rekordbox.
 
 <WorkflowContract id="set-building" />
 
-Builds ordered tracklists scored across six axes: key compatibility, BPM, energy, genre, brightness, and rhythm. The agent explores multiple paths and presents candidates for you to compare.
+## Phases
 
-Paste into your agent:
+1. **Define the brief.** Confirm duration, candidate scope, opener/closer pins,
+   energy shape, and scoring priorities.
+2. **Compare candidates.** Review multiple orderings across key, BPM, energy,
+   genre, brightness, and rhythm rather than treating the top score as final.
+3. **Refine transitions.** Inspect weak joins, move or replace tracks, and ask
+   for axis-level evidence where the sequence feels wrong.
+4. **Approve and export.** Choose one ordering, preview any unrelated staged
+   metadata, and optionally create playlist XML.
+
+## Decisions and approval checkpoints
+
+- A resolvable candidate pool and valid parameters are the only hard technical
+  requirements. Missing BPM, key, genre, or optional analysis weakens the
+  corresponding axis; it does not block the build.
+- Stratum can contribute BPM and key evidence. Essentia adds richer energy,
+  brightness, and rhythm scoring but remains optional.
+- Available curves are `warmup_build_peak_release` (default), `flat`,
+  `peak_only`, and `custom`. Choose the arc that matches the slot rather than
+  accepting the default automatically.
+- Start with more candidates than the final track count, and decide the opener,
+  closer, and must-play tracks before final approval.
+
+See [Harmonic Mixing](/concepts/harmonic-mixing/) for the scoring model.
+
+## What changes and how to recover
+
+Candidate state lives in the conversation and must be rebuilt after a restart;
+saved presets and exported XML persist. Change filters, weights, or pinned
+tracks and regenerate when a candidate does not work.
+
+Playlist export does not edit `master.db`, but it also writes and clears any
+metadata already staged by another workflow. Inspect `preview_changes` first
+and complete the separate metadata XML handoff when needed. Export proceeds
+only after the built-in database backup succeeds or the configured custom
+backup script exits zero; an export failure restores staged metadata for retry.
+
+## Finish in Rekordbox
+
+Keep the XML file and follow the
+[playlist XML import steps](/reference/xml-export/#importing-into-rekordbox).
+Verify the playlist name, count, first and last tracks, and representative
+transitions before deleting the XML. Import any staged metadata through the
+separate All Tracks flow described on that page.
+
+## Start this workflow
 
 ```
 Build a DJ set from my collection.
 ```
 
-## Prerequisites
+## Next steps
 
-- The only hard requirements are a resolvable candidate pool and valid tool
-  parameters.
-- Rekordbox BPM, key, and genre make their scoring axes more useful.
-- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
-- Built-in Stratum can supply BPM or key evidence when Rekordbox values are
-  absent; scoring also uses the Rekordbox values when available.
-- Essentia is recommended for richer energy, brightness, and rhythm scoring;
-  related pool tools also use its timbral features. Optional axes degrade
-  gracefully when it is unavailable.
-
-## Energy curves
-
-The agent shapes the energy arc across your set. Four presets are available:
-
-- **warmup_build_peak_release** (default) — the classic DJ arc
-- **flat** — every track at peak energy, for peak-time sets
-- **peak_only** — fast ramp to peak, good for shorter sets or festival slots
-- **custom** — define the energy phase for each position yourself
-
-See [Harmonic Mixing](/concepts/harmonic-mixing/) for the full scoring model.
-
-## Step-by-step
-
-<SetBuildingSOP />
-
-## Tips
-
-- **Start with a larger pool than you need.** A 12-track set benefits from 40-60 candidates.
-- **Pin your opener and closer first.** The agent optimizes the middle.
-- **Use genre focus loosely.** "Techno, Tech House" gives better results than "Techno" alone.
-- **Re-run with different priority axes.** A "harmonic" build and an "energy" build can look very different.
-- **Check individual transitions.** Ask the agent to score any two tracks to see the axis-by-axis breakdown.
+- [Pool Building](/workflows/pool-building/) — build an unordered crate for live improvisation
+- [Chapter Set Planning](/workflows/chapter-set-planning/) — connect several locked pools
+- [Agent SOP: Set Building](/agent/set-building/) — advanced, model-facing operational instructions

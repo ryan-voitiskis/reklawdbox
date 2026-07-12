@@ -5,62 +5,67 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import CollectionAuditSOP from '../../../partials/sops/collection-audit.mdx'
+
+## Outcome
+
+Find artist, title, tag-layer, filename, and directory problems; approve safe
+fixes; and finish with a verified report of what changed or was deliberately
+deferred. Genre assignment is a separate workflow.
 
 <WorkflowContract id="collection-audit" />
 
-Fixes artist names, track titles, file naming, and tagging issues so everything is clean before enrichment. Genre tagging is a separate step — see [Genre Classification](/workflows/genre-classification/).
+## Phases
 
-Paste into your agent:
+1. **Choose the scope.** Use the full collection or a confirmed directory and
+   make a file backup before approving writes.
+2. **Review findings.** Separate safe convention fixes from ambiguous identity
+   questions, unreadable files, and imported-path changes.
+3. **Approve and verify.** Approve the fix plan before any tag or filename
+   write, then re-read changed files and re-scan the scope.
+4. **Synchronize Rekordbox.** Reload tags only for the listed imported tracks
+   and leave path changes to Rekordbox relocation.
+
+## Decisions and approval checkpoints
+
+- Decide review-tier artist and title corrections rather than applying them in
+  bulk.
+- Imported files are never renamed behind Rekordbox, because Rekordbox stores
+  absolute paths. Defer those cases for Rekordbox relocation.
+- Common conventions are `NN Artist - Title.ext` for album tracks,
+  `Artist - Title.ext` for loose tracks, and `Album (Year)/` for album folders.
+- Confirm the exact Reload Tag selection before the audit is called complete.
+
+## What changes and how to recover
+
+Approved findings can write audio tags and can rename files that are not yet in
+Rekordbox. Audit state and review decisions persist locally, while the file
+changes themselves are durable. If you resume, re-scan before declaring the
+scope clean. Retry unreadable files; if a direct change was wrong, restore it
+from the file backup and scan again.
+
+WAV needs special care: Rekordbox reads RIFF INFO rather than ID3v2 from WAV,
+so the workflow writes both tag layers. RIFF INFO does not carry label or track
+number, and Reload Tag cannot transfer those fields; use XML import or a manual
+Rekordbox edit when they change.
+
+## Finish in Rekordbox
+
+For every successful tag change to an imported track, select only the exact
+tracks reported by the workflow and use **Reload Tag**. Reload Tag can overwrite
+intentional Rekordbox-only edits with values from the audio file, so verify the
+selection first. Confirm a small sample against the file tags. Use Rekordbox
+relocation—not a filesystem rename—for imported path changes.
+
+## Start this workflow
+
+For the full collection, copy:
 
 ```
 Audit my collection for naming and tagging issues.
 ```
 
-To scope to a specific directory:
-
-```
-Audit /path/to/music for naming and tagging issues.
-```
-
-## WAV tagging
-
-Rekordbox only reads RIFF INFO tags from WAV files, ignoring ID3v2 entirely. If your WAVs only have ID3v2 tags (common with files from Bandcamp, Beatport, etc.), Rekordbox shows them as untagged.
-
-The audit catches these issues and the agent writes both tag formats automatically.
-
-## Imported file protection
-
-Files already imported into Rekordbox are never renamed — Rekordbox stores absolute paths and can't update them through XML. To rename an imported file: delete it from Rekordbox first, rename, then re-import.
-
-## After fixes
-
-For every successful tag change to an imported track, the agent lists the exact
-tracks for you to select in Rekordbox and **Reload Tag** before enrichment. The
-workflow pauses for your confirmation, then verifies a small sample against the
-file tags. Reload Tag can overwrite intentional Rekordbox-only edits with the
-values stored in the audio file, so select only the listed tracks.
-
-WAV Reload Tag reads RIFF INFO, which does not support label or track-number
-fields. Those fields still need XML import or a manual Rekordbox edit when they
-change.
-
-## File naming conventions
-
-**Album tracks:** `NN Artist Name - Track Title.ext`
-e.g. `01 Actress - Maze.flac`, `12 Four Tet - Baby.wav`
-
-**Loose tracks:** `Artist Name - Track Title.ext`
-e.g. `Burial - Archangel.flac`, `Joy Orbison - Hyph Mngo.wav`
-
-**Album directories:** `Album Name (Year)/`
-e.g. `Untrue (2007)/`, `New Energy (2017)/`
-
-## Step-by-step
-
-<CollectionAuditSOP />
+Add a directory to that sentence when you want a narrower scope.
 
 ## Next steps
 
@@ -68,3 +73,4 @@ If you're following the [Library Cleanup](/workflows/library-cleanup/) guide, ne
 
 - [Metadata Backfill](/workflows/metadata-backfill/) — fill in missing labels, years, and albums
 - [Genre Classification](/workflows/genre-classification/) — classify genres for ungenred tracks
+- [Agent SOP: Collection Audit](/agent/collection-audit/) — advanced, model-facing operational instructions

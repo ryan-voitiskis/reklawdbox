@@ -5,44 +5,65 @@ sidebar:
   order: 3
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import GenreAuditSOP from '../../../partials/sops/genre-audit.mdx'
+
+## Outcome
+
+Compare existing genre tags with cached provider, label, BPM, and audio evidence;
+review only conflicts or uncertain cases; and export approved corrections as
+Rekordbox metadata XML.
 
 <WorkflowContract id="genre-audit" />
 
-Paste into your agent:
+## Phases
+
+1. **Choose the audit scope.** Start after classification, after importing a
+   differently tagged collection, when a genre seems over-applied, or when
+   newer evidence warrants a review.
+2. **Measure and prepare evidence.** Run scoped `cache_coverage` for genred
+   tracks and fill core Discogs, Beatport, and Stratum gaps where practical.
+   Essentia is useful but optional.
+3. **Compare rather than refill.** Use the same evidence model as
+   classification, but surface only conflicts and uncertain existing tags.
+4. **Review and export.** Decide each conflict group, preview the staged
+   corrections, and export only what you approve.
+
+## Decisions and approval checkpoints
+
+- Keep a current tag when the evidence is incomplete or your collection uses a
+  deliberate convention the sources cannot express.
+- Low-confidence and insufficient-evidence cases require individual review.
+- Use [Genre Classification](/workflows/genre-classification/) for blank genres;
+  this workflow verifies tags that already exist.
+
+## What changes and how to recover
+
+Preparation may update enrichment and audio caches. Approved corrections are
+staged in memory and do not directly edit audio files or `master.db`. XML
+export fails closed unless the built-in database backup succeeds or the
+configured custom backup script exits zero. Clear unwanted corrections before
+export; a failed XML write keeps the staged changes available for retry.
+
+Preparation follows `page.next_offset` and later retries explicit failed track
+IDs. Resume only with the same selector/library order, provider/cache policy,
+audio `skip_cached` setting, and Essentia availability; restart from zero after
+one changes. Audit pagination has its own caller-managed offset. Caches persist,
+but staged corrections must be exported before the MCP process restarts.
+
+## Finish in Rekordbox
+
+Keep the exported XML until the correction import is verified. Follow the
+[metadata XML handoff](/reference/xml-export/#importing-into-rekordbox), then
+check representative corrected and intentionally retained genres.
+
+## Start this workflow
 
 ```
 Audit my existing genre tags.
 ```
 
-## When to audit
-
-- After genre classification — catch any misclassifications
-- When you suspect a genre was applied too broadly (e.g. everything tagged "Techno")
-- After importing tracks from another collection with different conventions
-- Periodically, as enrichment data improves
-
-## How it works
-
-The audit uses the same decision tree as classification, but compares results against existing tags instead of filling blanks. Only conflicts and tracks needing manual review show up.
-
-**Audit vs Classification:** Classification assigns genres to ungenred tracks. Audit verifies genres that are already there. Classification shows everything; audit only shows problems.
-
-## Prerequisites
-
-Run scoped `cache_coverage` for genred tracks. Fill missing core Discogs and
-Beatport searches and Stratum analysis where practical; a cached no-match counts
-as searched. Essentia improves the audio evidence but is not a hard gate. The
-audit can proceed with incomplete evidence, but low or insufficient confidence
-items need individual review instead of bulk approval.
-
-## Step-by-step
-
-<GenreAuditSOP />
-
 ## Next steps
 
 - [Genre Classification](/workflows/genre-classification/) — classify any remaining ungenred tracks
 - [Set Building](/workflows/set-building/) — build sets with your verified genres
+- [Agent SOP: Genre Audit](/agent/genre-audit/) — advanced, model-facing operational instructions

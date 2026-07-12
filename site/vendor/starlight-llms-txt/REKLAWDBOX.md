@@ -10,6 +10,11 @@ Local package metadata changes:
 - `@astrojs/mdx`: `^7.0.0`
 - peer `astro`: `^7.0.2`
 - peer `@astrojs/starlight`: `>=0.41.0`
+- backward-compatible `excludeFull` option for excluding selected docs from
+  generic `llms-full.txt` without changing `llms-small.txt` or custom sets
 
 Remove this vendor copy and switch `site/package.json` back to the npm package
-once upstream publishes Astro 7-compatible peer metadata.
+only when upstream publishes Astro 7-compatible peer metadata and provides an
+equivalent generic-full exclusion. Any migration must prove that generic full
+and small outputs exclude agent routes while dedicated custom agent sets remain
+complete.

@@ -11,6 +11,7 @@ import {
 import {
   compareRuntimeHelp,
   compareToolMappings,
+  deriveAgentPairs,
   extractSopCalls,
   FIRST_SESSION_PROMPT,
   parseApplicationCliHelp,
@@ -25,6 +26,7 @@ import {
   validateMcpContracts,
   validateMcpOutputContracts,
   validateOnboardingSources,
+  validatePublishingAudiences,
   validateRuntimeHelpUrls,
   validateSopContracts,
   validateXmlBackupContracts,
@@ -69,6 +71,100 @@ function outputTool(name, properties = {}, required = []) {
 
 function mcpOutputMarker(name, body, schema = '/') {
   return `<!-- doc-contract:mcp-output tool=${name} schema=${schema} requiredness=global -->\n${body}\n<!-- /doc-contract:mcp-output -->`
+}
+
+function publishingAudienceFixture() {
+  const pairs = deriveAgentPairs(workflows)
+  const sourceArtifacts = new Map()
+  const builtArtifacts = new Map()
+  const fullHeadings = []
+  const smallHeadings = []
+  const agentHeadings = []
+  const sitemapPaths = [
+    '/workflows/',
+    '/mcp-tools/',
+    '/getting-started/',
+  ]
+
+  sourceArtifacts.set(
+    'site/astro.config.mjs',
+    `import sitemap from '@astrojs/sitemap'
+integrations: [
+  sitemap({ filter: (page) => !new URL(page).pathname.startsWith('/agent/') }),
+]
+starlightLlmsTxt({
+  exclude: ['agent/**'],
+  excludeFull: ['agent/**'],
+  customSets: [{ paths: ['agent/**'] }],
+})`,
+  )
+  sourceArtifacts.set(
+    'site/vendor/starlight-llms-txt/llms-full.txt.ts',
+    'exclude: starlightLllmsTxtContext.excludeFull',
+  )
+  sourceArtifacts.set(
+    'site/vendor/starlight-llms-txt/llms-small.txt.ts',
+    'exclude: starlightLllmsTxtContext.exclude',
+  )
+  sourceArtifacts.set(
+    'site/vendor/starlight-llms-txt/llms-custom.txt.ts',
+    'include: context.props.paths',
+  )
+
+  builtArtifacts.set(
+    'agent/index.html',
+    '<html><head><meta name="robots" content="noindex, nofollow"></head></html>',
+  )
+  for (const pair of pairs) {
+    const humanHeading = `# ${pair.title}`
+    const agentHeading = `# Agent SOP: ${pair.title}`
+    sourceArtifacts.set(pair.humanSource, '# Human explanation\n')
+    sourceArtifacts.set(
+      pair.agentSource,
+      `import SOP from '../../../partials/sops/${pair.id}.mdx'\n\n<SOP />\n`,
+    )
+    builtArtifacts.set(
+      pair.humanHtml,
+      `<html><main data-pagefind-body><h1>${pair.title}</h1></main></html>`,
+    )
+    builtArtifacts.set(
+      pair.agentHtml,
+      `<html><head><meta content="noindex, nofollow" name="robots"></head><h1>Agent SOP: ${pair.title}</h1></html>`,
+    )
+    builtArtifacts.set(pair.sopText, `${agentHeading}\n`)
+    fullHeadings.push(humanHeading)
+    smallHeadings.push(humanHeading)
+    agentHeadings.push(agentHeading)
+    sitemapPaths.push(pair.humanRoute)
+  }
+  builtArtifacts.set('llms-full.txt', `${fullHeadings.join('\n')}\n`)
+  builtArtifacts.set('llms-small.txt', `${smallHeadings.join('\n')}\n`)
+  builtArtifacts.set(
+    '_llms-txt/agent-sops.txt',
+    `# Agent SOPs\n${agentHeadings.join('\n')}\n`,
+  )
+  builtArtifacts.set(
+    'llms.txt',
+    [
+      '/_llms-txt/agent-sops.txt',
+      ...pairs.map((pair) => `/${pair.sopText}`),
+    ].join('\n'),
+  )
+  builtArtifacts.set(
+    'sitemap-0.xml',
+    `<urlset>${
+      sitemapPaths.map((route) =>
+        `<url><loc>https://reklawdbox.com${route}</loc></url>`
+      ).join('')
+    }</urlset>`,
+  )
+  return { workflows, sourceArtifacts, builtArtifacts }
+}
+
+function expectAudienceFailure(mutate, expected) {
+  const fixture = publishingAudienceFixture()
+  mutate(fixture, deriveAgentPairs(workflows))
+  assert.throws(() => validatePublishingAudiences(fixture), expected)
 }
 
 function selectedOutputFixture(enrichRows) {
@@ -2203,5 +2299,383 @@ test('runtime help derives nine topics and validates URLs from every payload', (
   assert.throws(
     () => validateRuntimeHelpUrls(payloads, built),
     /src\/tools\/help_handler\.rs:1: help\(.+\): runtime-help URL is not built/,
+  )
+})
+
+test('publishing audiences derive nine pairs and accept separated artifacts', () => {
+  assert.equal(deriveAgentPairs(workflows).length, 9)
+  assert.doesNotThrow(() =>
+    validatePublishingAudiences(publishingAudienceFixture())
+  )
+
+  const tooFew = structuredClone(workflows).filter((workflow) =>
+    workflow.id !== deriveAgentPairs(workflows)[0].id
+  )
+  assert.throws(
+    () => deriveAgentPairs(tooFew),
+    /expected exactly 9 agent pairs; found 8/,
+  )
+})
+
+test('publishing audiences fail explicitly for every missing artifact class', () => {
+  const [pair] = deriveAgentPairs(workflows)
+  const cases = [
+    [
+      (fixture) => fixture.sourceArtifacts.delete(pair.humanSource),
+      /missing human workflow source/,
+    ],
+    [
+      (fixture) => fixture.sourceArtifacts.delete(pair.agentSource),
+      /missing agent SOP source/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete(pair.humanHtml),
+      /missing human workflow HTML route/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete(pair.agentHtml),
+      /missing agent HTML route/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('agent/index.html'),
+      /missing agent HTML route: agent\/index\.html/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('sitemap-0.xml'),
+      /missing generated sitemap XML/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('llms-full.txt'),
+      /missing generic full LLM bundle/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('llms-small.txt'),
+      /missing generic small LLM bundle/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('_llms-txt/agent-sops.txt'),
+      /missing combined agent LLM bundle/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete('llms.txt'),
+      /missing LLM bundle index/,
+    ],
+    [
+      (fixture) => fixture.builtArtifacts.delete(pair.sopText),
+      /missing per-SOP agent LLM bundle/,
+    ],
+    [
+      (fixture) => fixture.sourceArtifacts.delete('site/astro.config.mjs'),
+      /missing Astro publishing config/,
+    ],
+    [
+      (fixture) =>
+        fixture.sourceArtifacts.delete(
+          'site/vendor/starlight-llms-txt/llms-full.txt.ts',
+        ),
+      /missing vendored generic-full route/,
+    ],
+    [
+      (fixture) =>
+        fixture.sourceArtifacts.delete(
+          'site/vendor/starlight-llms-txt/llms-small.txt.ts',
+        ),
+      /missing vendored generic-small route/,
+    ],
+    [
+      (fixture) =>
+        fixture.sourceArtifacts.delete(
+          'site/vendor/starlight-llms-txt/llms-custom.txt.ts',
+        ),
+      /missing vendored custom-set route/,
+    ],
+  ]
+
+  for (const [mutate, expected] of cases) {
+    expectAudienceFailure(mutate, expected)
+  }
+})
+
+test('publishing audiences reject robots and Pagefind policy drift', () => {
+  const [pair] = deriveAgentPairs(workflows)
+  expectAudienceFailure(
+    (fixture) => fixture.builtArtifacts.set(pair.agentHtml, '<html></html>'),
+    /must contain exactly one robots meta; found 0/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.agentHtml,
+        '<meta name="robots" content="noindex, nofollow"><meta name="robots" content="noindex, nofollow">',
+      ),
+    /must contain exactly one robots meta; found 2/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.agentHtml,
+        '<meta name="robots" content="index, follow">',
+      ),
+    /robots meta must be exactly noindex, nofollow/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.agentHtml,
+        '<meta name="robots" content="noindex, nofollow"><main data-pagefind-body></main>',
+      ),
+    /must not contain a Pagefind body marker/,
+  )
+  expectAudienceFailure(
+    (fixture) => fixture.builtArtifacts.set(pair.humanHtml, '<main></main>'),
+    /must retain its Pagefind body marker/,
+  )
+})
+
+test('publishing audiences retain human sitemap routes and exclude agents', () => {
+  const [pair] = deriveAgentPairs(workflows)
+  expectAudienceFailure(
+    (fixture) => {
+      const sitemap = fixture.builtArtifacts.get('sitemap-0.xml')
+      fixture.builtArtifacts.set(
+        'sitemap-0.xml',
+        sitemap.replace(
+          '</urlset>',
+          `<url><loc>https://reklawdbox.com${pair.agentRoute}</loc></url></urlset>`,
+        ),
+      )
+    },
+    /sitemap must exclude agent route/,
+  )
+  expectAudienceFailure(
+    (fixture) => {
+      const sitemap = fixture.builtArtifacts.get('sitemap-0.xml')
+      fixture.builtArtifacts.set(
+        'sitemap-0.xml',
+        sitemap.replace(
+          `<url><loc>https://reklawdbox.com${pair.humanRoute}</loc></url>`,
+          '',
+        ),
+      )
+    },
+    /sitemap must include human route/,
+  )
+  expectAudienceFailure(
+    (fixture) => {
+      const sitemap = fixture.builtArtifacts.get('sitemap-0.xml')
+      fixture.builtArtifacts.set(
+        'sitemap-0.xml',
+        sitemap.replace(
+          '<url><loc>https://reklawdbox.com/mcp-tools/</loc></url>',
+          '',
+        ),
+      )
+    },
+    /sitemap must retain a representative \/mcp-tools\/ route/,
+  )
+})
+
+test('publishing audiences keep generic and custom LLM sets disjoint', () => {
+  const [pair] = deriveAgentPairs(workflows)
+  const humanHeading = `# ${pair.title}`
+  const agentHeading = `# Agent SOP: ${pair.title}`
+  for (const file of ['llms-full.txt', 'llms-small.txt']) {
+    expectAudienceFailure(
+      (fixture) =>
+        fixture.builtArtifacts.set(
+          file,
+          `${fixture.builtArtifacts.get(file)}${agentHeading}\n`,
+        ),
+      new RegExp(`${file.replace('.', '\\.')} must not contain`),
+    )
+    expectAudienceFailure(
+      (fixture) =>
+        fixture.builtArtifacts.set(
+          file,
+          fixture.builtArtifacts.get(file).replace(humanHeading, ''),
+        ),
+      /must contain .* exactly once/,
+    )
+    expectAudienceFailure(
+      (fixture) =>
+        fixture.builtArtifacts.set(
+          file,
+          `${fixture.builtArtifacts.get(file)}${humanHeading}\n`,
+        ),
+      /must contain .* exactly once/,
+    )
+  }
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        '_llms-txt/agent-sops.txt',
+        fixture.builtArtifacts.get('_llms-txt/agent-sops.txt').replace(
+          agentHeading,
+          '',
+        ),
+      ),
+    /agent-sops\.txt must contain .* exactly once/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        'llms-full.txt',
+        `${fixture.builtArtifacts.get('llms-full.txt')}# Agent SOPs\n`,
+      ),
+    /llms-full\.txt must not contain any agent SOP heading/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        '_llms-txt/agent-sops.txt',
+        fixture.builtArtifacts.get('_llms-txt/agent-sops.txt').replace(
+          '# Agent SOPs',
+          '',
+        ),
+      ),
+    /agent-sops\.txt must contain # Agent SOPs exactly once/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        '_llms-txt/agent-sops.txt',
+        `${
+          fixture.builtArtifacts.get('_llms-txt/agent-sops.txt')
+        }# Agent SOP: Unexpected Workflow\n`,
+      ),
+    /agent-sops\.txt must contain exactly 10 agent headings; found 11/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        '_llms-txt/agent-sops.txt',
+        `${
+          fixture.builtArtifacts.get('_llms-txt/agent-sops.txt')
+        }${agentHeading}\n`,
+      ),
+    /agent-sops\.txt must contain .* exactly once/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.sopText,
+        `${agentHeading}\n${agentHeading}\n`,
+      ),
+    /must contain exactly its own/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.sopText,
+        `${fixture.builtArtifacts.get(pair.sopText)}# Agent SOPs\n`,
+      ),
+    /must contain exactly its own/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        'llms.txt',
+        fixture.builtArtifacts.get('llms.txt').replace(`/${pair.sopText}`, ''),
+      ),
+    /llms\.txt must link .* exactly once/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.sopText,
+        '# Agent SOP: Incorrect Workflow\n',
+      ),
+    /must contain exactly its own/,
+  )
+})
+
+test('publishing audiences enforce canonical source ownership', () => {
+  const pairs = deriveAgentPairs(workflows)
+  const [pair, wrongPair] = pairs
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        pair.agentSource,
+        `import SOP from '../../../partials/sops/${wrongPair.id}.mdx'\n\n<SOP />\n`,
+      ),
+    /imports .* instead of .*\.mdx/,
+  )
+  expectAudienceFailure(
+    (fixture) => {
+      const source = fixture.sourceArtifacts.get(pair.agentSource)
+      fixture.sourceArtifacts.set(
+        pair.agentSource,
+        `${source}import SecondSOP from '../../../partials/sops/${pair.id}.mdx'\n<SecondSOP />\n`,
+      )
+    },
+    /must import exactly one canonical SOP; found 2/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        pair.agentSource,
+        `import SOP from '../../../partials/sops/${pair.id}.mdx'\n`,
+      ),
+    /must render SOP exactly once; found 0/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        pair.humanSource,
+        `import SOP from '../../../partials/sops/${pair.id}.mdx'\n<SOP />\n`,
+      ),
+    /must not import or render its matching agent SOP partial/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        pair.humanSource,
+        `<${pair.sopComponent} />\n`,
+      ),
+    /must not import or render its matching agent SOP partial/,
+  )
+  const unrelated = publishingAudienceFixture()
+  unrelated.sourceArtifacts.set(
+    pair.humanSource,
+    "import XmlSteps from '../../../partials/sops/xml-playlist-import-steps.mdx'\n<XmlSteps />\n",
+  )
+  assert.doesNotThrow(() => validatePublishingAudiences(unrelated))
+})
+
+test('publishing audience source wiring keeps generic exclusions isolated', () => {
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        'site/astro.config.mjs',
+        fixture.sourceArtifacts.get('site/astro.config.mjs').replace(
+          "!new URL(page).pathname.startsWith('/agent/')",
+          "!page.includes('/agent/')",
+        ),
+      ),
+    /sitemap filter must parse each absolute URL/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        'site/vendor/starlight-llms-txt/llms-full.txt.ts',
+        'exclude: starlightLllmsTxtContext.exclude',
+      ),
+    /generic full route must use only excludeFull/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        'site/vendor/starlight-llms-txt/llms-small.txt.ts',
+        'exclude: starlightLllmsTxtContext.excludeFull',
+      ),
+    /generic small route must use only exclude/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        'site/vendor/starlight-llms-txt/llms-custom.txt.ts',
+        'exclude: starlightLllmsTxtContext.excludeFull',
+      ),
+    /custom-set route must not use generic exclusions/,
   )
 })

@@ -5,44 +5,74 @@ sidebar:
   order: 5
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import PoolBuildingSOP from '../../../partials/sops/pool-building.mdx'
+
+## Outcome
+
+Grow and inspect an unordered pool whose members are mutually compatible for
+live improvisation, then optionally export the locked pool as a Rekordbox
+playlist.
 
 <WorkflowContract id="pool-building" />
 
-Builds unordered pools of tracks that mix well together in any direction. Unlike [Set Building](/workflows/set-building/) (which produces a fixed sequence), pools are crates for live improvisation — any permutation works.
+## Phases
 
-Paste into your agent:
+1. **Set the intent.** Confirm seed or candidate tracks, discovery scope, pool
+   size, and whether you perform with master tempo enabled.
+2. **Grow the pool.** Compare suggested additions against the approved members;
+   the score is symmetric because the crate must work in either direction.
+3. **Inspect cohesion.** Review weak members and surprising discoveries, then
+   keep, replace, or remove them based on how the pool should feel live.
+4. **Lock and export.** Approve the final membership, preview unrelated staged
+   metadata, and optionally create playlist XML.
+
+## Decisions and approval checkpoints
+
+- Valid seeds/candidates and parameters are the only hard requirements. Missing
+  BPM, key, genre, or analysis weakens an axis instead of blocking the pool.
+- Stratum contributes BPM/key evidence. Essentia is recommended for energy,
+  brightness, rhythm, and timbral evidence, but unavailable axes degrade
+  gracefully.
+- `balanced` prioritizes BPM and energy while using timbre for discovery;
+  `timbral` increases cross-genre sonic discovery.
+- Pool tools default to `master_tempo=false`, accounting for pitch shift when
+  tempo changes. Set it to `true` if that matches your Rekordbox performance
+  setup.
+
+Unlike [Set Building](/workflows/set-building/), there is no fixed energy arc or
+track order. See [Pool Discovery](/concepts/pool-discovery/) for the scoring and
+expansion model.
+
+## What changes and how to recover
+
+Current pool membership lives in the conversation. After a restart, re-submit
+the approved members; saved presets and exported XML persist. If growth stops
+early, widen filters, change seeds, or relax the scoring goal. Timbral
+normalization statistics may be stored locally when enough Essentia vectors
+exist.
+
+Playlist export writes and clears unrelated staged metadata as well as the
+playlist, so run `preview_changes` first and complete a separate metadata XML
+handoff when needed. Export fails closed unless the built-in database backup
+succeeds or the configured custom backup script exits zero. A failed export
+restores staged metadata for retry.
+
+## Finish in Rekordbox
+
+Keep the XML and follow the
+[playlist XML import steps](/reference/xml-export/#importing-into-rekordbox).
+Confirm the imported playlist name and count before calling the pool locked or
+deleting the XML. Use the separate All Tracks flow for any included staged
+metadata.
+
+## Start this workflow
 
 ```
 Build a track pool from my collection.
 ```
 
-## Prerequisites
+## Next steps
 
-- The only hard requirements are valid seed or candidate tracks and valid tool
-  parameters.
-- Rekordbox BPM, key, and genre improve compatibility scoring.
-- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
-- Built-in Stratum supplies BPM and key evidence when available, with Rekordbox
-  metadata as the complementary source.
-- Essentia is recommended for energy, brightness, rhythm, and timbral scoring,
-  but unavailable axes degrade gracefully.
-
-## How it differs from set building
-
-Pool scoring is **symmetric** — score(A,B) always equals score(B,A). There are no energy phases, no genre streaks, no BPM drift penalties. The question is "do these tracks belong in the same crate?" not "should B follow A?"
-
-## Presets
-
-- **balanced** (default) — BPM and energy lead, with timbral similarity as the discovery axis
-- **timbral** — upweights timbral similarity for cross-genre sonic discovery
-
-## Master tempo
-
-Pool tools default to `master_tempo=false`, which accounts for the pitch shift that happens when you adjust BPM without master tempo on. If you play with Rekordbox's master tempo enabled, set `master_tempo=true`.
-
-See [Pool Discovery](/concepts/pool-discovery/) for the full scoring model and expansion algorithm.
-
-<PoolBuildingSOP />
+- [Set Building](/workflows/set-building/) — turn candidates into a fixed sequence
+- [Chapter Set Planning](/workflows/chapter-set-planning/) — connect several locked pools
+- [Agent SOP: Pool Building](/agent/pool-building/) — advanced, model-facing operational instructions

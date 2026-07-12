@@ -1,4 +1,5 @@
 // @ts-check
+import sitemap from '@astrojs/sitemap'
 import starlight from '@astrojs/starlight'
 import { defineConfig, passthroughImageService } from 'astro/config'
 import starlightLlmsTxt from 'starlight-llms-txt'
@@ -9,6 +10,9 @@ export default defineConfig({
     service: passthroughImageService(),
   },
   integrations: [
+    sitemap({
+      filter: (page) => !new URL(page).pathname.startsWith('/agent/'),
+    }),
     starlight({
       title: 'reklawdbox',
       logo: {
@@ -46,6 +50,8 @@ export default defineConfig({
       }],
       plugins: [
         starlightLlmsTxt({
+          exclude: ['agent/**'],
+          excludeFull: ['agent/**'],
           customSets: [
             {
               label: 'Agent SOPs',

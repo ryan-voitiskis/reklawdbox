@@ -28,6 +28,7 @@ export interface ProjectContext {
 	promote: NonNullable<StarlightLllmsTextOptions['promote']>;
 	demote: NonNullable<StarlightLllmsTextOptions['demote']>;
 	exclude: NonNullable<StarlightLllmsTextOptions['exclude']>;
+	excludeFull: NonNullable<StarlightLllmsTextOptions['excludeFull']>;
 	pageSeparator: NonNullable<StarlightLllmsTextOptions['pageSeparator']>;
 	rawContent: NonNullable<StarlightLllmsTextOptions['rawContent']>;
 	customSelectors: NonNullable<StarlightLllmsTextOptions['customSelectors']>;
@@ -196,6 +197,14 @@ export interface StarlightLllmsTextOptions {
 	 * exclude: ["old-page", "tutorial/**"],
 	 */
 	exclude?: string[];
+
+	/**
+	 * Slugs of pages to exclude from `llms-full.txt`. Supports glob patterns.
+	 * This does not affect custom sets.
+	 *
+	 * @default []
+	 */
+	excludeFull?: string[];
 
 	/**
 	 * String used to separate pages in the generated text.

@@ -5,42 +5,74 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import ChapterSetPlanningSOP from '../../../partials/sops/chapter-set-planning.mdx'
+
+## Outcome
+
+Order at least two locked chapters, find bridge tracks between them, refine any
+internal sequences, and optionally export the approved full plan for Rekordbox.
 
 <WorkflowContract id="chapter-set-planning" />
 
-Plan a full night from **chapters** (pools you've already built and validated) connected by **bridge tracks**. Each chapter is an improvisation-ready crate; bridges handle the transitions between them.
+## Phases
 
-Paste into your agent:
+1. **Define the chapters.** Start from playlists already built and validated
+   with [Pool Building](/workflows/pool-building/), and mark each one as fixed
+   sequence or unordered improvisation.
+2. **Shape the night.** Compare chapter orders against the intended overall
+   energy arc and choose boundary tracks where needed.
+3. **Find and judge bridges.** Review one to three connecting tracks for each
+   boundary, then refine any chapter sequence that makes the transition weak.
+4. **Approve and export.** Confirm chapter order, bridges, internal sequences,
+   and unrelated staged metadata before creating optional playlist XML.
+
+## Decisions and approval checkpoints
+
+- A **chapter** is a locked pool you have validated. A **bridge** is a short run
+  that connects one chapter's boundary to the next. The **set plan** combines
+  chapter order, bridges, and the overall energy arc.
+- At least two chapter playlists and a sequenced/unordered decision for each are
+  hard requirements. Missing BPM, key, genre, or optional analysis weakens the
+  relevant scoring axis rather than blocking the plan.
+- Stratum can contribute BPM/key evidence; Essentia improves energy,
+  brightness, rhythm, and timbral evidence but remains optional.
+- Approve every bridge and any proposed internal reordering before the plan is
+  treated as complete.
+
+Use [Set Building](/workflows/set-building/) for one fixed sequence and
+[Pool Building](/workflows/pool-building/) when you only need a compatible
+unordered crate.
+
+## What changes and how to recover
+
+The plan lives in the conversation rather than a durable cursor. Chapter
+playlists persist, but ordering and bridge choices must be reconstructed after
+a restart. Change the chapter order, boundary tracks, or scoring preferences
+and rerun only the affected bridge search when a transition fails. Timbral
+normalization or saved presets may persist locally.
+
+Playlist export also writes and clears unrelated staged metadata, so inspect
+`preview_changes` first and complete its separate metadata handoff when needed.
+Export fails closed unless the built-in database backup succeeds or the
+configured custom backup script exits zero. A failed export restores staged
+metadata for retry.
+
+## Finish in Rekordbox
+
+Keep every exported XML and follow the
+[playlist XML import steps](/reference/xml-export/#importing-into-rekordbox).
+Verify each imported playlist's name, count, and order—including chapter
+boundaries—before cleanup. Use the separate All Tracks flow for any included
+staged metadata.
+
+## Start this workflow
 
 ```
 Plan a set from my locked chapters.
 ```
 
-This assumes you've already built chapters using [Pool Building](/workflows/pool-building/).
+## Next steps
 
-## Prerequisites
-
-- At least two locked chapter playlists and a clear sequenced/unordered choice
-  for each chapter are hard requirements.
-- Bridge and sequence tools still need valid candidates and parameters.
-- Missing BPM, key, or genre degrades the corresponding scoring axis; it does not block the workflow.
-- Built-in Stratum supplies BPM and key evidence when available. Essentia is
-  recommended for energy, brightness, rhythm, and timbral evidence, but missing
-  optional axes degrade gracefully.
-
-## Key terms
-
-- **Chapter** — a locked pool you've validated. Can be sequenced (fixed order) or unordered (improvise live).
-- **Bridge** — 1-3 tracks connecting two chapters, compatible with the tail of one and the head of the next.
-- **Set plan** — the full structure: chapter order, bridges, overall energy arc.
-
-## When to use this vs Set Building
-
-- **Single pool, fixed sequence** — use [Set Building](/workflows/set-building/)
-- **Multiple pools, improvise within each** — use Chapter Set Planning
-- **Just finding compatible tracks** — use [Pool Building](/workflows/pool-building/)
-
-<ChapterSetPlanningSOP />
+- [Pool Building](/workflows/pool-building/) — create or refine a chapter
+- [Set Building](/workflows/set-building/) — build a single fixed sequence
+- [Agent SOP: Chapter Set Planning](/agent/chapter-set-planning/) — advanced, model-facing operational instructions

@@ -5,46 +5,70 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import GenreClassificationSOP from '../../../partials/sops/genre-classification.mdx'
+
+## Outcome
+
+Assign genres to ungenred tracks from cached provider, label, BPM, and audio
+evidence, with confidence-based human review and a Rekordbox-compatible
+metadata XML handoff.
 
 <WorkflowContract id="genre-classification" />
 
-Paste into your agent:
+## Phases
 
-```
-Classify genres for my ungenred tracks.
-```
+1. **Measure readiness.** Run scoped `cache_coverage` for ungenred tracks.
+   Cached no-matches count as searched, and incomplete optional evidence is
+   allowed.
+2. **Prepare evidence.** Fill core Discogs, Beatport, and Stratum gaps where
+   practical. Essentia adds richer audio evidence but is not a hard gate.
+3. **Classify by confidence.** Compare Discogs styles, Beatport genres, label
+   associations, BPM, and audio features against the DJ-oriented taxonomy.
+4. **Review and stage.** Apply the chosen confidence policy, inspect low or
+   insufficient results individually, preview the aggregate, and export only
+   approved genres.
 
-## How it works
-
-The agent runs a genre decision tree against all your cached evidence — Discogs styles, Beatport genres, label associations, BPM, and audio features. Results come back grouped by confidence:
+## Decisions and approval checkpoints
 
 - **High** — multiple sources agree and BPM is plausible
 - **Medium** — partial agreement or single strong source
 - **Low** — weak or ambiguous evidence
 - **Insufficient** — conflicting data, needs a manual call
 
-High and medium confidence results can usually be approved in bulk. Low and insufficient need a closer look.
+Choose which tiers, if any, may be staged in bulk. Low and insufficient tracks
+need individual judgment. The built-in taxonomy has roughly 50 DJ-oriented
+genres and is a starting point, not a closed list; add a genre only when the
+evidence and your collection vocabulary support it.
 
-## Prerequisites
+## What changes and how to recover
 
-Run scoped `cache_coverage` for ungenred tracks. Fill missing core Discogs and
-Beatport searches and Stratum analysis where practical; a cached no-match counts
-as searched. Essentia improves the audio evidence but is not a hard gate. You
-can proceed with incomplete evidence: affected tracks should fall to low or
-insufficient confidence and receive individual review.
+Preparation may update enrichment and audio caches. Approved genres are staged
+in memory; they do not directly edit audio files or `master.db`. XML export
+proceeds only after the built-in database backup succeeds or the configured
+custom backup script exits zero. A failed XML write retains the staged genres
+for retry; clear unwanted genres before exporting.
 
-## Genre taxonomy
+Preparation is bounded and resumable through `page.next_offset`; retry failed
+explicit track IDs after the scope. Resume only with the same selector/library
+order, enrichment provider/cache policy, audio `skip_cached` setting, and
+Essentia availability. Restart from zero when one changes. Classification has
+its own caller-managed offset, and staged genres are lost on MCP restart unless
+exported.
 
-The built-in taxonomy has ~50 genres, tuned for DJ mixing — specific where it matters (Deep House and Afro House play very differently) without being overly granular. It's a starting point, not a closed list. You can add genres during classification when the evidence supports it.
+## Finish in Rekordbox
 
-## Step-by-step
+Keep the XML until the import is verified. Follow the
+[metadata XML handoff](/reference/xml-export/#importing-into-rekordbox), then
+check representative genre values in Rekordbox.
 
-<GenreClassificationSOP />
+## Start this workflow
+
+```
+Classify genres for my ungenred tracks.
+```
 
 ## Next steps
 
 - [Genre Audit](/workflows/genre-audit/) — verify existing genre tags against evidence
 - [Set Building](/workflows/set-building/) — build sets using your classified genres
+- [Agent SOP: Genre Classification](/agent/genre-classification/) — advanced, model-facing operational instructions

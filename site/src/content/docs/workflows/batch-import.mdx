@@ -5,34 +5,68 @@ sidebar:
   order: 5
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import BatchImportSOP from '../../../partials/sops/batch-import.mdx'
+
+## Outcome
+
+Turn one incoming batch into consistently tagged, named, and organized files
+that are ready for a normal Rekordbox file or folder import. Genre tagging stays
+separate so you can classify it after Rekordbox sees the new tracks.
 
 <WorkflowContract id="batch-import" />
 
-Paste into your agent:
+## Phases
+
+1. **Inspect the batch.** Confirm the incoming path, final library layout, and a
+   file backup before anything moves.
+2. **Resolve identity.** Separate albums from loose tracks and decide ambiguous
+   artists, releases, years, labels, filenames, and artwork.
+3. **Approve direct changes.** Review the proposed tags, names, destinations,
+   archive handling, and cover choices before writing or moving files.
+4. **Verify the result.** Re-read representative tags and paths in the final
+   location, then treat the batch as ready for Rekordbox import.
+
+## Decisions and approval checkpoints
+
+- Confirm the destination layout before the first move.
+- Resolve uncertain metadata rather than accepting a provider guess.
+- For album tracks, decide whether your library uses names such as
+  `NN Artist - Title.ext`; for loose tracks, a common form is
+  `Artist - Title.ext`.
+- Choose among multiple artwork images and verify filenames and tags before the
+  final move.
+
+## What changes and how to recover
+
+This workflow directly writes audio tags, creates or removes directories, and
+moves or renames files. It can also extract archives and add artwork. WAV files
+need Rekordbox-readable RIFF INFO alongside any ID3 data; embedded cover art is
+not reliably available to Rekordbox for WAV, so keep the chosen image beside
+the file when manual cover assignment is needed.
+
+Completed file operations are durable, not transactional. Resume from the last
+verified album or phase only after re-reading its tags and paths. Failed
+archives are isolated instead of deleted, and no-clobber moves stop on a
+collision. Use your file backup to undo tag, artwork, rename, or move changes;
+there is no automatic rollback.
+
+## Finish in Rekordbox
+
+Import the verified destination files or folder into the Rekordbox Collection.
+For a WAV with a colocated cover image, add that artwork manually after import.
+Then use [Genre Classification](/workflows/genre-classification/) if the new
+tracks still need genre tags.
+
+## Start this workflow
+
+Copy this prompt and replace the placeholder path:
 
 ```
 Process the new music in [/path/to/folder] for Rekordbox import.
 ```
 
-Genre tagging is handled separately by [Genre Classification](/workflows/genre-classification/) after import.
-
-## What it does
-
-1. Extracts and organizes (unzips archives, sorts albums vs loose tracks)
-2. Enriches metadata from Discogs/Beatport (label, year, artist verification)
-3. Writes tags to files (including WAV dual-tagging for Rekordbox compatibility)
-4. Renames files to a consistent convention
-5. Embeds cover art from included images or Discogs
-6. Moves everything to its final location
-
-## Step-by-step
-
-<BatchImportSOP />
-
 ## Next steps
 
 - [Collection Audit](/workflows/collection-audit/) — scan for any remaining naming or tagging issues
 - [Genre Classification](/workflows/genre-classification/) — classify genres for the newly imported tracks
+- [Agent SOP: Batch Import](/agent/batch-import/) — advanced, model-facing operational instructions

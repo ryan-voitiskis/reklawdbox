@@ -2494,6 +2494,464 @@ export function validateOnboardingSources({
   }
 }
 
+/**
+ * Derive the public workflow and agent publishing pairs from the canonical
+ * workflow catalog. This is the only inventory used by the audience checker.
+ */
+export function deriveAgentPairs(workflows) {
+  const pairs = workflows
+    .filter((workflow) => workflow.runtimeHelp !== null)
+    .map((workflow) => {
+      const humanRoute = workflow.route
+      const agentRoute = `/agent/${workflow.id}/`
+      return {
+        id: workflow.id,
+        title: workflow.title,
+        humanRoute,
+        agentRoute,
+        humanSource: `site/src/content/docs${
+          humanRoute.replace(/\/$/, '')
+        }.mdx`,
+        agentSource: `site/src/content/docs/agent/${workflow.id}.mdx`,
+        humanHtml: `${humanRoute.replace(/^\//, '')}index.html`,
+        agentHtml: `${agentRoute.replace(/^\//, '')}index.html`,
+        sopText: `_llms-txt/${workflow.id}-sop.txt`,
+        sopComponent: `${workflow.title.replace(/[^A-Za-z0-9]+/g, '')}SOP`,
+      }
+    })
+
+  if (pairs.length !== 9) {
+    throw new Error(
+      `publishing audience contract: expected exactly 9 agent pairs; found ${pairs.length}`,
+    )
+  }
+  return pairs
+}
+
+function audienceIssue(issues, condition, message) {
+  if (!condition) issues.push(`publishing audience contract: ${message}`)
+}
+
+function artifactContent(artifacts, file, kind, issues) {
+  const content = artifacts.get(file)
+  if (content === undefined) {
+    issues.push(`publishing audience contract: missing ${kind}: ${file}`)
+    return null
+  }
+  return content
+}
+
+function countExactHeading(source, heading) {
+  return source
+    .replaceAll('\r\n', '\n')
+    .split('\n')
+    .filter((line) => line.trimEnd() === heading)
+    .length
+}
+
+function htmlAttribute(tag, name) {
+  const attributes = new Map()
+  const pattern = /([^\s=<>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g
+  for (const match of tag.matchAll(pattern)) {
+    attributes.set(
+      match[1].toLowerCase(),
+      match[2] ?? match[3] ?? match[4] ?? '',
+    )
+  }
+  return attributes.get(name)
+}
+
+function validateAgentHtml(file, html, issues) {
+  const robots = (html.match(/<meta\b[^>]*>/gi) ?? []).filter((tag) =>
+    htmlAttribute(tag, 'name')?.toLowerCase() === 'robots'
+  )
+  audienceIssue(
+    issues,
+    robots.length === 1,
+    `${file} must contain exactly one robots meta; found ${robots.length}`,
+  )
+  if (robots.length === 1) {
+    audienceIssue(
+      issues,
+      htmlAttribute(robots[0], 'content')?.toLowerCase()
+        === 'noindex, nofollow',
+      `${file} robots meta must be exactly noindex, nofollow`,
+    )
+  }
+  audienceIssue(
+    issues,
+    !html.includes('data-pagefind-body'),
+    `${file} must not contain a Pagefind body marker`,
+  )
+}
+
+function validateAgentSource(pair, source, issues) {
+  const imports = [...source.matchAll(
+    /^import\s+([A-Za-z][A-Za-z0-9_]*)\s+from\s+['"]([^'"]*partials\/sops\/([^'"]+)\.mdx)['"]\s*;?$/gm,
+  )]
+  audienceIssue(
+    issues,
+    imports.length === 1,
+    `${pair.agentSource} must import exactly one canonical SOP; found ${imports.length}`,
+  )
+  if (imports.length !== 1) return
+
+  const [, binding, , importedId] = imports[0]
+  audienceIssue(
+    issues,
+    importedId === pair.id,
+    `${pair.agentSource} imports ${importedId}.mdx instead of ${pair.id}.mdx`,
+  )
+  const renderPattern = new RegExp(`<${binding}\\s*/>`, 'g')
+  const renders = source.match(renderPattern) ?? []
+  audienceIssue(
+    issues,
+    renders.length === 1,
+    `${pair.agentSource} must render ${binding} exactly once; found ${renders.length}`,
+  )
+}
+
+/**
+ * Validate the separation between indexed human docs and model-facing agent
+ * surfaces using explicit source and generated artifact maps.
+ */
+export function validatePublishingAudiences({
+  workflows,
+  sourceArtifacts,
+  builtArtifacts,
+}) {
+  const pairs = deriveAgentPairs(workflows)
+  const issues = []
+
+  const agentIndexFile = 'agent/index.html'
+  const agentIndex = artifactContent(
+    builtArtifacts,
+    agentIndexFile,
+    'agent HTML route',
+    issues,
+  )
+  if (agentIndex !== null) validateAgentHtml(agentIndexFile, agentIndex, issues)
+
+  for (const pair of pairs) {
+    const humanSource = artifactContent(
+      sourceArtifacts,
+      pair.humanSource,
+      'human workflow source',
+      issues,
+    )
+    const agentSource = artifactContent(
+      sourceArtifacts,
+      pair.agentSource,
+      'agent SOP source',
+      issues,
+    )
+    const humanHtml = artifactContent(
+      builtArtifacts,
+      pair.humanHtml,
+      'human workflow HTML route',
+      issues,
+    )
+    const agentHtml = artifactContent(
+      builtArtifacts,
+      pair.agentHtml,
+      'agent HTML route',
+      issues,
+    )
+
+    if (humanSource !== null) {
+      const matchingSop = new RegExp(
+        `partials/sops/${pair.id.replaceAll('-', '\\-')}\\.mdx`,
+      )
+      const matchingRender = new RegExp(`<${pair.sopComponent}\\b`)
+      audienceIssue(
+        issues,
+        !matchingSop.test(humanSource) && !matchingRender.test(humanSource),
+        `${pair.humanSource} must not import or render its matching agent SOP partial`,
+      )
+    }
+    if (agentSource !== null) validateAgentSource(pair, agentSource, issues)
+    if (humanHtml !== null) {
+      audienceIssue(
+        issues,
+        humanHtml.includes('data-pagefind-body'),
+        `${pair.humanHtml} must retain its Pagefind body marker`,
+      )
+    }
+    if (agentHtml !== null) validateAgentHtml(pair.agentHtml, agentHtml, issues)
+  }
+
+  const sitemapFiles = [...builtArtifacts.keys()].filter((file) =>
+    /^sitemap-.*\.xml$/.test(file)
+  )
+  audienceIssue(
+    issues,
+    sitemapFiles.length > 0,
+    'missing generated sitemap XML',
+  )
+  const sitemapPaths = new Set()
+  for (const file of sitemapFiles) {
+    const source = builtArtifacts.get(file)
+    for (const match of source.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+      try {
+        sitemapPaths.add(new URL(match[1]).pathname)
+      } catch {
+        issues.push(
+          `publishing audience contract: ${file} has invalid sitemap URL ${
+            JSON.stringify(match[1])
+          }`,
+        )
+      }
+    }
+  }
+  for (const pair of pairs) {
+    audienceIssue(
+      issues,
+      sitemapPaths.has(pair.humanRoute),
+      `sitemap must include human route ${pair.humanRoute}`,
+    )
+    audienceIssue(
+      issues,
+      !sitemapPaths.has(pair.agentRoute),
+      `sitemap must exclude agent route ${pair.agentRoute}`,
+    )
+  }
+  for (const family of ['/workflows/', '/mcp-tools/', '/getting-started/']) {
+    audienceIssue(
+      issues,
+      [...sitemapPaths].some((pathname) => pathname.startsWith(family)),
+      `sitemap must retain a representative ${family} route`,
+    )
+  }
+  audienceIssue(
+    issues,
+    ![...sitemapPaths].some((pathname) => pathname.startsWith('/agent/')),
+    'sitemap must not contain any /agent/ route',
+  )
+
+  const full = artifactContent(
+    builtArtifacts,
+    'llms-full.txt',
+    'generic full LLM bundle',
+    issues,
+  )
+  const small = artifactContent(
+    builtArtifacts,
+    'llms-small.txt',
+    'generic small LLM bundle',
+    issues,
+  )
+  const combined = artifactContent(
+    builtArtifacts,
+    '_llms-txt/agent-sops.txt',
+    'combined agent LLM bundle',
+    issues,
+  )
+  const llmsIndex = artifactContent(
+    builtArtifacts,
+    'llms.txt',
+    'LLM bundle index',
+    issues,
+  )
+
+  for (
+    const [file, source] of [
+      ['llms-full.txt', full],
+      ['llms-small.txt', small],
+    ]
+  ) {
+    if (source === null) continue
+    audienceIssue(
+      issues,
+      source
+        .replaceAll('\r\n', '\n')
+        .split('\n')
+        .filter((line) =>
+          line === '# Agent SOPs' || line.startsWith('# Agent SOP:')
+        )
+        .length === 0,
+      `${file} must not contain any agent SOP heading`,
+    )
+  }
+  if (combined !== null) {
+    const combinedAgentHeadings = combined
+      .replaceAll('\r\n', '\n')
+      .split('\n')
+      .filter((line) =>
+        line === '# Agent SOPs' || line.startsWith('# Agent SOP:')
+      )
+    audienceIssue(
+      issues,
+      countExactHeading(combined, '# Agent SOPs') === 1,
+      '_llms-txt/agent-sops.txt must contain # Agent SOPs exactly once',
+    )
+    audienceIssue(
+      issues,
+      combinedAgentHeadings.length === pairs.length + 1,
+      `_llms-txt/agent-sops.txt must contain exactly ${
+        pairs.length + 1
+      } agent headings; found ${combinedAgentHeadings.length}`,
+    )
+  }
+  if (llmsIndex !== null) {
+    audienceIssue(
+      issues,
+      llmsIndex.split('/_llms-txt/agent-sops.txt').length - 1 === 1,
+      'llms.txt must link the combined agent SOP bundle exactly once',
+    )
+  }
+
+  for (const pair of pairs) {
+    const humanHeading = `# ${pair.title}`
+    const agentHeading = `# Agent SOP: ${pair.title}`
+    for (
+      const [file, source] of [
+        ['llms-full.txt', full],
+        ['llms-small.txt', small],
+      ]
+    ) {
+      if (source === null) continue
+      audienceIssue(
+        issues,
+        countExactHeading(source, humanHeading) === 1,
+        `${file} must contain ${humanHeading} exactly once`,
+      )
+      audienceIssue(
+        issues,
+        countExactHeading(source, agentHeading) === 0,
+        `${file} must not contain ${agentHeading}`,
+      )
+    }
+    if (combined !== null) {
+      audienceIssue(
+        issues,
+        countExactHeading(combined, agentHeading) === 1,
+        `_llms-txt/agent-sops.txt must contain ${agentHeading} exactly once`,
+      )
+    }
+
+    const perSop = artifactContent(
+      builtArtifacts,
+      pair.sopText,
+      'per-SOP agent LLM bundle',
+      issues,
+    )
+    if (perSop !== null) {
+      const agentHeadings = perSop
+        .replaceAll('\r\n', '\n')
+        .split('\n')
+        .filter((line) =>
+          line === '# Agent SOPs' || line.startsWith('# Agent SOP:')
+        )
+      audienceIssue(
+        issues,
+        agentHeadings.length === 1 && agentHeadings[0] === agentHeading,
+        `${pair.sopText} must contain exactly its own ${agentHeading} heading`,
+      )
+    }
+    if (llmsIndex !== null) {
+      audienceIssue(
+        issues,
+        llmsIndex.split(`/${pair.sopText}`).length - 1 === 1,
+        `llms.txt must link ${pair.sopText} exactly once`,
+      )
+    }
+  }
+
+  const astroConfig = artifactContent(
+    sourceArtifacts,
+    'site/astro.config.mjs',
+    'Astro publishing config',
+    issues,
+  )
+  const fullRoute = artifactContent(
+    sourceArtifacts,
+    'site/vendor/starlight-llms-txt/llms-full.txt.ts',
+    'vendored generic-full route',
+    issues,
+  )
+  const smallRoute = artifactContent(
+    sourceArtifacts,
+    'site/vendor/starlight-llms-txt/llms-small.txt.ts',
+    'vendored generic-small route',
+    issues,
+  )
+  const customRoute = artifactContent(
+    sourceArtifacts,
+    'site/vendor/starlight-llms-txt/llms-custom.txt.ts',
+    'vendored custom-set route',
+    issues,
+  )
+  if (astroConfig !== null) {
+    audienceIssue(
+      issues,
+      (astroConfig.match(/^import sitemap from ['"]@astrojs\/sitemap['"]$/gm)
+        ?? []).length === 1,
+      'Astro config must import exactly one explicit sitemap integration',
+    )
+    audienceIssue(
+      issues,
+      (astroConfig.match(/\bsitemap\s*\(/g) ?? []).length === 1,
+      'Astro config must register exactly one explicit sitemap integration',
+    )
+    audienceIssue(
+      issues,
+      /filter:\s*\(page\)\s*=>\s*!new URL\(page\)\.pathname\.startsWith\(['"]\/agent\/['"]\)/
+        .test(astroConfig),
+      'sitemap filter must parse each absolute URL and reject only /agent/ pathnames',
+    )
+    audienceIssue(
+      issues,
+      (astroConfig.match(/exclude:\s*\[['"]agent\/\*\*['"]\]/g) ?? [])
+            .length === 1
+        && (astroConfig.match(
+            /excludeFull:\s*\[['"]agent\/\*\*['"]\]/g,
+          ) ?? []).length === 1,
+      'Astro config must exclude agent/** once from each generic LLM bundle',
+    )
+  }
+  if (fullRoute !== null) {
+    audienceIssue(
+      issues,
+      (fullRoute.match(/starlightLllmsTxtContext\.excludeFull\b/g) ?? [])
+            .length === 1
+        && !/starlightLllmsTxtContext\.exclude\b/.test(fullRoute),
+      'generic full route must use only excludeFull',
+    )
+  }
+  if (smallRoute !== null) {
+    audienceIssue(
+      issues,
+      (smallRoute.match(/starlightLllmsTxtContext\.exclude\b/g) ?? [])
+            .length === 1
+        && !/starlightLllmsTxtContext\.excludeFull\b/.test(smallRoute),
+      'generic small route must use only exclude',
+    )
+  }
+  if (customRoute !== null) {
+    audienceIssue(
+      issues,
+      !/starlightLllmsTxtContext\.exclude(?:Full)?\b/.test(customRoute),
+      'custom-set route must not use generic exclusions',
+    )
+  }
+
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
+async function readExistingArtifacts(root, relativeFiles) {
+  const artifacts = new Map()
+  await Promise.all(
+    [...new Set(relativeFiles)].map(async (file) => {
+      try {
+        artifacts.set(file, await fs.readFile(path.join(root, file), 'utf8'))
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+    }),
+  )
+  return artifacts
+}
+
 const REQUIRED_CI_DOC_PATHS = [
   'site/**',
   'src/tools/**',
@@ -2754,6 +3212,7 @@ async function main() {
   check(() =>
     validateXmlBackupContracts(workflows, XML_BACKUP_SUCCESS_CONDITION)
   )
+  const agentPairs = deriveAgentPairs(workflows)
 
   const [
     homepageDocument,
@@ -2874,6 +3333,41 @@ async function main() {
     })),
   )
   check(() => validateBuiltLinkSet(htmlDocuments, builtPaths))
+
+  const audienceSourceFiles = agentPairs.flatMap((pair) => [
+    pair.humanSource,
+    pair.agentSource,
+  ])
+  audienceSourceFiles.push(
+    'site/astro.config.mjs',
+    'site/vendor/starlight-llms-txt/llms-full.txt.ts',
+    'site/vendor/starlight-llms-txt/llms-small.txt.ts',
+    'site/vendor/starlight-llms-txt/llms-custom.txt.ts',
+  )
+  const audienceBuiltFiles = [
+    'agent/index.html',
+    'llms.txt',
+    'llms-full.txt',
+    'llms-small.txt',
+    '_llms-txt/agent-sops.txt',
+    ...agentPairs.flatMap((pair) => [
+      pair.humanHtml,
+      pair.agentHtml,
+      pair.sopText,
+    ]),
+    ...distFiles.filter((file) => /^sitemap-.*\.xml$/.test(file)),
+  ]
+  const [audienceSources, audienceBuild] = await Promise.all([
+    readExistingArtifacts(root, audienceSourceFiles),
+    readExistingArtifacts(distRoot, audienceBuiltFiles),
+  ])
+  check(() =>
+    validatePublishingAudiences({
+      workflows,
+      sourceArtifacts: audienceSources,
+      builtArtifacts: audienceBuild,
+    })
+  )
 
   check(() =>
     validateRuntimeHelpUrls(

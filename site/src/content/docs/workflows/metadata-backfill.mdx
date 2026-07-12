@@ -5,43 +5,68 @@ sidebar:
   order: 7
 ---
 
-import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-import MetadataBackfillSOP from '../../../partials/sops/metadata-backfill.mdx'
+
+## Outcome
+
+Fill missing labels, years, and albums from file, folder, cached provider, and
+researched evidence, then export only the approved staged changes as Rekordbox
+metadata XML.
 
 <WorkflowContract id="metadata-backfill" />
 
-Fills missing labels, years, and albums using data from Discogs, Beatport, Bandcamp, MusicBrainz, file tags, and folder paths. Labels are the strongest genre signal for electronic music, and years give era context that improves classification.
+## Phases
 
-Paste into your agent:
+1. **Measure readiness.** Start with scoped `cache_coverage` for the tracks with
+   missing metadata. A searched no-match is valid completion; an unavailable
+   release does not need to produce a match.
+2. **Fill evidence gaps.** Complete relevant Discogs and Beatport searches,
+   then use targeted Bandcamp, MusicBrainz, automatic enrichment, file/folder
+   evidence, or web research for unresolved gaps.
+3. **Review staged values.** Labels fill empty values but conflicts need your
+   approval. Year conflicts prefer the earliest credible year. Albums are
+   best-effort and may remain empty for singles or loose tracks.
+4. **Preview and export.** Confirm every remaining label/year gap was genuinely
+   researched, review the aggregate preview, and approve the XML.
+
+## Decisions and approval checkpoints
+
+- Resolve label conflicts and uncertain researched values rather than bypassing
+  the evidence gate casually.
+- Decide whether a missing album is a genuine gap or an acceptable loose-track
+  result.
+- Inspect `preview_changes` before export; staged values remain in memory until
+  exported, cleared, or the MCP process restarts.
+
+## What changes and how to recover
+
+Preparation may write enrichment caches and provider session state. Approved
+metadata changes are staged in memory; audio files and Rekordbox `master.db`
+are not edited. The export fails closed: XML is written only after the built-in
+Rekordbox database backup succeeds or the configured custom backup script exits
+zero. A failed XML write keeps staged changes available for retry.
+
+Bounded preparation follows its continuation cursor and later retries explicit
+failed track IDs. Resume with the same selector order, providers, and cache
+policy; restart from zero if any of those inputs change. Provider caches
+persist, but the research gate and staged changes belong to the current MCP
+process.
+
+## Finish in Rekordbox
+
+Keep the exported XML until the import is verified. Follow the
+[metadata XML handoff](/reference/xml-export/#importing-into-rekordbox),
+then confirm representative labels, years, and albums in Rekordbox before
+cleaning up the file.
+
+## Start this workflow
 
 ```
 Find tracks missing labels and years in my collection and fill them from enrichment data.
 ```
 
-## How it works
-
-The agent runs three backfill passes:
-
-1. **Labels** — pulls from all four enrichment providers. Empty labels are filled automatically; conflicts are grouped for your review.
-2. **Years** — checks six sources in priority order (file tags, folder path, Discogs, Beatport, MusicBrainz, Bandcamp). Conflicts auto-resolve to the earliest year.
-3. **Albums** — fills empty albums from file tags, folder paths, Bandcamp, and Discogs. Best-effort — an empty album is fine for singles and loose tracks.
-
-Label conflicts always need your approval. Year conflicts resolve automatically. Albums only fill empty values, so there are no conflicts.
-
-## Prerequisites
-
-Start with scoped `cache_coverage` as a Discogs, Beatport, and audio-analysis
-baseline. A searched no-match is valid completion; unavailable releases do not
-need to produce a match. The workflow uses targeted Bandcamp enrichment,
-individual MusicBrainz lookups, `auto_enrich`, and web research for the gaps
-those baseline sources leave behind.
-
-## Step-by-step
-
-<MetadataBackfillSOP />
-
 ## Next steps
 
 - [Genre Classification](/workflows/genre-classification/) — classify ungenred tracks using the newly backfilled labels and years
 - [Genre Audit](/workflows/genre-audit/) — verify existing genre tags
+- [Agent SOP: Metadata Backfill](/agent/metadata-backfill/) — advanced, model-facing operational instructions

@@ -54,6 +54,7 @@ export default function starlightLlmsTxt(opts: StarlightLllmsTextOptions = {}): 
 								promote: opts.promote ?? ['index*'],
 								demote: opts.demote ?? [],
 								exclude: opts.exclude ?? [],
+								excludeFull: opts.excludeFull ?? [],
 								defaultLocale: config.defaultLocale,
 								locales: config.locales,
 								pageSeparator: opts.pageSeparator ?? '\n\n',
