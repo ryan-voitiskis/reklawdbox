@@ -269,6 +269,80 @@ fn select_bpm_estimate(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PreprocessingStageConfig {
+    enable_normalization: bool,
+    normalization: preprocessing::normalization::NormalizationMethod,
+    enable_silence_trimming: bool,
+    preserve_time_origin: bool,
+    min_amplitude_db: f32,
+    frame_size: usize,
+}
+
+impl From<&AnalysisConfig> for PreprocessingStageConfig {
+    fn from(config: &AnalysisConfig) -> Self {
+        Self {
+            enable_normalization: config.enable_normalization,
+            normalization: config.normalization,
+            enable_silence_trimming: config.enable_silence_trimming,
+            preserve_time_origin: config.external_beat_grid.is_some(),
+            min_amplitude_db: config.min_amplitude_db,
+            frame_size: config.frame_size,
+        }
+    }
+}
+
+struct PreprocessingStageOutput {
+    samples: Vec<f32>,
+}
+
+fn run_preprocessing_stage(
+    samples: &[f32],
+    sample_rate: u32,
+    config: PreprocessingStageConfig,
+) -> Result<PreprocessingStageOutput, AnalysisError> {
+    use preprocessing::normalization::{normalize, NormalizationConfig};
+    let mut processed_samples = samples.to_vec();
+    if config.enable_normalization {
+        let norm_config = NormalizationConfig {
+            method: config.normalization,
+            target_loudness_lufs: -14.0,
+            max_headroom_db: 1.0,
+        };
+        let _loudness_metadata =
+            normalize(&mut processed_samples, norm_config, sample_rate as f32)?;
+    } else {
+        log::debug!("Skipping normalization (enable_normalization=false)");
+    }
+
+    use preprocessing::silence::{detect_and_trim, SilenceDetector};
+    let trim_silence = config.enable_silence_trimming && !config.preserve_time_origin;
+    let trimmed_samples = if trim_silence {
+        let silence_detector = SilenceDetector {
+            threshold_db: config.min_amplitude_db,
+            min_duration_ms: 500,
+            frame_size: config.frame_size,
+        };
+        detect_and_trim(&processed_samples, sample_rate, silence_detector)?.0
+    } else {
+        if config.preserve_time_origin {
+            log::debug!("Skipping silence trimming (external beat grid supplied)");
+        } else {
+            log::debug!("Skipping silence trimming (enable_silence_trimming=false)");
+        }
+        processed_samples
+    };
+
+    if trimmed_samples.is_empty() {
+        return Err(AnalysisError::ProcessingError(
+            "Audio is entirely silent after trimming".to_string(),
+        ));
+    }
+    Ok(PreprocessingStageOutput {
+        samples: trimmed_samples,
+    })
+}
+
 /// Main analysis function
 ///
 /// Analyzes audio samples and returns comprehensive analysis results including
@@ -325,53 +399,21 @@ pub fn analyze_audio(
 
     config.validate(sample_rate, samples.len())?;
 
-    // Phase 1A: Preprocessing
-    let mut processed_samples = samples.to_vec();
-
-    // 1. Normalization
-    use preprocessing::normalization::{normalize, NormalizationConfig};
-    if config.enable_normalization {
-        let norm_config = NormalizationConfig {
-            method: config.normalization,
-            target_loudness_lufs: -14.0, // Default target
-            max_headroom_db: 1.0,
-        };
-        let _loudness_metadata =
-            normalize(&mut processed_samples, norm_config, sample_rate as f32)?;
-    } else {
-        log::debug!("Skipping normalization (enable_normalization=false)");
-    }
-
-    // 2. Silence detection and trimming
+    // Phase 1A: Preprocessing. This typed stage boundary keeps the public
+    // AnalysisConfig compatible while preventing later stages from reaching
+    // into unrelated preprocessing controls.
     //
     // Silence trimming removes leading samples, which shifts the audio out
     // of phase with any externally-supplied beat grid (the grid is in
     // original-time). When an external grid is supplied, skip trimming so
     // frame indices and grid times share an origin. Spurious onsets in
     // leading silence are filtered by the onset threshold downstream.
-    use preprocessing::silence::{detect_and_trim, SilenceDetector};
-    let trim_silence = config.enable_silence_trimming && config.external_beat_grid.is_none();
-    let (trimmed_samples, _silence_regions) = if trim_silence {
-        let silence_detector = SilenceDetector {
-            threshold_db: config.min_amplitude_db,
-            min_duration_ms: 500,
-            frame_size: config.frame_size,
-        };
-        detect_and_trim(&processed_samples, sample_rate, silence_detector)?
-    } else {
-        if config.external_beat_grid.is_some() {
-            log::debug!("Skipping silence trimming (external beat grid supplied)");
-        } else {
-            log::debug!("Skipping silence trimming (enable_silence_trimming=false)");
-        }
-        (processed_samples.clone(), Vec::new())
-    };
-
-    if trimmed_samples.is_empty() {
-        return Err(AnalysisError::ProcessingError(
-            "Audio is entirely silent after trimming".to_string(),
-        ));
-    }
+    let trimmed_samples = run_preprocessing_stage(
+        samples,
+        sample_rate,
+        PreprocessingStageConfig::from(&config),
+    )?
+    .samples;
 
     // Phase 1A: Onset Detection
     // Note: For now, we only have energy flux working directly on samples
