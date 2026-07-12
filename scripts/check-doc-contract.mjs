@@ -2561,7 +2561,19 @@ function htmlAttribute(tag, name) {
   return attributes.get(name)
 }
 
-function validateAgentHtml(file, html, issues) {
+function htmlHeadingText(source) {
+  return source
+    .replace(/<[^>]+>/g, '')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function validateAgentHtml(file, html, expectedHeading, issues) {
   const robots = (html.match(/<meta\b[^>]*>/gi) ?? []).filter((tag) =>
     htmlAttribute(tag, 'name')?.toLowerCase() === 'robots'
   )
@@ -2583,6 +2595,20 @@ function validateAgentHtml(file, html, issues) {
     !html.includes('data-pagefind-body'),
     `${file} must not contain a Pagefind body marker`,
   )
+  const headings = [...html.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi)]
+    .map((match) => htmlHeadingText(match[1]))
+  audienceIssue(
+    issues,
+    headings.length === 1,
+    `${file} must contain exactly one H1; found ${headings.length}`,
+  )
+  if (headings.length === 1) {
+    audienceIssue(
+      issues,
+      headings[0] === expectedHeading,
+      `${file} H1 must be exactly ${expectedHeading}`,
+    )
+  }
 }
 
 function validateAgentSource(pair, source, issues) {
@@ -2623,6 +2649,39 @@ export function validatePublishingAudiences({
   const pairs = deriveAgentPairs(workflows)
   const issues = []
 
+  for (const workflow of workflows) {
+    const humanSourceFile = 'site/src/content/docs'
+      + workflow.route.replace(/\/$/, '')
+      + '.mdx'
+    const humanSource = artifactContent(
+      sourceArtifacts,
+      humanSourceFile,
+      'human workflow source',
+      issues,
+    )
+    if (humanSource === null) continue
+    for (const canonicalPair of pairs) {
+      const canonicalImport = new RegExp(
+        '^import\\b[^\\n]*\\bfrom\\s+[\'"][^\'"]*partials/sops/'
+          + canonicalPair.id
+          + '\\.mdx[\'"]\\s*;?$',
+        'm',
+      )
+      const canonicalRender = new RegExp(
+        '<' + canonicalPair.sopComponent + '\\b',
+      )
+      const label = canonicalPair.id === workflow.id
+        ? 'its matching agent SOP partial'
+        : 'canonical agent SOP ' + canonicalPair.id
+      audienceIssue(
+        issues,
+        !canonicalImport.test(humanSource)
+          && !canonicalRender.test(humanSource),
+        humanSourceFile + ' must not import or render ' + label,
+      )
+    }
+  }
+
   const agentIndexFile = 'agent/index.html'
   const agentIndex = artifactContent(
     builtArtifacts,
@@ -2630,15 +2689,11 @@ export function validatePublishingAudiences({
     'agent HTML route',
     issues,
   )
-  if (agentIndex !== null) validateAgentHtml(agentIndexFile, agentIndex, issues)
+  if (agentIndex !== null) {
+    validateAgentHtml(agentIndexFile, agentIndex, 'Agent SOPs', issues)
+  }
 
   for (const pair of pairs) {
-    const humanSource = artifactContent(
-      sourceArtifacts,
-      pair.humanSource,
-      'human workflow source',
-      issues,
-    )
     const agentSource = artifactContent(
       sourceArtifacts,
       pair.agentSource,
@@ -2658,17 +2713,6 @@ export function validatePublishingAudiences({
       issues,
     )
 
-    if (humanSource !== null) {
-      const matchingSop = new RegExp(
-        `partials/sops/${pair.id.replaceAll('-', '\\-')}\\.mdx`,
-      )
-      const matchingRender = new RegExp(`<${pair.sopComponent}\\b`)
-      audienceIssue(
-        issues,
-        !matchingSop.test(humanSource) && !matchingRender.test(humanSource),
-        `${pair.humanSource} must not import or render its matching agent SOP partial`,
-      )
-    }
     if (agentSource !== null) validateAgentSource(pair, agentSource, issues)
     if (humanHtml !== null) {
       audienceIssue(
@@ -2677,7 +2721,14 @@ export function validatePublishingAudiences({
         `${pair.humanHtml} must retain its Pagefind body marker`,
       )
     }
-    if (agentHtml !== null) validateAgentHtml(pair.agentHtml, agentHtml, issues)
+    if (agentHtml !== null) {
+      validateAgentHtml(
+        pair.agentHtml,
+        agentHtml,
+        `Agent SOP: ${pair.title}`,
+        issues,
+      )
+    }
   }
 
   const sitemapFiles = [...builtArtifacts.keys()].filter((file) =>
@@ -3334,10 +3385,12 @@ async function main() {
   )
   check(() => validateBuiltLinkSet(htmlDocuments, builtPaths))
 
-  const audienceSourceFiles = agentPairs.flatMap((pair) => [
-    pair.humanSource,
-    pair.agentSource,
-  ])
+  const audienceSourceFiles = [
+    ...workflows.map((workflow) =>
+      `site/src/content/docs${workflow.route.replace(/\/$/, '')}.mdx`
+    ),
+    ...agentPairs.map((pair) => pair.agentSource),
+  ]
   audienceSourceFiles.push(
     'site/astro.config.mjs',
     'site/vendor/starlight-llms-txt/llms-full.txt.ts',

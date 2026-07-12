@@ -86,6 +86,13 @@ function publishingAudienceFixture() {
     '/getting-started/',
   ]
 
+  for (const workflow of workflows) {
+    sourceArtifacts.set(
+      `site/src/content/docs${workflow.route.replace(/\/$/, '')}.mdx`,
+      '# Human explanation\n',
+    )
+  }
+
   sourceArtifacts.set(
     'site/astro.config.mjs',
     `import sitemap from '@astrojs/sitemap'
@@ -113,7 +120,7 @@ starlightLlmsTxt({
 
   builtArtifacts.set(
     'agent/index.html',
-    '<html><head><meta name="robots" content="noindex, nofollow"></head></html>',
+    '<html><head><meta name="robots" content="noindex, nofollow"></head><h1>Agent SOPs</h1></html>',
   )
   for (const pair of pairs) {
     const humanHeading = `# ${pair.title}`
@@ -2430,6 +2437,34 @@ test('publishing audiences reject robots and Pagefind policy drift', () => {
     (fixture) => fixture.builtArtifacts.set(pair.humanHtml, '<main></main>'),
     /must retain its Pagefind body marker/,
   )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        'agent/index.html',
+        '<meta name="robots" content="noindex, nofollow"><h1>Ordinary docs</h1>',
+      ),
+    /agent\/index\.html H1 must be exactly Agent SOPs/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.agentHtml,
+        '<meta name="robots" content="noindex, nofollow"><h1>Ordinary docs</h1>',
+      ),
+    new RegExp(
+      `${
+        pair.agentHtml.replaceAll('/', '\\/')
+      } H1 must be exactly Agent SOP: ${pair.title}`,
+    ),
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.builtArtifacts.set(
+        pair.agentHtml,
+        `<meta name="robots" content="noindex, nofollow"><h1>Agent SOP: ${pair.title}</h1><h1>Duplicate</h1>`,
+      ),
+    /must contain exactly one H1; found 2/,
+  )
 })
 
 test('publishing audiences retain human sitemap routes and exclude agents', () => {
@@ -2592,6 +2627,7 @@ test('publishing audiences keep generic and custom LLM sets disjoint', () => {
 test('publishing audiences enforce canonical source ownership', () => {
   const pairs = deriveAgentPairs(workflows)
   const [pair, wrongPair] = pairs
+  const unpaired = workflows.find((workflow) => workflow.runtimeHelp === null)
   expectAudienceFailure(
     (fixture) =>
       fixture.sourceArtifacts.set(
@@ -2625,6 +2661,26 @@ test('publishing audiences enforce canonical source ownership', () => {
         `import SOP from '../../../partials/sops/${pair.id}.mdx'\n<SOP />\n`,
       ),
     /must not import or render its matching agent SOP partial/,
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        pair.humanSource,
+        `import OtherSOP from '../../../partials/sops/${wrongPair.id}.mdx'\n<OtherSOP />\n`,
+      ),
+    new RegExp(
+      `must not import or render canonical agent SOP ${wrongPair.id}`,
+    ),
+  )
+  expectAudienceFailure(
+    (fixture) =>
+      fixture.sourceArtifacts.set(
+        `site/src/content/docs${unpaired.route.replace(/\/$/, '')}.mdx`,
+        `import OtherSOP from '../../../partials/sops/${wrongPair.id}.mdx'\n<OtherSOP />\n`,
+      ),
+    new RegExp(
+      `must not import or render canonical agent SOP ${wrongPair.id}`,
+    ),
   )
   expectAudienceFailure(
     (fixture) =>
