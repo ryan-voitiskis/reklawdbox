@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "corpus_id": "genre-verified-dub-techno-24",
+  "corpus_version": 1,
+  "analysis_window_seconds": 90,
+  "audio_root_env": "REKLAW_AUDIO_ROOT",
+  "grid_json_env": "REKLAW_GRID_JSON",
+  "comparison_tolerances": {
+    "bpm_absolute": 1.0,
+    "dub_stab_rate_absolute": 0.25,
+    "template_score_absolute": 0.15,
+    "histogram_peak_bins": 2
+  },
+  "exact_match_fields": [
+    "analysis.dub_stab.rate_basis",
+    "analysis.dub_stab.template_match.name",
+    "analysis.kick_pattern.pattern"
+  ],
+  "tracks": [
+    {
+      "track_id": 214457971,
+      "label": "E110 - 00946",
+      "relative_path": "play/play5/E110 - 00946.wav",
+      "tagged_bpm": 122.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 55290192,
+      "label": "E110 - After Irradiation",
+      "relative_path": "play/play5/E110 - After Irradiation.wav",
+      "tagged_bpm": 126.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 94682372,
+      "label": "Gradient - Cloud One",
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/01 Gradient - Cloud One.wav",
+      "tagged_bpm": 125.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 187196887,
+      "label": "Submoon, Gradient - Cloud One (Submoon RMX)",
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/02 Submoon, Gradient - Cloud One (Submoon RMX).wav",
+      "tagged_bpm": 127.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 116618818,
+      "label": "Gradient - Cloud Three",
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/04 Gradient - Cloud Three.wav",
+      "tagged_bpm": 120.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 70634360,
+      "label": "Gradient - Cloud Two",
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/03 Gradient - Cloud Two.wav",
+      "tagged_bpm": 123.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 234646925,
+      "label": "E110 - Dubster",
+      "relative_path": "play/play5/E110 - Dubster.wav",
+      "tagged_bpm": 115.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 77922683,
+      "label": "Burger Ink - Elvism",
+      "relative_path": "play/play32/Burger Ink - Elvism.wav",
+      "tagged_bpm": 120.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 178179391,
+      "label": "Monolake - Excentric",
+      "relative_path": "collection/Monolake/Momentum (2003)/06 Monolake - Excentric.flac",
+      "tagged_bpm": 116.54,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 98389722,
+      "label": "Dub Taylor - Figure Two",
+      "relative_path": "collection/Dub Taylor/Forms & Figures (2001)/11 Dub Taylor - Figure Two (Original 12\" Version).flac",
+      "tagged_bpm": 123.85,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 84354739,
+      "label": "Dub Taylor, Phew - Generate Dub",
+      "relative_path": "collection/Dub Taylor/Forms & Figures (2001)/17 Dub Taylor, Phew - Generate Dub (Bonus Track).flac",
+      "tagged_bpm": 120.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 38915066,
+      "label": "Sascha Rydell - Laisser Faire",
+      "relative_path": "collection/Various Artists/Fachwerk/Fachwerk Part 3 (2019)/11 Sascha Rydell - Laisser Faire.flac",
+      "tagged_bpm": 125.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 167686475,
+      "label": "Burger Ink - Love Is the Drug",
+      "relative_path": "play/play32/Burger Ink - Love Is the Drug [Paris Texas].wav",
+      "tagged_bpm": 122.4,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 222689720,
+      "label": "E110 - My Last Love",
+      "relative_path": "play/play5/E110 - My Last Love.wav",
+      "tagged_bpm": 126.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 84251068,
+      "label": "Azuni - Orkus",
+      "relative_path": "play/play32/Azuni - Orkus.wav",
+      "tagged_bpm": 124.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 185691911,
+      "label": "Vladislav Delay - Recovery IDea (Andy Stott Remix)",
+      "relative_path": "play/play9/Vladislav Delay - Recovery IDea (Andy Stott Remix).wav",
+      "tagged_bpm": 120.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 100543999,
+      "label": "Monolake - Reminiscence",
+      "relative_path": "collection/Monolake/Momentum (2003)/07 Monolake - Reminiscence.flac",
+      "tagged_bpm": 130.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 101295222,
+      "label": "E110 - SKFS",
+      "relative_path": "play/play5/E110 - SKFS.wav",
+      "tagged_bpm": 127.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 132936113,
+      "label": "Donato Dozzy, Peter Van Hoesen - Talis",
+      "relative_path": "play/play32/Donato Dozzy, Peter Van Hoesen - Talis.wav",
+      "tagged_bpm": 125.0,
+      "listening_annotation": "boundary/outlier: unusually on-beat response in the historical stab investigation"
+    },
+    {
+      "track_id": 265126276,
+      "label": "Dialogue - Talkstart",
+      "relative_path": "collection/Dialogue/dialogical (2020)/02 Dialogue - Talkstart.wav",
+      "tagged_bpm": 130.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 43682718,
+      "label": "E110 - Track 3",
+      "relative_path": "play/play5/E110 - Track 3.wav",
+      "tagged_bpm": 125.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 32148233,
+      "label": "E110 - Unheard Bedtime Story",
+      "relative_path": "play/play5/E110 - Unheard Bedtime Story.wav",
+      "tagged_bpm": 119.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 258130501,
+      "label": "E110 - Untitled 2",
+      "relative_path": "play/play5/E110 - Untitled 2.wav",
+      "tagged_bpm": 130.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    },
+    {
+      "track_id": 204427823,
+      "label": "Waage - W7",
+      "relative_path": "play/play24/Waage - W7.wav",
+      "tagged_bpm": 123.0,
+      "listening_annotation": "dub-techno positive; historical stab investigation"
+    }
+  ]
+}

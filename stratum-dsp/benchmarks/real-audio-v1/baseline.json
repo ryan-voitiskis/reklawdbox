@@ -1,0 +1,2192 @@
+{
+  "schema_version": 1,
+  "corpus_id": "genre-verified-dub-techno-24",
+  "corpus_version": 1,
+  "analysis_window_seconds": 90,
+  "results": [
+    {
+      "schema_version": 1,
+      "track_id": 214457971,
+      "relative_path": "play/play5/E110 - 00946.wav",
+      "audio_sha256": "7652f88ec59ca2f863e4442a715018f5d0f3a9c75db5b6b0f12abd4f4126df64",
+      "grid_sha256": "8d00250858bb1a0178b8cdf4a44058e24f4a382920046c4cdee793fedcd5418d",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 121.755126953125,
+        "bpm_confidence": 0.4120568037033081,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.05120439827442169,
+            "tau_iqr": 301.45733642578125,
+            "tau_median": 189.05177307128906,
+            "usable_count": 152
+          },
+          "mid": {
+            "fit_r2_median": 0.060190919786691666,
+            "tau_iqr": 198.91995239257812,
+            "tau_median": 141.29037475585938,
+            "usable_count": 141
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.17353658378124237,
+            0.0005561431171372533,
+            3.264402081981643e-08,
+            1.0270947425894406e-09,
+            9.559949103277177e-05,
+            0.1865873634815216,
+            8.57910442352295,
+            15.25473690032959,
+            14.256941795349121,
+            9.332415580749512,
+            7.694493293762207,
+            7.1971330642700195,
+            1.277147889137268,
+            1.2015959024429321,
+            8.993383407592773,
+            6.398252487182617,
+            10.526299476623535,
+            21.884153366088867,
+            10.207140922546387,
+            5.13223123550415,
+            0.8543310761451721,
+            0.4715580940246582,
+            8.873988151550293,
+            7.451649188995361,
+            31.839244842529297,
+            29.234262466430664,
+            2.2701547145843506,
+            0.008235102519392967,
+            8.168908607331105e-07,
+            0.00019903860811609775,
+            0.10381650924682617,
+            0.9917854070663452
+          ],
+          "histogram_peak_bin": 24,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 168,
+          "stab_onset_rate": 1.8676191568374634,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.7920579314231873
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6260051727294922,
+        "key": {
+          "Minor": 6
+        },
+        "key_clarity": 0.7022380232810974,
+        "key_confidence": 0.01461918093264103,
+        "kick_pattern": {
+          "confidence": 0.4400230348110199,
+          "kicks_per_bar": 3.9347825050354004,
+          "onset_count": 181,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.320806503295898,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 55290192,
+      "relative_path": "play/play5/E110 - After Irradiation.wav",
+      "audio_sha256": "5698cfb60bfb08778534ddb47f25d78c63932dea64679460ee8ca35679b5449f",
+      "grid_sha256": "96a76abea0f71ce7360561ce0b662d0491fb76c0424fd228eb13a96c73fe3b5b",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 125.75054168701172,
+        "bpm_confidence": 0.20631621778011322,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.06 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.6612221598625183,
+            "tau_iqr": 854.5526123046875,
+            "tau_median": 272.357421875,
+            "usable_count": 100
+          },
+          "mid": {
+            "fit_r2_median": 0.4295898377895355,
+            "tau_iqr": 174.47900390625,
+            "tau_median": 154.83348083496094,
+            "usable_count": 148
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.20203401148319244,
+            0.0007048010593280196,
+            4.718363655342728e-08,
+            3.223629028070718e-05,
+            0.038917891681194305,
+            0.8605507016181946,
+            0.35398006439208984,
+            0.4931148886680603,
+            1.532914400100708,
+            1.448388695716858,
+            1.035278558731079,
+            2.120049476623535,
+            0.8335821032524109,
+            0.2797395884990692,
+            8.98774528503418,
+            25.13974380493164,
+            12.876577377319336,
+            4.0922369956970215,
+            3.0735559463500977,
+            0.6158437728881836,
+            0.20057225227355957,
+            0.9881227612495422,
+            1.1184313297271729,
+            9.942910194396973,
+            11.158504486083984,
+            1.6699823141098022,
+            0.846935510635376,
+            0.5892601609230042,
+            1.0030977725982666,
+            0.2404722273349762,
+            2.6769251823425293,
+            2.022003173828125
+          ],
+          "histogram_peak_bin": 15,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 78,
+          "stab_onset_rate": 1.2481857538223267,
+          "template_match": {
+            "name": "offbeat_eighth",
+            "score": 0.640545129776001
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.7069481611251831,
+        "key": {
+          "Major": 10
+        },
+        "key_clarity": 0.7051234841346741,
+        "key_confidence": 0.056983545422554016,
+        "kick_pattern": {
+          "confidence": 0.4700481593608856,
+          "kicks_per_bar": 3.7352941036224365,
+          "onset_count": 127,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 9.652563095092773,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 94682372,
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/01 Gradient - Cloud One.wav",
+      "audio_sha256": "d348071ac3442409ba3d87e7ea9305ad49eab082e807c00390094b9e11f9cd50",
+      "grid_sha256": "2e0a6d32d4ae130decca587bbd7a4a897b70bf9adb500832293a43d854702224",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 124.9094009399414,
+        "bpm_confidence": 0.2689226269721985,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.5346485376358032,
+            "tau_iqr": 23.08263397216797,
+            "tau_median": 21.624980926513672,
+            "usable_count": 222
+          },
+          "mid": {
+            "fit_r2_median": 0.4366275668144226,
+            "tau_iqr": 130.3948974609375,
+            "tau_median": 62.553916931152344,
+            "usable_count": 244
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.0,
+            0.0,
+            4.2319213622609476e-43,
+            8.988755508188483e-32,
+            3.523363045933844e-22,
+            2.565239788979417e-14,
+            3.524958813727608e-08,
+            0.0009564812644384801,
+            0.5856650471687317,
+            12.245630264282227,
+            22.286941528320312,
+            26.70155143737793,
+            30.582433700561523,
+            34.31174087524414,
+            31.80508804321289,
+            22.28807258605957,
+            25.516149520874023,
+            44.2306022644043,
+            48.12388229370117,
+            43.08460998535156,
+            36.4305534362793,
+            33.89299392700195,
+            37.505760192871094,
+            29.94930076599121,
+            8.012432098388672,
+            0.2724095284938812,
+            0.0005792626179754734,
+            3.1000613631704255e-08,
+            3.210355158794753e-14,
+            6.154206086910249e-22,
+            2.165918871051114e-31,
+            1.3970945689318426e-42
+          ],
+          "histogram_peak_bin": 18,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 389,
+          "stab_onset_rate": 4.324427604675293,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.3699227273464203
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6952399611473083,
+        "key": {
+          "Major": 2
+        },
+        "key_clarity": 0.5550742745399475,
+        "key_confidence": 0.014821607619524002,
+        "kick_pattern": {
+          "confidence": 0.511255145072937,
+          "kicks_per_bar": 3.9787232875823975,
+          "onset_count": 187,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.165118217468262,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 187196887,
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/02 Submoon, Gradient - Cloud One (Submoon RMX).wav",
+      "audio_sha256": "83e714f8e96197e1a6732f8ba7319b5e3a6f2dad3850aa9b37b86ba46229d65d",
+      "grid_sha256": "5825dacbbd1b0aaec4177117c11bdcd98aff51a207d18538159329ace982906f",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 126.80197143554688,
+        "bpm_confidence": 0.36754631996154785,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.05 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.0772770494222641,
+            "tau_iqr": 361.9208679199219,
+            "tau_median": 230.08200073242188,
+            "usable_count": 70
+          },
+          "mid": {
+            "fit_r2_median": 0.1014426127076149,
+            "tau_iqr": 541.150634765625,
+            "tau_median": 266.4737854003906,
+            "usable_count": 113
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.8443965315818787,
+            1.174806833267212,
+            3.456312894821167,
+            1.594909906387329,
+            0.11003223806619644,
+            1.57330322265625,
+            5.840661525726318,
+            2.386963129043579,
+            4.821666717529297,
+            11.372427940368652,
+            12.601446151733398,
+            9.617042541503906,
+            4.376953125,
+            1.9624910354614258,
+            12.575119018554688,
+            6.127345561981201,
+            2.4780423641204834,
+            1.7896788120269775,
+            0.356384813785553,
+            1.4435679912567139,
+            2.7608957290649414,
+            4.858029365539551,
+            2.8891642093658447,
+            1.6612406969070435,
+            1.5062111616134644,
+            3.9299957752227783,
+            4.503324508666992,
+            1.797258973121643,
+            0.8170403838157654,
+            0.8533582091331482,
+            3.201084613800049,
+            1.3828761577606201
+          ],
+          "histogram_peak_bin": 10,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 93,
+          "stab_onset_rate": 1.0338605642318726,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.37498340010643005
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.7295071482658386,
+        "key": {
+          "Minor": 10
+        },
+        "key_clarity": 0.6949511766433716,
+        "key_confidence": 0.048567693680524826,
+        "kick_pattern": {
+          "confidence": 0.4396698474884033,
+          "kicks_per_bar": 3.9583332538604736,
+          "onset_count": 190,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.41800594329834,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 116618818,
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/04 Gradient - Cloud Three.wav",
+      "audio_sha256": "101a48175c75ec52f2138d95050ce8275ac3b997f1ea9131e47b907cbbbb7e47",
+      "grid_sha256": "1aa3bbe31b0a0a2f4c84d7e5265b2fc8d21a189e00a9ff12aa8c5901d454ff6f",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 120.0,
+        "bpm_confidence": 0.6635133028030396,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.03 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.6402571201324463,
+            "tau_iqr": 150.2279052734375,
+            "tau_median": 30.001144409179688,
+            "usable_count": 197
+          },
+          "mid": {
+            "fit_r2_median": 0.7396892309188843,
+            "tau_iqr": 31.296878814697266,
+            "tau_median": 58.91358947753906,
+            "usable_count": 216
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            4.7407526793108445e-09,
+            3.1010025850264356e-05,
+            0.03830878064036369,
+            0.9693098068237305,
+            1.3489683866500854,
+            0.23741820454597473,
+            2.695610761642456,
+            7.058419704437256,
+            16.509357452392578,
+            21.68397331237793,
+            28.4006404876709,
+            24.779329299926758,
+            21.216997146606445,
+            18.349233627319336,
+            36.1954231262207,
+            16.984140396118164,
+            7.730170726776123,
+            7.452335834503174,
+            5.630865097045898,
+            4.357292175292969,
+            4.12403678894043,
+            5.253321170806885,
+            3.1690735816955566,
+            5.996367454528809,
+            2.9776573181152344,
+            0.9763889908790588,
+            0.26117250323295593,
+            0.0020878647919744253,
+            0.20076556503772736,
+            0.9785987138748169,
+            0.08736598491668701,
+            0.0001428572868462652
+          ],
+          "histogram_peak_bin": 14,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 197,
+          "stab_onset_rate": 2.1900057792663574,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.3867781162261963
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6814846396446228,
+        "key": {
+          "Major": 8
+        },
+        "key_clarity": 0.685002326965332,
+        "key_confidence": 0.033331628888845444,
+        "kick_pattern": {
+          "confidence": 0.46554091572761536,
+          "kicks_per_bar": 4.0,
+          "onset_count": 176,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 9.97385311126709,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 70634360,
+      "relative_path": "collection/Gradient/Autumn Clouds EP (2021)/03 Gradient - Cloud Two.wav",
+      "audio_sha256": "5add6a5d2bc37c850a5d4ed54b099e96b58e9386d72aecab128c1cbf5c4fc5f4",
+      "grid_sha256": "601208f7c4e374be8227db325e396c101b5078341105fd97f284b181385aa620",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 122.80654907226562,
+        "bpm_confidence": 0.22278393805027008,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.12 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.8419968485832214,
+            "tau_iqr": 1.6788129806518555,
+            "tau_median": 16.02251434326172,
+            "usable_count": 85
+          },
+          "mid": {
+            "fit_r2_median": 0.591033935546875,
+            "tau_iqr": 85.5523681640625,
+            "tau_median": 64.53349304199219,
+            "usable_count": 90
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            4.661570283590835e-21,
+            2.4122568634439567e-13,
+            2.3443993768523796e-07,
+            0.004301388282328844,
+            1.4985918998718262,
+            10.232120513916016,
+            5.714897155761719,
+            12.222100257873535,
+            8.124139785766602,
+            2.985222339630127,
+            1.721447229385376,
+            1.9800101518630981,
+            3.890221118927002,
+            6.467748165130615,
+            14.624435424804688,
+            14.068826675415039,
+            7.161754608154297,
+            3.2362136840820312,
+            0.2627682089805603,
+            1.8443984985351562,
+            2.3942949771881104,
+            0.6633784174919128,
+            0.13448399305343628,
+            5.048346519470215,
+            7.798252105712891,
+            0.7739142179489136,
+            0.003144468180835247,
+            3.1946797207638156e-07,
+            6.713089285848017e-13,
+            2.713116866256985e-20,
+            2.0486362073588383e-29,
+            1.683971453428668e-30
+          ],
+          "histogram_peak_bin": 14,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 90,
+          "stab_onset_rate": 1.0005102157592773,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.6236221194267273
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8418378233909607,
+        "key": {
+          "Minor": 0
+        },
+        "key_clarity": 0.7392278909683228,
+        "key_confidence": 0.12347649037837982,
+        "kick_pattern": {
+          "confidence": 0.45572206377983093,
+          "kicks_per_bar": 3.914893627166748,
+          "onset_count": 184,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 9.050169944763184,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 234646925,
+      "relative_path": "play/play5/E110 - Dubster.wav",
+      "audio_sha256": "ddfb02a5a38c41993ffddf4a82c3ba0d323d5289a69776b405bfd1c7c16ebd31",
+      "grid_sha256": "b1975188b26871e163a1815d6207f6839ff39f28cc2ae1e09d8dbcfa37c7facb",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 115.44656372070312,
+        "bpm_confidence": 0.10354319214820862,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.04 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.3900616765022278,
+            "tau_iqr": 506.55560302734375,
+            "tau_median": 206.57965087890625,
+            "usable_count": 54
+          },
+          "mid": {
+            "fit_r2_median": 0.28941240906715393,
+            "tau_iqr": 202.24700927734375,
+            "tau_median": 203.04336547851562,
+            "usable_count": 81
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.002514123916626,
+            1.422776222229004,
+            0.050181563943624496,
+            0.6074204444885254,
+            1.6510530710220337,
+            4.098370552062988,
+            6.317629337310791,
+            8.547523498535156,
+            10.512514114379883,
+            2.9267611503601074,
+            8.588163375854492,
+            6.545248508453369,
+            11.011930465698242,
+            7.28021240234375,
+            9.089625358581543,
+            26.57329750061035,
+            39.995140075683594,
+            11.193153381347656,
+            3.7013983726501465,
+            1.8659417629241943,
+            1.5609972476959229,
+            2.0283610820770264,
+            0.8869036436080933,
+            1.810683012008667,
+            0.12013083696365356,
+            0.00016533888992853463,
+            4.515436469176848e-09,
+            2.3599394584106507e-15,
+            1.7672312604598348e-18,
+            1.8468747364774885e-11,
+            3.645776814664714e-06,
+            0.013752536848187447
+          ],
+          "histogram_peak_bin": 16,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 135,
+          "stab_onset_rate": 1.500765323638916,
+          "template_match": {
+            "name": "offbeat_eighth",
+            "score": 0.8690522909164429
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6500314474105835,
+        "key": {
+          "Minor": 2
+        },
+        "key_clarity": 0.6719045639038086,
+        "key_confidence": 0.041594188660383224,
+        "kick_pattern": {
+          "confidence": 0.6126676797866821,
+          "kicks_per_bar": 3.909090995788574,
+          "onset_count": 172,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.797056198120117,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 77922683,
+      "relative_path": "play/play32/Burger Ink - Elvism.wav",
+      "audio_sha256": "8fa8aad87be09d87b1fdc6e28017340699df954acec3659d6eeae4f3cdad7e29",
+      "grid_sha256": "45bd6df04beb7f123e7a7d2e285221ca149e65e9504f0db09c8768454d946db4",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 119.86255645751953,
+        "bpm_confidence": 0.05098837614059448,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.03 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.2694767415523529,
+            "tau_iqr": 2043.0665283203125,
+            "tau_median": 816.8993530273438,
+            "usable_count": 105
+          },
+          "mid": {
+            "fit_r2_median": 0.4359482228755951,
+            "tau_iqr": 204.918701171875,
+            "tau_median": 171.8460693359375,
+            "usable_count": 98
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            3.926270266535518e-18,
+            3.1829629210111676e-11,
+            4.774055014422629e-06,
+            0.01391955092549324,
+            0.9985523819923401,
+            3.5745139122009277,
+            4.943846702575684,
+            12.474370002746582,
+            11.528403282165527,
+            12.057888984680176,
+            7.2957940101623535,
+            6.049313068389893,
+            7.782512187957764,
+            6.838676452636719,
+            21.097957611083984,
+            28.942289352416992,
+            10.902684211730957,
+            7.899045944213867,
+            4.1738996505737305,
+            5.743403911590576,
+            6.219882488250732,
+            10.022050857543945,
+            16.35818099975586,
+            28.545442581176758,
+            11.272770881652832,
+            6.4679999351501465,
+            0.35125240683555603,
+            0.0005724129150621593,
+            1.915072900260384e-08,
+            1.2067663152938966e-14,
+            1.4093140173470143e-22,
+            8.885220790904159e-27
+          ],
+          "histogram_peak_bin": 15,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 186,
+          "stab_onset_rate": 5.386015892028809,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.6248354911804199
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.9137251377105713,
+        "key": {
+          "Minor": 4
+        },
+        "key_clarity": 0.635189414024353,
+        "key_confidence": 0.03396936506032944,
+        "kick_pattern": {
+          "confidence": 0.6560942530632019,
+          "kicks_per_bar": 3.8333332538604736,
+          "onset_count": 69,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.738953590393066,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 178179391,
+      "relative_path": "collection/Monolake/Momentum (2003)/06 Monolake - Excentric.flac",
+      "audio_sha256": "b97f1edf7a117a8d3cac47ae28a2f44e1fd9e7757639c547648d57628c232f2d",
+      "grid_sha256": "a11b64ae07d2286362eaee2bc66ddac4e29aa821eae72c7485b4816645f2f5b2",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 116.39285278320312,
+        "bpm_confidence": 0.28678178787231445,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.02 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.2585400342941284,
+            "tau_iqr": 196.42352294921875,
+            "tau_median": 114.47998046875,
+            "usable_count": 76
+          },
+          "mid": {
+            "fit_r2_median": 0.3248719274997711,
+            "tau_iqr": 149.11923217773438,
+            "tau_median": 91.69219970703125,
+            "usable_count": 95
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.5375663042068481,
+            1.0270835161209106,
+            0.09755988419055939,
+            0.0001764093030942604,
+            8.387574780499563e-06,
+            0.027910739183425903,
+            1.710299015045166,
+            1.9288711547851562,
+            0.04004215449094772,
+            1.5302091924240813e-05,
+            2.128212273078134e-09,
+            0.00015012944641057402,
+            0.23584724962711334,
+            9.57033920288086,
+            22.3808650970459,
+            10.036953926086426,
+            6.889926910400391,
+            1.0680464506149292,
+            0.005125115159898996,
+            6.696403715977794e-07,
+            0.001714559504762292,
+            0.42133843898773193,
+            2.7344517707824707,
+            1.7359987497329712,
+            0.4297258257865906,
+            1.760343074798584,
+            3.7203500270843506,
+            0.5258961915969849,
+            0.13712067902088165,
+            3.0666966438293457,
+            5.180741310119629,
+            2.746608257293701
+          ],
+          "histogram_peak_bin": 14,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 63,
+          "stab_onset_rate": 0.70035719871521,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.36415910720825195
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.5707898736000061,
+        "key": {
+          "Major": 8
+        },
+        "key_clarity": 0.6315892338752747,
+        "key_confidence": 0.02066466026008129,
+        "kick_pattern": {
+          "confidence": 0.680050253868103,
+          "kicks_per_bar": 3.954545497894287,
+          "onset_count": 174,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.273353576660156,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 98389722,
+      "relative_path": "collection/Dub Taylor/Forms & Figures (2001)/11 Dub Taylor - Figure Two (Original 12\" Version).flac",
+      "audio_sha256": "e9b599fb76e828ecd7be3139bcb66f474060b0bb0ec735cedd94a3b819bc5ca3",
+      "grid_sha256": "4fb451a5f568c03e988dd80b78a023c4e999965df4afc2ebac92e07c9b28610c",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 124.0,
+        "bpm_confidence": 0.24826562404632568,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.05 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.5924389958381653,
+            "tau_iqr": 19.860368728637695,
+            "tau_median": 23.532943725585938,
+            "usable_count": 194
+          },
+          "mid": {
+            "fit_r2_median": 0.5071303844451904,
+            "tau_iqr": 42.25225830078125,
+            "tau_median": 27.30307960510254,
+            "usable_count": 223
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            2.5079915523529053,
+            4.690171718597412,
+            2.0651819705963135,
+            2.0927507877349854,
+            2.0740818977355957,
+            4.304572582244873,
+            2.2427289485931396,
+            3.497986316680908,
+            4.605837345123291,
+            6.681631088256836,
+            1.5104416608810425,
+            0.1675233095884323,
+            1.0104440450668335,
+            0.9519941806793213,
+            2.2203867435455322,
+            1.7731828689575195,
+            0.8743320107460022,
+            2.2846531867980957,
+            2.2564926147460938,
+            6.949283599853516,
+            4.696479797363281,
+            2.666684627532959,
+            3.765838623046875,
+            4.010127544403076,
+            3.583817958831787,
+            5.199902057647705,
+            1.5178245306015015,
+            0.01083049550652504,
+            0.003976099193096161,
+            0.8571727871894836,
+            4.704354286193848,
+            0.8292025327682495
+          ],
+          "histogram_peak_bin": 19,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 69,
+          "stab_onset_rate": 0.7670578360557556,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.5167513489723206
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.5807077884674072,
+        "key": {
+          "Minor": 11
+        },
+        "key_clarity": 0.7176068425178528,
+        "key_confidence": 0.04666072875261307,
+        "kick_pattern": {
+          "confidence": 0.4712888300418854,
+          "kicks_per_bar": 3.95652174949646,
+          "onset_count": 182,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 12.696248054504395,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 84354739,
+      "relative_path": "collection/Dub Taylor/Forms & Figures (2001)/17 Dub Taylor, Phew - Generate Dub (Bonus Track).flac",
+      "audio_sha256": "c97ae387c73fda4b9c722483bce53baf9ba5cdcdb1e19df76ebe7acb29242c98",
+      "grid_sha256": "74392f26fcc61d622d6c2789c82e5b2abbdda785b71f0382f471b2ec18cadca5",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 119.86255645751953,
+        "bpm_confidence": 0.047339342534542084,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.08 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.6694287657737732,
+            "tau_iqr": 44.252994537353516,
+            "tau_median": 31.962738037109375,
+            "usable_count": 173
+          },
+          "mid": {
+            "fit_r2_median": 0.8243626952171326,
+            "tau_iqr": 22.72083282470703,
+            "tau_median": 31.34874725341797,
+            "usable_count": 161
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.4376531626326176e-27,
+            1.5343685788890188e-24,
+            2.989710784034828e-16,
+            1.0854239729241044e-09,
+            7.584920240333304e-05,
+            0.1159394159913063,
+            6.438726425170898,
+            30.746313095092773,
+            20.58688735961914,
+            8.612434387207031,
+            1.181795597076416,
+            0.017252212390303612,
+            0.0020281048491597176,
+            0.820061981678009,
+            9.463521003723145,
+            10.568452835083008,
+            14.196074485778809,
+            1.366449236869812,
+            0.8203041553497314,
+            1.4470397233963013,
+            1.1483489274978638,
+            0.7492027878761292,
+            3.5851058959960938,
+            13.432015419006348,
+            9.419856071472168,
+            5.54225492477417,
+            3.2292182445526123,
+            0.5865049958229065,
+            0.007763946894556284,
+            2.0499846868915483e-06,
+            9.94327883918622e-12,
+            8.834456446140378e-19
+          ],
+          "histogram_peak_bin": 7,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 116,
+          "stab_onset_rate": 1.2895464897155762,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.7813490629196167
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6792993545532227,
+        "key": {
+          "Minor": 1
+        },
+        "key_clarity": 0.7405487895011902,
+        "key_confidence": 0.07978036999702454,
+        "kick_pattern": {
+          "confidence": 0.5069400072097778,
+          "kicks_per_bar": 3.9777777194976807,
+          "onset_count": 179,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.3045015335083,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 38915066,
+      "relative_path": "collection/Various Artists/Fachwerk/Fachwerk Part 3 (2019)/11 Sascha Rydell - Laisser Faire.flac",
+      "audio_sha256": "482b3afa141d2ac12b3c510971fab83a4a6836590da22ffc0834d4ae85731759",
+      "grid_sha256": "e73f335c5c8187a1e491ef5e2e0ae2306d369c104a2f4b7bd1476bcf7a1d88ae",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 62.4547004699707,
+        "bpm_confidence": 0.44806453585624695,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.4563424289226532,
+            "tau_iqr": 45.28132629394531,
+            "tau_median": 58.3039436340332,
+            "usable_count": 131
+          },
+          "mid": {
+            "fit_r2_median": 0.46812644600868225,
+            "tau_iqr": 15.539543151855469,
+            "tau_median": 42.07095718383789,
+            "usable_count": 141
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.2150159556259885e-16,
+            4.876580805834863e-10,
+            3.966953590861522e-05,
+            0.08039786666631699,
+            6.440546989440918,
+            28.849109649658203,
+            9.645166397094727,
+            26.853551864624023,
+            7.969109535217285,
+            3.276467800140381,
+            5.211098670959473,
+            2.9787096977233887,
+            9.162774085998535,
+            15.349989891052246,
+            6.408574104309082,
+            5.919363021850586,
+            26.339757919311523,
+            10.755939483642578,
+            0.1882653534412384,
+            0.019096536561846733,
+            2.3442437648773193,
+            9.563332557678223,
+            5.181058406829834,
+            0.5639626383781433,
+            3.0019071102142334,
+            1.8474133014678955,
+            0.02254440076649189,
+            5.442980182124302e-06,
+            2.5766038608265873e-11,
+            2.360034589144178e-18,
+            4.125093881100622e-27,
+            5.754837432086236e-25
+          ],
+          "histogram_peak_bin": 5,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 150,
+          "stab_onset_rate": 2.100971221923828,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.519203782081604
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8792112469673157,
+        "key": {
+          "Major": 2
+        },
+        "key_clarity": 0.6659189462661743,
+        "key_confidence": 0.006584043148905039,
+        "kick_pattern": {
+          "confidence": 0.49811235070228577,
+          "kicks_per_bar": 3.972972869873047,
+          "onset_count": 147,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.797455787658691,
+        "section_count": 2
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 167686475,
+      "relative_path": "play/play32/Burger Ink - Love Is the Drug [Paris Texas].wav",
+      "audio_sha256": "fa3ffc8cc20abe3a3e8034a06dc4d5b3a7fabaadadda02af0d89fd6d69f48d1a",
+      "grid_sha256": "96c99b36bb1f2ce867ece40d9c6a353957873fed4572a6e01bd5538737a6a500",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 121.755126953125,
+        "bpm_confidence": 0.6009812951087952,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.9535419940948486,
+            "tau_iqr": 17.932498931884766,
+            "tau_median": 39.83100128173828,
+            "usable_count": 150
+          },
+          "mid": {
+            "fit_r2_median": 0.45904842019081116,
+            "tau_iqr": 98.76544189453125,
+            "tau_median": 82.95263671875,
+            "usable_count": 115
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            3.0633539100075105e-38,
+            1.0816885384293802e-27,
+            6.995643250216888e-19,
+            8.2865615411154e-12,
+            1.797810568859859e-06,
+            0.007143909577280283,
+            0.5201187133789062,
+            0.8140789866447449,
+            1.7944167852401733,
+            1.489754557609558,
+            2.485495090484619,
+            4.166740417480469,
+            3.549253225326538,
+            1.3739999532699585,
+            0.02345343306660652,
+            8.052948032855056e-06,
+            5.13322093165236e-11,
+            6.0237207129229536e-18,
+            1.2999107300472403e-26,
+            5.157266224788666e-37,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "histogram_peak_bin": 15,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 13,
+          "stab_onset_rate": 1.0850061178207397,
+          "template_match": {
+            "name": "offbeat_eighth",
+            "score": 0.7649317383766174
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8809338212013245,
+        "key": {
+          "Minor": 8
+        },
+        "key_clarity": 0.6685483455657959,
+        "key_confidence": 0.010879244655370712,
+        "kick_pattern": {
+          "confidence": 0.4739105701446533,
+          "kicks_per_bar": 3.7142856121063232,
+          "onset_count": 26,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 8.797197341918945,
+        "section_count": 5
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 222689720,
+      "relative_path": "play/play5/E110 - My Last Love.wav",
+      "audio_sha256": "2c275d611ff4f95662896ec7385c7f49dd91421400cbbe380d3ab79d29c150b5",
+      "grid_sha256": "6f76af9313753f999666e1431c2f87410ba6eac84de937572c2b49c119c09cf2",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 125.75054168701172,
+        "bpm_confidence": 0.20549969375133514,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.08 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.11033309251070023,
+            "tau_iqr": 141.44287109375,
+            "tau_median": 103.27647399902344,
+            "usable_count": 136
+          },
+          "mid": {
+            "fit_r2_median": 0.11418765783309937,
+            "tau_iqr": 232.52218627929688,
+            "tau_median": 119.6113510131836,
+            "usable_count": 132
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.0011513442732393742,
+            6.87988190861688e-08,
+            1.2961399802838974e-13,
+            6.606723701452211e-08,
+            0.0017361429054290056,
+            1.0809578895568848,
+            18.418107986450195,
+            17.575523376464844,
+            8.341358184814453,
+            2.238988161087036,
+            0.06246047094464302,
+            5.8811659982893616e-05,
+            1.1291818591274705e-09,
+            4.039981875444509e-16,
+            2.6556124766508304e-24,
+            3.987454080496784e-34,
+            8.2547529249116615e-25,
+            1.5976307964170046e-16,
+            5.78950554164237e-10,
+            4.080839062226005e-05,
+            0.06498744338750839,
+            4.116149425506592,
+            19.999732971191406,
+            11.052427291870117,
+            6.621115684509277,
+            0.8046742081642151,
+            0.004489621613174677,
+            6.597241508643492e-07,
+            0.00038367504021152854,
+            0.2037205994129181,
+            1.9812183380126953,
+            0.3529033660888672
+          ],
+          "histogram_peak_bin": 22,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 75,
+          "stab_onset_rate": 1.3274346590042114,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.4005941152572632
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8660135269165039,
+        "key": {
+          "Minor": 0
+        },
+        "key_clarity": 0.6513944864273071,
+        "key_confidence": 0.08302540332078934,
+        "kick_pattern": {
+          "confidence": 0.44654580950737,
+          "kicks_per_bar": 3.8064515590667725,
+          "onset_count": 118,
+          "pattern": "broken_beat",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.906546592712402,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 84251068,
+      "relative_path": "play/play32/Azuni - Orkus.wav",
+      "audio_sha256": "736283509c21fbd958b2668bc79c03234454929579def9ccf5a39a931645a528",
+      "grid_sha256": "88c7169817c519d12ee6706663482333d343114d06f12777379d1b40121dec5e",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 123.64768981933594,
+        "bpm_confidence": 0.43362191319465637,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.02 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.75846266746521,
+            "tau_iqr": 107.08688354492188,
+            "tau_median": 72.2343978881836,
+            "usable_count": 134
+          },
+          "mid": {
+            "fit_r2_median": 0.8045782446861267,
+            "tau_iqr": 59.79031753540039,
+            "tau_median": 54.92292022705078,
+            "usable_count": 118
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.470551755470521e-35,
+            2.4368832878269703e-25,
+            7.562183098144305e-17,
+            4.415617316233522e-10,
+            4.877114042756148e-05,
+            0.10245586931705475,
+            4.146841526031494,
+            5.3865861892700195,
+            2.8129100799560547,
+            4.587268829345703,
+            7.273295879364014,
+            4.100819110870361,
+            0.3940838873386383,
+            7.415699005126953,
+            3.468594789505005,
+            0.03266322985291481,
+            0.16443102061748505,
+            0.9950281977653503,
+            0.11028710007667542,
+            0.00022389079094864428,
+            8.324720468522173e-09,
+            5.669233867620395e-15,
+            7.071344105691356e-23,
+            1.6154864413756792e-32,
+            6.726232628759122e-44,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "histogram_peak_bin": 13,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 33,
+          "stab_onset_rate": 1.066159963607788,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.2710563540458679
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.9162261486053467,
+        "key": {
+          "Minor": 2
+        },
+        "key_clarity": 0.7068437337875366,
+        "key_confidence": 0.021569371223449707,
+        "kick_pattern": {
+          "confidence": 0.44437408447265625,
+          "kicks_per_bar": 3.8235294818878174,
+          "onset_count": 65,
+          "pattern": "broken_beat",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 9.010228157043457,
+        "section_count": 4
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 185691911,
+      "relative_path": "play/play9/Vladislav Delay - Recovery IDea (Andy Stott Remix).wav",
+      "audio_sha256": "fad9080632cc47c1ab603b0e16bfd91011966dc06daf5b26298a79517210052c",
+      "grid_sha256": "d3143bb8e074c1c1124f8e8d391179fe491c57ce47e6d6912870ff631b40d510",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 240.0,
+        "bpm_confidence": 0.1347242295742035,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.08 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.36867809295654297,
+            "tau_iqr": 506.3208312988281,
+            "tau_median": 228.8419189453125,
+            "usable_count": 91
+          },
+          "mid": {
+            "fit_r2_median": 0.16028854250907898,
+            "tau_iqr": 643.7620239257812,
+            "tau_median": 296.032958984375,
+            "usable_count": 90
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.6965125799179077,
+            1.0453373193740845,
+            1.0274611711502075,
+            0.7742605805397034,
+            3.541781187057495,
+            1.6221163272857666,
+            2.1020641326904297,
+            3.3457508087158203,
+            3.462097644805908,
+            4.325250625610352,
+            2.5199544429779053,
+            2.1682538986206055,
+            0.7956182360649109,
+            2.044177532196045,
+            2.745396137237549,
+            1.7612206935882568,
+            3.391399383544922,
+            3.663722515106201,
+            0.8536088466644287,
+            1.138867974281311,
+            3.3826115131378174,
+            1.676849126815796,
+            0.23125013709068298,
+            2.2071194648742676,
+            1.3439465761184692,
+            0.023020070046186447,
+            7.855591320549138e-06,
+            7.761127199046314e-05,
+            0.06312571465969086,
+            0.9404045343399048,
+            0.27595674991607666,
+            0.7232152223587036
+          ],
+          "histogram_peak_bin": 9,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 45,
+          "stab_onset_rate": 3.317054271697998,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.6200965642929077
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8002356886863708,
+        "key": {
+          "Minor": 7
+        },
+        "key_clarity": 0.7051211595535278,
+        "key_confidence": 0.07863745093345642,
+        "kick_pattern": {
+          "confidence": 0.4371296167373657,
+          "kicks_per_bar": 3.7142856121063232,
+          "onset_count": 26,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.205122947692871,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 100543999,
+      "relative_path": "collection/Monolake/Momentum (2003)/07 Monolake - Reminiscence.flac",
+      "audio_sha256": "f3af76de89aa8ca6b4815534a684e3c8d53b664fb25753b334660b3e1b452e42",
+      "grid_sha256": "85db7fbe59dd9745f07594219faf0dc9d3b078c70fbfd5a4a5f3dfaa6b893d59",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 129.95623779296875,
+        "bpm_confidence": 0.7035884857177734,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.08 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.4310299754142761,
+            "tau_iqr": 316.09490966796875,
+            "tau_median": 102.56517791748047,
+            "usable_count": 117
+          },
+          "mid": {
+            "fit_r2_median": 0.17416876554489136,
+            "tau_iqr": 699.3653564453125,
+            "tau_median": 348.9160461425781,
+            "usable_count": 120
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            7.203884601593018,
+            6.344870090484619,
+            4.732452869415283,
+            11.298294067382812,
+            6.761046409606934,
+            11.082139015197754,
+            7.435361385345459,
+            5.478499889373779,
+            0.47058796882629395,
+            0.6348038911819458,
+            0.579230785369873,
+            0.009695378132164478,
+            0.0022297159302979708,
+            0.32782408595085144,
+            1.0730797052383423,
+            1.0376180410385132,
+            0.928695797920227,
+            1.5749999284744263,
+            0.8213759660720825,
+            3.5879056453704834,
+            2.501359224319458,
+            5.944163799285889,
+            6.8028883934021,
+            8.618638038635254,
+            13.050047874450684,
+            5.3330817222595215,
+            2.614884853363037,
+            6.555328369140625,
+            3.2315750122070312,
+            4.814685344696045,
+            11.665572166442871,
+            2.019162654876709
+          ],
+          "histogram_peak_bin": 24,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 115,
+          "stab_onset_rate": 1.4117114543914795,
+          "template_match": {
+            "name": "anticipation",
+            "score": 0.49632659554481506
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.6809335947036743,
+        "key": {
+          "Minor": 0
+        },
+        "key_clarity": 0.6529083251953125,
+        "key_confidence": 0.0764119103550911,
+        "kick_pattern": {
+          "confidence": 0.6355645656585693,
+          "kicks_per_bar": 3.9111111164093018,
+          "onset_count": 176,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.742071151733398,
+        "section_count": 2
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 101295222,
+      "relative_path": "play/play5/E110 - SKFS.wav",
+      "audio_sha256": "4dfbdb3abe3fc9b6269daaf08872b586988ef290214e4414a1c2bd4e6d823376",
+      "grid_sha256": "80a64f7d1ae412edaf58f48dd69a8244d2bc625d51bc338cbb153d2761a2612c",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 126.80197143554688,
+        "bpm_confidence": 0.3240630328655243,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.3544701337814331,
+            "tau_iqr": 174.9024658203125,
+            "tau_median": 207.97853088378906,
+            "usable_count": 151
+          },
+          "mid": {
+            "fit_r2_median": 0.46985501050949097,
+            "tau_iqr": 74.51611328125,
+            "tau_median": 87.03519439697266,
+            "usable_count": 171
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.0,
+            1.4677620504877431e-40,
+            1.1540227145864388e-29,
+            1.6618762902180703e-20,
+            4.3833228604954477e-13,
+            2.1175316078370088e-07,
+            0.0018736084457486868,
+            0.30365169048309326,
+            0.938608705997467,
+            1.547868013381958,
+            1.9728361368179321,
+            0.23212990164756775,
+            0.023631567135453224,
+            0.859891951084137,
+            1.4542936086654663,
+            0.17319440841674805,
+            0.0005321557982824743,
+            0.02077641896903515,
+            0.7356972098350525,
+            0.4771448075771332,
+            0.005667923018336296,
+            0.00026914788759313524,
+            0.171514630317688,
+            2.579864025115967,
+            2.941756248474121,
+            0.5870235562324524,
+            0.004213842563331127,
+            6.529937763843918e-07,
+            1.958168219587386e-12,
+            1.0957608583231966e-19,
+            1.130023385576548e-28,
+            2.1387415902650023e-39
+          ],
+          "histogram_peak_bin": 24,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 12,
+          "stab_onset_rate": 0.28220993280410767,
+          "template_match": {
+            "name": "anticipation",
+            "score": 0.7110300064086914
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.69407057762146,
+        "key": {
+          "Major": 6
+        },
+        "key_clarity": 0.6631422638893127,
+        "key_confidence": 0.005851224064826965,
+        "kick_pattern": {
+          "confidence": 0.6050214171409607,
+          "kicks_per_bar": 3.91304349899292,
+          "onset_count": 90,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 12.083078384399414,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 132936113,
+      "relative_path": "play/play32/Donato Dozzy, Peter Van Hoesen - Talis.wav",
+      "audio_sha256": "bca6b667f3bc5e99252d423da727d5129f3f84d5466c1d47192c3cfa25fe8bfd",
+      "grid_sha256": "bfc899de39b0113f00426a26403632f28e1c8498949e6bbe9021b69228158907",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 124.0,
+        "bpm_confidence": 0.1813974380493164,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.27779442071914673,
+            "tau_iqr": 78.06507110595703,
+            "tau_median": 79.21317291259766,
+            "usable_count": 138
+          },
+          "mid": {
+            "fit_r2_median": 0.4589175283908844,
+            "tau_iqr": 171.53273010253906,
+            "tau_median": 117.4382095336914,
+            "usable_count": 143
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.7201496362686157,
+            7.2314133644104,
+            5.963404655456543,
+            3.210897445678711,
+            4.780600070953369,
+            3.405116558074951,
+            1.4952294826507568,
+            3.2892472743988037,
+            2.016317844390869,
+            3.2215287685394287,
+            2.4375627040863037,
+            1.1299853324890137,
+            0.968052089214325,
+            2.2865264415740967,
+            0.5375989079475403,
+            0.002964672865346074,
+            3.1658112220611656e-07,
+            7.573239813041255e-10,
+            5.379080539569259e-05,
+            0.07019081711769104,
+            1.6812682151794434,
+            0.7392332553863525,
+            0.0059664067812263966,
+            8.839467682264512e-07,
+            2.403875059078797e-12,
+            3.2074018724623146e-19,
+            3.828872982558629e-12,
+            1.4018519323144574e-06,
+            0.010210363194346428,
+            1.58293879032135,
+            6.2829437255859375,
+            2.3090598583221436
+          ],
+          "histogram_peak_bin": 1,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 45,
+          "stab_onset_rate": 1.4734753370285034,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.3433799147605896
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.3806123733520508,
+        "key": {
+          "Minor": 10
+        },
+        "key_clarity": 0.6802749633789062,
+        "key_confidence": 0.012136531993746758,
+        "kick_pattern": {
+          "confidence": 0.6912994384765625,
+          "kicks_per_bar": 3.7058823108673096,
+          "onset_count": 63,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.451101303100586,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 265126276,
+      "relative_path": "collection/Dialogue/dialogical (2020)/02 Dialogue - Talkstart.wav",
+      "audio_sha256": "8ed84b3ef514244ca8599576034c504e8a4a84eb2dd93ad7d7fd39db30f208b5",
+      "grid_sha256": "a5fa30b9b49f2edb0cd5201cf2d2497e6336753f5be48d73003c9065bd8a8604",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 129.95623779296875,
+        "bpm_confidence": 0.2679920196533203,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.06 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.37113285064697266,
+            "tau_iqr": 61.99742889404297,
+            "tau_median": 52.907432556152344,
+            "usable_count": 132
+          },
+          "mid": {
+            "fit_r2_median": 0.2554738521575928,
+            "tau_iqr": 294.93701171875,
+            "tau_median": 154.3759765625,
+            "usable_count": 128
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.6867378950119019,
+            4.346063613891602,
+            4.365520477294922,
+            1.139693260192871,
+            3.523733377456665,
+            13.49354362487793,
+            9.491114616394043,
+            12.43782901763916,
+            17.72856903076172,
+            6.024426460266113,
+            1.5331580638885498,
+            0.7660778760910034,
+            0.16165831685066223,
+            1.445329189300537,
+            0.8988645076751709,
+            0.07817899435758591,
+            0.9991001486778259,
+            1.5138945579528809,
+            1.6194911003112793,
+            0.8186451196670532,
+            0.14002521336078644,
+            0.9975989460945129,
+            0.1572946161031723,
+            0.5831042528152466,
+            2.9425134658813477,
+            0.2763098180294037,
+            0.0004819074529223144,
+            1.5589732171861215e-08,
+            9.341073413089793e-15,
+            1.5011200561656363e-13,
+            1.3370649298849457e-07,
+            0.002217724686488509
+          ],
+          "histogram_peak_bin": 8,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 70,
+          "stab_onset_rate": 0.778174638748169,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.5240006446838379
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.64449542760849,
+        "key": {
+          "Minor": 0
+        },
+        "key_clarity": 0.7147595286369324,
+        "key_confidence": 0.05772506445646286,
+        "kick_pattern": {
+          "confidence": 0.44086769223213196,
+          "kicks_per_bar": 3.9387755393981934,
+          "onset_count": 193,
+          "pattern": "broken_beat",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.966877937316895,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 43682718,
+      "relative_path": "play/play5/E110 - Track 3.wav",
+      "audio_sha256": "6ecb2fa4206da1753cebe44347fdca9892d5d4ee3ad476c93a9a3300a3bf2547",
+      "grid_sha256": "db00ccab9d3a0ce1009062ba80d479fddef483c93cf2c6a33934d513954628b4",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 124.9094009399414,
+        "bpm_confidence": 0.35232260823249817,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.01 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.2509239614009857,
+            "tau_iqr": 45.72897720336914,
+            "tau_median": 36.97643280029297,
+            "usable_count": 161
+          },
+          "mid": {
+            "fit_r2_median": 0.45265865325927734,
+            "tau_iqr": 26.466205596923828,
+            "tau_median": 39.422340393066406,
+            "usable_count": 160
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            1.7971602981769733e-31,
+            5.264991977125538e-22,
+            2.8250905236590178e-14,
+            2.7764397003693375e-08,
+            0.0004997649230062962,
+            0.1647653430700302,
+            0.9956274032592773,
+            0.5222744345664978,
+            4.8059983253479,
+            1.1006313562393188,
+            0.004849588964134455,
+            4.042047692109918e-07,
+            6.299735039183574e-13,
+            1.82288521930567e-20,
+            9.751299281314076e-30,
+            1.0877347788226652e-28,
+            1.0584701992161136e-19,
+            1.886975168133298e-12,
+            6.175307021294429e-07,
+            0.003792941803112626,
+            0.6089121699333191,
+            15.417923927307129,
+            44.1424560546875,
+            9.032905578613281,
+            4.0702290534973145,
+            0.69941246509552,
+            0.0025473793502897024,
+            1.90299402902383e-07,
+            2.859952129719706e-13,
+            8.404849726006335e-21,
+            4.7100493819369246e-30,
+            5.059107845751887e-41
+          ],
+          "histogram_peak_bin": 22,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 65,
+          "stab_onset_rate": 0.7225907444953918,
+          "template_match": {
+            "name": "unmatched",
+            "score": 0.16782014071941376
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.5707573294639587,
+        "key": {
+          "Major": 5
+        },
+        "key_clarity": 0.6159946322441101,
+        "key_confidence": 0.009135004132986069,
+        "kick_pattern": {
+          "confidence": 0.44132140278816223,
+          "kicks_per_bar": 3.9787232875823975,
+          "onset_count": 187,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 11.90711498260498,
+        "section_count": 1
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 32148233,
+      "relative_path": "play/play5/E110 - Unheard Bedtime Story.wav",
+      "audio_sha256": "c6d0b043969968631b85ee31e9c4d9aa59354f186f130900c9fda18ca3e63964",
+      "grid_sha256": "89848e03809fe759746b0b17937624f2cf812db83f836837be4543c1632f7a91",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 118.91627502441406,
+        "bpm_confidence": 0.35241544246673584,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.07 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.29636505246162415,
+            "tau_iqr": 451.7086181640625,
+            "tau_median": 311.1385498046875,
+            "usable_count": 84
+          },
+          "mid": {
+            "fit_r2_median": 0.323709636926651,
+            "tau_iqr": 370.00408935546875,
+            "tau_median": 246.44070434570312,
+            "usable_count": 108
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.090239979326725,
+            0.9813052415847778,
+            0.23323385417461395,
+            1.8162310123443604,
+            8.46108627319336,
+            6.4777398109436035,
+            9.61804485321045,
+            11.687326431274414,
+            3.502260446548462,
+            1.8278131484985352,
+            0.4522836208343506,
+            1.0888866186141968,
+            2.5390594005584717,
+            0.4569597840309143,
+            1.531088948249817,
+            2.2192890644073486,
+            2.041365385055542,
+            0.8703522682189941,
+            0.5182939171791077,
+            0.08532358705997467,
+            3.109736919403076,
+            11.147441864013672,
+            13.244000434875488,
+            19.724773406982422,
+            11.191710472106934,
+            3.124894142150879,
+            1.1592955589294434,
+            2.038526773452759,
+            1.5027860403060913,
+            0.8785271048545837,
+            1.6055821180343628,
+            0.11763036996126175
+          ],
+          "histogram_peak_bin": 23,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 100,
+          "stab_onset_rate": 1.6002380847930908,
+          "template_match": {
+            "name": "anticipation",
+            "score": 0.517861545085907
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.49622905254364014,
+        "key": {
+          "Minor": 5
+        },
+        "key_clarity": 0.7239266037940979,
+        "key_confidence": 0.0658571720123291,
+        "kick_pattern": {
+          "confidence": 0.6408172249794006,
+          "kicks_per_bar": 3.875,
+          "onset_count": 124,
+          "pattern": "irregular",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 8.377613067626953,
+        "section_count": 2
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 258130501,
+      "relative_path": "play/play5/E110 - Untitled 2.wav",
+      "audio_sha256": "efb615a15b8b38a4ce0db4497ec957938db0f7051b3421eed74a47fbc6864338",
+      "grid_sha256": "4a0652c1c75c6c7488566f358b478d913dd6810776ee2ea909c4548b110c78d7",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 129.95623779296875,
+        "bpm_confidence": 0.07378696650266647,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.03 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.10615738481283188,
+            "tau_iqr": 453.9501037597656,
+            "tau_median": 351.6979675292969,
+            "usable_count": 65
+          },
+          "mid": {
+            "fit_r2_median": 0.18323105573654175,
+            "tau_iqr": 300.653076171875,
+            "tau_median": 221.0452423095703,
+            "usable_count": 61
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            7.977524404736837e-23,
+            6.487740439277065e-15,
+            9.978953663392076e-09,
+            0.00030250076088123024,
+            0.20268785953521729,
+            4.2545061111450195,
+            13.022880554199219,
+            20.656082153320312,
+            12.999731063842773,
+            6.017547607421875,
+            1.9180327653884888,
+            2.649808168411255,
+            3.278484344482422,
+            1.601106882095337,
+            4.687636852264404,
+            7.6055378913879395,
+            5.840660572052002,
+            7.198503017425537,
+            4.792729377746582,
+            4.195145130157471,
+            0.9293574690818787,
+            2.8817074298858643,
+            8.770421981811523,
+            8.921707153320312,
+            5.931044578552246,
+            0.6334732174873352,
+            0.0025191379245370626,
+            2.0581087767368444e-07,
+            3.185705280302209e-13,
+            9.162733767418873e-21,
+            4.860272293757321e-30,
+            1.8246636039893913e-32
+          ],
+          "histogram_peak_bin": 7,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 103,
+          "stab_onset_rate": 2.422301769256592,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.6586300730705261
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.8871980309486389,
+        "key": {
+          "Minor": 8
+        },
+        "key_clarity": 0.7598382234573364,
+        "key_confidence": 0.030621759593486786,
+        "kick_pattern": {
+          "confidence": 0.47004976868629456,
+          "kicks_per_bar": 3.7916667461395264,
+          "onset_count": 91,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 9.758445739746094,
+        "section_count": 3
+      }
+    },
+    {
+      "schema_version": 1,
+      "track_id": 204427823,
+      "relative_path": "play/play24/Waage - W7.wav",
+      "audio_sha256": "53e1789943e38e48486c5aec6f1bbd926cbf9692d39927b9988a84a79d373e21",
+      "grid_sha256": "b7e46095c69a283bee456e812ce46602e3606475464710c421e42f57f50ec728",
+      "grid_source": "rekordbox_pqtz",
+      "analysis": {
+        "algorithm_version": "0.1.0-alpha",
+        "bpm": 122.9095458984375,
+        "bpm_confidence": 0.37109771370887756,
+        "confidence_warnings": [
+          "Low key detection confidence: 0.07 (may indicate ambiguous or atonal music)"
+        ],
+        "decay": {
+          "high": {
+            "fit_r2_median": 0.8044573664665222,
+            "tau_iqr": 65.2080078125,
+            "tau_median": 30.97962760925293,
+            "usable_count": 212
+          },
+          "mid": {
+            "fit_r2_median": 0.5482504367828369,
+            "tau_iqr": 61.97575378417969,
+            "tau_median": 65.52780151367188,
+            "usable_count": 226
+          }
+        },
+        "dub_stab": {
+          "histogram": [
+            0.8713536262512207,
+            0.343677282333374,
+            0.5371964573860168,
+            1.4672632217407227,
+            0.7067651152610779,
+            6.700927734375,
+            19.41250991821289,
+            16.54360008239746,
+            7.074866771697998,
+            5.881822109222412,
+            4.049501419067383,
+            0.18642829358577728,
+            0.00018360535614192486,
+            3.456610775387503e-09,
+            1.2260363571955793e-15,
+            8.139389511701688e-24,
+            1.0283686513539046e-33,
+            2.847210273753811e-25,
+            6.787567497413307e-17,
+            3.027384731790761e-10,
+            2.578781459305901e-05,
+            0.04426044225692749,
+            1.9906039237976074,
+            6.505739212036133,
+            6.264618873596191,
+            2.661588668823242,
+            0.04667508974671364,
+            1.9408731532166712e-05,
+            1.629603674224711e-10,
+            5.6934895686922e-10,
+            3.582293356885202e-05,
+            0.041282545775175095
+          ],
+          "histogram_peak_bin": 6,
+          "rate_basis": "main_groove",
+          "stab_onset_count": 66,
+          "stab_onset_rate": 0.7336376309394836,
+          "template_match": {
+            "name": "all_16th_offbeats",
+            "score": 0.45167651772499084
+          }
+        },
+        "flags": [],
+        "grid_stability": 1.0,
+        "harmonic_proportion": 0.7455189228057861,
+        "key": {
+          "Minor": 10
+        },
+        "key_clarity": 0.761170506477356,
+        "key_confidence": 0.07293447107076645,
+        "kick_pattern": {
+          "confidence": 0.4116804599761963,
+          "kicks_per_bar": 3.914893627166748,
+          "onset_count": 184,
+          "pattern": "four_on_floor",
+          "rate_basis": "main_groove"
+        },
+        "mod_centroid": 10.699944496154785,
+        "section_count": 1
+      }
+    }
+  ]
+}
