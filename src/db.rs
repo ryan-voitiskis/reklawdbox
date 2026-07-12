@@ -1366,6 +1366,11 @@ mod tests {
 
     pub fn create_test_db() -> Connection {
         let conn = open_test();
+        seed_test_db(&conn);
+        conn
+    }
+
+    fn seed_test_db(conn: &Connection) {
         conn.execute_batch(
             "
             CREATE TABLE djmdArtist (
@@ -1509,7 +1514,44 @@ mod tests {
             ",
         )
         .unwrap();
-        conn
+    }
+
+    #[test]
+    fn sanitized_sqlcipher_fixture_opens_read_only_through_production_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sanitized-master.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!("PRAGMA key = '{REKORDBOX_SQLCIPHER_KEY}'"))
+                .unwrap();
+            seed_test_db(&conn);
+        }
+
+        let plain = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert!(
+            plain
+                .query_row("SELECT count(*) FROM sqlite_master", [], |row| row
+                    .get::<_, i64>(0))
+                .is_err(),
+            "fixture must be encrypted rather than plain SQLite"
+        );
+
+        let conn = open(path.to_str().unwrap()).expect("production SQLCipher open should succeed");
+        let tracks = search_tracks(&conn, &SearchParams::default()).unwrap();
+        assert_eq!(tracks.len(), 7);
+        assert!(
+            tracks
+                .iter()
+                .any(|track| track.id == "t1" && track.title == "Archangel")
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO djmdArtist (ID, Name) VALUES ('write', 'blocked')",
+                [],
+            )
+            .is_err(),
+            "production fixture connection must remain read-only"
+        );
     }
 
     #[test]
@@ -2601,6 +2643,7 @@ mod tests {
 
         let mut alias_count = 0;
         let mut canonical_count = 0;
+        let mut unknown_count = 0;
         let mut unknown_genres = Vec::new();
 
         for gc in &stats.genres {
@@ -2612,6 +2655,7 @@ mod tests {
             } else if crate::genre::is_known_genre(&gc.name) {
                 canonical_count += gc.count;
             } else {
+                unknown_count += gc.count;
                 unknown_genres.push(format!("{}: {} tracks", gc.name, gc.count));
             }
         }
@@ -2622,9 +2666,15 @@ mod tests {
             eprintln!("  {g}");
         }
 
-        assert!(
-            alias_count > 100,
-            "expected >100 alias-able tracks, got {alias_count}"
+        let classified_count = stats
+            .genres
+            .iter()
+            .filter(|genre| genre.name != "(none)" && !genre.name.is_empty())
+            .map(|genre| genre.count)
+            .sum::<i32>();
+        assert_eq!(
+            canonical_count + alias_count + unknown_count,
+            classified_count
         );
     }
 

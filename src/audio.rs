@@ -1365,6 +1365,57 @@ def percentile(arr, p):
         );
     }
 
+    fn write_generated_wav(path: &std::path::Path, sample_rate: u32, seconds: u32) {
+        let sample_count = sample_rate * seconds;
+        let mut pcm = Vec::with_capacity(sample_count as usize * 2);
+        for index in 0..sample_count {
+            let phase = index as f32 / sample_rate as f32;
+            let tone = (phase * 220.0 * std::f32::consts::TAU).sin() * 0.18;
+            let beat_position = index % (sample_rate / 2);
+            let click = if beat_position < 400 {
+                (1.0 - beat_position as f32 / 400.0) * 0.75
+            } else {
+                0.0
+            };
+            let sample = ((tone + click).clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        let data_size = pcm.len() as u32;
+        let mut wav = Vec::with_capacity(44 + pcm.len());
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.extend_from_slice(&pcm);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn generated_wav_fixture_decodes_and_analyzes_without_private_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("120-bpm-generated.wav");
+        write_generated_wav(&path, 44_100, 8);
+
+        let (samples, sample_rate) = decode_to_samples(path.to_str().unwrap()).unwrap();
+        assert_eq!(sample_rate, 44_100);
+        assert_eq!(samples.len(), 44_100 * 8);
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+
+        let result = analyze_with_stratum(&samples, sample_rate, None).unwrap();
+        assert!(result.bpm.is_finite() && result.bpm > 0.0);
+        assert!(result.duration_seconds >= 7.9 && result.duration_seconds <= 8.1);
+        assert!(!result.analyzer_version.is_empty());
+    }
+
     // ==================== Integration tests (real audio files) ====================
     // Run with: cargo test -- --ignored
 
