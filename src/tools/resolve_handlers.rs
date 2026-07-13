@@ -548,6 +548,8 @@ pub(crate) fn resolve_single_track(
             "rating": s.rating,
             "color": s.color,
             "label": s.label,
+            "year": s.year,
+            "album": s.album,
         })
     });
 

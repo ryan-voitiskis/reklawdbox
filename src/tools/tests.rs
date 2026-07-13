@@ -13,7 +13,7 @@ use serde::Deserialize;
 use tempfile::TempDir;
 
 use crate::genre;
-use crate::types::TrackChange;
+use crate::types::{EditableField, TrackChange};
 
 fn extract_json(result: &CallToolResult) -> serde_json::Value {
     let text = result
@@ -8492,6 +8492,120 @@ fn resolve_single_track_with_staged_changes() {
     assert!(sc["comments"].is_null(), "unstaged field should be null");
     assert_eq!(sc["rating"], 5);
     assert!(sc["color"].is_null(), "unstaged field should be null");
+    assert!(
+        sc.get("year").is_some_and(serde_json::Value::is_null),
+        "unstaged year should be present and null"
+    );
+    assert!(
+        sc.get("album").is_some_and(serde_json::Value::is_null),
+        "unstaged album should be present and null"
+    );
+}
+
+#[tokio::test]
+async fn resolve_tools_return_all_staged_fields_in_full_format() {
+    let track_id = "resolve-all-staged-fields";
+    let db_conn = create_single_track_test_db(track_id, "/tmp/resolve-all-staged-fields.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let staged = TrackChange {
+        track_id: track_id.to_string(),
+        genre: Some("Techno".to_string()),
+        comments: Some("staged comments".to_string()),
+        rating: Some(5),
+        color: Some("Red".to_string()),
+        label: Some("Staged Label".to_string()),
+        year: Some(1997),
+        album: Some("Staged Album".to_string()),
+    };
+    assert_eq!(server.state.changes.stage(vec![staged]), (1, 1));
+
+    let expected_staged = serde_json::json!({
+        "genre": "Techno",
+        "comments": "staged comments",
+        "rating": 5,
+        "color": "Red",
+        "label": "Staged Label",
+        "year": 1997,
+        "album": "Staged Album",
+    });
+    let expected_keys: HashSet<&str> = EditableField::ALL
+        .iter()
+        .map(EditableField::as_str)
+        .collect();
+
+    let single_result = server
+        .resolve_track_data(Parameters(ResolveTrackDataParams {
+            track_id: track_id.to_string(),
+        }))
+        .await
+        .expect("resolve_track_data should succeed");
+    let single_payload = extract_json(&single_result);
+    let single_staged = single_payload
+        .get("staged_changes")
+        .expect("resolve_track_data should include staged_changes");
+    assert_eq!(single_staged, &expected_staged);
+    let single_keys: HashSet<&str> = single_staged
+        .as_object()
+        .expect("staged_changes should be an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(single_keys, expected_keys);
+
+    let batch_result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![track_id.to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            format: Some(ResolveFormat::Full),
+        }))
+        .await
+        .expect("full resolve_tracks_data should succeed");
+    let batch_payload = extract_json(&batch_result);
+    let batch_item = batch_payload
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("full resolve_tracks_data should return the requested track");
+    let batch_staged = batch_item
+        .get("staged_changes")
+        .expect("full resolve_tracks_data should include staged_changes");
+    assert_eq!(batch_staged, &expected_staged);
+    assert_eq!(batch_staged, single_staged);
+
+    let compact_result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![track_id.to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            format: Some(ResolveFormat::Classification),
+        }))
+        .await
+        .expect("classification resolve_tracks_data should succeed");
+    let compact_payload = extract_json(&compact_result);
+    let compact_item = compact_payload
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("classification resolve_tracks_data should return the requested track");
+    assert_eq!(
+        compact_item.get("track_id"),
+        Some(&serde_json::json!(track_id))
+    );
+    assert!(compact_item.get("artist").is_some());
+    assert!(compact_item.get("audio").is_some());
+    assert!(compact_item.get("rekordbox").is_none());
+    assert!(compact_item.get("staged_changes").is_none());
 }
 
 #[test]
