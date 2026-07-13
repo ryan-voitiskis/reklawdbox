@@ -1,242 +1,114 @@
-use std::collections::{HashMap, HashSet};
+//! MCP planning compatibility and JSON presentation mappings.
+//!
+//! Scoring policy lives in domain planning; stateful profile and timbral
+//! orchestration lives in application planning.
 
-use rusqlite::Connection;
+// Temporary compatibility exports for legacy colocated tests; retire in Plan 046.
+#![allow(dead_code, unused_imports)]
 
-use super::*;
-use crate::genre;
-pub(super) use crate::genre::map_genre_through_taxonomy;
+use super::params::{
+    EnergyCurveInput, EnergyCurvePreset, EnergyPhase, HarmonicMixingStyle, PoolPreset,
+    SequencingPriority,
+};
+use crate::domain::planning as domain;
 
-const WARMUP_PHASE_END: f64 = 0.15;
-const BUILD_PHASE_END: f64 = 0.45;
-const PEAK_PHASE_END: f64 = 0.75;
-const PEAKONLY_BUILD_END: f64 = 0.10;
-const PEAKONLY_RELEASE_END: f64 = 0.85;
+pub(super) use crate::application::planning::TimbralSourceSnapshot;
+pub(super) use crate::application::planning::sweep_optimal_reference_bpm;
+pub(super) use crate::application::planning::{
+    build_track_profile, build_track_profiles, ensure_timbral_norm_stats,
+    load_timbral_source_snapshot,
+};
+#[cfg(test)]
+pub(super) use crate::application::planning::{
+    compute_timbral_norm_stats, load_timbral_source_snapshot_for_test,
+};
+pub(super) use crate::domain::classification::taxonomy::{GenreFamily, map_genre_through_taxonomy};
+pub(super) use crate::domain::planning::{
+    AxisScore, CamelotKey, CandidatePlan, CandidatePoolScore, CandidateTransition, DiscoveredPool,
+    PoolAxisScores, PoolCohesionResult, PoolWeights, PriorityWeights, ScoreAdjustment,
+    ScoringContext, TIMBRAL_VECTOR_SCHEMA_VERSION, TimbralFeatures, TrackProfile,
+};
+pub(super) use crate::domain::planning::{
+    bpm_pitch_shift, build_timbral_vector, composite_score, find_bridge_tracks, format_camelot,
+    genre_family_for, key_to_camelot, musical_key_to_camelot, parse_camelot_key,
+    round_to_3_decimals, score_bpm_axis, score_genre_axis, score_key_axis,
+    score_key_with_pitch_shifts, score_pool_bpm_axis, score_pool_energy_axis,
+    score_pool_genre_axis, transpose_camelot_key,
+};
 
-const BPM_DRIFT_PENALTY_FACTOR: f64 = 0.7;
-
-const BRIGHTNESS_SIMILAR_HZ: f64 = 300.0;
-const BRIGHTNESS_SHIFT_HZ: f64 = 800.0;
-const BRIGHTNESS_JUMP_HZ: f64 = 1500.0;
-
-const RHYTHM_MATCHED_DELTA: f64 = 0.1;
-const RHYTHM_MANAGEABLE_DELTA: f64 = 0.25;
-const RHYTHM_CHALLENGING_DELTA: f64 = 0.5;
-
-#[derive(Debug, Clone)]
-pub(super) struct TimbralFeatures {
-    pub(super) mfcc_mean: Vec<f64>,
-    pub(super) mfcc_std: Vec<f64>,
-    pub(super) spectral_contrast_mean: Vec<f64>,
-    pub(super) spectral_centroid_cv: f64,
-    pub(super) dissonance_mean: f64,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TrackProfile {
-    pub(super) track: crate::types::Track,
-    pub(super) camelot_key: Option<CamelotKey>,
-    pub(super) key_display: String,
-    pub(super) bpm: f64,
-    pub(super) energy: f64,
-    pub(super) brightness: Option<f64>,
-    pub(super) rhythm_regularity: Option<f64>,
-    pub(super) loudness_range: Option<f64>,
-    pub(super) canonical_genre: Option<String>,
-    pub(super) genre_family: GenreFamily,
-    /// Timbral features from Essentia (used by pool compatibility kernel).
-    /// All-or-nothing: present only when all 5 components are available.
-    pub(super) timbral: Option<TimbralFeatures>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CamelotKey {
-    number: u8,
-    letter: char,
-}
-
-pub(super) use crate::genre::GenreFamily;
-
-#[derive(Debug, Clone)]
-pub(super) struct AxisScore {
-    pub(super) value: f64,
-    pub(super) label: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ScoreAdjustment {
-    pub(super) kind: &'static str,
-    pub(super) delta: f64,
-    pub(super) composite_without: f64,
-    pub(super) reason: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TransitionScores {
-    pub(super) key: AxisScore,
-    pub(super) bpm: AxisScore,
-    pub(super) energy: AxisScore,
-    pub(super) genre: AxisScore,
-    pub(super) brightness: AxisScore,
-    pub(super) rhythm: AxisScore,
-    pub(super) composite: f64,
-    pub(super) effective_to_key: Option<String>,
-    pub(super) pitch_shift_semitones: i32,
-    pub(super) key_relation: String,
-    pub(super) bpm_adjustment_pct: f64,
-    pub(super) adjustments: Vec<ScoreAdjustment>,
-}
-
-impl TransitionScores {
-    pub(super) fn to_json(&self) -> serde_json::Value {
-        let mut json = serde_json::json!({
-            "key": { "value": round_to_3_decimals(self.key.value), "label": self.key.label },
-            "bpm": { "value": round_to_3_decimals(self.bpm.value), "label": self.bpm.label },
-            "energy": { "value": round_to_3_decimals(self.energy.value), "label": self.energy.label },
-            "genre": { "value": round_to_3_decimals(self.genre.value), "label": self.genre.label },
-            "brightness": { "value": round_to_3_decimals(self.brightness.value), "label": self.brightness.label },
-            "rhythm": { "value": round_to_3_decimals(self.rhythm.value), "label": self.rhythm.label },
-            "composite": round_to_3_decimals(self.composite),
-        });
-        if !self.adjustments.is_empty() {
-            json["adjustments"] = serde_json::json!(
-                self.adjustments
-                    .iter()
-                    .map(|a| serde_json::json!({
-                        "kind": a.kind,
-                        "delta": round_to_3_decimals(a.delta),
-                        "composite_without": round_to_3_decimals(a.composite_without),
-                        "reason": a.reason,
-                    }))
-                    .collect::<Vec<_>>()
-            );
-        }
-        json
+fn domain_phase(phase: EnergyPhase) -> domain::EnergyPhase {
+    match phase {
+        EnergyPhase::Warmup => domain::EnergyPhase::Warmup,
+        EnergyPhase::Build => domain::EnergyPhase::Build,
+        EnergyPhase::Peak => domain::EnergyPhase::Peak,
+        EnergyPhase::Release => domain::EnergyPhase::Release,
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct ScoringContext {
-    pub(super) genre_run_length: u32,
+fn domain_curve_preset(preset: EnergyCurvePreset) -> domain::EnergyCurvePreset {
+    match preset {
+        EnergyCurvePreset::WarmupBuildPeakRelease => {
+            domain::EnergyCurvePreset::WarmupBuildPeakRelease
+        }
+        EnergyCurvePreset::FlatEnergy => domain::EnergyCurvePreset::FlatEnergy,
+        EnergyCurvePreset::PeakOnly => domain::EnergyCurvePreset::PeakOnly,
+    }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct CandidateTransition {
-    pub(super) from_index: usize,
-    pub(super) to_index: usize,
-    pub(super) scores: TransitionScores,
+fn domain_curve(input: &EnergyCurveInput) -> domain::EnergyCurve {
+    match input {
+        EnergyCurveInput::Preset(preset) => {
+            domain::EnergyCurve::Preset(domain_curve_preset(*preset))
+        }
+        EnergyCurveInput::Custom(phases) => {
+            domain::EnergyCurve::Custom(phases.iter().copied().map(domain_phase).collect())
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct CandidatePlan {
-    pub(super) ordered_ids: Vec<String>,
-    pub(super) transitions: Vec<CandidateTransition>,
+fn domain_style(style: HarmonicMixingStyle) -> domain::HarmonicMixingStyle {
+    match style {
+        HarmonicMixingStyle::Conservative => domain::HarmonicMixingStyle::Conservative,
+        HarmonicMixingStyle::Balanced => domain::HarmonicMixingStyle::Balanced,
+        HarmonicMixingStyle::Adventurous => domain::HarmonicMixingStyle::Adventurous,
+    }
 }
 
 pub(super) fn resolve_energy_curve(
     energy_curve: Option<&EnergyCurveInput>,
     target_tracks: usize,
 ) -> Result<Vec<EnergyPhase>, String> {
-    if target_tracks == 0 {
-        return Err("target_tracks must be at least 1".to_string());
-    }
-
-    match energy_curve {
-        Some(EnergyCurveInput::Custom(phases)) => {
-            if phases.len() != target_tracks {
-                return Err(format!(
-                    "custom phase array length ({}) must match target_tracks ({target_tracks})",
-                    phases.len()
-                ));
-            }
-            Ok(phases.clone())
-        }
-        Some(EnergyCurveInput::Preset(preset)) => Ok((0..target_tracks)
-            .map(|position| preset_energy_phase(*preset, position, target_tracks))
-            .collect()),
-        None => Ok((0..target_tracks)
-            .map(|position| {
-                preset_energy_phase(
-                    EnergyCurvePreset::WarmupBuildPeakRelease,
-                    position,
-                    target_tracks,
-                )
+    let curve = energy_curve.map(domain_curve);
+    domain::resolve_energy_curve(curve.as_ref(), target_tracks).map(|phases| {
+        phases
+            .into_iter()
+            .map(|phase| match phase {
+                domain::EnergyPhase::Warmup => EnergyPhase::Warmup,
+                domain::EnergyPhase::Build => EnergyPhase::Build,
+                domain::EnergyPhase::Peak => EnergyPhase::Peak,
+                domain::EnergyPhase::Release => EnergyPhase::Release,
             })
-            .collect()),
-    }
-}
-
-fn preset_energy_phase(preset: EnergyCurvePreset, position: usize, total: usize) -> EnergyPhase {
-    let fraction = if total == 0 {
-        0.0
-    } else {
-        position as f64 / total as f64
-    };
-    match preset {
-        EnergyCurvePreset::WarmupBuildPeakRelease => {
-            if fraction < WARMUP_PHASE_END {
-                EnergyPhase::Warmup
-            } else if fraction < BUILD_PHASE_END {
-                EnergyPhase::Build
-            } else if fraction < PEAK_PHASE_END {
-                EnergyPhase::Peak
-            } else {
-                EnergyPhase::Release
-            }
-        }
-        EnergyCurvePreset::FlatEnergy => EnergyPhase::Peak,
-        EnergyCurvePreset::PeakOnly => {
-            if fraction < PEAKONLY_BUILD_END {
-                EnergyPhase::Build
-            } else if fraction < PEAKONLY_RELEASE_END {
-                EnergyPhase::Peak
-            } else {
-                EnergyPhase::Release
-            }
-        }
-    }
+            .collect()
+    })
 }
 
 pub(super) fn select_start_track_ids(
-    profiles_by_id: &HashMap<String, TrackProfile>,
+    profiles_by_id: &std::collections::HashMap<String, TrackProfile>,
     requested_candidates: usize,
     first_phase: EnergyPhase,
     forced_start: Option<&str>,
 ) -> Vec<String> {
-    if let Some(track_id) = forced_start {
-        return vec![track_id.to_string()];
-    }
-
-    let prefer_low_energy = matches!(first_phase, EnergyPhase::Warmup | EnergyPhase::Build);
-    let mut profiles: Vec<&TrackProfile> = profiles_by_id.values().collect();
-    profiles.sort_by(|left, right| {
-        let energy_cmp = if prefer_low_energy {
-            left.energy
-                .partial_cmp(&right.energy)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            right
-                .energy
-                .partial_cmp(&left.energy)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        };
-        energy_cmp.then_with(|| left.track.id.cmp(&right.track.id))
-    });
-
-    let wanted = requested_candidates.max(1);
-    let mut start_track_ids: Vec<String> = profiles
-        .into_iter()
-        .take(wanted)
-        .map(|profile| profile.track.id.clone())
-        .collect();
-    if start_track_ids.is_empty() {
-        start_track_ids.extend(profiles_by_id.keys().take(1).cloned());
-    }
-    start_track_ids
+    domain::select_start_track_ids(
+        profiles_by_id,
+        requested_candidates,
+        domain_phase(first_phase),
+        forced_start,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_candidate_plan(
-    profiles_by_id: &HashMap<String, TrackProfile>,
+    profiles_by_id: &std::collections::HashMap<String, TrackProfile>,
     start_track_id: &str,
     target_tracks: usize,
     phases: &[EnergyPhase],
@@ -247,155 +119,24 @@ pub(super) fn build_candidate_plan(
     bpm_drift_pct: f64,
     target_bpms: Option<&[f64]>,
 ) -> CandidatePlan {
-    let mut ordered_ids = vec![start_track_id.to_string()];
-    let mut transitions = Vec::new();
-    let mut remaining: HashSet<String> = profiles_by_id.keys().cloned().collect();
-    remaining.remove(start_track_id);
-
-    let mut genre_run_length: u32 = 0;
-    let start_bpm = profiles_by_id.get(start_track_id).map_or(0.0, |p| p.bpm);
-
-    while ordered_ids.len() < target_tracks && !remaining.is_empty() {
-        let Some(from_track_id) = ordered_ids.last() else {
-            break;
-        };
-        let Some(from_profile) = profiles_by_id.get(from_track_id) else {
-            break;
-        };
-
-        let to_phase = phases.get(ordered_ids.len()).copied();
-        let from_phase = ordered_ids
-            .len()
-            .checked_sub(1)
-            .and_then(|idx| phases.get(idx).copied());
-        let scoring_context = ScoringContext { genre_run_length };
-        let step = ordered_ids.len();
-        let play_bpms = target_bpms.and_then(|bpms| {
-            let from_bpm = bpms.get(step - 1).copied()?;
-            let to_bpm = bpms.get(step).copied()?;
-            Some((from_bpm, to_bpm))
-        });
-        let mut scored_next: Vec<(String, TransitionScores)> = remaining
-            .iter()
-            .filter_map(|candidate_id| {
-                profiles_by_id.get(candidate_id).map(|to_profile| {
-                    (
-                        candidate_id.clone(),
-                        score_transition_profiles(
-                            from_profile,
-                            to_profile,
-                            from_phase,
-                            to_phase,
-                            weights,
-                            master_tempo,
-                            harmonic_style,
-                            &scoring_context,
-                            play_bpms,
-                        ),
-                    )
-                })
-            })
-            .collect();
-
-        if start_bpm > 0.0 && target_tracks > 1 {
-            let position = ordered_ids.len();
-            let max_position = (target_tracks - 1) as f64;
-            let budget_pct = bpm_drift_pct * (position as f64 / max_position);
-            let budget_bpm = start_bpm * budget_pct / 100.0;
-            for (candidate_id, scores) in &mut scored_next {
-                if let Some(candidate_profile) = profiles_by_id.get(candidate_id.as_str()) {
-                    let drift = (candidate_profile.bpm - start_bpm).abs();
-                    if drift > budget_bpm {
-                        let composite_without = scores.composite;
-                        scores.composite *= BPM_DRIFT_PENALTY_FACTOR;
-                        scores.adjustments.push(ScoreAdjustment {
-                            kind: "bpm_drift",
-                            delta: scores.composite - composite_without,
-                            composite_without,
-                            reason: format!(
-                                "BPM drift {drift:.1} exceeds budget {budget_bpm:.1} at position {position} — 0.7x penalty",
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-
-        scored_next.sort_by(|left, right| {
-            right
-                .1
-                .composite
-                .partial_cmp(&left.1.composite)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-
-        if scored_next.is_empty() {
-            break;
-        }
-
-        let pick_rank = transition_pick_rank(variation_index, ordered_ids.len(), scored_next.len());
-        let (next_track_id, transition_scores) = scored_next[pick_rank].clone();
-
-        if let Some(next_profile) = profiles_by_id.get(&next_track_id) {
-            if next_profile.genre_family == from_profile.genre_family
-                && from_profile.genre_family != GenreFamily::Other
-            {
-                genre_run_length += 1;
-            } else {
-                genre_run_length = 0;
-            }
-        }
-
-        transitions.push(CandidateTransition {
-            from_index: ordered_ids.len() - 1,
-            to_index: ordered_ids.len(),
-            scores: transition_scores,
-        });
-        ordered_ids.push(next_track_id.clone());
-        remaining.remove(&next_track_id);
-    }
-
-    CandidatePlan {
-        ordered_ids,
-        transitions,
-    }
-}
-
-fn transition_pick_rank(
-    variation_index: usize,
-    current_length: usize,
-    available_options: usize,
-) -> usize {
-    if available_options <= 1 {
-        return 0;
-    }
-    let preferred_rank = if current_length == 1 {
-        variation_index
-    } else if variation_index > 0 && current_length.is_multiple_of(4) {
-        variation_index.min(1)
-    } else {
-        0
-    };
-    preferred_rank.min(available_options - 1)
-}
-
-// ---------------------------------------------------------------------------
-// Beam search
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-struct BeamState {
-    ordered_ids: Vec<String>,
-    remaining: HashSet<String>,
-    genre_run_length: u32,
-    cumulative_score: f64,
-    transitions: Vec<CandidateTransition>,
+    let phases: Vec<_> = phases.iter().copied().map(domain_phase).collect();
+    domain::build_candidate_plan(
+        profiles_by_id,
+        start_track_id,
+        target_tracks,
+        &phases,
+        weights,
+        variation_index,
+        master_tempo,
+        harmonic_style.map(domain_style),
+        bpm_drift_pct,
+        target_bpms,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_candidate_plan_beam(
-    profiles_by_id: &HashMap<String, TrackProfile>,
+    profiles_by_id: &std::collections::HashMap<String, TrackProfile>,
     start_track_id: &str,
     target_tracks: usize,
     phases: &[EnergyPhase],
@@ -406,339 +147,28 @@ pub(super) fn build_candidate_plan_beam(
     bpm_drift_pct: f64,
     target_bpms: Option<&[f64]>,
 ) -> Vec<CandidatePlan> {
-    let mut remaining_init: HashSet<String> = profiles_by_id.keys().cloned().collect();
-    remaining_init.remove(start_track_id);
-
-    let start_bpm = profiles_by_id.get(start_track_id).map_or(0.0, |p| p.bpm);
-
-    let initial = BeamState {
-        ordered_ids: vec![start_track_id.to_string()],
-        remaining: remaining_init,
-        genre_run_length: 0,
-        cumulative_score: 0.0,
-        transitions: Vec::new(),
-    };
-
-    let mut beams = vec![initial];
-
-    for step in 1..target_tracks {
-        let mut expansions: Vec<BeamState> = Vec::new();
-
-        for beam in &beams {
-            if beam.remaining.is_empty() {
-                expansions.push(beam.clone());
-                continue;
-            }
-
-            let from_id = beam
-                .ordered_ids
-                .last()
-                .expect("ordered_ids always has at least the start track");
-            let Some(from_profile) = profiles_by_id.get(from_id) else {
-                expansions.push(beam.clone());
-                continue;
-            };
-
-            let to_phase = phases.get(step).copied();
-            let from_phase = step.checked_sub(1).and_then(|idx| phases.get(idx).copied());
-            let scoring_context = ScoringContext {
-                genre_run_length: beam.genre_run_length,
-            };
-
-            let play_bpms = target_bpms.and_then(|bpms| {
-                let from_bpm = bpms.get(step - 1).copied()?;
-                let to_bpm = bpms.get(step).copied()?;
-                Some((from_bpm, to_bpm))
-            });
-
-            for candidate_id in &beam.remaining {
-                let Some(to_profile) = profiles_by_id.get(candidate_id) else {
-                    continue;
-                };
-
-                let mut scores = score_transition_profiles(
-                    from_profile,
-                    to_profile,
-                    from_phase,
-                    to_phase,
-                    weights,
-                    master_tempo,
-                    harmonic_style,
-                    &scoring_context,
-                    play_bpms,
-                );
-
-                if start_bpm > 0.0 && target_tracks > 1 {
-                    let max_position = (target_tracks - 1) as f64;
-                    let budget_pct = bpm_drift_pct * (step as f64 / max_position);
-                    let budget_bpm = start_bpm * budget_pct / 100.0;
-                    let drift = (to_profile.bpm - start_bpm).abs();
-                    if drift > budget_bpm {
-                        let composite_without = scores.composite;
-                        scores.composite *= BPM_DRIFT_PENALTY_FACTOR;
-                        scores.adjustments.push(ScoreAdjustment {
-                            kind: "bpm_drift",
-                            delta: scores.composite - composite_without,
-                            composite_without,
-                            reason: format!(
-                                "BPM drift {drift:.1} exceeds budget {budget_bpm:.1} at step {step} — 0.7x penalty",
-                            ),
-                        });
-                    }
-                }
-
-                let new_cumulative = beam.cumulative_score + scores.composite;
-
-                let new_genre_run = if to_profile.genre_family == from_profile.genre_family
-                    && from_profile.genre_family != GenreFamily::Other
-                {
-                    beam.genre_run_length + 1
-                } else {
-                    0
-                };
-
-                let mut new_ordered = beam.ordered_ids.clone();
-                new_ordered.push(candidate_id.clone());
-                let mut new_remaining = beam.remaining.clone();
-                new_remaining.remove(candidate_id);
-                let mut new_transitions = beam.transitions.clone();
-                new_transitions.push(CandidateTransition {
-                    from_index: step - 1,
-                    to_index: step,
-                    scores,
-                });
-
-                expansions.push(BeamState {
-                    ordered_ids: new_ordered,
-                    remaining: new_remaining,
-                    genre_run_length: new_genre_run,
-                    cumulative_score: new_cumulative,
-                    transitions: new_transitions,
-                });
-            }
-        }
-
-        expansions.sort_by(|a, b| {
-            let a_mean = if a.transitions.is_empty() {
-                0.0
-            } else {
-                a.cumulative_score / a.transitions.len() as f64
-            };
-            let b_mean = if b.transitions.is_empty() {
-                0.0
-            } else {
-                b.cumulative_score / b.transitions.len() as f64
-            };
-            b_mean
-                .partial_cmp(&a_mean)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.ordered_ids.cmp(&b.ordered_ids))
-        });
-
-        expansions.truncate(beam_width);
-        beams = expansions;
-    }
-
-    let mut seen_plans: HashSet<Vec<String>> = HashSet::new();
-    beams
-        .into_iter()
-        .filter(|beam| seen_plans.insert(beam.ordered_ids.clone()))
-        .map(|beam| CandidatePlan {
-            ordered_ids: beam.ordered_ids,
-            transitions: beam.transitions,
-        })
-        .collect()
+    let phases: Vec<_> = phases.iter().copied().map(domain_phase).collect();
+    domain::build_candidate_plan_beam(
+        profiles_by_id,
+        start_track_id,
+        target_tracks,
+        &phases,
+        weights,
+        beam_width,
+        master_tempo,
+        harmonic_style.map(domain_style),
+        bpm_drift_pct,
+        target_bpms,
+    )
 }
 
-/// Compute a per-position target BPM trajectory based on energy phases.
-///
-/// - **Warmup** → `start_bpm`
-/// - **Build** → linear ramp from `start_bpm` to `end_bpm`
-/// - **Peak** → `end_bpm`
-/// - **Release** → linear ramp from `end_bpm` back toward `start_bpm`
 pub(super) fn compute_bpm_trajectory(
     phases: &[EnergyPhase],
     start_bpm: f64,
     end_bpm: f64,
 ) -> Vec<f64> {
-    if phases.is_empty() {
-        return Vec::new();
-    }
-
-    let build_start = phases.iter().position(|p| *p == EnergyPhase::Build);
-    let build_end = phases.iter().rposition(|p| *p == EnergyPhase::Build);
-    let release_start = phases.iter().position(|p| *p == EnergyPhase::Release);
-    let release_end = phases.iter().rposition(|p| *p == EnergyPhase::Release);
-
-    phases
-        .iter()
-        .enumerate()
-        .map(|(i, phase)| match phase {
-            EnergyPhase::Warmup => start_bpm,
-            EnergyPhase::Build => {
-                let (build_start_idx, build_end_idx) = (
-                    build_start.expect("build_start exists when iterating a Build phase"),
-                    build_end.expect("build_end exists when iterating a Build phase"),
-                );
-                if build_start_idx == build_end_idx {
-                    (start_bpm + end_bpm) / 2.0
-                } else {
-                    let progress =
-                        (i - build_start_idx) as f64 / (build_end_idx - build_start_idx) as f64;
-                    start_bpm + (end_bpm - start_bpm) * progress
-                }
-            }
-            EnergyPhase::Peak => end_bpm,
-            EnergyPhase::Release => {
-                let (release_start_idx, release_end_idx) = (
-                    release_start.expect("release_start exists when iterating a Release phase"),
-                    release_end.expect("release_end exists when iterating a Release phase"),
-                );
-                if release_start_idx == release_end_idx {
-                    (end_bpm + start_bpm) / 2.0
-                } else {
-                    let progress = (i - release_start_idx) as f64
-                        / (release_end_idx - release_start_idx) as f64;
-                    end_bpm + (start_bpm - end_bpm) * progress
-                }
-            }
-        })
-        .collect()
-}
-
-pub(super) fn build_track_profile(
-    track: crate::types::Track,
-    store_conn: &Connection,
-) -> Result<TrackProfile, String> {
-    build_track_profiles(vec![track], store_conn)?
-        .pop()
-        .ok_or_else(|| "Track profile batch unexpectedly returned no result".to_string())
-}
-
-pub(super) fn build_track_profiles(
-    tracks: Vec<crate::types::Track>,
-    store_conn: &Connection,
-) -> Result<Vec<TrackProfile>, String> {
-    let identities = audio_cache_identities_with_current_stratum_input(
-        tracks.iter().map(|track| track.file_path.as_str()),
-    );
-    let stratum_identities: Vec<_> = identities
-        .iter()
-        .filter_map(|identity| identity.as_ref()?.as_stratum_store_identity())
-        .collect();
-    let essentia_identities: Vec<_> = identities
-        .iter()
-        .filter_map(|identity| {
-            identity
-                .as_ref()
-                .map(AudioCacheIdentity::as_essentia_store_identity)
-        })
-        .collect();
-    let stratum = crate::store::batch_get_fresh_audio_analysis(
-        store_conn,
-        &stratum_identities,
-        crate::audio::ANALYZER_STRATUM,
-        crate::audio::STRATUM_SCHEMA_VERSION,
-    )
-    .map_err(|error| format!("Stratum cache read error: {error}"))?;
-    let essentia = crate::store::batch_get_fresh_audio_analysis(
-        store_conn,
-        &essentia_identities,
-        crate::audio::ANALYZER_ESSENTIA,
-        crate::audio::ESSENTIA_SCHEMA_VERSION,
-    )
-    .map_err(|error| format!("Essentia cache read error: {error}"))?;
-
-    Ok(tracks
-        .into_iter()
-        .zip(identities)
-        .map(|(track, identity)| {
-            let cache_key = identity
-                .as_ref()
-                .map(|identity| identity.cache_key.as_str());
-            build_track_profile_from_cache(
-                track,
-                cache_key.and_then(|key| stratum.get(key)),
-                cache_key.and_then(|key| essentia.get(key)),
-            )
-        })
-        .collect())
-}
-
-fn build_track_profile_from_cache(
-    track: crate::types::Track,
-    stratum_entry: Option<&crate::store::CachedAudioAnalysis>,
-    essentia_entry: Option<&crate::store::CachedAudioAnalysis>,
-) -> TrackProfile {
-    let stratum_json = stratum_entry
-        .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
-    let essentia_data = essentia_entry.and_then(|cached| {
-        serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok()
-    });
-
-    // Prefer Rekordbox BPM — it's the value the DJ sees and can manually correct.
-    // Fall back to stratum-dsp's estimate for tracks Rekordbox hasn't analyzed.
-    // (Key uses the opposite strategy: stratum preferred, Rekordbox fallback.)
-    const BPM_PLAUSIBLE_MIN: f64 = 30.0;
-    let bpm = if track.bpm >= BPM_PLAUSIBLE_MIN {
-        track.bpm
-    } else {
-        stratum_json
-            .as_ref()
-            .and_then(|v| v.get("bpm"))
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.0)
-            .max(0.0)
-    };
-
-    let camelot_key = stratum_json
-        .as_ref()
-        .and_then(|v| v.get("key_camelot").and_then(serde_json::Value::as_str))
-        .and_then(parse_camelot_key)
-        .or_else(|| key_to_camelot(&track.key));
-
-    let key_display = camelot_key.map_or_else(
-        || match track.key.trim() {
-            "" => "Unknown".to_string(),
-            _ => track.key.clone(),
-        },
-        format_camelot,
-    );
-
-    let energy = compute_track_energy(essentia_data.as_ref(), bpm);
-    let brightness = essentia_data
-        .as_ref()
-        .and_then(|e| e.spectral_centroid_mean);
-    let rhythm_regularity = essentia_data.as_ref().and_then(|e| e.rhythm_regularity);
-    let loudness_range = essentia_data.as_ref().and_then(|e| e.loudness_range);
-    let canonical_genre = canonicalize_genre(&track.genre);
-    let genre_family = canonical_genre
-        .as_deref()
-        .map_or(GenreFamily::Other, genre_family_for);
-
-    let timbral = essentia_data.as_ref().and_then(|e| {
-        Some(TimbralFeatures {
-            mfcc_mean: e.mfcc_mean.clone()?,
-            mfcc_std: e.mfcc_std.clone()?,
-            spectral_contrast_mean: e.spectral_contrast_mean.clone()?,
-            spectral_centroid_cv: e.spectral_centroid_cv?,
-            dissonance_mean: e.dissonance_mean?,
-        })
-    });
-
-    TrackProfile {
-        track,
-        camelot_key,
-        key_display,
-        bpm,
-        energy,
-        brightness,
-        rhythm_regularity,
-        loudness_range,
-        canonical_genre,
-        genre_family,
-        timbral,
-    }
+    let phases: Vec<_> = phases.iter().copied().map(domain_phase).collect();
+    domain::compute_bpm_trajectory(&phases, start_bpm, end_bpm)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -750,335 +180,23 @@ pub(super) fn score_transition_profiles(
     weights: &PriorityWeights,
     master_tempo: bool,
     harmonic_style: Option<HarmonicMixingStyle>,
-    ctx: &ScoringContext,
+    context: &ScoringContext,
     play_bpms: Option<(f64, f64)>,
 ) -> TransitionScores {
-    let (
-        effective_to_key,
-        pitch_shift_semitones,
-        scoring_from_key,
-        scoring_to_key,
-        bpm,
-        exact_from_shift,
-        exact_to_shift,
-    ) = if let Some((from_play_bpm, to_play_bpm)) = play_bpms {
-        let exact_from = if from.bpm > 0.0 && from_play_bpm > 0.0 {
-            12.0 * (from_play_bpm / from.bpm).log2()
-        } else {
-            0.0
-        };
-        let exact_to = if to.bpm > 0.0 && to_play_bpm > 0.0 {
-            12.0 * (to_play_bpm / to.bpm).log2()
-        } else {
-            0.0
-        };
-        let from_shift = exact_from.round() as i32;
-        let to_shift = exact_to.round() as i32;
-
-        let effective_from_key = if !master_tempo && from_shift != 0 {
-            from.camelot_key
-                .map(|k| transpose_camelot_key(k, from_shift))
-        } else {
-            from.camelot_key
-        };
-        let effective_to_key = if !master_tempo && to_shift != 0 {
-            to.camelot_key.map(|k| transpose_camelot_key(k, to_shift))
-        } else {
-            to.camelot_key
-        };
-
-        let effective_to_key_display = if !master_tempo && to_shift != 0 {
-            effective_to_key.map(format_camelot)
-        } else {
-            None
-        };
-
-        let bpm_score = score_bpm_axis(to_play_bpm, to.bpm);
-
-        (
-            effective_to_key_display,
-            to_shift,
-            effective_from_key,
-            effective_to_key,
-            bpm_score,
-            if master_tempo { 0.0 } else { exact_from },
-            if master_tempo { 0.0 } else { exact_to },
-        )
-    } else {
-        let (eff_to_key, shift, exact_to) = if !master_tempo && from.bpm > 0.0 && to.bpm > 0.0 {
-            let exact = 12.0 * (from.bpm / to.bpm).log2();
-            let integer_shift = exact.round() as i32;
-            if integer_shift != 0 {
-                let transposed = to
-                    .camelot_key
-                    .map(|k| transpose_camelot_key(k, integer_shift));
-                (transposed.map(format_camelot), integer_shift, exact)
-            } else {
-                (None, 0, exact)
-            }
-        } else {
-            (None, 0, 0.0)
-        };
-
-        let scoring_to = if let Some(ref ek) = eff_to_key {
-            parse_camelot_key(ek)
-        } else {
-            to.camelot_key
-        };
-
-        let bpm_score = score_bpm_axis(from.bpm, to.bpm);
-
-        (
-            eff_to_key,
-            shift,
-            from.camelot_key,
-            scoring_to,
-            bpm_score,
-            0.0,
-            exact_to,
-        )
-    };
-
-    // Interpolate between bracketing integer transpositions to avoid the cliff
-    // where rounding a fractional semitone shift jumps 7 Camelot positions.
-    let key = if exact_from_shift.abs() > 0.01 || exact_to_shift.abs() > 0.01 {
-        score_key_with_pitch_shifts(
-            from.camelot_key,
-            to.camelot_key,
-            exact_from_shift,
-            exact_to_shift,
-        )
-    } else {
-        score_key_axis(scoring_from_key, scoring_to_key)
-    };
-    let energy = score_energy_axis(
-        from.energy,
-        to.energy,
-        from_phase,
-        to_phase,
-        to.loudness_range,
-    );
-    let genre = score_genre_axis(
-        from.canonical_genre.as_deref(),
-        to.canonical_genre.as_deref(),
-        from.genre_family,
-        to.genre_family,
-        ctx.genre_run_length,
-    );
-    let brightness = score_brightness_axis(from.brightness, to.brightness);
-    let rhythm = score_rhythm_axis(from.rhythm_regularity, to.rhythm_regularity);
-    let brightness_available = from.brightness.is_some() && to.brightness.is_some();
-    let rhythm_available = from.rhythm_regularity.is_some() && to.rhythm_regularity.is_some();
-    let mut composite = composite_score(
-        key.value,
-        bpm.value,
-        energy.value,
-        genre.value,
-        if brightness_available {
-            Some(brightness.value)
-        } else {
-            None
-        },
-        if rhythm_available {
-            Some(rhythm.value)
-        } else {
-            None
-        },
+    domain::score_transition_profiles(
+        from,
+        to,
+        from_phase.map(domain_phase),
+        to_phase.map(domain_phase),
         weights,
-    );
-
-    let mut adjustments = Vec::new();
-
-    // Axis bonuses/penalties were already baked into axis scores; compute
-    // their weighted composite impact for transparency reporting.
-    let mut total_weight = weights.key + weights.bpm + weights.energy + weights.genre;
-    if brightness_available {
-        total_weight += weights.brightness;
-    }
-    if rhythm_available {
-        total_weight += weights.rhythm;
-    }
-    if total_weight > f64::EPSILON {
-        if genre.label.contains("streak bonus") {
-            let delta = weights.genre * 0.1 / total_weight;
-            adjustments.push(ScoreAdjustment {
-                kind: "genre_streak",
-                delta,
-                composite_without: composite - delta,
-                reason: "Genre family streak bonus (+0.1 on genre axis)".to_string(),
-            });
-        }
-        if genre.label.contains("early switch penalty") {
-            let delta = -(weights.genre * 0.1 / total_weight);
-            adjustments.push(ScoreAdjustment {
-                kind: "genre_early_switch",
-                delta,
-                composite_without: composite - delta,
-                reason: "Genre family switched too early (-0.1 on genre axis)".to_string(),
-            });
-        }
-        if energy.label.contains("dynamic boundary boost") {
-            let delta = weights.energy * 0.1 / total_weight;
-            adjustments.push(ScoreAdjustment {
-                kind: "phase_boundary_boost",
-                delta,
-                composite_without: composite - delta,
-                reason: "Phase boundary with dynamic range (+0.1 on energy axis)".to_string(),
-            });
-        }
-        if energy.label.contains("sustained-peak consistency boost") {
-            let delta = weights.energy * 0.05 / total_weight;
-            adjustments.push(ScoreAdjustment {
-                kind: "sustained_peak",
-                delta,
-                composite_without: composite - delta,
-                reason: "Sustained peak with tight loudness range (+0.05 on energy axis)"
-                    .to_string(),
-            });
-        }
-    }
-
-    if let Some(style) = harmonic_style {
-        let min_key = harmonic_style_min_key(style, to_phase);
-        if key.value < min_key {
-            let composite_without = composite;
-            let factor = harmonic_penalty_factor(style);
-            composite *= factor;
-            adjustments.push(ScoreAdjustment {
-                kind: "harmonic_gate",
-                delta: composite - composite_without,
-                composite_without,
-                reason: format!(
-                    "Key score {:.2} below {style:?} threshold {:.2} — {factor}x penalty",
-                    key.value, min_key,
-                ),
-            });
-        }
-    }
-
-    let key_relation = key.label.clone();
-    let bpm_adjustment_pct = if let Some((_, to_play_bpm)) = play_bpms {
-        if to.bpm > 0.0 {
-            (to_play_bpm - to.bpm).abs() / to.bpm * 100.0
-        } else {
-            0.0
-        }
-    } else if to.bpm > 0.0 {
-        (from.bpm - to.bpm).abs() / to.bpm * 100.0
-    } else {
-        0.0
-    };
-
-    TransitionScores {
-        key,
-        bpm,
-        energy,
-        genre,
-        brightness,
-        rhythm,
-        composite,
-        effective_to_key,
-        pitch_shift_semitones,
-        key_relation,
-        bpm_adjustment_pct,
-        adjustments,
-    }
+        master_tempo,
+        harmonic_style.map(domain_style),
+        context,
+        play_bpms,
+    )
 }
 
-pub(super) fn round_to_3_decimals(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
-pub(super) fn bpm_pitch_shift(native_bpm: f64, ref_bpm: f64) -> f64 {
-    if native_bpm > 0.0 {
-        12.0 * (ref_bpm / native_bpm).log2()
-    } else {
-        0.0
-    }
-}
-
-pub(super) fn score_key_axis(from: Option<CamelotKey>, to: Option<CamelotKey>) -> AxisScore {
-    let Some(from) = from else {
-        return AxisScore {
-            value: 0.1,
-            label: "Clash (missing key)".to_string(),
-        };
-    };
-    let Some(to) = to else {
-        return AxisScore {
-            value: 0.1,
-            label: "Clash (missing key)".to_string(),
-        };
-    };
-
-    if from.number == to.number && from.letter == to.letter {
-        return AxisScore {
-            value: 1.0,
-            label: "Perfect".to_string(),
-        };
-    }
-    if from.number == to.number && from.letter != to.letter {
-        return AxisScore {
-            value: 0.8,
-            label: "Mood shift (A\u{2194}B)".to_string(),
-        };
-    }
-
-    let clockwise = ((to.number as i16 - from.number as i16 + 12) % 12) as u8;
-    if from.letter == to.letter && clockwise == 1 {
-        AxisScore {
-            value: 0.9,
-            label: "Camelot adjacent (+1)".to_string(),
-        }
-    } else if from.letter == to.letter && clockwise == 11 {
-        AxisScore {
-            value: 0.9,
-            label: "Camelot adjacent (-1)".to_string(),
-        }
-    } else if from.letter == to.letter && (clockwise == 2 || clockwise == 10) {
-        AxisScore {
-            value: 0.45,
-            label: "Extended (+/-2)".to_string(),
-        }
-    } else if from.letter != to.letter && (clockwise == 1 || clockwise == 11) {
-        AxisScore {
-            value: 0.55,
-            label: "Energy diagonal (+/-1 cross)".to_string(),
-        }
-    } else {
-        AxisScore {
-            value: 0.1,
-            label: "Clash".to_string(),
-        }
-    }
-}
-
-pub(super) fn score_bpm_axis(from_bpm: f64, to_bpm: f64) -> AxisScore {
-    if from_bpm <= 0.0 || to_bpm <= 0.0 {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown BPM".to_string(),
-        };
-    }
-    let delta = (from_bpm - to_bpm).abs();
-    let pct = delta / from_bpm * 100.0;
-    let value = (-0.019 * pct * pct).exp();
-    let label_category = if pct < 2.0 {
-        "Seamless"
-    } else if pct < 4.0 {
-        "Comfortable"
-    } else if pct < 6.0 {
-        "Noticeable"
-    } else if pct < 9.0 {
-        "Creative transition needed"
-    } else {
-        "Jarring"
-    };
-    AxisScore {
-        value,
-        label: format!("{label_category} ({pct:.1}%, {delta:.1} BPM)"),
-    }
-}
+pub(super) use crate::domain::planning::TransitionScores;
 
 pub(super) fn score_energy_axis(
     from_energy: f64,
@@ -1087,1043 +205,64 @@ pub(super) fn score_energy_axis(
     to_phase: Option<EnergyPhase>,
     to_loudness_range: Option<f64>,
 ) -> AxisScore {
-    let delta = to_energy - from_energy;
-    let mut axis = match to_phase {
-        Some(EnergyPhase::Warmup) => {
-            let phase_requirement_met = (-0.03..=0.12).contains(&delta);
-            AxisScore {
-                value: if phase_requirement_met { 1.0 } else { 0.5 },
-                label: if phase_requirement_met {
-                    "Stable/slight rise (warmup phase)".to_string()
-                } else {
-                    "Too abrupt for warmup".to_string()
-                },
-            }
-        }
-        Some(EnergyPhase::Build) => {
-            let phase_requirement_met = delta >= 0.03;
-            AxisScore {
-                value: if phase_requirement_met { 1.0 } else { 0.3 },
-                label: if phase_requirement_met {
-                    "Rising (build phase)".to_string()
-                } else {
-                    "Not rising (build phase)".to_string()
-                },
-            }
-        }
-        Some(EnergyPhase::Peak) => {
-            let phase_requirement_met = to_energy >= 0.65 && delta.abs() <= 0.10;
-            AxisScore {
-                value: if phase_requirement_met { 1.0 } else { 0.5 },
-                label: if phase_requirement_met {
-                    "High and stable (peak phase)".to_string()
-                } else {
-                    "Not high/stable (peak phase)".to_string()
-                },
-            }
-        }
-        Some(EnergyPhase::Release) => {
-            let phase_requirement_met = delta <= -0.03;
-            AxisScore {
-                value: if phase_requirement_met { 1.0 } else { 0.3 },
-                label: if phase_requirement_met {
-                    "Dropping (release phase)".to_string()
-                } else {
-                    "Not dropping (release phase)".to_string()
-                },
-            }
-        }
-        None => AxisScore {
-            value: 1.0,
-            label: "No phase preference".to_string(),
-        },
-    };
-
-    let is_phase_boundary = matches!(
-        (from_phase, to_phase),
-        (Some(previous), Some(current)) if previous != current
-    );
-    match (to_phase, to_loudness_range) {
-        (Some(_), Some(loudness_range)) if is_phase_boundary && loudness_range > 8.0 => {
-            axis.value = (axis.value + 0.1).clamp(0.0, 1.0);
-            axis.label.push_str(" + dynamic boundary boost");
-        }
-        (Some(EnergyPhase::Peak), Some(loudness_range))
-            if !is_phase_boundary && loudness_range < 4.0 =>
-        {
-            axis.value = (axis.value + 0.05).clamp(0.0, 1.0);
-            axis.label.push_str(" + sustained-peak consistency boost");
-        }
-        _ => {}
-    }
-    axis
-}
-
-pub(super) fn score_genre_axis(
-    from_genre: Option<&str>,
-    to_genre: Option<&str>,
-    from_family: GenreFamily,
-    to_family: GenreFamily,
-    genre_run_length: u32,
-) -> AxisScore {
-    let Some(from_genre) = from_genre else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown genre".to_string(),
-        };
-    };
-    let Some(to_genre) = to_genre else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown genre".to_string(),
-        };
-    };
-
-    let genre_compatible = (from_genre.eq_ignore_ascii_case(to_genre))
-        || (from_family == to_family && from_family != GenreFamily::Other);
-
-    let mut axis = if from_genre.eq_ignore_ascii_case(to_genre) {
-        AxisScore {
-            value: 1.0,
-            label: "Same genre".to_string(),
-        }
-    } else if from_family == to_family && from_family != GenreFamily::Other {
-        AxisScore {
-            value: 0.7,
-            label: "Same family".to_string(),
-        }
-    } else {
-        AxisScore {
-            value: 0.3,
-            label: "Different families".to_string(),
-        }
-    };
-
-    if genre_compatible
-        && from_family != GenreFamily::Other
-        && genre_run_length > 0
-        && genre_run_length < 5
-    {
-        axis.value = (axis.value + 0.1).min(1.0);
-        axis.label.push_str(" + streak bonus");
-    } else if !genre_compatible && genre_run_length > 0 && genre_run_length < 2 {
-        axis.value = (axis.value - 0.1).max(0.0);
-        axis.label.push_str(" + early switch penalty");
-    }
-
-    axis
-}
-
-fn score_brightness_axis(from_centroid: Option<f64>, to_centroid: Option<f64>) -> AxisScore {
-    let Some(from_centroid) = from_centroid else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown brightness".to_string(),
-        };
-    };
-    let Some(to_centroid) = to_centroid else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown brightness".to_string(),
-        };
-    };
-
-    let delta = (to_centroid - from_centroid).abs();
-    if delta < BRIGHTNESS_SIMILAR_HZ {
-        AxisScore {
-            value: 1.0,
-            label: format!("Similar timbre (delta {delta:.0} Hz)"),
-        }
-    } else if delta < BRIGHTNESS_SHIFT_HZ {
-        AxisScore {
-            value: 0.7,
-            label: format!("Noticeable brightness shift (delta {delta:.0} Hz)"),
-        }
-    } else if delta < BRIGHTNESS_JUMP_HZ {
-        AxisScore {
-            value: 0.4,
-            label: format!("Large timbral jump (delta {delta:.0} Hz)"),
-        }
-    } else {
-        AxisScore {
-            value: 0.2,
-            label: format!("Jarring brightness jump (delta {delta:.0} Hz)"),
-        }
-    }
-}
-
-fn score_rhythm_axis(from_regularity: Option<f64>, to_regularity: Option<f64>) -> AxisScore {
-    let Some(from_regularity) = from_regularity else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown groove".to_string(),
-        };
-    };
-    let Some(to_regularity) = to_regularity else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown groove".to_string(),
-        };
-    };
-
-    let delta = (to_regularity - from_regularity).abs();
-    if delta < RHYTHM_MATCHED_DELTA {
-        AxisScore {
-            value: 1.0,
-            label: format!("Matching groove (delta {delta:.2})"),
-        }
-    } else if delta < RHYTHM_MANAGEABLE_DELTA {
-        AxisScore {
-            value: 0.7,
-            label: format!("Manageable groove shift (delta {delta:.2})"),
-        }
-    } else if delta < RHYTHM_CHALLENGING_DELTA {
-        AxisScore {
-            value: 0.4,
-            label: format!("Challenging groove shift (delta {delta:.2})"),
-        }
-    } else {
-        AxisScore {
-            value: 0.2,
-            label: format!("Groove clash (delta {delta:.2})"),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pool-specific axis functions (symmetric, no sequential context)
-// ---------------------------------------------------------------------------
-
-/// Symmetric BPM axis using max(a, b) as denominator.
-pub(super) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
-    if a_bpm <= 0.0 || b_bpm <= 0.0 {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown BPM".to_string(),
-        };
-    }
-    let delta = (a_bpm - b_bpm).abs();
-    let denom = a_bpm.max(b_bpm);
-    let pct = delta / denom * 100.0;
-    let value = (-0.019 * pct * pct).exp();
-    let label_category = if pct < 2.0 {
-        "Seamless"
-    } else if pct < 4.0 {
-        "Comfortable"
-    } else if pct < 6.0 {
-        "Noticeable"
-    } else if pct < 9.0 {
-        "Creative transition needed"
-    } else {
-        "Jarring"
-    };
-    AxisScore {
-        value,
-        label: format!("{label_category} ({pct:.1}%, {delta:.1} BPM)"),
-    }
-}
-
-/// Gaussian decay on absolute energy distance.
-pub(super) fn score_pool_energy_axis(a_energy: f64, b_energy: f64) -> AxisScore {
-    let delta = (a_energy - b_energy).abs();
-    // exp(-25 * delta^2): 0.0 → 1.0, 0.1 → 0.78, 0.2 → 0.37, 0.3 → 0.11
-    let value = (-25.0 * delta * delta).exp();
-    let label = if delta < 0.05 {
-        format!("Same energy band (delta {delta:.2})")
-    } else if delta < 0.15 {
-        format!("Close energy (delta {delta:.2})")
-    } else if delta < 0.25 {
-        format!("Moderate energy gap (delta {delta:.2})")
-    } else {
-        format!("Wide energy gap (delta {delta:.2})")
-    };
-    AxisScore { value, label }
-}
-
-/// Genre match without streak logic (1.0 / 0.7 / 0.3).
-pub(super) fn score_pool_genre_axis(
-    genre_a: Option<&str>,
-    genre_b: Option<&str>,
-    family_a: GenreFamily,
-    family_b: GenreFamily,
-) -> AxisScore {
-    let Some(genre_a) = genre_a else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown genre".to_string(),
-        };
-    };
-    let Some(genre_b) = genre_b else {
-        return AxisScore {
-            value: 0.5,
-            label: "Unknown genre".to_string(),
-        };
-    };
-
-    if genre_a.eq_ignore_ascii_case(genre_b) {
-        AxisScore {
-            value: 1.0,
-            label: "Same genre".to_string(),
-        }
-    } else if family_a == family_b && family_a != GenreFamily::Other {
-        AxisScore {
-            value: 0.7,
-            label: "Same family".to_string(),
-        }
-    } else {
-        AxisScore {
-            value: 0.3,
-            label: "Different families".to_string(),
-        }
-    }
-}
-
-/// Euclidean distance on z-score-normalized timbral vectors.
-/// Returns None if either track lacks timbral data.
-pub(super) fn score_pool_timbral_axis(
-    a: &TrackProfile,
-    b: &TrackProfile,
-    norm_stats: &crate::store::TimbralNormStats,
-) -> Option<AxisScore> {
-    let raw_a = build_timbral_vector(a)?;
-    let raw_b = build_timbral_vector(b)?;
-
-    if raw_a.len() != raw_b.len() || raw_a.len() != norm_stats.dims.len() {
-        return None;
-    }
-
-    let norm_a = normalize_timbral_vector(&raw_a, norm_stats)?;
-    let norm_b = normalize_timbral_vector(&raw_b, norm_stats)?;
-
-    let dist_sq: f64 = norm_a
-        .iter()
-        .zip(norm_b.iter())
-        .map(|(a, b)| (a - b).powi(2))
-        .sum();
-    let dist = dist_sq.sqrt();
-
-    // Map to [0,1] via exp(-k * dist^2). k chosen so that dist=4 → ~0.45
-    // (typical "different but not extreme" in z-score space)
-    let k = 0.05;
-    let value = (-k * dist_sq).exp();
-
-    let label = if value > 0.8 {
-        format!("Very similar timbre (dist {dist:.1})")
-    } else if value > 0.5 {
-        format!("Similar timbre (dist {dist:.1})")
-    } else if value > 0.3 {
-        format!("Moderate timbral distance (dist {dist:.1})")
-    } else {
-        format!("Distant timbre (dist {dist:.1})")
-    };
-
-    Some(AxisScore { value, label })
-}
-
-fn harmonic_penalty_factor(style: HarmonicMixingStyle) -> f64 {
-    match style {
-        HarmonicMixingStyle::Conservative => 0.1,
-        HarmonicMixingStyle::Balanced | HarmonicMixingStyle::Adventurous => 0.5,
-    }
-}
-
-fn harmonic_style_min_key(style: HarmonicMixingStyle, phase: Option<EnergyPhase>) -> f64 {
-    match style {
-        HarmonicMixingStyle::Conservative => 0.8,
-        HarmonicMixingStyle::Balanced => 0.45,
-        HarmonicMixingStyle::Adventurous => match phase {
-            Some(EnergyPhase::Warmup) | Some(EnergyPhase::Release) => 0.45,
-            Some(EnergyPhase::Build) | Some(EnergyPhase::Peak) | None => 0.1,
-        },
-    }
-}
-
-pub(super) struct PriorityWeights {
-    pub key: f64,
-    pub bpm: f64,
-    pub energy: f64,
-    pub genre: f64,
-    pub brightness: f64,
-    pub rhythm: f64,
+    domain::score_energy_axis(
+        from_energy,
+        to_energy,
+        from_phase.map(domain_phase),
+        to_phase.map(domain_phase),
+        to_loudness_range,
+    )
 }
 
 pub(super) fn priority_weights(priority: SequencingPriority) -> PriorityWeights {
-    match priority {
-        SequencingPriority::Balanced => PriorityWeights {
-            key: 0.30,
-            bpm: 0.20,
-            energy: 0.18,
-            genre: 0.17,
-            brightness: 0.08,
-            rhythm: 0.07,
-        },
-        SequencingPriority::Harmonic => PriorityWeights {
-            key: 0.48,
-            bpm: 0.18,
-            energy: 0.12,
-            genre: 0.08,
-            brightness: 0.08,
-            rhythm: 0.06,
-        },
-        SequencingPriority::Energy => PriorityWeights {
-            key: 0.12,
-            bpm: 0.18,
-            energy: 0.42,
-            genre: 0.12,
-            brightness: 0.08,
-            rhythm: 0.08,
-        },
-        SequencingPriority::Genre => PriorityWeights {
-            key: 0.18,
-            bpm: 0.18,
-            energy: 0.12,
-            genre: 0.38,
-            brightness: 0.08,
-            rhythm: 0.06,
-        },
-    }
+    let priority = match priority {
+        SequencingPriority::Balanced => domain::SequencingPriority::Balanced,
+        SequencingPriority::Harmonic => domain::SequencingPriority::Harmonic,
+        SequencingPriority::Energy => domain::SequencingPriority::Energy,
+        SequencingPriority::Genre => domain::SequencingPriority::Genre,
+    };
+    domain::priority_weights(priority)
 }
 
-pub(super) fn composite_score(
-    key_score: f64,
-    bpm_score: f64,
-    energy_score: f64,
-    genre_score: f64,
-    brightness_score: Option<f64>,
-    rhythm_score: Option<f64>,
-    weights: &PriorityWeights,
-) -> f64 {
-    let mut weighted_sum = (weights.key * key_score)
-        + (weights.bpm * bpm_score)
-        + (weights.energy * energy_score)
-        + (weights.genre * genre_score);
-    let mut total_weight = weights.key + weights.bpm + weights.energy + weights.genre;
-
-    if let Some(brightness) = brightness_score {
-        weighted_sum += weights.brightness * brightness;
-        total_weight += weights.brightness;
-    }
-    if let Some(rhythm) = rhythm_score {
-        weighted_sum += weights.rhythm * rhythm;
-        total_weight += weights.rhythm;
-    }
-
-    if total_weight <= f64::EPSILON {
-        0.0
-    } else {
-        weighted_sum / total_weight
-    }
+pub(super) fn pool_weights(preset: PoolPreset) -> PoolWeights {
+    let preset = match preset {
+        PoolPreset::Balanced => domain::PoolPreset::Balanced,
+        PoolPreset::Timbral => domain::PoolPreset::Timbral,
+    };
+    domain::pool_weights(preset)
 }
-
-const BPM_PROXY_FLOOR: f64 = 95.0;
-const BPM_PROXY_RANGE: f64 = 50.0;
-
-const DANCEABILITY_MAX: f64 = 3.0;
-const LOUDNESS_FLOOR_LUFS: f64 = -30.0;
-const LOUDNESS_RANGE_LUFS: f64 = 30.0;
-const ONSET_RATE_MAX: f64 = 10.0;
-
-const ENERGY_W_DANCE: f64 = 0.4;
-const ENERGY_W_LOUDNESS: f64 = 0.3;
-const ENERGY_W_ONSET: f64 = 0.3;
 
 pub(super) fn compute_track_energy(
     essentia: Option<&crate::audio::EssentiaOutput>,
     bpm: f64,
 ) -> f64 {
-    let bpm_proxy = ((bpm - BPM_PROXY_FLOOR) / BPM_PROXY_RANGE).clamp(0.0, 1.0);
-    let Some(essentia) = essentia else {
-        return bpm_proxy;
-    };
-
-    let danceability = essentia.danceability;
-    let loudness_integrated = essentia.loudness_integrated;
-    let onset_rate = essentia.onset_rate;
-
-    match (danceability, loudness_integrated, onset_rate) {
-        (Some(dance), Some(loudness), Some(onset)) => {
-            let normalized_dance = (dance / DANCEABILITY_MAX).clamp(0.0, 1.0);
-            let normalized_loudness =
-                ((loudness - LOUDNESS_FLOOR_LUFS) / LOUDNESS_RANGE_LUFS).clamp(0.0, 1.0);
-            let onset_rate_normalized = (onset / ONSET_RATE_MAX).clamp(0.0, 1.0);
-            ((ENERGY_W_DANCE * normalized_dance)
-                + (ENERGY_W_LOUDNESS * normalized_loudness)
-                + (ENERGY_W_ONSET * onset_rate_normalized))
-                .clamp(0.0, 1.0)
-        }
-        _ => bpm_proxy,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Timbral vector construction and z-score normalization (pool kernel)
-// ---------------------------------------------------------------------------
-
-/// Bump whenever timbral vector membership, order, or inclusion rules change.
-pub(super) const TIMBRAL_VECTOR_SCHEMA_VERSION: &str = "1";
-
-#[derive(Debug)]
-pub(super) struct TimbralSourceSnapshot {
-    pub(super) vectors: Vec<Vec<f64>>,
-    pub(super) source_fingerprint: String,
-}
-
-fn assemble_timbral_vector(
-    mfcc_mean: &[f64],
-    mfcc_std: &[f64],
-    spectral_contrast: &[f64],
-    centroid_cv: f64,
-    dissonance: f64,
-) -> Vec<f64> {
-    let mut vec =
-        Vec::with_capacity(mfcc_mean.len() + mfcc_std.len() + spectral_contrast.len() + 2);
-    vec.extend_from_slice(mfcc_mean);
-    vec.extend_from_slice(mfcc_std);
-    vec.extend_from_slice(spectral_contrast);
-    vec.push(centroid_cv);
-    vec.push(dissonance);
-    vec
-}
-
-pub(super) fn build_timbral_vector(profile: &TrackProfile) -> Option<Vec<f64>> {
-    let t = profile.timbral.as_ref()?;
-    Some(assemble_timbral_vector(
-        &t.mfcc_mean,
-        &t.mfcc_std,
-        &t.spectral_contrast_mean,
-        t.spectral_centroid_cv,
-        t.dissonance_mean,
-    ))
-}
-
-fn build_timbral_vector_from_essentia(essentia: &crate::audio::EssentiaOutput) -> Option<Vec<f64>> {
-    Some(assemble_timbral_vector(
-        essentia.mfcc_mean.as_ref()?,
-        essentia.mfcc_std.as_ref()?,
-        essentia.spectral_contrast_mean.as_ref()?,
-        essentia.spectral_centroid_cv?,
-        essentia.dissonance_mean?,
-    ))
-}
-
-fn hash_length_delimited(hasher: &mut sha2::Sha256, value: &[u8]) {
-    use sha2::Digest as _;
-
-    let length = u64::try_from(value.len()).expect("hash input length fits in u64");
-    hasher.update(length.to_be_bytes());
-    hasher.update(value);
-}
-
-fn load_timbral_source_snapshot_with_vector_schema(
-    store_conn: &Connection,
-) -> Result<TimbralSourceSnapshot, String> {
-    load_timbral_source_snapshot_for_schema(store_conn, TIMBRAL_VECTOR_SCHEMA_VERSION)
-}
-
-fn load_timbral_source_snapshot_for_schema(
-    store_conn: &Connection,
-    vector_schema_version: &str,
-) -> Result<TimbralSourceSnapshot, String> {
-    use sha2::Digest as _;
-
-    let mut stmt = store_conn
-        .prepare(
-            "SELECT file_path, file_size, file_mtime, input_fingerprint, features_json
-             FROM audio_analysis_cache
-             WHERE analyzer = ?1 AND analysis_version = ?2
-             ORDER BY file_path",
-        )
-        .map_err(|e| format!("DB error: {e}"))?;
-
-    let rows = stmt
-        .query_map(
-            rusqlite::params![
-                crate::audio::ANALYZER_ESSENTIA,
-                crate::audio::ESSENTIA_SCHEMA_VERSION
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            },
-        )
-        .map_err(|e| format!("DB error: {e}"))?;
-
-    let mut hasher = sha2::Sha256::new();
-    hash_length_delimited(&mut hasher, vector_schema_version.as_bytes());
-    hash_length_delimited(
-        &mut hasher,
-        crate::audio::ESSENTIA_SCHEMA_VERSION.as_bytes(),
-    );
-    let mut vectors = Vec::new();
-    let mut expected_dimensions = None;
-
-    for row in rows {
-        let (file_path, file_size, file_mtime, input_fingerprint, features_json) =
-            row.map_err(|e| format!("Row error: {e}"))?;
-
-        let Some(identity) = super::analysis::audio_cache_identity(&file_path) else {
-            continue;
-        };
-        if identity.cache_key != file_path {
-            continue;
-        }
-        let cached = crate::store::CachedAudioAnalysis {
-            file_path: file_path.clone(),
-            analyzer: crate::audio::ANALYZER_ESSENTIA.to_string(),
-            file_size,
-            file_mtime,
-            analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-            input_fingerprint,
-            features_json: features_json.clone(),
-            created_at: String::new(),
-        };
-        if !crate::store::is_audio_analysis_fresh(
-            Some(&cached),
-            crate::audio::ESSENTIA_SCHEMA_VERSION,
-            identity.file_size,
-            identity.file_mtime,
-            "",
-        ) {
-            continue;
-        }
-
-        let essentia: crate::audio::EssentiaOutput = match serde_json::from_str(&features_json) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let Some(vector) = build_timbral_vector_from_essentia(&essentia) else {
-            continue;
-        };
-        if !vector.iter().all(|value| value.is_finite()) {
-            continue;
-        }
-        let dimensions = *expected_dimensions.get_or_insert(vector.len());
-        if vector.len() != dimensions {
-            continue;
-        }
-
-        hash_length_delimited(&mut hasher, file_path.as_bytes());
-        hash_length_delimited(&mut hasher, &file_size.to_be_bytes());
-        hash_length_delimited(&mut hasher, &file_mtime.to_be_bytes());
-        hash_length_delimited(&mut hasher, features_json.as_bytes());
-        vectors.push(vector);
-    }
-
-    Ok(TimbralSourceSnapshot {
-        vectors,
-        source_fingerprint: format!("{:x}", hasher.finalize()),
-    })
-}
-
-pub(super) fn load_timbral_source_snapshot(
-    store_conn: &Connection,
-) -> Result<TimbralSourceSnapshot, String> {
-    load_timbral_source_snapshot_with_vector_schema(store_conn)
-}
-
-#[cfg(test)]
-pub(super) fn load_timbral_source_snapshot_for_test(
-    store_conn: &Connection,
-    vector_schema_version: &str,
-) -> Result<TimbralSourceSnapshot, String> {
-    load_timbral_source_snapshot_for_schema(store_conn, vector_schema_version)
-}
-
-fn compute_timbral_norm_stats_from_snapshot(
-    snapshot: &TimbralSourceSnapshot,
-) -> Result<crate::store::TimbralNormStats, String> {
-    let count = i64::try_from(snapshot.vectors.len())
-        .map_err(|_| "Too many Essentia entries to compute normalization stats".to_string())?;
-    if count < 2 {
-        return Err("Need at least 2 Essentia entries to compute normalization stats".to_string());
-    }
-
-    let dimensions = snapshot.vectors[0].len();
-    let mut means = vec![0.0; dimensions];
-    let mut m2s = vec![0.0; dimensions];
-
-    for (row_index, vector) in snapshot.vectors.iter().enumerate() {
-        let sample_count = (row_index + 1) as f64;
-        // Welford's online update
-        for (i, &x) in vector.iter().enumerate() {
-            let delta = x - means[i];
-            means[i] += delta / sample_count;
-            let delta2 = x - means[i];
-            m2s[i] += delta * delta2;
-        }
-    }
-
-    let dims: Vec<(f64, f64)> = means
-        .iter()
-        .zip(m2s.iter())
-        .map(|(&mean, &m2)| (mean, (m2 / (count - 1) as f64).sqrt().max(1e-10)))
-        .collect();
-
-    Ok(crate::store::TimbralNormStats {
-        dims,
-        sample_count: count,
-        source_fingerprint: snapshot.source_fingerprint.clone(),
-        analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-        vector_schema_version: TIMBRAL_VECTOR_SCHEMA_VERSION.to_string(),
-    })
-}
-
-/// Welford's online algorithm over one exact, fresh Essentia source snapshot.
-#[cfg(test)]
-pub(super) fn compute_timbral_norm_stats(
-    store_conn: &Connection,
-) -> Result<crate::store::TimbralNormStats, String> {
-    let snapshot = load_timbral_source_snapshot(store_conn)?;
-    compute_timbral_norm_stats_from_snapshot(&snapshot)
+    domain::compute_track_energy(
+        essentia.map(|output| {
+            (
+                output.danceability,
+                output.loudness_integrated,
+                output.onset_rate,
+            )
+        }),
+        bpm,
+    )
 }
 
 pub(super) fn normalize_timbral_vector(
     raw: &[f64],
     stats: &crate::store::TimbralNormStats,
 ) -> Option<Vec<f64>> {
-    if raw.len() != stats.dims.len() {
-        return None;
-    }
-    Some(
-        raw.iter()
-            .zip(stats.dims.iter())
-            .map(|(&x, &(mean, stddev))| (x - mean) / stddev)
-            .collect(),
-    )
+    let stats = crate::application::planning::normalization_from_persisted(stats);
+    domain::normalize_timbral_vector(raw, &stats)
 }
 
-pub(super) fn ensure_timbral_norm_stats(
-    store_conn: &Connection,
-) -> Result<Option<crate::store::TimbralNormStats>, String> {
-    let snapshot = load_timbral_source_snapshot(store_conn)?;
-    if snapshot.vectors.len() < 2 {
-        crate::store::clear_timbral_norm_stats(store_conn)
-            .map_err(|e| format!("Failed to clear norm stats: {e}"))?;
-        return Ok(None);
-    }
-
-    let existing =
-        crate::store::get_timbral_norm_stats(store_conn).map_err(|e| format!("DB error: {e}"))?;
-
-    if let Some(stats) = existing {
-        let expected_dimensions = snapshot.vectors[0].len();
-        let provenance_matches = stats.source_fingerprint == snapshot.source_fingerprint
-            && stats.analysis_version == crate::audio::ESSENTIA_SCHEMA_VERSION
-            && stats.vector_schema_version == TIMBRAL_VECTOR_SCHEMA_VERSION;
-        let dimensions_are_coherent = stats.dims.len() == expected_dimensions
-            && stats
-                .dims
-                .iter()
-                .all(|(mean, stddev)| mean.is_finite() && stddev.is_finite() && *stddev > 0.0);
-        let sample_count_matches = usize::try_from(stats.sample_count)
-            .is_ok_and(|sample_count| sample_count == snapshot.vectors.len());
-        if provenance_matches && dimensions_are_coherent && sample_count_matches {
-            return Ok(Some(stats));
-        }
-    }
-
-    let stats = compute_timbral_norm_stats_from_snapshot(&snapshot)?;
-    crate::store::save_timbral_norm_stats(store_conn, &stats)
-        .map_err(|e| format!("Failed to save norm stats: {e}"))?;
-    Ok(Some(stats))
-}
-
-fn canonicalize_genre(raw_genre: &str) -> Option<String> {
-    let trimmed = raw_genre.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    genre::resolve_genre(trimmed).map(|s| s.to_string())
-}
-
-pub(super) fn genre_family_for(canonical_genre: &str) -> GenreFamily {
-    genre::genre_family(canonical_genre)
-}
-
-pub(super) fn key_to_camelot(raw_key: &str) -> Option<CamelotKey> {
-    parse_camelot_key(raw_key).or_else(|| musical_key_to_camelot(raw_key))
-}
-
-pub(super) fn parse_camelot_key(raw_key: &str) -> Option<CamelotKey> {
-    let trimmed = raw_key.trim().to_ascii_uppercase();
-    if trimmed.len() < 2 {
-        return None;
-    }
-    let (number, letter_str) = trimmed.split_at(trimmed.len() - 1);
-    let letter = letter_str.chars().next()?;
-    if letter != 'A' && letter != 'B' {
-        return None;
-    }
-    let number: u8 = number.parse().ok()?;
-    if !(1..=12).contains(&number) {
-        return None;
-    }
-    Some(CamelotKey { number, letter })
-}
-
-pub(super) fn musical_key_to_camelot(raw_key: &str) -> Option<CamelotKey> {
-    let normalized = raw_key
-        .trim()
-        .replace('\u{266F}', "#")
-        .replace('\u{266D}', "b");
-    if normalized.is_empty() {
-        return None;
-    }
-    let lower = normalized.to_ascii_lowercase();
-
-    let (root_raw, is_minor) = if lower.ends_with("minor") && normalized.len() > 5 {
-        (&normalized[..normalized.len() - 5], true)
-    } else if lower.ends_with("min") && normalized.len() > 3 {
-        (&normalized[..normalized.len() - 3], true)
-    } else if lower.ends_with('m') && normalized.len() > 1 {
-        (&normalized[..normalized.len() - 1], true)
-    } else if lower.ends_with("major") && normalized.len() > 5 {
-        (&normalized[..normalized.len() - 5], false)
-    } else if lower.ends_with("maj") && normalized.len() > 3 {
-        (&normalized[..normalized.len() - 3], false)
-    } else {
-        (normalized.as_str(), false)
-    };
-    let root = normalize_key_root(root_raw)?;
-
-    let (number, letter) = if is_minor {
-        match root.as_str() {
-            "G#" | "Ab" => (1, 'A'),
-            "D#" | "Eb" => (2, 'A'),
-            "A#" | "Bb" => (3, 'A'),
-            "F" => (4, 'A'),
-            "C" => (5, 'A'),
-            "G" => (6, 'A'),
-            "D" => (7, 'A'),
-            "A" => (8, 'A'),
-            "E" => (9, 'A'),
-            "B" => (10, 'A'),
-            "F#" | "Gb" => (11, 'A'),
-            "C#" | "Db" => (12, 'A'),
-            _ => return None,
-        }
-    } else {
-        match root.as_str() {
-            "B" => (1, 'B'),
-            "F#" | "Gb" => (2, 'B'),
-            "C#" | "Db" => (3, 'B'),
-            "G#" | "Ab" => (4, 'B'),
-            "D#" | "Eb" => (5, 'B'),
-            "A#" | "Bb" => (6, 'B'),
-            "F" => (7, 'B'),
-            "C" => (8, 'B'),
-            "G" => (9, 'B'),
-            "D" => (10, 'B'),
-            "A" => (11, 'B'),
-            "E" => (12, 'B'),
-            _ => return None,
-        }
-    };
-    Some(CamelotKey { number, letter })
-}
-
-fn normalize_key_root(root: &str) -> Option<String> {
-    let stripped: String = root.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if stripped.is_empty() {
-        return None;
-    }
-    let mut chars = stripped.chars();
-    let letter = chars.next()?.to_ascii_uppercase();
-    if !matches!(letter, 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G') {
-        return None;
-    }
-
-    let accidental = chars.next();
-    if chars.next().is_some() {
-        return None;
-    }
-
-    let normalized = match accidental {
-        Some('#') => format!("{letter}#"),
-        Some('b') | Some('B') => format!("{letter}b"),
-        Some(_) => return None,
-        None => letter.to_string(),
-    };
-    Some(normalized)
-}
-
-pub(super) fn format_camelot(key: CamelotKey) -> String {
-    format!("{}{}", key.number, key.letter)
-}
-
-/// Transpose a Camelot key by the given number of semitones.
-/// +1 semitone = +7 Camelot positions mod 12 (circle of fifths).
-/// Letter (A/B) is unchanged.
-pub(super) fn transpose_camelot_key(key: CamelotKey, semitones: i32) -> CamelotKey {
-    let steps = ((semitones % 12) * 7).rem_euclid(12);
-    let new_number = ((key.number as i32 - 1 + steps) % 12 + 1) as u8;
-    CamelotKey {
-        number: new_number,
-        letter: key.letter,
-    }
-}
-
-/// Compute the two bracketing Camelot keys for a fractional semitone shift,
-/// with interpolation weights.
-///
-/// For an exact integer shift, returns the transposed key with weight 1.0
-/// and a dummy entry with weight 0.0.
-/// For a fractional shift, returns (floor_key, 1-frac) and (ceil_key, frac).
-fn bracketed_keys(key: CamelotKey, exact_shift: f64) -> [(CamelotKey, f64); 2] {
-    if !exact_shift.is_finite() || exact_shift.abs() < 0.01 {
-        return [(key, 1.0), (key, 0.0)];
-    }
-    let floor_s = exact_shift.floor() as i32;
-    let ceil_s = exact_shift.ceil() as i32;
-    if floor_s == ceil_s {
-        let t = transpose_camelot_key(key, floor_s);
-        return [(t, 1.0), (t, 0.0)];
-    }
-    let frac = exact_shift - floor_s as f64;
-    let floor_k = transpose_camelot_key(key, floor_s);
-    let ceil_k = transpose_camelot_key(key, ceil_s);
-    [(floor_k, 1.0 - frac), (ceil_k, frac)]
-}
-
-/// Interpolates between bracketing integer transpositions to avoid the cliff
-/// where +1 chromatic semitone = 7 Camelot positions. Both from and to tracks
-/// may be shifted; uses bilinear interpolation across all 4 key combinations.
-pub(super) fn score_key_with_pitch_shifts(
-    from: Option<CamelotKey>,
-    to: Option<CamelotKey>,
-    from_shift: f64,
-    to_shift: f64,
-) -> AxisScore {
-    let Some(from_key) = from else {
-        return score_key_axis(from, to);
-    };
-    let Some(to_key) = to else {
-        return score_key_axis(from, to);
-    };
-
-    if from_shift.abs() < 0.01 && to_shift.abs() < 0.01 {
-        return score_key_axis(Some(from_key), Some(to_key));
-    }
-
-    let from_keys = bracketed_keys(from_key, from_shift);
-    let to_keys = bracketed_keys(to_key, to_shift);
-
-    let mut blended = 0.0;
-    let mut best_label = String::new();
-    let mut best_weight = 0.0_f64;
-
-    for &(from_t, from_w) in &from_keys {
-        for &(to_t, to_w) in &to_keys {
-            let w = from_w * to_w;
-            if w < 1e-6 {
-                continue;
-            }
-            let score = score_key_axis(Some(from_t), Some(to_t));
-            blended += w * score.value;
-            if w > best_weight {
-                best_weight = w;
-                best_label = score.label;
-            }
-        }
-    }
-
-    // Report detuning in the label when audible (>10 cents from nearest integer)
-    let from_cents = (from_shift - from_shift.round()).abs() * 100.0;
-    let to_cents = (to_shift - to_shift.round()).abs() * 100.0;
-    let max_cents = from_cents.max(to_cents);
-    let label = if max_cents > 10.0 {
-        format!("{best_label} (~{max_cents:.0}\u{00a2} detuned)")
-    } else {
-        best_label
-    };
-
-    AxisScore {
-        value: blended,
-        label,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pool compatibility kernel (symmetric, no sequential context)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct PoolWeights {
-    pub bpm: f64,
-    pub energy: f64,
-    pub timbral: f64,
-    pub key: f64,
-    pub genre: f64,
-    pub brightness: f64,
-    pub rhythm: f64,
-}
-
-pub(super) fn pool_weights(preset: PoolPreset) -> PoolWeights {
-    let w = match preset {
-        PoolPreset::Balanced => PoolWeights {
-            bpm: 0.25,
-            energy: 0.20,
-            timbral: 0.18,
-            key: 0.12,
-            genre: 0.10,
-            brightness: 0.08,
-            rhythm: 0.07,
-        },
-        PoolPreset::Timbral => PoolWeights {
-            bpm: 0.20,
-            energy: 0.15,
-            timbral: 0.35,
-            key: 0.10,
-            genre: 0.05,
-            brightness: 0.08,
-            rhythm: 0.07,
-        },
-    };
-    debug_assert!(
-        (w.bpm + w.energy + w.timbral + w.key + w.genre + w.brightness + w.rhythm - 1.0).abs()
-            < 1e-10,
-        "pool weights must sum to 1.0"
-    );
-    w
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PoolAxisScores {
-    pub key: AxisScore,
-    pub bpm: AxisScore,
-    pub energy: AxisScore,
-    pub genre: AxisScore,
-    pub brightness: AxisScore,
-    pub rhythm: AxisScore,
-    pub timbral: Option<AxisScore>,
-    pub composite: f64,
-}
-
-impl PoolAxisScores {
-    pub(super) fn to_json(&self) -> serde_json::Value {
-        let mut json = serde_json::json!({
-            "key": { "value": round_to_3_decimals(self.key.value), "label": self.key.label },
-            "bpm": { "value": round_to_3_decimals(self.bpm.value), "label": self.bpm.label },
-            "energy": { "value": round_to_3_decimals(self.energy.value), "label": self.energy.label },
-            "genre": { "value": round_to_3_decimals(self.genre.value), "label": self.genre.label },
-            "brightness": { "value": round_to_3_decimals(self.brightness.value), "label": self.brightness.label },
-            "rhythm": { "value": round_to_3_decimals(self.rhythm.value), "label": self.rhythm.label },
-            "composite": round_to_3_decimals(self.composite),
-        });
-        if let Some(ref t) = self.timbral {
-            json["timbral"] = serde_json::json!({
-                "value": round_to_3_decimals(t.value),
-                "label": t.label,
-            });
-        }
-        json
-    }
+pub(super) fn score_pool_timbral_axis(
+    a: &TrackProfile,
+    b: &TrackProfile,
+    stats: &crate::store::TimbralNormStats,
+) -> Option<AxisScore> {
+    let stats = crate::application::planning::normalization_from_persisted(stats);
+    domain::score_pool_timbral_axis(a, b, &stats)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2135,74 +274,8 @@ pub(super) fn score_pool_compatibility_pair(
     weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> PoolAxisScores {
-    let key = if !master_tempo && ref_bpm > 0.0 {
-        score_key_with_pitch_shifts(
-            a.camelot_key,
-            b.camelot_key,
-            bpm_pitch_shift(a.bpm, ref_bpm),
-            bpm_pitch_shift(b.bpm, ref_bpm),
-        )
-    } else {
-        score_key_axis(a.camelot_key, b.camelot_key)
-    };
-
-    let bpm = score_pool_bpm_axis(a.bpm, b.bpm);
-    let energy = score_pool_energy_axis(a.energy, b.energy);
-    let genre = score_pool_genre_axis(
-        a.canonical_genre.as_deref(),
-        b.canonical_genre.as_deref(),
-        a.genre_family,
-        b.genre_family,
-    );
-    let brightness = score_brightness_axis(a.brightness, b.brightness);
-    let rhythm = score_rhythm_axis(a.rhythm_regularity, b.rhythm_regularity);
-
-    let timbral = norm_stats.and_then(|stats| score_pool_timbral_axis(a, b, stats));
-
-    let brightness_available = a.brightness.is_some() && b.brightness.is_some();
-    let rhythm_available = a.rhythm_regularity.is_some() && b.rhythm_regularity.is_some();
-    let mut weighted_sum = (weights.bpm * bpm.value)
-        + (weights.energy * energy.value)
-        + (weights.key * key.value)
-        + (weights.genre * genre.value);
-    let mut total_weight = weights.bpm + weights.energy + weights.key + weights.genre;
-
-    if brightness_available {
-        weighted_sum += weights.brightness * brightness.value;
-        total_weight += weights.brightness;
-    }
-    if rhythm_available {
-        weighted_sum += weights.rhythm * rhythm.value;
-        total_weight += weights.rhythm;
-    }
-    if let Some(ref t) = timbral {
-        weighted_sum += weights.timbral * t.value;
-        total_weight += weights.timbral;
-    }
-
-    let composite = if total_weight > f64::EPSILON {
-        weighted_sum / total_weight
-    } else {
-        0.0
-    };
-
-    PoolAxisScores {
-        key,
-        bpm,
-        energy,
-        genre,
-        brightness,
-        rhythm,
-        timbral,
-        composite,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct CandidatePoolScore {
-    pub min_score: f64,
-    pub mean_score: f64,
-    pub per_member: Vec<(String, PoolAxisScores)>,
+    let norm_stats = norm_stats.map(crate::application::planning::normalization_from_persisted);
+    domain::score_pool_compatibility_pair(a, b, master_tempo, ref_bpm, weights, norm_stats.as_ref())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2214,50 +287,15 @@ pub(super) fn score_candidate_vs_pool(
     weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> CandidatePoolScore {
-    let mut min_score = f64::INFINITY;
-    let mut sum = 0.0;
-    let mut per_member = Vec::with_capacity(pool.len());
-
-    for member in pool {
-        let scores = score_pool_compatibility_pair(
-            candidate,
-            member,
-            master_tempo,
-            ref_bpm,
-            weights,
-            norm_stats,
-        );
-        if scores.composite < min_score {
-            min_score = scores.composite;
-        }
-        sum += scores.composite;
-        per_member.push((member.track.id.clone(), scores));
-    }
-
-    let mean_score = if pool.is_empty() {
-        0.0
-    } else {
-        sum / pool.len() as f64
-    };
-
-    CandidatePoolScore {
-        min_score: if min_score.is_infinite() {
-            0.0
-        } else {
-            min_score
-        },
-        mean_score,
-        per_member,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PoolCohesionResult {
-    pub mean_pairwise: f64,
-    pub min_pairwise: f64,
-    pub weakest_member_id: Option<String>,
-    pub medoid_id: Option<String>,
-    pub per_pair: Vec<(String, String, PoolAxisScores)>,
+    let norm_stats = norm_stats.map(crate::application::planning::normalization_from_persisted);
+    domain::score_candidate_vs_pool(
+        candidate,
+        pool,
+        master_tempo,
+        ref_bpm,
+        weights,
+        norm_stats.as_ref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2268,102 +306,14 @@ pub(super) fn compute_pool_cohesion(
     weights: &PoolWeights,
     norm_stats: Option<&crate::store::TimbralNormStats>,
 ) -> PoolCohesionResult {
-    let n = profiles.len();
-    if n < 2 {
-        return PoolCohesionResult {
-            mean_pairwise: 1.0,
-            min_pairwise: 1.0,
-            weakest_member_id: None,
-            medoid_id: profiles.first().map(|p| p.track.id.clone()),
-            per_pair: Vec::new(),
-        };
-    }
-
-    let mut per_pair = Vec::with_capacity(n * (n - 1) / 2);
-    let mut global_min = f64::INFINITY;
-    let mut global_sum = 0.0;
-    let pair_count = n * (n - 1) / 2;
-
-    let mut member_min: Vec<f64> = vec![f64::INFINITY; n];
-    let mut member_sum: Vec<f64> = vec![0.0; n];
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let scores = score_pool_compatibility_pair(
-                profiles[i],
-                profiles[j],
-                master_tempo,
-                ref_bpm,
-                weights,
-                norm_stats,
-            );
-            let c = scores.composite;
-
-            if c < global_min {
-                global_min = c;
-            }
-            global_sum += c;
-
-            if c < member_min[i] {
-                member_min[i] = c;
-            }
-            if c < member_min[j] {
-                member_min[j] = c;
-            }
-            member_sum[i] += c;
-            member_sum[j] += c;
-
-            per_pair.push((
-                profiles[i].track.id.clone(),
-                profiles[j].track.id.clone(),
-                scores,
-            ));
-        }
-    }
-
-    let mean_pairwise = if pair_count > 0 {
-        global_sum / pair_count as f64
-    } else {
-        0.0
-    };
-
-    let weakest_idx = member_min
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i);
-
-    let medoid_idx = member_sum
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i);
-
-    PoolCohesionResult {
-        mean_pairwise,
-        min_pairwise: if global_min.is_infinite() {
-            0.0
-        } else {
-            global_min
-        },
-        weakest_member_id: weakest_idx.map(|i| profiles[i].track.id.clone()),
-        medoid_id: medoid_idx.map(|i| profiles[i].track.id.clone()),
-        per_pair,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pool discovery — Bron-Kerbosch maximal clique enumeration
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub(super) struct DiscoveredPool {
-    pub track_ids: Vec<String>,
-    pub mean_compatibility: f64,
-    pub min_compatibility: f64,
-    pub core_members: Vec<String>,
-    pub edge_members: Vec<String>,
-    pub score: f64,
+    let norm_stats = norm_stats.map(crate::application::planning::normalization_from_persisted);
+    domain::compute_pool_cohesion(
+        profiles,
+        master_tempo,
+        ref_bpm,
+        weights,
+        norm_stats.as_ref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2378,213 +328,73 @@ pub(super) fn discover_pools(
     max_size: usize,
     max_pools: usize,
 ) -> Vec<DiscoveredPool> {
-    let n = profiles.len();
-    if n < min_size {
-        return Vec::new();
-    }
-
-    let mut compat: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let s = score_pool_compatibility_pair(
-                profiles[i],
-                profiles[j],
-                master_tempo,
-                ref_bpm,
-                weights,
-                norm_stats,
-            );
-            compat[i][j] = s.composite;
-            compat[j][i] = s.composite;
-        }
-    }
-
-    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if compat[i][j] >= threshold {
-                adj[i].insert(j);
-                adj[j].insert(i);
-            }
-        }
-    }
-
-    let mut cliques: Vec<Vec<usize>> = Vec::new();
-    let all: HashSet<usize> = (0..n).collect();
-    bron_kerbosch_pivot(
-        &adj,
-        &mut HashSet::new(),
-        &mut all.clone(),
-        &mut HashSet::new(),
-        &mut cliques,
+    let norm_stats = norm_stats.map(crate::application::planning::normalization_from_persisted);
+    domain::discover_pools(
+        profiles,
+        master_tempo,
+        ref_bpm,
+        weights,
+        norm_stats.as_ref(),
+        threshold,
+        min_size,
         max_size,
-    );
+        max_pools,
+    )
+}
 
-    let mut pools: Vec<DiscoveredPool> = cliques
-        .into_iter()
-        .filter(|c| c.len() >= min_size && c.len() <= max_size)
-        .map(|c| build_discovered_pool(&c, profiles, &compat))
-        .collect();
+pub(super) trait TransitionScoresPresentation {
+    fn to_json(&self) -> serde_json::Value;
+}
 
-    pools.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.track_ids.len().cmp(&a.track_ids.len()))
-    });
-
-    let mut selected: Vec<DiscoveredPool> = Vec::new();
-    for pool in pools {
-        if selected.len() >= max_pools {
-            break;
-        }
-        let set: HashSet<&str> = pool
-            .track_ids
-            .iter()
-            .map(std::string::String::as_str)
-            .collect();
-        let is_subset = selected.iter().any(|s| {
-            let ss: HashSet<&str> = s
-                .track_ids
-                .iter()
-                .map(std::string::String::as_str)
-                .collect();
-            set.is_subset(&ss)
+impl TransitionScoresPresentation for TransitionScores {
+    fn to_json(&self) -> serde_json::Value {
+        let mut json = serde_json::json!({
+            "key": { "value": round_to_3_decimals(self.key.value), "label": self.key.label },
+            "bpm": { "value": round_to_3_decimals(self.bpm.value), "label": self.bpm.label },
+            "energy": { "value": round_to_3_decimals(self.energy.value), "label": self.energy.label },
+            "genre": { "value": round_to_3_decimals(self.genre.value), "label": self.genre.label },
+            "brightness": { "value": round_to_3_decimals(self.brightness.value), "label": self.brightness.label },
+            "rhythm": { "value": round_to_3_decimals(self.rhythm.value), "label": self.rhythm.label },
+            "composite": round_to_3_decimals(self.composite),
         });
-        if !is_subset {
-            selected.push(pool);
+        if !self.adjustments.is_empty() {
+            json["adjustments"] = serde_json::json!(
+                self.adjustments
+                    .iter()
+                    .map(|adjustment| serde_json::json!({
+                        "kind": adjustment.kind,
+                        "delta": round_to_3_decimals(adjustment.delta),
+                        "composite_without": round_to_3_decimals(adjustment.composite_without),
+                        "reason": adjustment.reason,
+                    }))
+                    .collect::<Vec<_>>()
+            );
         }
-    }
-    selected
-}
-
-fn build_discovered_pool(
-    clique: &[usize],
-    profiles: &[&TrackProfile],
-    compat: &[Vec<f64>],
-) -> DiscoveredPool {
-    let (mean_c, min_c) = clique_compatibility(clique, compat);
-    let size_bonus = match clique.len() {
-        2..=3 => 0.85,
-        4..=8 => 1.0,
-        _ => 0.90,
-    };
-
-    let mut member_means: Vec<(usize, f64)> = clique
-        .iter()
-        .map(|&i| {
-            let sum: f64 = clique
-                .iter()
-                .filter(|&&j| j != i)
-                .map(|&j| compat[i][j])
-                .sum();
-            (i, sum / (clique.len() - 1).max(1) as f64)
-        })
-        .collect();
-    member_means.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let median_mean = member_means
-        .get((member_means.len().saturating_sub(1)) / 2)
-        .map_or(0.0, |m| m.1);
-
-    DiscoveredPool {
-        track_ids: clique
-            .iter()
-            .map(|&i| profiles[i].track.id.clone())
-            .collect(),
-        mean_compatibility: mean_c,
-        min_compatibility: min_c,
-        core_members: member_means
-            .iter()
-            .filter(|(_, m)| *m >= median_mean)
-            .map(|(i, _)| profiles[*i].track.id.clone())
-            .collect(),
-        edge_members: member_means
-            .iter()
-            .filter(|(_, m)| *m < median_mean)
-            .map(|(i, _)| profiles[*i].track.id.clone())
-            .collect(),
-        score: mean_c * size_bonus,
+        json
     }
 }
 
-const MAX_CLIQUES: usize = 50_000;
-
-fn bron_kerbosch_pivot(
-    adj: &[HashSet<usize>],
-    r: &mut HashSet<usize>,
-    p: &mut HashSet<usize>,
-    x: &mut HashSet<usize>,
-    cliques: &mut Vec<Vec<usize>>,
-    max_size: usize,
-) {
-    if cliques.len() >= MAX_CLIQUES {
-        return;
-    }
-    if p.is_empty() && x.is_empty() {
-        if r.len() >= 2 {
-            let mut c: Vec<usize> = r.iter().copied().collect();
-            c.sort_unstable();
-            cliques.push(c);
-        }
-        return;
-    }
-    if r.len() >= max_size {
-        let mut c: Vec<usize> = r.iter().copied().collect();
-        c.sort_unstable();
-        cliques.push(c);
-        return;
-    }
-
-    let pivot = p
-        .union(x)
-        .max_by_key(|&&v| adj[v].intersection(p).count())
-        .copied();
-    let Some(pivot) = pivot else { return };
-
-    let candidates: Vec<usize> = p.difference(&adj[pivot]).copied().collect();
-    for v in candidates {
-        r.insert(v);
-        let mut new_p: HashSet<usize> = p.intersection(&adj[v]).copied().collect();
-        let mut new_x: HashSet<usize> = x.intersection(&adj[v]).copied().collect();
-        bron_kerbosch_pivot(adj, r, &mut new_p, &mut new_x, cliques, max_size);
-        r.remove(&v);
-        p.remove(&v);
-        x.insert(v);
-    }
+pub(super) trait PoolAxisScoresPresentation {
+    fn to_json(&self) -> serde_json::Value;
 }
 
-fn clique_compatibility(clique: &[usize], compat: &[Vec<f64>]) -> (f64, f64) {
-    let mut sum = 0.0;
-    let mut min = f64::INFINITY;
-    let mut count = 0u32;
-    for (idx, &i) in clique.iter().enumerate() {
-        for &j in &clique[idx + 1..] {
-            sum += compat[i][j];
-            if compat[i][j] < min {
-                min = compat[i][j];
-            }
-            count += 1;
+impl PoolAxisScoresPresentation for PoolAxisScores {
+    fn to_json(&self) -> serde_json::Value {
+        let mut json = serde_json::json!({
+            "key": { "value": round_to_3_decimals(self.key.value), "label": self.key.label },
+            "bpm": { "value": round_to_3_decimals(self.bpm.value), "label": self.bpm.label },
+            "energy": { "value": round_to_3_decimals(self.energy.value), "label": self.energy.label },
+            "genre": { "value": round_to_3_decimals(self.genre.value), "label": self.genre.label },
+            "brightness": { "value": round_to_3_decimals(self.brightness.value), "label": self.brightness.label },
+            "rhythm": { "value": round_to_3_decimals(self.rhythm.value), "label": self.rhythm.label },
+            "composite": round_to_3_decimals(self.composite),
+        });
+        if let Some(ref timbral) = self.timbral {
+            json["timbral"] = serde_json::json!({
+                "value": round_to_3_decimals(timbral.value),
+                "label": timbral.label,
+            });
         }
+        json
     }
-    if count > 0 {
-        (sum / count as f64, min)
-    } else {
-        (0.0, 0.0)
-    }
-}
-
-pub(super) fn find_bridge_tracks(pools: &[DiscoveredPool]) -> Vec<(String, Vec<usize>)> {
-    let mut track_pools: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, pool) in pools.iter().enumerate() {
-        for id in &pool.track_ids {
-            track_pools.entry(id.clone()).or_default().push(idx);
-        }
-    }
-    let mut bridges: Vec<(String, Vec<usize>)> = track_pools
-        .into_iter()
-        .filter(|(_, p)| p.len() >= 2)
-        .collect();
-    bridges.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
-    bridges
 }

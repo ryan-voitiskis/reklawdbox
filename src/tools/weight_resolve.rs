@@ -32,35 +32,7 @@ pub(super) fn resolve_transition_weights(
 }
 
 fn resolve_transition_named(name: &str, store: &Connection) -> Result<PriorityWeights, String> {
-    match name {
-        "balanced" => {
-            return Ok(super::scoring::priority_weights(
-                SequencingPriority::Balanced,
-            ));
-        }
-        "harmonic" => {
-            return Ok(super::scoring::priority_weights(
-                SequencingPriority::Harmonic,
-            ));
-        }
-        "energy" => return Ok(super::scoring::priority_weights(SequencingPriority::Energy)),
-        "genre" => return Ok(super::scoring::priority_weights(SequencingPriority::Genre)),
-        _ => {}
-    }
-
-    let json = crate::store::get_weight_preset(store, name, "transition")
-        .map_err(|e| format!("DB error: {e}"))?
-        .ok_or_else(|| {
-            format!(
-                "Unknown transition preset '{name}'. Built-in: balanced, harmonic, energy, genre"
-            )
-        })?;
-
-    let input: TransitionWeightInput =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid saved preset: {e}"))?;
-    let mut w = transition_input_to_weights(&input);
-    renormalize_transition(&mut w)?;
-    Ok(w)
+    crate::application::planning::resolve_transition_named(name, store)
 }
 
 macro_rules! impl_weight_ops {
@@ -84,18 +56,7 @@ macro_rules! impl_weight_ops {
         }
 
         pub(super) fn $renorm_fn(w: &mut $weights_ty) -> Result<(), String> {
-            let fields = [$(w.$field),+];
-            if let Some(neg) = fields.iter().find(|&&v| v < 0.0) {
-                return Err(format!(
-                    "Negative weight ({neg}) \u{2014} all weights must be >= 0"
-                ));
-            }
-            let sum: f64 = fields.iter().sum();
-            if sum <= f64::EPSILON {
-                return Err("All weights are zero \u{2014} at least one must be positive".into());
-            }
-            $(w.$field /= sum;)+
-            Ok(())
+            crate::domain::planning::$renorm_fn(w)
         }
 
         pub(super) fn $json_fn(w: &$weights_ty) -> serde_json::Value {
@@ -153,21 +114,7 @@ pub(super) fn resolve_pool_weights(
 }
 
 fn resolve_pool_named(name: &str, store: &Connection) -> Result<PoolWeights, String> {
-    match name {
-        "balanced" => return Ok(super::scoring::pool_weights(PoolPreset::Balanced)),
-        "timbral" => return Ok(super::scoring::pool_weights(PoolPreset::Timbral)),
-        _ => {}
-    }
-
-    let json = crate::store::get_weight_preset(store, name, "pool")
-        .map_err(|e| format!("DB error: {e}"))?
-        .ok_or_else(|| format!("Unknown pool preset '{name}'. Built-in: balanced, timbral"))?;
-
-    let input: PoolWeightInput =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid saved preset: {e}"))?;
-    let mut w = pool_input_to_weights(&input);
-    renormalize_pool(&mut w)?;
-    Ok(w)
+    crate::application::planning::resolve_pool_named(name, store)
 }
 
 #[cfg(test)]

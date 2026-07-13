@@ -1,10 +1,11 @@
-use std::collections::HashSet;
-
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use super::*;
 use crate::db;
+
+#[cfg(test)]
+pub(super) use crate::application::planning::sweep_optimal_reference_bpm;
 
 pub(super) fn handle_score_pool_compatibility(
     server: &ReklawdboxServer,
@@ -51,40 +52,22 @@ pub(super) fn handle_score_pool_compatibility(
             };
 
             let store = server.cache_store_conn()?;
-            let mut profiles = build_track_profiles(vec![track_a, track_b], &store)
-                .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
-            let profile_b = profiles
-                .pop()
-                .expect("two input tracks produce two profiles");
-            let profile_a = profiles
-                .pop()
-                .expect("two input tracks produce two profiles");
-
-            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-                None
-            });
-
-            let ref_bpm = params
-                .reference_bpm
-                .unwrap_or_else(|| median_bpm(&[profile_a.bpm, profile_b.bpm]));
-
-            let scores = score_pool_compatibility_pair(
-                &profile_a,
-                &profile_b,
+            let evaluation = crate::application::planning::evaluate_pool_pair(
+                [track_a, track_b],
+                &store,
                 master_tempo,
-                ref_bpm,
+                params.reference_bpm,
                 &weights,
-                norm_stats.as_ref(),
-            );
+            )
+            .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
 
             let result = serde_json::json!({
                 "mode": "pairwise",
-                "track_a": track_summary(&profile_a),
-                "track_b": track_summary(&profile_b),
-                "reference_bpm": round_to_3_decimals(ref_bpm),
+                "track_a": track_summary(&evaluation.track_a),
+                "track_b": track_summary(&evaluation.track_b),
+                "reference_bpm": round_to_3_decimals(evaluation.reference_bpm),
                 "master_tempo": master_tempo,
-                "scores": scores.to_json(),
+                "scores": evaluation.scores.to_json(),
             });
 
             ok_json(&result)
@@ -117,40 +100,24 @@ pub(super) fn handle_score_pool_compatibility(
             }
 
             let store = server.cache_store_conn()?;
-            let candidate_profile = build_track_profile(candidate_track, &store)
-                .map_err(|e| mcp_internal_error(format!("Profile error: {e}")))?;
-
-            let built = build_profiles(pool_tracks, &store);
-            let pool_profiles = built.profiles;
-
-            if pool_profiles.is_empty() {
-                return Err(mcp_internal_error(
-                    "Failed to build any pool profiles".to_string(),
-                ));
-            }
-
-            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-                None
-            });
-
-            let mut all_bpms: Vec<f64> = pool_profiles.iter().map(|p| p.bpm).collect();
-            all_bpms.push(candidate_profile.bpm);
-            let ref_bpm = params
-                .reference_bpm
-                .unwrap_or_else(|| median_bpm(&all_bpms));
-
-            let pool_refs: Vec<&TrackProfile> = pool_profiles.iter().collect();
-            let result_scores = score_candidate_vs_pool(
-                &candidate_profile,
-                &pool_refs,
+            let evaluation = crate::application::planning::evaluate_candidate_pool(
+                candidate_track,
+                pool_tracks,
+                &store,
                 master_tempo,
-                ref_bpm,
+                params.reference_bpm,
                 &weights,
-                norm_stats.as_ref(),
-            );
+            )
+            .map_err(|error| {
+                if error == "Failed to build any pool profiles" {
+                    mcp_internal_error(error)
+                } else {
+                    mcp_internal_error(format!("Profile error: {error}"))
+                }
+            })?;
 
-            let per_member_json: Vec<serde_json::Value> = result_scores
+            let per_member_json: Vec<serde_json::Value> = evaluation
+                .scores
                 .per_member
                 .iter()
                 .map(|(id, scores)| {
@@ -163,15 +130,15 @@ pub(super) fn handle_score_pool_compatibility(
 
             let mut result = serde_json::json!({
                 "mode": "one_vs_pool",
-                "candidate": track_summary(&candidate_profile),
-                "reference_bpm": round_to_3_decimals(ref_bpm),
+                "candidate": track_summary(&evaluation.candidate),
+                "reference_bpm": round_to_3_decimals(evaluation.reference_bpm),
                 "master_tempo": master_tempo,
-                "min_score": round_to_3_decimals(result_scores.min_score),
-                "mean_score": round_to_3_decimals(result_scores.mean_score),
+                "min_score": round_to_3_decimals(evaluation.scores.min_score),
+                "mean_score": round_to_3_decimals(evaluation.scores.mean_score),
                 "per_member": per_member_json,
             });
-            if !built.skipped.is_empty() {
-                result["skipped_tracks"] = serde_json::json!(built.skipped);
+            if !evaluation.skipped.is_empty() {
+                result["skipped_tracks"] = serde_json::json!(evaluation.skipped);
             }
 
             ok_json(&result)
@@ -195,36 +162,19 @@ pub(super) fn handle_score_pool_compatibility(
             };
 
             let store = server.cache_store_conn()?;
-            let built = build_profiles(pool_tracks, &store);
-            let profiles = built.profiles;
-
-            if profiles.len() < 2 {
-                return Err(McpError::invalid_params(
-                    "Need at least 2 valid profiles for cohesion".to_string(),
-                    None,
-                ));
-            }
-
-            let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-                None
-            });
-
-            let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
-            let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
-
-            let profile_refs: Vec<&TrackProfile> = profiles.iter().collect();
-            let cohesion = compute_pool_cohesion(
-                &profile_refs,
+            let evaluation = crate::application::planning::evaluate_pool_cohesion(
+                pool_tracks,
+                &store,
                 master_tempo,
-                ref_bpm,
+                params.reference_bpm,
                 &weights,
-                norm_stats.as_ref(),
-            );
+            )
+            .map_err(|error| McpError::invalid_params(error, None))?;
 
-            let mut result = cohesion_to_json(&cohesion, ref_bpm, master_tempo);
-            if !built.skipped.is_empty() {
-                result["skipped_tracks"] = serde_json::json!(built.skipped);
+            let mut result =
+                cohesion_to_json(&evaluation.cohesion, evaluation.reference_bpm, master_tempo);
+            if !evaluation.skipped.is_empty() {
+                result["skipped_tracks"] = serde_json::json!(evaluation.skipped);
             }
 
             ok_json(&result)
@@ -265,44 +215,22 @@ pub(super) fn handle_expand_pool(
     }
 
     let store = server.cache_store_conn()?;
-    let seed_built = build_profiles(seed_tracks, &store);
-    let seed_profiles = seed_built.profiles;
-
-    if seed_profiles.is_empty() {
-        return Err(mcp_internal_error(
-            "Failed to build any seed profiles".to_string(),
-        ));
-    }
-
-    let seed_bpms: Vec<f64> = seed_profiles.iter().map(|p| p.bpm).collect();
-    let ref_bpm = params
-        .reference_bpm
-        .unwrap_or_else(|| median_bpm(&seed_bpms));
-
-    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-        None
-    });
-
-    // seed_bpms guaranteed non-empty by the check above
-    let min_seed_bpm = seed_bpms.iter().copied().reduce(f64::min).unwrap();
-    let max_seed_bpm = seed_bpms.iter().copied().reduce(f64::max).unwrap();
-    let bpm_low = min_seed_bpm * 0.92;
-    let bpm_high = max_seed_bpm * 1.08;
-
-    let seed_families: HashSet<GenreFamily> =
-        seed_profiles.iter().map(|p| p.genre_family).collect();
-    let seed_ids: HashSet<String> = seed_profiles.iter().map(|p| p.track.id.clone()).collect();
+    let seed = crate::application::planning::prepare_pool_expansion(
+        seed_tracks,
+        &store,
+        params.reference_bpm,
+    )
+    .map_err(mcp_internal_error)?;
 
     // Intersect user BPM filters with seed-derived range
     let mut candidate_filters = params.filters;
     candidate_filters.bpm_min = Some(match candidate_filters.bpm_min {
-        Some(user_min) => user_min.max(bpm_low),
-        None => bpm_low,
+        Some(user_min) => user_min.max(seed.bpm_low),
+        None => seed.bpm_low,
     });
     candidate_filters.bpm_max = Some(match candidate_filters.bpm_max {
-        Some(user_max) => user_max.min(bpm_high),
-        None => bpm_high,
+        Some(user_max) => user_max.min(seed.bpm_high),
+        None => seed.bpm_high,
     });
 
     let candidate_tracks = {
@@ -324,86 +252,20 @@ pub(super) fn handle_expand_pool(
 
     let candidate_tracks: Vec<_> = candidate_tracks
         .into_iter()
-        .filter(|track| !seed_ids.contains(&track.id))
+        .filter(|track| !seed.track_ids.contains(&track.id))
         .collect();
-    let candidate_profiles = build_profiles(candidate_tracks, &store).profiles;
-    let mut candidate_profiles: Vec<_> = candidate_profiles
-        .into_iter()
-        .filter(|profile| cross_genre || seed_families.contains(&profile.genre_family))
-        .collect();
-
-    let candidates_scanned = candidate_profiles.len();
-
-    let mut pool: Vec<TrackProfile> = seed_profiles;
-    let mut added: Vec<AdditionResult> = Vec::new();
-    let quality_threshold = 0.4;
-
-    for _ in 0..additions {
-        if candidate_profiles.is_empty() {
-            break;
-        }
-
-        let pool_refs: Vec<&TrackProfile> = pool.iter().collect();
-
-        let mut best_idx = 0;
-        let mut best_min = f64::NEG_INFINITY;
-        let mut best_mean = 0.0;
-        let mut best_result: Option<CandidatePoolScore> = None;
-
-        for (i, candidate) in candidate_profiles.iter().enumerate() {
-            let result = score_candidate_vs_pool(
-                candidate,
-                &pool_refs,
-                master_tempo,
-                ref_bpm,
-                &weights,
-                norm_stats.as_ref(),
-            );
-
-            // Rank by min_score, tiebreak by mean_score
-            if result.min_score > best_min
-                || (result.min_score == best_min && result.mean_score > best_mean)
-            {
-                best_idx = i;
-                best_min = result.min_score;
-                best_mean = result.mean_score;
-                best_result = Some(result);
-            }
-        }
-
-        if best_min < quality_threshold {
-            break;
-        }
-
-        let chosen = candidate_profiles.swap_remove(best_idx);
-        let result = best_result.unwrap();
-
-        let rationale = build_addition_rationale(&result);
-
-        added.push(AdditionResult {
-            track_id: chosen.track.id.clone(),
-            title: chosen.track.title.clone(),
-            artist: chosen.track.artist.clone(),
-            min_score: result.min_score,
-            mean_score: result.mean_score,
-            rationale,
-        });
-
-        pool.push(chosen);
-    }
-
-    let stopped_early = added.len() < additions;
-
-    let pool_refs: Vec<&TrackProfile> = pool.iter().collect();
-    let final_cohesion = compute_pool_cohesion(
-        &pool_refs,
+    let expanded = crate::application::planning::expand_pool(
+        seed,
+        candidate_tracks,
+        &store,
+        additions,
+        cross_genre,
         master_tempo,
-        ref_bpm,
         &weights,
-        norm_stats.as_ref(),
     );
 
-    let additions_json: Vec<serde_json::Value> = added
+    let additions_json: Vec<serde_json::Value> = expanded
+        .additions
         .iter()
         .map(|a| {
             serde_json::json!({
@@ -412,7 +274,11 @@ pub(super) fn handle_expand_pool(
                 "artist": a.artist,
                 "min_score": round_to_3_decimals(a.min_score),
                 "mean_score": round_to_3_decimals(a.mean_score),
-                "rationale": a.rationale,
+                "rationale": {
+                    "strongest_axes": a.rationale.strongest_axes,
+                    "weakest_axis": a.rationale.weakest_axis,
+                    "most_compatible_member": a.rationale.most_compatible_member,
+                },
             })
         })
         .collect();
@@ -420,16 +286,16 @@ pub(super) fn handle_expand_pool(
     let mut result = serde_json::json!({
         "additions": additions_json,
         "pool_cohesion": {
-            "mean_pairwise": round_to_3_decimals(final_cohesion.mean_pairwise),
-            "min_pairwise": round_to_3_decimals(final_cohesion.min_pairwise),
+            "mean_pairwise": round_to_3_decimals(expanded.final_cohesion.mean_pairwise),
+            "min_pairwise": round_to_3_decimals(expanded.final_cohesion.min_pairwise),
         },
-        "stopped_early": stopped_early,
-        "candidates_scanned": candidates_scanned,
-        "reference_bpm": round_to_3_decimals(ref_bpm),
+        "stopped_early": expanded.stopped_early,
+        "candidates_scanned": expanded.candidates_scanned,
+        "reference_bpm": round_to_3_decimals(expanded.reference_bpm),
         "master_tempo": master_tempo,
     });
-    if !seed_built.skipped.is_empty() {
-        result["skipped_seed_tracks"] = serde_json::json!(seed_built.skipped);
+    if !expanded.skipped_seed_tracks.is_empty() {
+        result["skipped_seed_tracks"] = serde_json::json!(expanded.skipped_seed_tracks);
     }
 
     ok_json(&result)
@@ -471,128 +337,57 @@ pub(super) fn handle_describe_pool(
     }
 
     let store = server.cache_store_conn()?;
-    let built = build_profiles(pool_tracks, &store);
-    let profiles = built.profiles;
-    let essentia_count = profiles.iter().filter(|p| p.timbral.is_some()).count();
-
-    if profiles.len() < 2 {
-        return Err(mcp_internal_error(
-            "Failed to build enough profiles".to_string(),
-        ));
-    }
-
-    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-        None
-    });
-
-    let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
-    let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
-
-    let profile_refs: Vec<&TrackProfile> = profiles.iter().collect();
-    let cohesion = compute_pool_cohesion(
-        &profile_refs,
+    let description = crate::application::planning::describe_pool(
+        pool_tracks,
+        &store,
         master_tempo,
-        ref_bpm,
+        params.reference_bpm,
         &weights,
-        norm_stats.as_ref(),
-    );
-
-    // profiles guaranteed >=2 by the check above
-    let energies: Vec<f64> = profiles.iter().map(|p| p.energy).collect();
-    let energy_min = energies.iter().copied().reduce(f64::min).unwrap();
-    let energy_max = energies.iter().copied().reduce(f64::max).unwrap();
-
-    let bpm_min = bpms.iter().copied().reduce(f64::min).unwrap();
-    let bpm_max = bpms.iter().copied().reduce(f64::max).unwrap();
-    let bpm_center = median_bpm(&bpms);
-    let bpm_spread = bpm_max - bpm_min;
-
-    let key_neighborhood: Vec<String> = profiles
+    )
+    .map_err(mcp_internal_error)?;
+    let weak_members: Vec<_> = description
+        .weak_members
         .iter()
-        .filter_map(|p| {
-            let k = p.camelot_key?;
-            if !master_tempo && ref_bpm > 0.0 {
-                let shift = bpm_pitch_shift(p.bpm, ref_bpm).round() as i32;
-                Some(format_camelot(transpose_camelot_key(k, shift)))
-            } else {
-                Some(format_camelot(k))
-            }
-        })
-        .collect();
-
-    let mut genre_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for p in &profiles {
-        if let Some(ref g) = p.canonical_genre {
-            *genre_counts.entry(g.as_str()).or_default() += 1;
-        }
-    }
-    let dominant_genre = genre_counts
-        .into_iter()
-        .max_by_key(|(_, c)| *c)
-        .map(|(g, _)| g.to_string());
-
-    // Tracks with min-compatibility < 0.5 to any pool member
-    let weak_candidates: HashSet<&str> = cohesion
-        .per_pair
-        .iter()
-        .filter(|(_, _, s)| s.composite < 0.5)
-        .flat_map(|(a, b, _)| [a.as_str(), b.as_str()])
-        .collect();
-
-    let weak_members: Vec<serde_json::Value> = weak_candidates
-        .into_iter()
-        .filter_map(|id| {
-            let min_score = cohesion
-                .per_pair
-                .iter()
-                .filter(|(a, b, _)| a == id || b == id)
-                .map(|(_, _, s)| s.composite)
-                .reduce(f64::min)?;
-            (min_score < 0.5).then(|| {
-                serde_json::json!({
-                    "track_id": id,
-                    "min_score_to_pool": round_to_3_decimals(min_score),
-                })
+        .map(|member| {
+            serde_json::json!({
+                "track_id": member.track_id,
+                "min_score_to_pool": round_to_3_decimals(member.min_score_to_pool),
             })
         })
         .collect();
 
-    let analysis_coverage = essentia_count as f64 / profiles.len() as f64;
-
     let mut result = serde_json::json!({
         "cohesion": {
-            "mean_pairwise": round_to_3_decimals(cohesion.mean_pairwise),
-            "min_pairwise": round_to_3_decimals(cohesion.min_pairwise),
+            "mean_pairwise": round_to_3_decimals(description.cohesion.mean_pairwise),
+            "min_pairwise": round_to_3_decimals(description.cohesion.min_pairwise),
         },
-        "medoid_track_id": cohesion.medoid_id,
+        "medoid_track_id": description.cohesion.medoid_id,
         "weak_members": weak_members,
-        "energy_band": [round_to_3_decimals(energy_min), round_to_3_decimals(energy_max)],
-        "bpm_center": round_to_3_decimals(bpm_center),
-        "bpm_spread": round_to_3_decimals(bpm_spread),
-        "key_neighborhood": key_neighborhood,
-        "dominant_genre": dominant_genre,
-        "analysis_coverage": round_to_3_decimals(analysis_coverage),
-        "track_count": profiles.len(),
+        "energy_band": [round_to_3_decimals(description.energy_band.0), round_to_3_decimals(description.energy_band.1)],
+        "bpm_center": round_to_3_decimals(description.bpm_center),
+        "bpm_spread": round_to_3_decimals(description.bpm_spread),
+        "key_neighborhood": description.key_neighborhood,
+        "dominant_genre": description.dominant_genre,
+        "analysis_coverage": round_to_3_decimals(description.analysis_coverage),
+        "track_count": description.track_count,
         "master_tempo": master_tempo,
     });
-    if !built.skipped.is_empty() {
-        result["skipped_tracks"] = serde_json::json!(built.skipped);
+    if !description.skipped.is_empty() {
+        result["skipped_tracks"] = serde_json::json!(description.skipped);
     }
 
     if !master_tempo {
-        let median_ref = median_bpm(&bpms);
-
-        let sweep_result = sweep_optimal_reference_bpm(&profiles, &bpms);
-
-        result["reference_bpm_used"] = serde_json::json!(round_to_3_decimals(ref_bpm));
-        if let Some((optimal_bpm, optimal_stability)) = sweep_result {
-            let median_stability = compute_key_stability_at_bpm(&profiles, median_ref);
+        result["reference_bpm_used"] =
+            serde_json::json!(round_to_3_decimals(description.reference_bpm));
+        if let Some((optimal_bpm, optimal_stability)) = description.optimal_reference {
             result["optimal_reference_bpm"] = serde_json::json!(round_to_3_decimals(optimal_bpm));
             result["key_stability_at_optimal"] =
                 serde_json::json!(round_to_3_decimals(optimal_stability));
-            result["key_stability_at_median"] =
-                serde_json::json!(round_to_3_decimals(median_stability));
+            result["key_stability_at_median"] = serde_json::json!(round_to_3_decimals(
+                description
+                    .median_key_stability
+                    .expect("optimal reference has median stability"),
+            ));
         } else {
             result["optimal_reference_bpm"] = serde_json::Value::Null;
             result["bpm_range_warning"] = serde_json::json!(
@@ -604,41 +399,10 @@ pub(super) fn handle_describe_pool(
     ok_json(&result)
 }
 
-struct BuildProfilesResult {
-    profiles: Vec<TrackProfile>,
-    skipped: Vec<String>,
-}
-
-fn build_profiles(tracks: Vec<crate::types::Track>, store: &Connection) -> BuildProfilesResult {
-    let skipped: Vec<_> = tracks.iter().map(|track| track.id.clone()).collect();
-    match build_track_profiles(tracks, store) {
-        Ok(profiles) => BuildProfilesResult {
-            profiles,
-            skipped: Vec::new(),
-        },
-        Err(error) => {
-            tracing::warn!(%error, "Skipping profile batch: cache read failed");
-            BuildProfilesResult {
-                profiles: Vec::new(),
-                skipped,
-            }
-        }
-    }
-}
-
 enum PoolMode {
     Pairwise,
     OneVsPool,
     Cohesion,
-}
-
-struct AdditionResult {
-    track_id: String,
-    title: String,
-    artist: String,
-    min_score: f64,
-    mean_score: f64,
-    rationale: serde_json::Value,
 }
 
 fn track_summary(p: &TrackProfile) -> serde_json::Value {
@@ -651,20 +415,6 @@ fn track_summary(p: &TrackProfile) -> serde_json::Value {
         "energy": round_to_3_decimals(p.energy),
         "genre": p.track.genre,
     })
-}
-
-fn median_bpm(bpms: &[f64]) -> f64 {
-    if bpms.is_empty() {
-        return 0.0;
-    }
-    let mut sorted: Vec<f64> = bpms.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = sorted.len() / 2;
-    if sorted.len().is_multiple_of(2) {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
-    } else {
-        sorted[mid]
-    }
 }
 
 fn cohesion_to_json(
@@ -694,150 +444,6 @@ fn cohesion_to_json(
         "medoid_id": cohesion.medoid_id,
         "per_pair": per_pair_json,
     })
-}
-
-fn build_addition_rationale(result: &CandidatePoolScore) -> serde_json::Value {
-    if result.per_member.is_empty() {
-        return serde_json::json!({});
-    }
-
-    let most_compatible_id = result
-        .per_member
-        .iter()
-        .max_by(|(_, a), (_, b)| {
-            a.composite
-                .partial_cmp(&b.composite)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map_or("", |(id, _)| id.as_str());
-
-    let mut axis_sums: std::collections::HashMap<&str, (f64, u32)> =
-        std::collections::HashMap::new();
-    for (_, scores) in &result.per_member {
-        for (name, value) in [
-            ("key", scores.key.value),
-            ("bpm", scores.bpm.value),
-            ("energy", scores.energy.value),
-            ("genre", scores.genre.value),
-            ("brightness", scores.brightness.value),
-            ("rhythm", scores.rhythm.value),
-        ] {
-            let entry = axis_sums.entry(name).or_insert((0.0, 0));
-            entry.0 += value;
-            entry.1 += 1;
-        }
-        if let Some(ref t) = scores.timbral {
-            let entry = axis_sums.entry("timbral").or_insert((0.0, 0));
-            entry.0 += t.value;
-            entry.1 += 1;
-        }
-    }
-
-    let mut axis_means: Vec<(&str, f64)> = axis_sums
-        .iter()
-        .map(|(name, (sum, count))| (*name, sum / *count as f64))
-        .collect();
-    axis_means.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-
-    let strongest: Vec<&str> = axis_means
-        .iter()
-        .take(2)
-        .filter(|(_, v)| *v >= 0.7)
-        .map(|(name, _)| *name)
-        .collect();
-    let weakest = axis_means.last().map_or("unknown", |(name, _)| *name);
-
-    serde_json::json!({
-        "strongest_axes": strongest,
-        "weakest_axis": weakest,
-        "most_compatible_member": most_compatible_id,
-    })
-}
-
-/// Sweep reference BPMs to find the one maximizing key compatibility.
-/// Returns None if the BPM range is too wide for any single reference.
-pub(super) fn sweep_optimal_reference_bpm(
-    profiles: &[TrackProfile],
-    bpms: &[f64],
-) -> Option<(f64, f64)> {
-    // Compute the valid reference BPM interval analytically.
-    // For each track at BPM X, the 1-semitone constraint gives:
-    //   X / 2^(1/12) <= ref <= X * 2^(1/12)
-    // The valid interval is the intersection of all per-track intervals.
-    let semitone_ratio = 2.0_f64.powf(1.0 / 12.0); // ~1.0595
-    let mut interval_lo = f64::NEG_INFINITY;
-    let mut interval_hi = f64::INFINITY;
-
-    for &bpm in bpms {
-        if bpm <= 0.0 {
-            continue;
-        }
-        let lo = bpm / semitone_ratio;
-        let hi = bpm * semitone_ratio;
-        if lo > interval_lo {
-            interval_lo = lo;
-        }
-        if hi < interval_hi {
-            interval_hi = hi;
-        }
-    }
-
-    if interval_lo > interval_hi || interval_lo <= 0.0 {
-        return None;
-    }
-
-    let step = 0.1;
-    let mut best_bpm = interval_lo;
-    let mut best_stability = f64::NEG_INFINITY;
-    let mut ref_bpm = interval_lo;
-
-    while ref_bpm <= interval_hi {
-        let stability = compute_key_stability_at_bpm(profiles, ref_bpm);
-        if stability > best_stability {
-            best_stability = stability;
-            best_bpm = ref_bpm;
-        }
-        ref_bpm += step;
-    }
-
-    // Also check the interval boundaries (may not land on a grid point)
-    let stability_hi = compute_key_stability_at_bpm(profiles, interval_hi);
-    if stability_hi > best_stability {
-        best_stability = stability_hi;
-        best_bpm = interval_hi;
-    }
-
-    if best_stability > f64::NEG_INFINITY {
-        Some((best_bpm, best_stability))
-    } else {
-        None
-    }
-}
-
-/// Compute mean key axis score across all pairs at a given reference BPM.
-fn compute_key_stability_at_bpm(profiles: &[TrackProfile], ref_bpm: f64) -> f64 {
-    let n = profiles.len();
-    if n < 2 {
-        return 1.0;
-    }
-
-    let mut sum = 0.0;
-    let mut count = 0u32;
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let key_score = score_key_with_pitch_shifts(
-                profiles[i].camelot_key,
-                profiles[j].camelot_key,
-                bpm_pitch_shift(profiles[i].bpm, ref_bpm),
-                bpm_pitch_shift(profiles[j].bpm, ref_bpm),
-            );
-            sum += key_score.value;
-            count += 1;
-        }
-    }
-
-    if count > 0 { sum / count as f64 } else { 1.0 }
 }
 
 pub(super) fn handle_discover_pools(
@@ -883,40 +489,22 @@ pub(super) fn handle_discover_pools(
     }
 
     let store = server.cache_store_conn()?;
-    let built = build_profiles(tracks, &store);
-    let profiles = built.profiles;
-
-    if profiles.len() < min_size {
-        return Err(mcp_internal_error(format!(
-            "Only {} profiles built (need {min_size})",
-            profiles.len()
-        )));
-    }
-
-    let norm_stats = ensure_timbral_norm_stats(&store).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "Timbral norm stats unavailable, scoring without timbral axis");
-        None
-    });
-
-    let bpms: Vec<f64> = profiles.iter().map(|p| p.bpm).collect();
-    let ref_bpm = params.reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
-
-    let profile_refs: Vec<&TrackProfile> = profiles.iter().collect();
-    let pools = discover_pools(
-        &profile_refs,
+    let discovered = crate::application::planning::discover_track_pools(
+        tracks,
+        &store,
         master_tempo,
-        ref_bpm,
+        params.reference_bpm,
         &weights,
-        norm_stats.as_ref(),
         threshold,
         min_size,
         max_size,
         max_pools,
-    );
+    )
+    .map_err(mcp_internal_error)?;
+    let profiles = discovered.profiles;
 
-    let bridges = find_bridge_tracks(&pools);
-
-    let pools_json: Vec<serde_json::Value> = pools
+    let pools_json: Vec<serde_json::Value> = discovered
+        .pools
         .iter()
         .enumerate()
         .map(|(idx, pool)| {
@@ -978,7 +566,8 @@ pub(super) fn handle_discover_pools(
         })
         .collect();
 
-    let bridges_json: Vec<serde_json::Value> = bridges
+    let bridges_json: Vec<serde_json::Value> = discovered
+        .bridges
         .iter()
         .filter_map(|(id, pool_indices)| {
             profiles.iter().find(|p| p.track.id == *id).map(|p| {
@@ -996,10 +585,10 @@ pub(super) fn handle_discover_pools(
         "tracks_analyzed": profiles.len(),
         "threshold": threshold,
         "master_tempo": master_tempo,
-        "reference_bpm": round_to_3_decimals(ref_bpm),
+        "reference_bpm": round_to_3_decimals(discovered.reference_bpm),
     });
-    if !built.skipped.is_empty() {
-        result["skipped_tracks"] = serde_json::json!(built.skipped);
+    if !discovered.skipped.is_empty() {
+        result["skipped_tracks"] = serde_json::json!(discovered.skipped);
     }
 
     ok_json(&result)

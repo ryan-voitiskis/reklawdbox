@@ -483,6 +483,17 @@ pub enum SequencingPriority {
     Genre,
 }
 
+impl From<SequencingPriority> for crate::domain::planning::SequencingPriority {
+    fn from(value: SequencingPriority) -> Self {
+        match value {
+            SequencingPriority::Balanced => Self::Balanced,
+            SequencingPriority::Harmonic => Self::Harmonic,
+            SequencingPriority::Energy => Self::Energy,
+            SequencingPriority::Genre => Self::Genre,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
@@ -490,6 +501,16 @@ pub enum HarmonicMixingStyle {
     Conservative,
     Balanced,
     Adventurous,
+}
+
+impl From<HarmonicMixingStyle> for crate::domain::planning::HarmonicMixingStyle {
+    fn from(value: HarmonicMixingStyle) -> Self {
+        match value {
+            HarmonicMixingStyle::Conservative => Self::Conservative,
+            HarmonicMixingStyle::Balanced => Self::Balanced,
+            HarmonicMixingStyle::Adventurous => Self::Adventurous,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -502,6 +523,17 @@ pub enum EnergyPhase {
     Release,
 }
 
+impl From<EnergyPhase> for crate::domain::planning::EnergyPhase {
+    fn from(value: EnergyPhase) -> Self {
+        match value {
+            EnergyPhase::Warmup => Self::Warmup,
+            EnergyPhase::Build => Self::Build,
+            EnergyPhase::Peak => Self::Peak,
+            EnergyPhase::Release => Self::Release,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
@@ -512,12 +544,33 @@ pub enum EnergyCurvePreset {
     PeakOnly,
 }
 
+impl From<EnergyCurvePreset> for crate::domain::planning::EnergyCurvePreset {
+    fn from(value: EnergyCurvePreset) -> Self {
+        match value {
+            EnergyCurvePreset::WarmupBuildPeakRelease => Self::WarmupBuildPeakRelease,
+            EnergyCurvePreset::FlatEnergy => Self::FlatEnergy,
+            EnergyCurvePreset::PeakOnly => Self::PeakOnly,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(untagged)]
 pub enum EnergyCurveInput {
     Preset(EnergyCurvePreset),
     Custom(Vec<EnergyPhase>),
+}
+
+impl From<&EnergyCurveInput> for crate::domain::planning::EnergyCurve {
+    fn from(value: &EnergyCurveInput) -> Self {
+        match value {
+            EnergyCurveInput::Preset(preset) => Self::Preset((*preset).into()),
+            EnergyCurveInput::Custom(phases) => {
+                Self::Custom(phases.iter().copied().map(Into::into).collect())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -629,6 +682,15 @@ pub enum PoolPreset {
     #[default]
     Balanced,
     Timbral,
+}
+
+impl From<PoolPreset> for crate::domain::planning::PoolPreset {
+    fn from(value: PoolPreset) -> Self {
+        match value {
+            PoolPreset::Balanced => Self::Balanced,
+            PoolPreset::Timbral => Self::Timbral,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]

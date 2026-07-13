@@ -7,3 +7,4 @@ pub(crate) mod audit;
 pub(crate) mod classification;
 pub(crate) mod library;
 pub(crate) mod metadata;
+pub(crate) mod planning;

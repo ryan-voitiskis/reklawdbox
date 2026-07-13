@@ -17,6 +17,38 @@ pub struct CachedAudioAnalysis {
     pub created_at: String,
 }
 
+#[derive(Debug)]
+pub struct TimbralSourceRow {
+    pub file_path: String,
+    pub file_size: i64,
+    pub file_mtime: i64,
+    pub input_fingerprint: String,
+    pub features_json: String,
+}
+
+pub fn load_timbral_source_rows(
+    conn: &Connection,
+    analyzer: &str,
+    analysis_version: &str,
+) -> Result<Vec<TimbralSourceRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, file_size, file_mtime, input_fingerprint, features_json
+         FROM audio_analysis_cache
+         WHERE analyzer = ?1 AND analysis_version = ?2
+         ORDER BY file_path",
+    )?;
+    stmt.query_map(params![analyzer, analysis_version], |row| {
+        Ok(TimbralSourceRow {
+            file_path: row.get(0)?,
+            file_size: row.get(1)?,
+            file_mtime: row.get(2)?,
+            input_fingerprint: row.get(3)?,
+            features_json: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
 pub fn is_audio_analysis_fresh(
     cached: Option<&CachedAudioAnalysis>,
     analysis_version: &str,

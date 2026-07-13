@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -37,36 +37,25 @@ pub(super) fn handle_score_transition(
         (from, to)
     };
 
-    let (from_profile, to_profile) = {
+    let evaluation = {
         let store = server.cache_store_conn()?;
-        let mut profiles = build_track_profiles(vec![from_track, to_track], &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?;
-        let to = profiles
-            .pop()
-            .expect("two input tracks produce two profiles");
-        let from = profiles
-            .pop()
-            .expect("two input tracks produce two profiles");
-        (from, to)
+        crate::application::planning::evaluate_transition(
+            from_track,
+            to_track,
+            &store,
+            params.energy_phase.map(Into::into),
+            &weights,
+            params.use_master_tempo.unwrap_or(true),
+            params
+                .harmonic_style
+                .unwrap_or(HarmonicMixingStyle::Balanced)
+                .into(),
+        )
+        .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
     };
-
-    let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(
-        params
-            .harmonic_style
-            .unwrap_or(HarmonicMixingStyle::Balanced),
-    );
-    let scores = score_transition_profiles(
-        &from_profile,
-        &to_profile,
-        params.energy_phase,
-        params.energy_phase,
-        &weights,
-        master_tempo,
-        harmonic_style,
-        &ScoringContext::default(),
-        None,
-    );
+    let from_profile = evaluation.from;
+    let to_profile = evaluation.to;
+    let scores = evaluation.scores;
 
     let mut result = serde_json::json!({
         "from": {
@@ -119,11 +108,6 @@ pub(super) fn handle_query_transition_candidates(
             .map_err(|e| McpError::invalid_params(e, None))?
     };
     let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(
-        params
-            .harmonic_style
-            .unwrap_or(HarmonicMixingStyle::Balanced),
-    );
     let limit = params.limit.unwrap_or(10).min(50) as usize;
 
     let from_track = {
@@ -156,54 +140,29 @@ pub(super) fn handle_query_transition_candidates(
         ));
     }
 
-    let mut profile_tracks = Vec::with_capacity(pool_tracks.len() + 1);
-    profile_tracks.push(from_track);
-    profile_tracks.extend(
-        pool_tracks
-            .into_iter()
-            .filter(|track| track.id != params.source_track_id),
-    );
-    let mut profiles = {
+    let ranked = {
         let store = server.cache_store_conn()?;
-        build_track_profiles(profile_tracks, &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
+        crate::application::planning::rank_transition_candidates(
+            from_track,
+            pool_tracks,
+            &store,
+            params.energy_phase.map(Into::into),
+            &weights,
+            master_tempo,
+            params
+                .harmonic_style
+                .unwrap_or(HarmonicMixingStyle::Balanced)
+                .into(),
+            params.target_bpm,
+            limit,
+        )
+        .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
     };
-    let from_profile = profiles.remove(0);
-    let pool_profiles = profiles;
+    let from_profile = ranked.from;
     let skipped_profiles = 0u32;
 
-    let ctx = ScoringContext::default();
-    let reference_bpm = params.target_bpm.unwrap_or(from_profile.bpm);
-    let play_bpms = params.target_bpm.map(|target| (from_profile.bpm, target));
-
-    let mut scored: Vec<(TrackProfile, TransitionScores)> = pool_profiles
-        .into_iter()
-        .map(|to_profile| {
-            let scores = score_transition_profiles(
-                &from_profile,
-                &to_profile,
-                params.energy_phase,
-                params.energy_phase,
-                &weights,
-                master_tempo,
-                harmonic_style,
-                &ctx,
-                play_bpms,
-            );
-            (to_profile, scores)
-        })
-        .collect();
-
-    scored.sort_by(|a, b| {
-        b.1.composite
-            .partial_cmp(&a.1.composite)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.track.id.cmp(&b.0.track.id))
-    });
-    let total_pool_size = scored.len();
-    scored.truncate(limit);
-
-    let candidates_json: Vec<serde_json::Value> = scored
+    let candidates_json: Vec<serde_json::Value> = ranked
+        .candidates
         .iter()
         .map(|(profile, scores)| {
             let mut candidate = serde_json::json!({
@@ -255,10 +214,10 @@ pub(super) fn handle_query_transition_candidates(
             "energy": round_to_3_decimals(from_profile.energy),
             "genre": from_profile.track.genre,
         },
-        "reference_bpm": round_to_3_decimals(reference_bpm),
+        "reference_bpm": round_to_3_decimals(ranked.reference_bpm),
         "master_tempo": master_tempo,
         "candidates": candidates_json,
-        "total_pool_size": total_pool_size,
+        "total_pool_size": ranked.total_pool_size,
     });
     if skipped_profiles > 0 {
         result["skipped_profiles"] = serde_json::json!(skipped_profiles);
@@ -320,130 +279,44 @@ pub(super) fn handle_build_set(
         ));
     }
 
-    let profiles_by_id: HashMap<String, TrackProfile> = {
-        let store = server.cache_store_conn()?;
-        build_track_profiles(tracks, &store)
-            .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
-            .into_iter()
-            .map(|profile| (profile.track.id.clone(), profile))
-            .collect()
-    };
-
-    if let Some(opening_track_id) = params.opening_track_id.as_deref()
-        && !profiles_by_id.contains_key(opening_track_id)
-    {
-        return Err(McpError::invalid_params(
-            format!("opening_track_id '{opening_track_id}' is not in track_ids"),
-            None,
-        ));
-    }
-
-    let actual_target = requested_target.min(profiles_by_id.len());
-    let phases = match params.energy_curve.as_ref() {
-        Some(EnergyCurveInput::Custom(_)) => {
-            let requested_phases =
-                resolve_energy_curve(params.energy_curve.as_ref(), requested_target).map_err(
-                    |e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None),
-                )?;
-            requested_phases.into_iter().take(actual_target).collect()
-        }
-        _ => resolve_energy_curve(params.energy_curve.as_ref(), actual_target)
-            .map_err(|e| McpError::invalid_params(format!("Invalid energy_curve: {e}"), None))?,
-    };
-
-    let bpm_trajectory = params
-        .bpm_range
-        .map(|(start, end)| compute_bpm_trajectory(&phases, start, end));
-
-    let start_tracks = select_start_track_ids(
-        &profiles_by_id,
-        if profiles_by_id.len() <= actual_target {
-            1
-        } else {
-            effective_beam_width
-        },
-        phases[0],
-        params.opening_track_id.as_deref(),
-    );
-
     let master_tempo = params.use_master_tempo.unwrap_or(true);
-    let harmonic_style = Some(
-        params
-            .harmonic_style
-            .unwrap_or(HarmonicMixingStyle::Balanced),
-    );
-    let bpm_drift_pct = params.bpm_drift_pct.unwrap_or(6.0);
-
-    // Route: beam_width=1 -> greedy (backward compat), beam_width>=2 -> beam search
-    let plans: Vec<CandidatePlan> = if effective_beam_width <= 1 {
-        // Greedy path -- use variation via start tracks
-        let effective_candidates = if profiles_by_id.len() <= actual_target {
-            1
-        } else {
-            start_tracks.len()
-        };
-        (0..effective_candidates)
-            .map(|i| {
-                let start_id = start_tracks[i % start_tracks.len()].clone();
-                build_candidate_plan(
-                    &profiles_by_id,
-                    &start_id,
-                    actual_target,
-                    &phases,
-                    &weights,
-                    i,
-                    master_tempo,
-                    harmonic_style,
-                    bpm_drift_pct,
-                    bpm_trajectory.as_deref(),
-                )
-            })
-            .collect()
-    } else {
-        let mut all_plans = Vec::new();
-        for start_id in &start_tracks {
-            let mut beam_plans = build_candidate_plan_beam(
-                &profiles_by_id,
-                start_id,
-                actual_target,
-                &phases,
-                &weights,
-                effective_beam_width,
+    let built = {
+        let store = server.cache_store_conn()?;
+        crate::application::planning::build_set_candidates(
+            &store,
+            crate::application::planning::BuildSetOptions {
+                tracks,
+                requested_target,
+                energy_curve: params.energy_curve.as_ref().map(Into::into),
+                opening_track_id: params.opening_track_id,
+                beam_width: effective_beam_width,
+                weights,
                 master_tempo,
-                harmonic_style,
-                bpm_drift_pct,
-                bpm_trajectory.as_deref(),
-            );
-            all_plans.append(&mut beam_plans);
-        }
-        let mut seen_track_sequences: HashSet<Vec<String>> = HashSet::new();
-        all_plans.retain(|plan| seen_track_sequences.insert(plan.ordered_ids.clone()));
-        all_plans.sort_by(|a, b| {
-            let a_mean = if a.transitions.is_empty() {
-                0.0
-            } else {
-                a.transitions
-                    .iter()
-                    .map(|t| t.scores.composite)
-                    .sum::<f64>()
-                    / a.transitions.len() as f64
-            };
-            let b_mean = if b.transitions.is_empty() {
-                0.0
-            } else {
-                b.transitions
-                    .iter()
-                    .map(|t| t.scores.composite)
-                    .sum::<f64>()
-                    / b.transitions.len() as f64
-            };
-            b_mean
-                .partial_cmp(&a_mean)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        all_plans.truncate(effective_beam_width);
-        all_plans
+                harmonic_style: params
+                    .harmonic_style
+                    .unwrap_or(HarmonicMixingStyle::Balanced)
+                    .into(),
+                bpm_drift_pct: params.bpm_drift_pct.unwrap_or(6.0),
+                bpm_range: params.bpm_range,
+            },
+        )
+        .map_err(|error| match error {
+            crate::application::planning::BuildSetError::Profile(error) => {
+                mcp_internal_error(format!("Failed to build track profiles: {error}"))
+            }
+            crate::application::planning::BuildSetError::OpeningTrack(error) => {
+                McpError::invalid_params(error, None)
+            }
+            crate::application::planning::BuildSetError::EnergyCurve(error) => {
+                McpError::invalid_params(format!("Invalid energy_curve: {error}"), None)
+            }
+        })?
     };
+    let effective_beam_width = built.beam_width;
+    let profiles_by_id = built.profiles_by_id;
+    let plans = built.plans;
+    let actual_target = built.actual_target;
+    let bpm_trajectory = built.bpm_trajectory;
 
     let mut candidates = Vec::with_capacity(plans.len());
     for (candidate_index, plan) in plans.into_iter().enumerate() {
