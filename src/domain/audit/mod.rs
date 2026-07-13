@@ -2,8 +2,10 @@
 //!
 //! Audit domain code must not depend on application infrastructure.
 
+pub(crate) mod checks;
+pub(crate) mod filename;
 mod model;
 
 #[cfg(test)]
 pub(crate) use model::SafetyTier;
-pub(crate) use model::{AuditContext, AuditStatus, IssueType, Resolution};
+pub(crate) use model::{AuditContext, AuditStatus, IssueType, Resolution, TagSnapshot};

@@ -8,6 +8,7 @@ mod error;
 mod essentia;
 mod scan;
 mod stratum;
+pub(crate) mod tags;
 
 #[cfg(test)]
 pub(crate) use decode::downmix_to_mono;

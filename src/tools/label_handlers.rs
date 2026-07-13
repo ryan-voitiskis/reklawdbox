@@ -4,10 +4,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::*;
+#[allow(unused_imports)]
+use crate::application::metadata::backfill::*;
 use crate::db;
 use crate::normalize;
 use crate::store;
-use crate::types::TrackChange;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct BackfillLabelsParams {
@@ -26,170 +27,6 @@ pub(super) struct BackfillLabelsParams {
 }
 
 /// Filters out Discogs "Not On Label" entries (self-released, no useful signal).
-fn normalize_label(label: &str) -> Option<String> {
-    if label.starts_with("Not On Label") {
-        return None;
-    }
-    Some(label.to_string())
-}
-
-fn extract_label(entry: Option<&store::EnrichmentCacheEntry>) -> Option<String> {
-    classify_handler::parse_response_json(entry)
-        .as_ref()
-        .and_then(|v| v.get("label"))
-        .and_then(|v| v.as_str())
-        .filter(|l| !l.is_empty())
-        .and_then(normalize_label)
-}
-
-fn sort_label_conflicts(conflicts: &mut [serde_json::Value]) {
-    conflicts.sort_by(|left, right| {
-        let key = |value: &serde_json::Value| {
-            (
-                normalize::normalize_for_matching(value["artist"].as_str().unwrap_or_default()),
-                normalize::normalize_for_matching(value["title"].as_str().unwrap_or_default()),
-                value["track_id"].as_str().unwrap_or_default().to_string(),
-            )
-        };
-        key(left).cmp(&key(right))
-    });
-}
-
-#[derive(Default)]
-struct BackfillLabelsScanResult {
-    filled: usize,
-    already_labeled: usize,
-    conflicts: Vec<serde_json::Value>,
-    no_enrichment: usize,
-    no_discogs: usize,
-    no_musicbrainz: usize,
-    no_bandcamp: usize,
-    no_beatport: usize,
-    to_stage: Vec<TrackChange>,
-    /// Tracks that had no Bandcamp cache and got no label from any source.
-    uncached_bandcamp: Vec<(String, String, String, String)>, // (norm_artist, norm_title, raw_artist, raw_title)
-}
-
-fn scan_labels(
-    store_conn: &rusqlite::Connection,
-    tracks: &[crate::types::Track],
-) -> BackfillLabelsScanResult {
-    let mut result = BackfillLabelsScanResult::default();
-
-    // Pre-compute normalized keys for all tracks.
-    let norm_keys: Vec<(String, String, Option<String>)> = tracks
-        .iter()
-        .map(|t| {
-            let a = normalize::normalize_for_matching(&t.artist);
-            let ti = normalize::normalize_for_matching(&t.title);
-            let al = normalize::normalize_for_matching(&t.album);
-            (a, ti, (!al.is_empty()).then_some(al))
-        })
-        .collect();
-
-    // Build batch keys for all 4 providers × all tracks.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 4);
-    for (a, t, al) in &norm_keys {
-        let album = al.as_deref().unwrap_or("");
-        enrich_keys.push(("discogs", a, t, album));
-        enrich_keys.push(("musicbrainz", a, t, ""));
-        enrich_keys.push(("bandcamp", a, t, ""));
-        enrich_keys.push(("beatport", a, t, ""));
-    }
-
-    // Single batch load — replaces 4N individual queries.
-    let cache_map = store::batch_get_enrichment(store_conn, &enrich_keys).unwrap_or_else(|e| {
-        tracing::warn!("batch enrichment load failed: {e}");
-        std::collections::HashMap::new()
-    });
-
-    for (track, (norm_artist, norm_title, norm_album)) in tracks.iter().zip(&norm_keys) {
-        let album = norm_album.as_deref().unwrap_or("");
-
-        let discogs_key = (
-            "discogs".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            album.to_string(),
-        );
-        let mb_key = (
-            "musicbrainz".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-        let bc_key = (
-            "bandcamp".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-        let bp_key = (
-            "beatport".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-
-        let discogs_entry = cache_map.get(&discogs_key);
-        let mb_entry = cache_map.get(&mb_key);
-        let bc_entry = cache_map.get(&bc_key);
-        let bp_entry = cache_map.get(&bp_key);
-
-        let discogs_label = extract_label(discogs_entry);
-        let mb_label = extract_label(mb_entry);
-        let bc_label = extract_label(bc_entry);
-        let bp_label = extract_label(bp_entry);
-
-        let enrichment_label = discogs_label.or(mb_label).or(bc_label).or(bp_label);
-
-        let Some(enrich_label) = enrichment_label else {
-            result.no_enrichment += 1;
-            if discogs_entry.is_none() {
-                result.no_discogs += 1;
-            }
-            if mb_entry.is_none() {
-                result.no_musicbrainz += 1;
-            }
-            if bc_entry.is_none() {
-                result.no_bandcamp += 1;
-                result.uncached_bandcamp.push((
-                    norm_artist.clone(),
-                    norm_title.clone(),
-                    track.artist.clone(),
-                    track.title.clone(),
-                ));
-            }
-            if bp_entry.is_none() {
-                result.no_beatport += 1;
-            }
-            continue;
-        };
-
-        if track.label.is_empty() {
-            result.filled += 1;
-            result.to_stage.push(TrackChange {
-                track_id: track.id.clone(),
-                label: Some(enrich_label.clone()),
-                ..Default::default()
-            });
-        } else if track.label.eq_ignore_ascii_case(&enrich_label) {
-            result.already_labeled += 1;
-        } else {
-            result.conflicts.push(serde_json::json!({
-                "track_id": track.id,
-                "artist": track.artist,
-                "title": track.title,
-                "current_label": track.label,
-                "enrichment_label": enrich_label,
-            }));
-        }
-    }
-
-    sort_label_conflicts(&mut result.conflicts);
-    result
-}
-
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub(super) struct LabelProviderMissingSummary {
     no_discogs: usize,
@@ -392,14 +229,7 @@ pub(super) async fn handle_backfill_labels(
         .map(|c| c.track_id.clone())
         .collect();
 
-    let staged_count = if !dry_run && !scan.to_stage.is_empty() {
-        let (staged, _) = server.state.changes.stage(scan.to_stage);
-        staged
-    } else {
-        0
-    };
-
-    let pending = server.state.changes.pending_ids().len();
+    let (staged_count, pending) = stage_suggestions(&server.state.changes, scan.to_stage, dry_run);
 
     let max_conflicts = params.max_conflicts.unwrap_or(50);
     let conflict_offset = params.conflict_offset.unwrap_or(0);

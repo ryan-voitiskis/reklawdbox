@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString, strum::EnumIter, strum::Display,
 )]
@@ -152,6 +154,20 @@ impl Resolution {
 pub enum AuditContext {
     AlbumTrack,
     LooseTrack,
+}
+
+/// Transport-neutral projection of the tag data needed by audit policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TagSnapshot {
+    Single {
+        tags: HashMap<String, Option<String>>,
+    },
+    Wav {
+        id3v2: HashMap<String, Option<String>>,
+        riff_info: HashMap<String, Option<String>>,
+        tag3_missing: Vec<String>,
+    },
+    Error,
 }
 
 #[cfg(test)]

@@ -1,0 +1,2598 @@
+//! Audit filesystem scan, freshness, and persistence orchestration.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use rusqlite::Connection;
+use serde::Serialize;
+
+use crate::adapters::audio::tags::{self, FileReadResult};
+use crate::adapters::state;
+#[cfg(test)]
+use crate::domain::audit::checks::normalize_for_drift;
+use crate::domain::audit::checks::{
+    DetectedIssue, check_filename as check_snapshot_filename, check_tags as check_snapshot_tags,
+};
+use crate::domain::audit::filename::*;
+use crate::domain::audit::{AuditContext, IssueType, TagSnapshot};
+#[cfg(test)]
+use crate::domain::audit::{Resolution, SafetyTier};
+
+use super::resolve::*;
+
+fn tag_snapshot(result: &FileReadResult) -> TagSnapshot {
+    match result {
+        FileReadResult::Single { tags, .. } => TagSnapshot::Single { tags: tags.clone() },
+        FileReadResult::Wav {
+            id3v2,
+            riff_info,
+            tag3_missing,
+            ..
+        } => TagSnapshot::Wav {
+            id3v2: id3v2.clone(),
+            riff_info: riff_info.clone(),
+            tag3_missing: tag3_missing.clone(),
+        },
+        FileReadResult::Error { .. } => TagSnapshot::Error,
+    }
+}
+
+fn check_tags(
+    path: &Path,
+    result: &FileReadResult,
+    context: &AuditContext,
+    skip: &HashSet<IssueType>,
+) -> Vec<crate::domain::audit::checks::DetectedIssue> {
+    check_snapshot_tags(path, &tag_snapshot(result), context, skip)
+}
+
+fn check_filename(
+    path: &Path,
+    result: &FileReadResult,
+    context: &AuditContext,
+    skip: &HashSet<IssueType>,
+) -> Vec<crate::domain::audit::checks::DetectedIssue> {
+    check_snapshot_filename(path, &tag_snapshot(result), context, skip)
+}
+
+// ---------------------------------------------------------------------------
+// Scan operation
+// ---------------------------------------------------------------------------
+
+use crate::audio::AUDIO_EXTENSIONS;
+const BATCH_SIZE: usize = 500;
+
+#[derive(Debug, Serialize)]
+pub struct ScanSummary {
+    pub files_in_scope: usize,
+    pub scanned: usize,
+    pub failed_reads: usize,
+    pub skipped_unchanged: usize,
+    pub missing_from_disk: usize,
+    pub skipped_issue_types: Vec<String>,
+    pub new_issues: HashMap<String, usize>,
+    pub auto_resolved: HashMap<String, usize>,
+    pub total_open: i64,
+    pub total_resolved: i64,
+    pub total_accepted: i64,
+    pub total_deferred: i64,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn enforce_trailing_slash(scope: &str) -> String {
+    if scope.ends_with('/') {
+        scope.to_string()
+    } else {
+        format!("{scope}/")
+    }
+}
+
+struct WalkResult {
+    files: Vec<std::path::PathBuf>,
+    warnings: Vec<String>,
+    had_errors: bool,
+}
+
+fn walk_audio_files(scope: &Path) -> Result<WalkResult, String> {
+    if !scope.is_dir() {
+        return Err(format!("Not a directory: {}", scope.display()));
+    }
+
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    let mut had_errors = false;
+    let mut dirs = vec![scope.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) => {
+                warnings.push(format!("Cannot read {}: {e}", dir.display()));
+                had_errors = true;
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    warnings.push(format!("Dir entry error in {}: {e}", dir.display()));
+                    had_errors = true;
+                    continue;
+                }
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    warnings.push(format!("Cannot read entry type in {}: {e}", dir.display()));
+                    had_errors = true;
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let path = entry.path();
+
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let is_audio = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()));
+            if is_audio {
+                files.push(path);
+            }
+        }
+    }
+
+    files.sort();
+    Ok(WalkResult {
+        files,
+        warnings,
+        had_errors,
+    })
+}
+
+const AUDIT_FRESHNESS_VERSION: &str = "v2";
+
+fn audit_context_freshness_token(context: AuditContext) -> &'static str {
+    match context {
+        AuditContext::AlbumTrack => "album",
+        AuditContext::LooseTrack => "loose",
+    }
+}
+
+fn audit_freshness_key(
+    modified: Option<std::time::SystemTime>,
+    context: AuditContext,
+) -> Option<String> {
+    let modified_nanos = modified?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(format!(
+        "{AUDIT_FRESHNESS_VERSION}:{modified_nanos}:{}",
+        audit_context_freshness_token(context)
+    ))
+}
+
+fn audit_freshness_key_from_metadata(
+    metadata: &std::fs::Metadata,
+    context: AuditContext,
+) -> Option<String> {
+    audit_freshness_key(metadata.modified().ok(), context)
+}
+
+fn is_successful_audit_freshness_key(value: &str) -> bool {
+    let mut parts = value.split(':');
+    matches!(parts.next(), Some(AUDIT_FRESHNESS_VERSION))
+        && parts
+            .next()
+            .is_some_and(|nanos| nanos.parse::<u128>().is_ok())
+        && matches!(parts.next(), Some("album" | "loose"))
+        && parts.next().is_none()
+}
+
+#[derive(Clone, Copy)]
+enum AuditRetryKind {
+    Read,
+    Metadata,
+}
+
+fn retry_audit_freshness_key(kind: AuditRetryKind, attempt_nanos: u128) -> String {
+    let kind = match kind {
+        AuditRetryKind::Read => "read",
+        AuditRetryKind::Metadata => "metadata",
+    };
+    format!("retry:{kind}:{attempt_nanos}")
+}
+
+fn audit_attempt_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+pub(crate) fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn delete_missing_files_if_walk_complete(
+    conn: &Connection,
+    scope: &str,
+    disk_path_set: &HashSet<String>,
+    walk_had_errors: bool,
+    warnings: &mut Vec<String>,
+) -> Result<usize, String> {
+    if walk_had_errors {
+        warnings.push(
+            "Skipped missing-file cleanup because filesystem walk had read errors; existing audit rows were preserved."
+                .to_string(),
+        );
+        Ok(0)
+    } else {
+        state::delete_missing_audit_files(conn, scope, disk_path_set)
+            .map_err(|e| format!("DB error deleting missing files: {e}"))
+    }
+}
+
+pub fn scan(
+    conn: &Connection,
+    scope: &str,
+    revalidate: bool,
+    skip_issue_types: &HashSet<IssueType>,
+    rekordbox_imported: Option<&HashSet<String>>,
+) -> Result<ScanSummary, String> {
+    scan_with_freshness_key_provider(
+        conn,
+        scope,
+        revalidate,
+        skip_issue_types,
+        rekordbox_imported,
+        audit_freshness_key_from_metadata,
+    )
+}
+
+fn scan_with_freshness_key_provider(
+    conn: &Connection,
+    scope: &str,
+    revalidate: bool,
+    skip_issue_types: &HashSet<IssueType>,
+    rekordbox_imported: Option<&HashSet<String>>,
+    freshness_key_for: fn(&std::fs::Metadata, AuditContext) -> Option<String>,
+) -> Result<ScanSummary, String> {
+    let scope = enforce_trailing_slash(scope);
+    if scope == "/" {
+        return Err("Scope must not be empty or root (/)".to_string());
+    }
+    let scope_path = Path::new(&scope);
+
+    // 1. Walk filesystem
+    let walk_result = walk_audio_files(scope_path)?;
+    let WalkResult {
+        files: disk_files,
+        mut warnings,
+        had_errors: walk_had_errors,
+    } = walk_result;
+    let files_in_scope = disk_files.len();
+
+    // 2. Load existing audit_files for this scope
+    let existing = state::get_audit_files_in_scope(conn, &scope)
+        .map_err(|e| format!("DB error loading audit files: {e}"))?;
+    let existing_map: HashMap<String, state::AuditFile> =
+        existing.into_iter().map(|f| (f.path.clone(), f)).collect();
+
+    let disk_path_set: HashSet<String> =
+        disk_files.iter().map(|p| p.display().to_string()).collect();
+
+    // 3. Delete missing files
+    let missing_from_disk = delete_missing_files_if_walk_complete(
+        conn,
+        &scope,
+        &disk_path_set,
+        walk_had_errors,
+        &mut warnings,
+    )?;
+
+    let mut scanned = 0usize;
+    let mut failed_reads = 0usize;
+    let mut skipped_unchanged = 0usize;
+    let mut new_issues: HashMap<String, usize> = HashMap::new();
+    let mut auto_resolved: HashMap<String, usize> = HashMap::new();
+
+    // Pre-compute directory-level imported set for TechSpecsInDir annotation
+    let imported_dirs: HashSet<String> = rekordbox_imported
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| {
+                    std::path::Path::new(p)
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Pre-pass: detect album dirs by counting track-number prefixes
+    let album_dirs = detect_album_dirs(&disk_files);
+
+    // 4. Process files in batches (transaction auto-rolls-back on early exit)
+    let mut batch_count = 0usize;
+    let now = now_iso();
+
+    let mut tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("DB error starting transaction: {e}"))?;
+
+    for file_path in &disk_files {
+        let path_str = file_path.display().to_string();
+        let metadata = match std::fs::metadata(file_path) {
+            Ok(m) => m,
+            Err(e) => {
+                warnings.push(format!("Cannot stat {path_str}: {e}"));
+                continue;
+            }
+        };
+        let size = metadata.len() as i64;
+        let context = classify_track_context(file_path, &album_dirs);
+        let expected_freshness_key = freshness_key_for(&metadata, context);
+        let existing_file = existing_map.get(&path_str);
+        let is_unchanged = !revalidate
+            && existing_file.is_some_and(|file| {
+                file.file_size == size
+                    && expected_freshness_key.as_deref().is_some_and(|expected| {
+                        is_successful_audit_freshness_key(expected)
+                            && file.freshness_key == expected
+                    })
+            });
+
+        if is_unchanged {
+            skipped_unchanged += 1;
+        } else {
+            let read_result = tags::read_file_tags(file_path, None, false);
+
+            if let FileReadResult::Error { error, .. } = &read_result {
+                failed_reads += 1;
+                warnings.push(format!(
+                    "Tag read failed for {path_str}: {error}; file will be retried."
+                ));
+                let retry_key =
+                    retry_audit_freshness_key(AuditRetryKind::Read, audit_attempt_nanos());
+                state::upsert_audit_file(&tx, &path_str, &now, &retry_key, size)
+                    .map_err(|e| format!("DB error upserting failed-read file: {e}"))?;
+            } else {
+                let mut detected: Vec<DetectedIssue> = Vec::new();
+                detected.extend(check_tags(
+                    file_path,
+                    &read_result,
+                    &context,
+                    skip_issue_types,
+                ));
+                detected.extend(check_filename(
+                    file_path,
+                    &read_result,
+                    &context,
+                    skip_issue_types,
+                ));
+
+                // Annotate rename-type issues with Rekordbox import status
+                if let Some(imported_set) = rekordbox_imported {
+                    for issue in &mut detected {
+                        let is_imported = match issue.issue_type {
+                            IssueType::OriginalMixSuffix => Some(imported_set.contains(&path_str)),
+                            IssueType::TechSpecsInDir => {
+                                let parent_dir = file_path
+                                    .parent()
+                                    .map(|d| d.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                Some(imported_dirs.contains(&parent_dir))
+                            }
+                            _ => None,
+                        };
+                        if let (Some(imported), Some(detail)) = (is_imported, &issue.detail)
+                            && let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail)
+                        {
+                            obj["imported"] = serde_json::Value::Bool(imported);
+                            issue.detail = Some(obj.to_string());
+                        }
+                    }
+                }
+
+                let persisted_freshness_key = expected_freshness_key.unwrap_or_else(|| {
+                    warnings.push(format!(
+                        "Audited {path_str}, but its modified time was unavailable; file will be retried."
+                    ));
+                    retry_audit_freshness_key(
+                        AuditRetryKind::Metadata,
+                        audit_attempt_nanos(),
+                    )
+                });
+                state::upsert_audit_file(&tx, &path_str, &now, &persisted_freshness_key, size)
+                    .map_err(|e| format!("DB error upserting file: {e}"))?;
+
+                let detected_types: Vec<&str> =
+                    detected.iter().map(|d| d.issue_type.as_str()).collect();
+                for issue in &detected {
+                    state::upsert_audit_issue(
+                        &tx,
+                        &path_str,
+                        issue.issue_type.as_str(),
+                        issue.detail.as_deref(),
+                        "open",
+                        &now,
+                    )
+                    .map_err(|e| format!("DB error upserting issue: {e}"))?;
+
+                    *new_issues.entry(issue.issue_type.to_string()).or_insert(0) += 1;
+                }
+
+                // Auto-resolve issues no longer detected (for changed/re-read files).
+                if existing_file.is_some() {
+                    // Skipped issue types should not be auto-resolved — we didn't check them
+                    let mut types_still_open: Vec<&str> = detected_types.clone();
+                    for skip_type in skip_issue_types {
+                        let s = skip_type.as_str();
+                        if !types_still_open.contains(&s) {
+                            types_still_open.push(s);
+                        }
+                    }
+
+                    let resolved_count = state::mark_issues_resolved_for_path(
+                        &tx,
+                        &path_str,
+                        &types_still_open,
+                        &now,
+                    )
+                    .map_err(|e| format!("DB error resolving issues: {e}"))?;
+                    if resolved_count > 0 {
+                        *auto_resolved.entry("_total".to_string()).or_insert(0) += resolved_count;
+                    }
+                }
+
+                scanned += 1;
+            }
+        }
+
+        batch_count += 1;
+        if batch_count >= BATCH_SIZE {
+            tx.commit()
+                .map_err(|e| format!("DB error committing batch: {e}"))?;
+            tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("DB error starting transaction: {e}"))?;
+            batch_count = 0;
+        }
+    }
+
+    tx.commit()
+        .map_err(|e| format!("DB error committing final batch: {e}"))?;
+
+    // 4b. Refresh import annotations on ALL open rename-type issues in scope.
+    // This catches issues that were skipped (unchanged files) but whose Rekordbox
+    // import status may have changed since the last scan.
+    if let Some(imported_set) = rekordbox_imported {
+        let rename_types = [
+            IssueType::OriginalMixSuffix.as_str(),
+            IssueType::TechSpecsInDir.as_str(),
+        ];
+        let issues = state::get_open_issues_by_types(conn, &scope, &rename_types)
+            .map_err(|e| format!("DB error querying issues for import refresh: {e}"))?;
+        for (id, path, issue_type, detail) in &issues {
+            let is_imported = match issue_type.as_str() {
+                t if t == IssueType::OriginalMixSuffix.as_str() => imported_set.contains(path),
+                t if t == IssueType::TechSpecsInDir.as_str() => {
+                    let parent_dir = std::path::Path::new(path)
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    imported_dirs.contains(&parent_dir)
+                }
+                _ => continue,
+            };
+            if let Some(detail_str) = detail
+                && let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(detail_str)
+            {
+                obj["imported"] = serde_json::Value::Bool(is_imported);
+                let updated = obj.to_string();
+                if updated != *detail_str {
+                    state::update_audit_issue_detail(conn, *id, &updated)
+                        .map_err(|e| format!("DB error updating import annotation: {e}"))?;
+                }
+            }
+        }
+    }
+
+    // 5. Build summary from DB
+    let summary = state::get_audit_summary(conn, &scope)
+        .map_err(|e| format!("DB error getting summary: {e}"))?;
+
+    let counts = aggregate_status_counts(&summary);
+
+    let skipped_names: Vec<String> = skip_issue_types
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+
+    Ok(ScanSummary {
+        files_in_scope,
+        scanned,
+        failed_reads,
+        skipped_unchanged,
+        missing_from_disk,
+        skipped_issue_types: skipped_names,
+        new_issues,
+        auto_resolved,
+        total_open: counts.open,
+        total_resolved: counts.resolved,
+        total_accepted: counts.accepted,
+        total_deferred: counts.deferred,
+        warnings,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_minimal_pcm_wav(path: &Path) {
+        let data_size: u32 = 2;
+        let file_size = 36 + data_size;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&file_size.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&88200u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.extend_from_slice(&[0u8; 2]);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    fn open_scan_test_store(dir: &tempfile::TempDir) -> Connection {
+        let db_path = dir.path().join("internal.sqlite3");
+        state::open(db_path.to_str().unwrap()).unwrap()
+    }
+
+    // -- classify_track_context --
+
+    #[test]
+    fn classify_album_track_with_year() {
+        let p = Path::new("/music/Artist/Album Name (2024)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_album_track_with_tech_specs_and_year() {
+        let p = Path::new("/music/Artist/Album [FLAC] (2024)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_loose_track_in_unnamed_dir() {
+        let p = Path::new("/music/play/Artist - Track.wav");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::LooseTrack
+        );
+    }
+
+    #[test]
+    fn classify_loose_track_no_year() {
+        let p = Path::new("/music/Artist/SomeDir/Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::LooseTrack
+        );
+    }
+
+    #[test]
+    fn classify_disc_subdir() {
+        let p = Path::new("/music/Artist/Album (2020)/CD1/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- has_year_suffix --
+
+    #[test]
+    fn year_suffix_present() {
+        assert!(has_year_suffix("Album Name (2024)"));
+        assert!(has_year_suffix("Album (1999)"));
+    }
+
+    #[test]
+    fn year_suffix_absent() {
+        assert!(!has_year_suffix("Album Name"));
+        assert!(!has_year_suffix("Album (Deluxe)"));
+        assert!(!has_year_suffix("(20)"));
+    }
+
+    #[test]
+    fn year_suffix_unicode_boundaries_are_safe() {
+        assert!(!has_year_suffix("Album (日本2024)"));
+        assert!(!has_year_suffix("Album (🎵2024)"));
+        assert!(has_year_suffix("日本語のアルバム (2024)"));
+        assert!(has_year_suffix("Album (2024 日本盤)"));
+    }
+
+    // -- has_year_range --
+
+    #[test]
+    fn year_range_present() {
+        assert!(has_year_range("The Studio Album Collection 1977-1992"));
+        assert!(has_year_range("Live 1992-2014"));
+        assert!(has_year_range("Anthology 2000\u{2013}2020")); // en-dash
+    }
+
+    #[test]
+    fn year_range_absent() {
+        assert!(!has_year_range("Album Name"));
+        assert!(!has_year_range("CCCP Edits 4"));
+        assert!(!has_year_range("Album 123-456")); // not valid years
+        assert!(!has_year_range("Album 1899-2100")); // out of range
+    }
+
+    // -- has_bare_year --
+
+    #[test]
+    fn bare_year_present() {
+        assert!(has_bare_year(
+            "Live at Alexandra Palace - London 8th and 9th May 2019"
+        ));
+        assert!(has_bare_year("FM Broadcast August 1996"));
+        assert!(has_bare_year("Live in Tokyo - 1st December 2013"));
+    }
+
+    #[test]
+    fn bare_year_absent() {
+        assert!(!has_bare_year("Album Name"));
+        assert!(!has_bare_year("CCCP Edits 4"));
+        assert!(!has_bare_year("Return to Nothing"));
+        assert!(!has_bare_year("Fever (Limited Edition)"));
+    }
+
+    // -- parse_filename --
+
+    #[test]
+    fn parse_album_canonical() {
+        let p = Path::new("/music/Artist/Album (2024)/01 Some Artist - Track Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Some Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track Title"));
+    }
+
+    #[test]
+    fn parse_album_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/08. Tune Out.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("08"));
+        assert_eq!(parsed.artist, None);
+        assert_eq!(parsed.title.as_deref(), Some("Tune Out"));
+    }
+
+    #[test]
+    fn parse_loose_canonical() {
+        let p = Path::new("/music/play/Burial - Archangel.wav");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.track_num, None);
+        assert_eq!(parsed.artist.as_deref(), Some("Burial"));
+        assert_eq!(parsed.title.as_deref(), Some("Archangel"));
+    }
+
+    #[test]
+    fn parse_loose_no_separator() {
+        let p = Path::new("/music/play/JustATitle.wav");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.artist, None);
+        assert_eq!(parsed.title.as_deref(), Some("JustATitle"));
+    }
+
+    #[test]
+    fn parse_title_with_hyphen() {
+        let p = Path::new("/music/play/Artist - Title - Subtitle.flac");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Title - Subtitle"));
+    }
+
+    // -- check_tags --
+
+    fn make_single(fields: &[(&str, &str)]) -> FileReadResult {
+        let mut tags = HashMap::new();
+        for &f in tags::ALL_FIELDS {
+            tags.insert(f.to_string(), None);
+        }
+        for &(k, v) in fields {
+            tags.insert(k.to_string(), Some(v.to_string()));
+        }
+        FileReadResult::Single {
+            path: "/test/track.flac".to_string(),
+            format: "flac".to_string(),
+            tag_type: "vorbis_comment".to_string(),
+            tags,
+            cover_art: None,
+        }
+    }
+
+    fn make_wav(
+        id3v2_fields: &[(&str, &str)],
+        riff_fields: &[(&str, &str)],
+        tag3_missing: Vec<String>,
+    ) -> FileReadResult {
+        let mut id3v2 = HashMap::new();
+        let mut riff_info = HashMap::new();
+        for &f in tags::ALL_FIELDS {
+            id3v2.insert(f.to_string(), None);
+            riff_info.insert(f.to_string(), None);
+        }
+        for &(k, v) in id3v2_fields {
+            id3v2.insert(k.to_string(), Some(v.to_string()));
+        }
+        for &(k, v) in riff_fields {
+            riff_info.insert(k.to_string(), Some(v.to_string()));
+        }
+        FileReadResult::Wav {
+            path: "/test/track.wav".to_string(),
+            format: "wav".to_string(),
+            id3v2,
+            riff_info,
+            tag3_missing,
+            cover_art: None,
+        }
+    }
+
+    #[test]
+    fn check_tags_empty_artist() {
+        let result = make_single(&[("title", "Track")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
+    }
+
+    #[test]
+    fn check_tags_empty_title() {
+        let result = make_single(&[("artist", "Artist")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::EmptyTitle));
+    }
+
+    #[test]
+    fn check_tags_album_missing_fields() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingTrackNum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingAlbum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
+    }
+
+    #[test]
+    fn check_tags_album_all_present() {
+        let result = make_single(&[
+            ("artist", "A"),
+            ("title", "T"),
+            ("track", "1"),
+            ("album", "Al"),
+            ("year", "2024"),
+        ]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn check_tags_artist_in_title() {
+        let result = make_single(&[("artist", "Burial"), ("title", "Burial - Archangel")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect artist in title");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "Archangel");
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_case_insensitive() {
+        let result = make_single(&[("artist", "burial"), ("title", "Burial - Archangel")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
+    }
+
+    #[test]
+    fn check_tags_wav_tag3_missing() {
+        let result = make_wav(
+            &[("artist", "A"), ("title", "T")],
+            &[("title", "T")],
+            vec!["artist".to_string()],
+        );
+        let issues = check_tags(
+            Path::new("/test/track.wav"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTag3Missing)
+        );
+    }
+
+    #[test]
+    fn check_tags_wav_tag_drift() {
+        let result = make_wav(&[("artist", "Correct")], &[("artist", "Wrong")], vec![]);
+        let issues = check_tags(
+            Path::new("/test/track.wav"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_tags_genre_set() {
+        let result = make_single(&[("artist", "A"), ("title", "T"), ("genre", "House")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::GenreSet));
+    }
+
+    #[test]
+    fn check_tags_no_tags() {
+        let result = make_single(&[]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::NoTags));
+        // Should NOT also report EMPTY_ARTIST etc when NO_TAGS fires
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
+    }
+
+    #[test]
+    fn check_tags_skip_genre() {
+        let result = make_single(&[("artist", "A"), ("title", "T"), ("genre", "House")]);
+        let skip: HashSet<IssueType> = [IssueType::GenreSet].into();
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &skip,
+        );
+        assert!(!issues.iter().any(|i| i.issue_type == IssueType::GenreSet));
+    }
+
+    // -- check_filename --
+
+    #[test]
+    fn check_filename_original_mix() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Mix).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix)
+        );
+    }
+
+    #[test]
+    fn check_filename_original_mix_case_insensitive() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        for variant in [
+            "A - Track (original mix).flac",
+            "A - Track (ORIGINAL MIX).flac",
+            "A - Track (Original mix).flac",
+        ] {
+            let issues = check_filename(
+                Path::new(&format!("/test/{variant}")),
+                &result,
+                &AuditContext::LooseTrack,
+                &HashSet::new(),
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+                "should detect Original Mix in: {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_filename_original_bare() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect bare (Original)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_version() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Version).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect (Original Version)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_club_mix_not_detected() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Club Mix).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should NOT detect (Original Club Mix)"
+        );
+    }
+
+    #[test]
+    fn check_filename_tech_specs() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/Album [FLAC]/01 A - T.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::TechSpecsInDir)
+        );
+    }
+
+    #[test]
+    fn check_filename_tag_drift() {
+        let result = make_single(&[("artist", "RealArtist"), ("title", "RealTitle")]);
+        let issues = check_filename(
+            Path::new("/music/play/WrongArtist - WrongTitle.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_when_matching() {
+        let result = make_single(&[("artist", "Burial"), ("title", "Archangel")]);
+        let issues = check_filename(
+            Path::new("/music/play/Burial - Archangel.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_artist() {
+        let result = make_single(&[("artist", "SS"), ("title", "Track")]);
+        let issues = check_filename(
+            Path::new("/music/play/ß - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_title() {
+        let result = make_single(&[("artist", "Artist"), ("title", "STRASSE")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Straße.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    // -- normalize_dir_name --
+
+    #[test]
+    fn normalize_strips_tech_specs() {
+        // Existing cases
+        assert_eq!(normalize_dir_name("Album [FLAC] (2024)"), "Album (2024)");
+        assert_eq!(normalize_dir_name("Album [WAV] 24-96"), "Album");
+        // Issue #15: fractional kHz suffix left `.1` fragment
+        assert_eq!(
+            normalize_dir_name("Good Lies(Electronic) [2023] 24-44.1"),
+            "Good Lies(Electronic) [2023]"
+        );
+        // Issue #15: bare format + units left `(-44.1kHz)` fragment
+        assert_eq!(normalize_dir_name("FLAC (16bit-44.1kHz)"), "");
+        // Bare format name without brackets
+        assert_eq!(normalize_dir_name("Album FLAC"), "Album");
+        // Standalone bit-depth with space
+        assert_eq!(normalize_dir_name("Album 24 bit"), "Album");
+        // Sample rate with kHz unit
+        assert_eq!(normalize_dir_name("Album 16-48kHz"), "Album");
+    }
+
+    #[test]
+    fn normalize_no_false_positives() {
+        // Years in parens must NOT be stripped
+        assert_eq!(normalize_dir_name("Album Name (2024)"), "Album Name (2024)");
+        assert_eq!(normalize_dir_name("Album (2016)"), "Album (2016)");
+        // Non-tech-spec parenthesized text must NOT be stripped
+        assert_eq!(normalize_dir_name("Album (Deluxe)"), "Album (Deluxe)");
+        // Bare number that happens to be 16/24/32 but not followed by bit/- pattern
+        assert_eq!(normalize_dir_name("Track 24"), "Track 24");
+        assert_eq!(normalize_dir_name("Studio 32"), "Studio 32");
+        // Two-digit numbers that are NOT 16/24/32 followed by dash should not match
+        assert_eq!(normalize_dir_name("Album 20-20"), "Album 20-20");
+        // "24" embedded in longer number should not match
+        assert_eq!(normalize_dir_name("Track 2400"), "Track 2400");
+        assert_eq!(normalize_dir_name("Track 124"), "Track 124");
+        // Artist/album name containing "wav" as substring should NOT match
+        assert_eq!(
+            normalize_dir_name("Brainwave Sessions"),
+            "Brainwave Sessions"
+        );
+        assert_eq!(
+            normalize_dir_name("New Wave Compilation"),
+            "New Wave Compilation"
+        );
+    }
+
+    // -- IssueType round-trip --
+
+    #[test]
+    fn issue_type_str_round_trip() {
+        use strum::IntoEnumIterator;
+        for it in IssueType::iter() {
+            let s = it.as_str();
+            let back: IssueType = s
+                .parse()
+                .unwrap_or_else(|_| panic!("No IssueType for \"{s}\""));
+            assert_eq!(it, back);
+        }
+    }
+
+    // -- safety_tier --
+
+    #[test]
+    fn safety_tiers() {
+        use strum::IntoEnumIterator;
+        // Every variant has a tier — new variants cause a compile error in safety_tier()
+        for it in IssueType::iter() {
+            let _ = it.safety_tier();
+        }
+        assert_eq!(IssueType::ArtistInTitle.safety_tier(), SafetyTier::Safe);
+        assert_eq!(IssueType::WavTag3Missing.safety_tier(), SafetyTier::Safe);
+        assert_eq!(IssueType::WavTagDrift.safety_tier(), SafetyTier::Safe);
+        assert_eq!(
+            IssueType::OriginalMixSuffix.safety_tier(),
+            SafetyTier::RenameSafe
+        );
+        assert_eq!(
+            IssueType::TechSpecsInDir.safety_tier(),
+            SafetyTier::RenameSafe
+        );
+        assert_eq!(IssueType::EmptyArtist.safety_tier(), SafetyTier::Review);
+        assert_eq!(IssueType::GenreSet.safety_tier(), SafetyTier::Review);
+    }
+
+    // -- Bug-fix regression tests --
+
+    fn make_tags(fields: &[(&str, &str)]) -> HashMap<String, Option<String>> {
+        let mut tags = HashMap::new();
+        for &f in tags::ALL_FIELDS {
+            tags.insert(f.to_string(), None);
+        }
+        for &(k, v) in fields {
+            tags.insert(k.to_string(), Some(v.to_string()));
+        }
+        tags
+    }
+
+    // M21: MISSING_YEAR fires when "year" is empty, regardless of "date"
+    // ("date" is not in tags::ALL_FIELDS and was a no-op check)
+    #[test]
+    fn check_tags_missing_year_ignores_date_field() {
+        // Even if "date" is set, missing "year" should flag MISSING_YEAR
+        let tags = make_tags(&[
+            ("artist", "A"),
+            ("title", "T"),
+            ("album", "Alb"),
+            ("track", "1"),
+            ("date", "2024"),
+        ]);
+        let result = FileReadResult::Single {
+            path: "/music/Artist/Album (2024)/01 A - T.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
+    }
+
+    // Finding 2: Multi-byte UTF-8 in filename doesn't panic
+    #[test]
+    fn parse_album_multibyte_utf8_no_panic() {
+        // 3-byte char at start: should not panic
+        let p = Path::new("/music/Artist/Album (2024)/€1 Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should return something (possibly no track_num) but must NOT panic
+        assert!(parsed.title.is_some());
+    }
+
+    // Finding 3: ARTIST_IN_TITLE new_title is correct with unicode
+    #[test]
+    fn check_tags_artist_in_title_new_title_correct() {
+        let tags = make_tags(&[("artist", "DJ Test"), ("title", "DJ Test - The Track")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "The Track");
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_uses_unicode_casefold() {
+        let tags = make_tags(&[("artist", "ß"), ("title", "SS - Track")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_artist_contains_separator() {
+        let tags = make_tags(&[("artist", "AC - DC"), ("title", "AC - DC - Thunderstruck")]);
+        let result = FileReadResult::Single {
+            path: "/x.flac".to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect artist in title");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "Thunderstruck");
+    }
+
+    // Regression: empty scope normalizes to "/" via enforce_trailing_slash.
+    #[test]
+    fn scan_rejects_empty_scope() {
+        let result = enforce_trailing_slash("");
+        assert_eq!(result, "/");
+    }
+
+    #[test]
+    fn audit_read_failure_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let unreadable = dir.path().join("broken.flac");
+        std::fs::write(&unreadable, b"not a valid FLAC file").unwrap();
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let second = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            first.scanned, 0,
+            "a failed tag read is not a completed scan"
+        );
+        assert_eq!(first.failed_reads, 1);
+        assert_eq!(second.scanned, 0, "the retry should fail, not scan cleanly");
+        assert_eq!(second.failed_reads, 1);
+        assert_eq!(
+            second.skipped_unchanged, 0,
+            "a failed tag read must remain retryable",
+        );
+        assert!(
+            second
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Tag read failed")
+                    && warning.contains("broken.flac"))
+        );
+        let persisted = state::get_audit_file(&conn, unreadable.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(persisted.freshness_key.starts_with("retry:read:"));
+    }
+
+    #[test]
+    fn audit_read_failure_preserves_existing_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let unreadable = dir.path().join("broken.flac");
+        std::fs::write(&unreadable, b"not a valid FLAC file").unwrap();
+        let path = unreadable.to_str().unwrap();
+        let size = std::fs::metadata(&unreadable).unwrap().len() as i64;
+        state::upsert_audit_file(&conn, path, "before", "legacy-freshness", size).unwrap();
+        state::upsert_audit_issue(
+            &conn,
+            path,
+            IssueType::EmptyArtist.as_str(),
+            Some("existing detail"),
+            "open",
+            "before",
+        )
+        .unwrap();
+
+        let summary = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            true,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let issues = state::get_audit_issues(
+            &conn,
+            &enforce_trailing_slash(dir.path().to_str().unwrap()),
+            None,
+            None,
+            100,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].status, "open");
+        assert_eq!(issues[0].detail.as_deref(), Some("existing detail"));
+        assert_eq!(summary.scanned, 0, "a failed revalidation is not scanned");
+        assert_eq!(summary.failed_reads, 1);
+        assert!(summary.auto_resolved.is_empty());
+        let persisted = state::get_audit_file(&conn, path).unwrap().unwrap();
+        assert!(persisted.freshness_key.starts_with("retry:read:"));
+    }
+
+    #[test]
+    fn audit_freshness_key_distinguishes_subsecond_mtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mtime.wav");
+        write_minimal_pcm_wav(&path);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let same_second = 1_700_000_000;
+        let first_time = std::time::UNIX_EPOCH + std::time::Duration::new(same_second, 123_000_000);
+        file.set_times(std::fs::FileTimes::new().set_modified(first_time))
+            .unwrap();
+        let first_metadata = std::fs::metadata(&path).unwrap();
+
+        let second_time =
+            std::time::UNIX_EPOCH + std::time::Duration::new(same_second, 987_000_000);
+        file.set_times(std::fs::FileTimes::new().set_modified(second_time))
+            .unwrap();
+        let second_metadata = std::fs::metadata(&path).unwrap();
+
+        assert_ne!(
+            first_metadata.modified().unwrap(),
+            second_metadata.modified().unwrap(),
+            "fixture must retain subsecond mtime precision",
+        );
+        let first_key =
+            audit_freshness_key(first_metadata.modified().ok(), AuditContext::LooseTrack).unwrap();
+        let second_key =
+            audit_freshness_key(second_metadata.modified().ok(), AuditContext::LooseTrack).unwrap();
+        assert_ne!(first_key, second_key);
+    }
+
+    #[test]
+    fn audit_freshness_key_context_and_domains() {
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::new(42, 123);
+        let album = audit_freshness_key(Some(modified), AuditContext::AlbumTrack).unwrap();
+        let loose = audit_freshness_key(Some(modified), AuditContext::LooseTrack).unwrap();
+        assert_eq!(album, "v2:42000000123:album");
+        assert_eq!(loose, "v2:42000000123:loose");
+        assert_ne!(album, loose);
+        assert!(is_successful_audit_freshness_key(&album));
+        assert!(is_successful_audit_freshness_key(&loose));
+
+        assert!(audit_freshness_key(None, AuditContext::LooseTrack).is_none());
+        assert!(
+            audit_freshness_key(
+                Some(std::time::UNIX_EPOCH - std::time::Duration::from_nanos(1)),
+                AuditContext::LooseTrack,
+            )
+            .is_none()
+        );
+
+        let read_retry = retry_audit_freshness_key(AuditRetryKind::Read, 99);
+        let metadata_retry = retry_audit_freshness_key(AuditRetryKind::Metadata, 100);
+        assert_eq!(read_retry, "retry:read:99");
+        assert_eq!(metadata_retry, "retry:metadata:100");
+        for not_successful in [
+            read_retry.as_str(),
+            metadata_retry.as_str(),
+            "2026-02-20T10:00:00Z",
+            "v2:not-nanos:loose",
+            "v2:123:other",
+        ] {
+            assert!(!is_successful_audit_freshness_key(not_successful));
+        }
+    }
+
+    #[test]
+    fn album_context_change_reaudits_unchanged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let first_path = dir.path().join("01 First.wav");
+        write_minimal_pcm_wav(&first_path);
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 1);
+
+        let second_path = dir.path().join("02 Second.wav");
+        write_minimal_pcm_wav(&second_path);
+        let after_sibling_added = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            after_sibling_added.scanned, 2,
+            "the unchanged first file must be reaudited after its context changes",
+        );
+        assert_eq!(after_sibling_added.skipped_unchanged, 0);
+
+        let stable_album = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stable_album.scanned, 0);
+        assert_eq!(stable_album.skipped_unchanged, 2);
+    }
+
+    #[test]
+    fn audit_metadata_freshness_failure_is_scanned_and_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let path = dir.path().join("Artist - Track.wav");
+        write_minimal_pcm_wav(&path);
+        let path_str = path.to_str().unwrap();
+        let size = std::fs::metadata(&path).unwrap().len() as i64;
+        state::upsert_audit_file(&conn, path_str, "before", "legacy-freshness", size).unwrap();
+        state::upsert_audit_issue(
+            &conn,
+            path_str,
+            IssueType::GenreSet.as_str(),
+            None,
+            "open",
+            "before",
+        )
+        .unwrap();
+
+        let missing_metadata_key = scan_with_freshness_key_provider(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+            |_, _| None,
+        )
+        .unwrap();
+        assert_eq!(missing_metadata_key.scanned, 1);
+        assert_eq!(missing_metadata_key.failed_reads, 0);
+        assert_eq!(missing_metadata_key.skipped_unchanged, 0);
+        assert!(missing_metadata_key.warnings.iter().any(|warning| {
+            warning.contains("modified time was unavailable") && warning.contains("Track.wav")
+        }));
+        let retry = state::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(retry.freshness_key.starts_with("retry:metadata:"));
+        let issues = state::get_audit_issues(
+            &conn,
+            &enforce_trailing_slash(dir.path().to_str().unwrap()),
+            None,
+            Some(IssueType::GenreSet.as_str()),
+            100,
+            0,
+        )
+        .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].status, "resolved");
+
+        let recovered = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(recovered.scanned, 1);
+        assert_eq!(recovered.failed_reads, 0);
+        let successful = state::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(successful.freshness_key.starts_with("v2:"));
+
+        let unchanged = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(unchanged.scanned, 0);
+        assert_eq!(unchanged.failed_reads, 0);
+        assert_eq!(unchanged.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_successful_unchanged_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        write_minimal_pcm_wav(&dir.path().join("Artist - Track.wav"));
+
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        let second = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 1);
+        assert_eq!(first.failed_reads, 0);
+        assert_eq!(second.scanned, 0);
+        assert_eq!(second.failed_reads, 0);
+        assert_eq!(second.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_legacy_freshness_rescans_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let path = dir.path().join("Artist - Track.wav");
+        write_minimal_pcm_wav(&path);
+        let path_str = path.to_str().unwrap();
+        let size = std::fs::metadata(&path).unwrap().len() as i64;
+        state::upsert_audit_file(&conn, path_str, "before", "2026-02-20T10:00:00Z", size).unwrap();
+
+        let refreshed = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(refreshed.scanned, 1);
+        let persisted = state::get_audit_file(&conn, path_str).unwrap().unwrap();
+        assert!(persisted.freshness_key.starts_with("v2:"));
+
+        let stable = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(stable.scanned, 0);
+        assert_eq!(stable.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn unrelated_album_context_change_does_not_reaudit_other_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        let stable_dir = dir.path().join("stable");
+        let changing_dir = dir.path().join("changing");
+        std::fs::create_dir(&stable_dir).unwrap();
+        std::fs::create_dir(&changing_dir).unwrap();
+        write_minimal_pcm_wav(&stable_dir.join("Artist - Stable.wav"));
+        write_minimal_pcm_wav(&changing_dir.join("01 First.wav"));
+        let first = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.scanned, 2);
+
+        write_minimal_pcm_wav(&changing_dir.join("02 Second.wav"));
+        let changed = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(changed.scanned, 2);
+        assert_eq!(changed.skipped_unchanged, 1);
+    }
+
+    #[test]
+    fn audit_failed_reads_respect_transaction_batching() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_scan_test_store(&dir);
+        for index in 0..=BATCH_SIZE {
+            let path = dir.path().join(format!("{index:04}-broken.flac"));
+            std::fs::write(path, b"not a valid FLAC file").unwrap();
+        }
+        conn.execute_batch(
+            "CREATE TRIGGER fail_after_first_audit_batch
+             BEFORE INSERT ON audit_files
+             WHEN NEW.path LIKE '%/0500-broken.flac'
+             BEGIN
+                 SELECT RAISE(ABORT, 'stop after committed batch');
+             END;",
+        )
+        .unwrap();
+
+        let error = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("upserting failed-read file"));
+        let committed: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(committed, BATCH_SIZE as i64);
+    }
+
+    // Finding 9: NN - Title parsing
+    #[test]
+    fn parse_album_nn_dash_title() {
+        let p = Path::new("/music/Artist/Album (2024)/05 - Invisible Dance.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("05"));
+        assert_eq!(parsed.title.as_deref(), Some("Invisible Dance"));
+        assert_eq!(parsed.artist, None);
+    }
+
+    // Finding 10: Missing-space format is bad filename
+    #[test]
+    fn parse_album_missing_space_is_bad() {
+        let p = Path::new("/music/Artist/Album (2024)/01Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should NOT extract track number (no valid separator)
+        assert_eq!(parsed.track_num, None);
+    }
+
+    // Finding 6: Directory checks use album dir for disc subdirs
+    #[test]
+    fn check_filename_disc_subdir_uses_album_dir() {
+        // File in CD1 subdir under album dir with year — should NOT flag MISSING_YEAR_IN_DIR
+        let p = Path::new("/music/Artist/Album (2020)/CD1/01 Artist - Track.flac");
+        let tags = make_tags(&[("artist", "Artist"), ("title", "Track")]);
+        let result = FileReadResult::Single {
+            path: p.to_str().unwrap().to_string(),
+            format: "FLAC".to_string(),
+            tag_type: "VorbisComments".to_string(),
+            tags,
+            cover_art: None,
+        };
+        let issues = check_filename(p, &result, &AuditContext::AlbumTrack, &HashSet::new());
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYearInDir),
+            "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix"
+        );
+    }
+
+    #[test]
+    fn skip_missing_cleanup_when_walk_has_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("internal.sqlite3");
+        let conn = state::open(db_path.to_str().unwrap()).unwrap();
+
+        state::upsert_audit_file(&conn, "/music/a.flac", "t1", "m1", 100).unwrap();
+
+        let disk_path_set: HashSet<String> = HashSet::new();
+        let mut warnings = Vec::new();
+        let removed = delete_missing_files_if_walk_complete(
+            &conn,
+            "/music/",
+            &disk_path_set,
+            true,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 0);
+        let files = state::get_audit_files_in_scope(&conn, "/music/").unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Skipped missing-file cleanup"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_skips_missing_cleanup_when_walk_hits_unreadable_subdir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("internal.sqlite3");
+        let conn = state::open(db_path.to_str().unwrap()).unwrap();
+
+        let ok_file = dir.path().join("ok.flac");
+        std::fs::write(&ok_file, b"not-audio").unwrap();
+
+        let blocked_dir = dir.path().join("blocked");
+        std::fs::create_dir(&blocked_dir).unwrap();
+        let blocked_file = blocked_dir.join("hidden.flac");
+        std::fs::write(&blocked_file, b"not-audio").unwrap();
+
+        let ok_path = ok_file.to_str().unwrap();
+        let blocked_path = blocked_file.to_str().unwrap();
+        state::upsert_audit_file(&conn, ok_path, "t1", "m1", 1).unwrap();
+        state::upsert_audit_file(&conn, blocked_path, "t1", "m1", 1).unwrap();
+
+        let original_perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        let mut no_access = original_perms.clone();
+        no_access.set_mode(0o000);
+        std::fs::set_permissions(&blocked_dir, no_access).unwrap();
+
+        let scan_result = scan(
+            &conn,
+            dir.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        );
+
+        std::fs::set_permissions(&blocked_dir, original_perms).unwrap();
+
+        let summary = scan_result.expect("scan should continue with warnings");
+        assert_eq!(summary.missing_from_disk, 0);
+        assert!(summary.warnings.iter().any(|w| w.contains("Cannot read")));
+        assert!(
+            summary
+                .warnings
+                .iter()
+                .any(|w| w.contains("Skipped missing-file cleanup"))
+        );
+        assert!(
+            state::get_audit_file(&conn, blocked_path)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    // -- has_year_suffix: compound parenthetical content --
+
+    #[test]
+    fn year_suffix_compound_years() {
+        assert!(has_year_suffix("Album (1969, 2004)"));
+        assert!(has_year_suffix("Album (2017, Label - Cat)"));
+        assert!(has_year_suffix("Album (2020 Remaster)"));
+    }
+
+    #[test]
+    fn year_suffix_range_validation() {
+        assert!(has_year_suffix("Album (1900)"));
+        assert!(has_year_suffix("Album (2099)"));
+        assert!(!has_year_suffix("Album (1899)"));
+        assert!(!has_year_suffix("Album (2100)"));
+        assert!(!has_year_suffix("Album (0001)"));
+    }
+
+    #[test]
+    fn classify_album_with_catalog_suffix() {
+        let p = Path::new("/music/Artist/Album (2017, Label - Cat)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- detect_album_dirs --
+
+    #[test]
+    fn detect_album_dirs_two_numbered() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/01 Track.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/02 Track.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(dirs.contains(Path::new("/music/Artist/Mix")));
+    }
+
+    #[test]
+    fn detect_album_dirs_one_numbered_not_detected() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/01 Track.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/Intro.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(!dirs.contains(Path::new("/music/Artist/Mix")));
+    }
+
+    #[test]
+    fn detect_album_dirs_zero_numbered() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/Intro.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/Outro.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn classify_with_album_dirs_no_year() {
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Giegling Mix")].into();
+        let p = Path::new("/music/Artist/Giegling Mix/01 Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_disc_subdir_with_album_dirs() {
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Mix")].into();
+        let p = Path::new("/music/Artist/Mix/CD1/01 Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- TECH_SPEC_RE: hi-res --
+
+    #[test]
+    fn normalize_strips_hi_res() {
+        assert_eq!(normalize_dir_name("Album [Hi-Res] (2024)"), "Album (2024)");
+        assert_eq!(normalize_dir_name("Album [HiRes]"), "Album");
+    }
+
+    // -- D.NN disc-dot parsing --
+
+    #[test]
+    fn parse_album_disc_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/1.01 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("1.01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    // -- 3-digit track numbers --
+
+    #[test]
+    fn parse_album_three_digit_track() {
+        let p = Path::new("/music/Artist/Album (2024)/100 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_two_digit_no_regression() {
+        let p = Path::new("/music/Artist/Album (2024)/01 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_three_digit_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/100. Track Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.title.as_deref(), Some("Track Title"));
+    }
+
+    // -- Drift normalization --
+
+    #[test]
+    fn drift_normalize_slash_to_dash() {
+        assert_eq!(normalize_for_drift("AC/DC"), "AC-DC");
+    }
+
+    #[test]
+    fn drift_normalize_preserves_colon() {
+        assert_eq!(normalize_for_drift("Title: Subtitle"), "Title: Subtitle");
+    }
+
+    #[test]
+    fn drift_normalize_preserves_special_chars() {
+        assert_eq!(normalize_for_drift("F*ck"), "F*ck");
+        assert_eq!(normalize_for_drift("Why?"), "Why?");
+        assert_eq!(normalize_for_drift("S.E.X."), "S.E.X.");
+        assert_eq!(normalize_for_drift("KAS:ST"), "KAS:ST");
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_slash_in_tag() {
+        // `/` is the only macOS-forbidden char — normalized to `-` on both sides
+        let result = make_single(&[("artist", "AC/DC"), ("title", "Thunderstruck")]);
+        let issues = check_filename(
+            Path::new("/music/play/AC-DC - Thunderstruck.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Slash in tag should match dash in filename after normalization"
+        );
+    }
+
+    #[test]
+    fn check_filename_drift_with_colon_in_tag() {
+        // `:` is valid on macOS — filename should use it, so drift is real
+        let result = make_single(&[("artist", "Artist"), ("title", "Part 1: The Beginning")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Part 1- The Beginning.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Colon in tag vs dash in filename is real drift — file can be renamed"
+        );
+    }
+
+    // -- NN-Title (no space after dash) parsing --
+
+    #[test]
+    fn parse_album_nn_dash_no_space() {
+        let p = Path::new("/music/Artist/Album (2024)/01-Dreamin.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.title.as_deref(), Some("Dreamin"));
+    }
+
+    #[test]
+    fn parse_album_nn_dash_no_space_with_artist() {
+        let p = Path::new("/music/Artist/Album (2024)/08-Snoop Doggy Dogg - Gold Rush.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("08"));
+        assert_eq!(parsed.artist.as_deref(), Some("Snoop Doggy Dogg"));
+        assert_eq!(parsed.title.as_deref(), Some("Gold Rush"));
+    }
+
+    #[test]
+    fn parse_album_three_digit_dash_no_space() {
+        let p = Path::new("/music/Artist/Album (2024)/100-Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_nn_dash_digit_not_parsed_as_track() {
+        // "01-02" — dash followed by digit should NOT be parsed as NN-Title
+        let p = Path::new("/music/Artist/Album (2024)/01-02 Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Neither disc-track (bytes[1] is '1' not '-') nor NN-Title (digit after dash)
+        assert_eq!(parsed.track_num, None);
+    }
+
+    // -- Disc subdir with album_dirs pre-pass --
+
+    #[test]
+    fn classify_disc_subdir_detected_by_prepass() {
+        // CD1 is in album_dirs (pre-pass detected it), grandparent has no year suffix
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Live 1992-2014/CD1")].into();
+        let p = Path::new("/music/Artist/Live 1992-2014/CD1/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- Dot-space prefix stripping --
+
+    #[test]
+    fn parse_album_dot_format_with_artist() {
+        // "01. Artist - Title" — the ". " prefix must not leak into artist
+        let p = Path::new("/music/Artist/Album (2024)/01. Roza Terenzi - Loose.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Roza Terenzi"));
+        assert_eq!(parsed.title.as_deref(), Some("Loose"));
+    }
+
+    #[test]
+    fn parse_album_feat_dot_no_false_split() {
+        // "feat." interior dot must not split the title
+        let p = Path::new("/music/Artist/Album (2024)/03 Artist feat. Someone.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("03"));
+        assert_eq!(parsed.title.as_deref(), Some("Artist feat. Someone"));
+    }
+
+    // -- Original Mix symmetric stripping --
+
+    #[test]
+    fn drift_original_mix_in_tag_only() {
+        // Tag has (Original Mix) but filename doesn't — should not drift
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original Mix)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original Mix) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_mix_case_insensitive() {
+        // Tag has lowercase "(original mix)" but filename doesn't — should not drift
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (original mix)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "case-insensitive (original mix) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_bare_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_version_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original Version)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original Version) in tag only should not trigger drift"
+        );
+    }
+
+    // -- Symmetric drift normalization --
+
+    #[test]
+    fn check_filename_no_drift_with_question_mark_both_sides() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Why?")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Why?.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Question mark in both filename and tag should not trigger drift"
+        );
+    }
+
+    // -- is_disc_subdir regression --
+
+    #[test]
+    fn disc_subdir_rejects_false_positives() {
+        assert!(!is_disc_subdir("Disco Dreams Unlimited (2018)"));
+        assert!(!is_disc_subdir("Discovering Infinity"));
+        assert!(!is_disc_subdir("CD"));
+        assert!(!is_disc_subdir("Disc"));
+        assert!(!is_disc_subdir("Disconnected"));
+    }
+
+    #[test]
+    fn disc_subdir_accepts_real_disc_dirs() {
+        assert!(is_disc_subdir("CD1"));
+        assert!(is_disc_subdir("CD 2"));
+        assert!(is_disc_subdir("CD10"));
+        assert!(is_disc_subdir("Disc 1"));
+        assert!(is_disc_subdir("disc2"));
+        assert!(is_disc_subdir("Disk 3"));
+    }
+
+    // -- ancestor_has_year --
+
+    #[test]
+    fn ancestor_year_suppresses_nested_subdir() {
+        let p = Path::new("/music/Artist/Album (2021)/bonus-tracks/01 track.flac");
+        assert!(ancestor_has_year(p));
+    }
+
+    #[test]
+    fn ancestor_year_absent_when_no_year_above() {
+        let p = Path::new("/music/Artist/SomeDir/nested/01 track.flac");
+        assert!(!ancestor_has_year(p));
+    }
+
+    // -- leaf-dir filter in detect_album_dirs --
+
+    #[test]
+    fn leaf_dir_filter_excludes_parent_of_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            // parent dir has loose numbered files
+            PathBuf::from("/music/lossy/01 Track A.flac"),
+            PathBuf::from("/music/lossy/02 Track B.flac"),
+            // child subdir also has numbered files
+            PathBuf::from("/music/lossy/Artist/01 Track X.flac"),
+            PathBuf::from("/music/lossy/Artist/02 Track Y.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        // /music/lossy/Artist is a leaf → included
+        assert!(album_dirs.contains(&PathBuf::from("/music/lossy/Artist")));
+        // /music/lossy is parent of a child album dir → excluded
+        assert!(!album_dirs.contains(&PathBuf::from("/music/lossy")));
+    }
+
+    #[test]
+    fn leaf_dir_filter_keeps_standalone_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            PathBuf::from("/music/Artist/Album/01 Track.flac"),
+            PathBuf::from("/music/Artist/Album/02 Track.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        assert!(album_dirs.contains(&PathBuf::from("/music/Artist/Album")));
+    }
+
+    #[test]
+    fn boundary_audit_scan_is_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio_path = directory.path().join("Artist - Track.wav");
+        write_minimal_pcm_wav(&audio_path);
+        let audio_before = std::fs::read(&audio_path).unwrap();
+        let store = open_scan_test_store(&directory);
+        let summary = scan(
+            &store,
+            directory.path().to_str().unwrap(),
+            false,
+            &HashSet::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(summary.files_in_scope, 1);
+        assert!(
+            state::get_audit_file(&store, audio_path.to_str().unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(std::fs::read(&audio_path).unwrap(), audio_before);
+    }
+
+    #[test]
+    fn audit_workflow_preserves_freshness_and_resolution() {
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123);
+        let album_key = audit_freshness_key(Some(modified), AuditContext::AlbumTrack).unwrap();
+        let loose_key = audit_freshness_key(Some(modified), AuditContext::LooseTrack).unwrap();
+        assert_ne!(album_key, loose_key);
+        assert!(is_successful_audit_freshness_key(&album_key));
+
+        let (_directory, store) = seed_query_resolve_db();
+        let open = query_issues(&store, "/music/a", Some("open"), None, 100, 0).unwrap();
+        let issue_id = open[0].id;
+        assert_eq!(
+            resolve_issues(&store, &[issue_id], "deferred", Some("later")).unwrap(),
+            1
+        );
+        let deferred = query_issues(&store, "/music/a", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].note.as_deref(), Some("later"));
+    }
+
+    // -- query_issues & resolve_issues --
+
+    fn seed_query_resolve_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite3");
+        let conn = state::open(db_path.to_str().unwrap()).unwrap();
+
+        state::upsert_audit_file(&conn, "/music/a/track1.flac", "t1", "m1", 100).unwrap();
+        state::upsert_audit_file(&conn, "/music/b/track2.wav", "t1", "m1", 200).unwrap();
+
+        // Issues for track1 (two open, one accepted)
+        state::upsert_audit_issue(
+            &conn,
+            "/music/a/track1.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        state::upsert_audit_issue(
+            &conn,
+            "/music/a/track1.flac",
+            "GENRE_SET",
+            None,
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        // Accept the GENRE_SET issue (id=2)
+        state::resolve_audit_issues(
+            &conn,
+            &[2],
+            Resolution::AcceptedAsIs,
+            Some("intended"),
+            "2026-01-02T00:00:00Z",
+        )
+        .unwrap();
+
+        // Issues for track2 (one open WAV_TAG3_MISSING)
+        state::upsert_audit_issue(
+            &conn,
+            "/music/b/track2.wav",
+            "WAV_TAG3_MISSING",
+            Some(r#"{"fields":["artist"]}"#),
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        (dir, conn)
+    }
+
+    #[test]
+    fn query_issues_all_in_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 3);
+    }
+
+    #[test]
+    fn query_issues_narrow_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/a/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+        assert!(issues.iter().all(|i| i.path.starts_with("/music/a/")));
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_open() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+        assert!(issues.iter().all(|i| i.status == "open"));
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_accepted() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", Some("accepted"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].issue_type, "GENRE_SET");
+        assert_eq!(issues[0].status, "accepted");
+    }
+
+    #[test]
+    fn query_issues_filter_by_issue_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "/music/b/track2.wav");
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_and_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/", Some("open"), Some("EMPTY_ARTIST"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "/music/a/track1.flac");
+        assert_eq!(issues[0].issue_type, "EMPTY_ARTIST");
+    }
+
+    #[test]
+    fn query_issues_empty_result_for_non_existent_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/other/", None, None, 100, 0).unwrap();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn query_issues_empty_result_for_non_matching_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", None, Some("BAD_FILENAME"), 100, 0).unwrap();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn query_issues_rejects_root_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = query_issues(&conn, "/", None, None, 100, 0).unwrap_err();
+        assert!(err.contains("root"));
+    }
+
+    #[test]
+    fn query_issues_rejects_empty_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Empty scope normalizes to "/" via enforce_trailing_slash
+        let err = query_issues(&conn, "", None, None, 100, 0).unwrap_err();
+        assert!(err.contains("root"));
+    }
+
+    #[test]
+    fn query_issues_limit_and_offset() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let first = query_issues(&conn, "/music/", None, None, 1, 0).unwrap();
+        assert_eq!(first.len(), 1);
+
+        let second = query_issues(&conn, "/music/", None, None, 1, 1).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0].id, second[0].id);
+
+        let beyond = query_issues(&conn, "/music/", None, None, 100, 100).unwrap();
+        assert!(beyond.is_empty());
+    }
+
+    #[test]
+    fn query_issues_detail_parsed_as_json() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/b/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        let detail = issues[0].detail.as_ref().expect("detail should be parsed");
+        assert_eq!(detail["fields"][0], "artist");
+    }
+
+    #[test]
+    fn query_issues_adds_trailing_slash() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Scope without trailing slash should still work
+        let issues = query_issues(&conn, "/music/a", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+    }
+
+    // -- resolve_issues tests --
+
+    #[test]
+    fn resolve_issues_accepted_as_is() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Issue id=1 is open EMPTY_ARTIST
+        let count = resolve_issues(&conn, &[1], "accepted_as_is", Some("ok")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("accepted"), None, 100, 0).unwrap();
+        // id=1 (EMPTY_ARTIST) + id=2 (GENRE_SET) are both accepted now
+        assert_eq!(issues.len(), 2);
+
+        let resolved = issues.iter().find(|i| i.id == 1).unwrap();
+        assert_eq!(resolved.status, "accepted");
+        assert_eq!(resolved.resolution.as_deref(), Some("accepted_as_is"));
+        assert_eq!(resolved.note.as_deref(), Some("ok"));
+        assert!(resolved.resolved_at.is_some());
+    }
+
+    #[test]
+    fn resolve_issues_wont_fix() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[1], "wont_fix", None).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("accepted"), None, 100, 0).unwrap();
+        let resolved = issues.iter().find(|i| i.id == 1).unwrap();
+        assert_eq!(resolved.resolution.as_deref(), Some("wont_fix"));
+    }
+
+    #[test]
+    fn resolve_issues_deferred() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[1], "deferred", Some("later")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, 1);
+        assert_eq!(issues[0].status, "deferred");
+        assert_eq!(issues[0].resolution.as_deref(), Some("deferred"));
+        assert_eq!(issues[0].note.as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn resolve_issues_rejects_fixed_resolution() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = resolve_issues(&conn, &[1], "fixed", None).unwrap_err();
+        assert!(err.contains("Invalid resolution"));
+    }
+
+    #[test]
+    fn resolve_issues_rejects_unknown_resolution() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = resolve_issues(&conn, &[1], "banana", None).unwrap_err();
+        assert!(err.contains("Invalid resolution"));
+    }
+
+    #[test]
+    fn resolve_issues_multiple_ids() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // ids 1 (EMPTY_ARTIST, open) and 3 (WAV_TAG3_MISSING, open)
+        let count = resolve_issues(&conn, &[1, 3], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 2);
+
+        let open = query_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert!(open.is_empty());
+    }
+
+    #[test]
+    fn resolve_issues_non_existent_id_returns_zero() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[999], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn resolve_issues_empty_ids_returns_zero() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn resolve_issues_already_resolved_can_be_re_resolved() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // id=2 is already accepted — re-resolving with deferred should work
+        let count = resolve_issues(&conn, &[2], "deferred", Some("revisit")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, 2);
+        assert_eq!(issues[0].note.as_deref(), Some("revisit"));
+    }
+}

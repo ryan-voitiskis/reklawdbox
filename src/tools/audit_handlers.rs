@@ -4,8 +4,9 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use super::*;
-use crate::audit;
+use crate::application::audit;
 use crate::db;
+use crate::domain::audit::IssueType;
 use crate::store;
 
 pub(super) async fn handle_audit_state(
@@ -20,10 +21,10 @@ pub(super) async fn handle_audit_state(
             skip_issue_types,
         } => {
             let revalidate = revalidate.unwrap_or(false);
-            let skip: HashSet<audit::IssueType> = skip_issue_types
+            let skip: HashSet<IssueType> = skip_issue_types
                 .unwrap_or_default()
                 .iter()
-                .filter_map(|s| s.parse::<audit::IssueType>().ok())
+                .filter_map(|s| s.parse::<IssueType>().ok())
                 .collect();
 
             let summary = tokio::task::spawn_blocking(move || {

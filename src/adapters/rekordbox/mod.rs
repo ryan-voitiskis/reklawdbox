@@ -3,11 +3,13 @@
 //! ANLZ beat-grid parsing and the `AnalysisDataPath` lookup live in [`anlz`].
 
 pub(crate) mod anlz;
+pub(crate) mod backup;
 mod connection;
 mod health;
 mod history;
 mod playlists;
 mod tracks;
+pub(crate) mod xml;
 
 #[cfg(test)]
 pub(crate) use connection::{
