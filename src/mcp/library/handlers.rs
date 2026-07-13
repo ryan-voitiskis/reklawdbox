@@ -4,8 +4,8 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rusqlite::Connection;
 
-use crate::db;
-use crate::genre;
+use crate::adapters::rekordbox as db;
+use crate::domain::classification::taxonomy as genre;
 use crate::mcp::{
     GetPlaylistTracksParams, GetTrackParams, SearchTracksParams, apply_offset_limit, db_error,
     ok_json, track_has_unknown_genre,

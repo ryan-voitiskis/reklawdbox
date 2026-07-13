@@ -1,7 +1,5 @@
 //! Discogs broker, authentication protocol, and lookup adapter.
 
-#![allow(unused_imports)]
-
 mod auth;
 mod broker;
 mod client;

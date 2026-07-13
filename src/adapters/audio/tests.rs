@@ -2,8 +2,6 @@ use super::*;
 use crate::adapters::rekordbox::anlz::{
     load_rekordbox_grid_for_path, load_rekordbox_grid_for_path_with_conn,
 };
-use crate::application::analysis::identity::analyze_with_stratum_input_using;
-use crate::application::analysis::model::RekordboxGridInput;
 
 #[test]
 fn grid_lookup_with_shared_connection_handles_empty_analysis_path() {
@@ -18,84 +16,9 @@ fn grid_lookup_with_shared_connection_handles_empty_analysis_path() {
 }
 use std::process::Stdio;
 
-fn fingerprint_test_grid() -> stratum_dsp::BeatGrid {
-    stratum_dsp::BeatGrid {
-        beats: vec![0.5, 1.0, 1.5, 2.0],
-        downbeats: vec![0.5],
-        bars: vec![0.5, 2.5],
-    }
-}
-
-#[test]
-fn grid_input_fingerprint_is_stable_and_versioned() {
-    let first = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
-    let second = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
-
-    assert_eq!(first.fingerprint, second.fingerprint);
-    assert!(first.fingerprint.starts_with("grid:v1:"));
-    assert!(!first.fingerprint.contains('/'));
-}
-
-#[test]
-fn grid_input_fingerprint_covers_every_semantic_series() {
-    let base = RekordboxGridInput::from_grid(Some(fingerprint_test_grid())).fingerprint;
-
-    let mut beat_changed = fingerprint_test_grid();
-    beat_changed.beats[1] = f32::from_bits(beat_changed.beats[1].to_bits() + 1);
-    let mut downbeat_changed = fingerprint_test_grid();
-    downbeat_changed.downbeats[0] = 1.0;
-    let mut bar_changed = fingerprint_test_grid();
-    bar_changed.bars[1] = 3.0;
-    let mut length_changed = fingerprint_test_grid();
-    length_changed.beats.push(2.5);
-    let mut order_changed = fingerprint_test_grid();
-    order_changed.beats.swap(0, 1);
-
-    for changed in [
-        beat_changed,
-        downbeat_changed,
-        bar_changed,
-        length_changed,
-        order_changed,
-    ] {
-        assert_ne!(
-            RekordboxGridInput::from_grid(Some(changed)).fingerprint,
-            base
-        );
-    }
-}
-
-#[test]
-fn grid_input_fingerprint_distinguishes_hmm_source() {
-    let hmm = RekordboxGridInput::from_grid(None);
-    let grid = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
-
-    assert_eq!(hmm.fingerprint, "hmm:v1");
-    assert!(hmm.grid.is_none());
-    assert_ne!(hmm.fingerprint, grid.fingerprint);
-}
-
 #[test]
 fn grid_compatibility_wrapper_preserves_the_no_live_db_test_seam() {
     assert!(load_rekordbox_grid_for_path("/synthetic/not-read.flac").is_none());
-}
-
-#[test]
-fn stratum_analysis_keeps_the_fingerprint_paired_with_its_grid_snapshot() {
-    let analyzed_input = RekordboxGridInput::from_grid(Some(fingerprint_test_grid()));
-    let analyzed_fingerprint = analyzed_input.fingerprint.clone();
-    let mut changed_grid = fingerprint_test_grid();
-    changed_grid.beats[0] = 0.25;
-    let later_current = RekordboxGridInput::from_grid(Some(changed_grid));
-
-    let analyzed = analyze_with_stratum_input_using(analyzed_input, |grid| {
-        assert_eq!(grid.unwrap().beats, fingerprint_test_grid().beats);
-        Ok(StratumResult::default())
-    })
-    .unwrap();
-
-    assert_eq!(analyzed.input_fingerprint, analyzed_fingerprint);
-    assert_ne!(analyzed.input_fingerprint, later_current.fingerprint);
 }
 
 #[test]
@@ -708,8 +631,8 @@ fn generated_wav_fixture_decodes_and_analyzes_without_private_audio() {
 #[test]
 #[ignore]
 fn test_real_audio_analysis() {
-    let conn = crate::db::open_real_db().expect("backup tarball not found");
-    let params = crate::db::SearchParams {
+    let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
+    let params = crate::adapters::rekordbox::SearchParams {
         query: None,
         artist: None,
         genre: None,
@@ -730,7 +653,7 @@ fn test_real_audio_analysis() {
         limit: Some(5),
         offset: None,
     };
-    let tracks = crate::db::search_tracks(&conn, &params).unwrap();
+    let tracks = crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap();
     assert!(!tracks.is_empty(), "no tracks found for analysis test");
 
     let track = tracks
@@ -816,8 +739,8 @@ fn test_real_audio_analysis() {
 #[test]
 #[ignore]
 fn test_audio_analysis_cache_round_trip() {
-    let conn = crate::db::open_real_db().expect("backup tarball not found");
-    let params = crate::db::SearchParams {
+    let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
+    let params = crate::adapters::rekordbox::SearchParams {
         query: None,
         artist: None,
         genre: None,
@@ -838,7 +761,7 @@ fn test_audio_analysis_cache_round_trip() {
         limit: Some(5),
         offset: None,
     };
-    let tracks = crate::db::search_tracks(&conn, &params).unwrap();
+    let tracks = crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap();
     let track = tracks
         .iter()
         .find(|t| {
@@ -866,7 +789,7 @@ fn test_audio_analysis_cache_round_trip() {
 
     let dir = tempfile::tempdir().unwrap();
     let store_path = dir.path().join("test-cache.sqlite3");
-    let store_conn = crate::store::open(store_path.to_str().unwrap()).unwrap();
+    let store_conn = crate::adapters::state::open(store_path.to_str().unwrap()).unwrap();
 
     let metadata = std::fs::metadata(&file_path).unwrap();
     let file_size = metadata.len() as i64;
@@ -876,7 +799,7 @@ fn test_audio_analysis_cache_round_trip() {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs() as i64);
 
-    crate::store::set_audio_analysis_with_fingerprint(
+    crate::adapters::state::set_audio_analysis_with_fingerprint(
         &store_conn,
         &file_path,
         "stratum-dsp",
@@ -888,7 +811,7 @@ fn test_audio_analysis_cache_round_trip() {
     )
     .unwrap();
 
-    let cached = crate::store::get_audio_analysis(&store_conn, &file_path, "stratum-dsp")
+    let cached = crate::adapters::state::get_audio_analysis(&store_conn, &file_path, "stratum-dsp")
         .unwrap()
         .expect("should find cached entry");
 

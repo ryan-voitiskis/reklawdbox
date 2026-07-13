@@ -8,14 +8,16 @@ use tokio_util::sync::CancellationToken;
 use console::style;
 
 use crate::adapters::audio as audio_adapter;
+#[cfg(test)]
+use crate::adapters::audio;
+use crate::adapters::providers::{beatport, discogs};
+use crate::adapters::{rekordbox as db, state as store};
 use crate::application::enrichment::hydrate::{
     EnrichmentCacheWrite, HydrationWorkerCompletion, acknowledge_enrichment_cache_write,
     persist_enrichment_cache_write, run_analysis_stage, run_bounded_workers,
 };
 use crate::application::enrichment::model::{EnrichmentProvider, HydrationStage, HydrationStages};
-#[cfg(test)]
-use crate::audio;
-use crate::{beatport, db, discogs, normalize, store};
+use crate::domain::metadata as normalize;
 
 #[cfg(test)]
 use super::runtime::cache_writer::send_cache_message;
@@ -671,7 +673,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 enrich_concurrency,
                 cancel.clone(),
                 |track| track.id.clone(),
-                move |track: crate::types::Track| {
+                move |track: crate::domain::library::Track| {
                     let client = client.clone();
                     let cache_tx = cache_tx.clone();
                     let counters = worker_counters.clone();
@@ -811,7 +813,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 1,
                 cancel.clone(),
                 |track| track.id.clone(),
-                move |track: crate::types::Track| {
+                move |track: crate::domain::library::Track| {
                     let client = client.clone();
                     let cache_tx = cache_tx.clone();
                     let counters = worker_counters.clone();
@@ -941,7 +943,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 analysis_concurrency,
                 cancel.clone(),
                 |(track, _, _)| track.id.clone(),
-                move |(track, needs_stratum, needs_essentia): (crate::types::Track, bool, bool)| {
+                move |(track, needs_stratum, needs_essentia): (crate::domain::library::Track, bool, bool)| {
                     let essentia_python = essentia_python.clone();
                     let cache_tx = cache_tx.clone();
                     let counters = worker_counters.clone();

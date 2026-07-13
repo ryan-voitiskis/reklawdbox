@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{FileKind, Track};
+use crate::domain::library::{FileKind, Track};
 use rusqlite::{Connection, OpenFlags, params};
 
 #[test]
@@ -1207,7 +1207,7 @@ fn test_real_db_unicode() {
 
     for t in &unicode_tracks {
         let json = serde_json::to_string(t).unwrap();
-        let back: crate::types::Track = serde_json::from_str(&json).unwrap();
+        let back: crate::domain::library::Track = serde_json::from_str(&json).unwrap();
         assert_eq!(t.title, back.title, "unicode title round-trip failed");
         assert_eq!(t.artist, back.artist, "unicode artist round-trip failed");
     }
@@ -1405,9 +1405,9 @@ fn test_real_db_genre_normalization_coverage() {
         if gc.name == "(none)" || gc.name.is_empty() {
             continue;
         }
-        if crate::genre::canonical_genre_from_alias(&gc.name).is_some() {
+        if crate::domain::classification::taxonomy::canonical_genre_from_alias(&gc.name).is_some() {
             alias_count += gc.count;
-        } else if crate::genre::is_known_genre(&gc.name) {
+        } else if crate::domain::classification::taxonomy::is_known_genre(&gc.name) {
             canonical_count += gc.count;
         } else {
             unknown_count += gc.count;
@@ -1582,8 +1582,9 @@ fn search_has_unknown_genre() {
         .into_iter()
         .filter(|t| {
             !t.genre.is_empty()
-                && !crate::genre::is_known_genre(&t.genre)
-                && crate::genre::canonical_genre_from_alias(&t.genre).is_none()
+                && !crate::domain::classification::taxonomy::is_known_genre(&t.genre)
+                && crate::domain::classification::taxonomy::canonical_genre_from_alias(&t.genre)
+                    .is_none()
         })
         .collect();
     assert_eq!(unknown.len(), 1);

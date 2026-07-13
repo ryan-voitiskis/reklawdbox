@@ -12,10 +12,10 @@ reimport.
   Local SQLite cache/store writes are fine for enrichment, analysis, audit,
   calibration, and broker-session state.
 - SOPs in `site/src/partials/sops/*.mdx` are embedded by
-  `src/tools/help_handler.rs` using `include_str!`; SOP changes need a rebuild
+  `src/mcp/help.rs` using `include_str!`; SOP changes need a rebuild
   and deploy/release before an MCP host sees them.
 - Tool surfaces are defined by `#[tool(...)]` annotations and `schemars`
-  descriptions in `src/tools/params.rs`.
+  descriptions in `src/mcp/*/transport.rs`.
 - Use Conventional Commits.
 
 ## Repo Shape
@@ -94,7 +94,7 @@ Essentia uses `.venvs/essentia/bin/python` via `CRATE_DIG_ESSENTIA_PYTHON` in
 ## Change-Specific Notes
 
 - Audio output/schema changes usually need a cache schema bump in
-  `src/audio.rs` (`STRATUM_SCHEMA_VERSION` or `ESSENTIA_SCHEMA_VERSION`).
+  `src/adapters/audio/mod.rs` (`STRATUM_SCHEMA_VERSION` or `ESSENTIA_SCHEMA_VERSION`).
 - DSP tests should use synthetic fixtures where possible; do not make normal
   tests depend on private local audio files.
 - Before release, run the doc-drift workflow in

@@ -37,16 +37,17 @@ pub fn get_broker_discogs_session(
 
     // Migrate legacy plaintext tokens to Keychain.
     if !session.session_token.is_empty() {
-        crate::keychain::set_session_token(broker_url, &session.session_token).map_err(|msg| {
-            rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_ERROR), Some(msg))
-        })?;
+        crate::adapters::platform::keychain::set_session_token(broker_url, &session.session_token)
+            .map_err(|msg| {
+                rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_ERROR), Some(msg))
+            })?;
         conn.execute(
             "UPDATE broker_discogs_session SET session_token = '' WHERE broker_url = ?1",
             params![broker_url],
         )?;
     }
 
-    match crate::keychain::get_session_token(broker_url) {
+    match crate::adapters::platform::keychain::get_session_token(broker_url) {
         Ok(Some(token)) => {
             session.session_token = token;
             Ok(Some(session))
@@ -66,9 +67,9 @@ pub fn set_broker_discogs_session(
     expires_at: i64,
 ) -> Result<(), rusqlite::Error> {
     // Store the secret in Keychain first; if this fails, don't persist metadata.
-    crate::keychain::set_session_token(broker_url, session_token).map_err(|msg| {
-        rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_ERROR), Some(msg))
-    })?;
+    crate::adapters::platform::keychain::set_session_token(broker_url, session_token).map_err(
+        |msg| rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_ERROR), Some(msg)),
+    )?;
 
     conn.execute(
         "INSERT INTO broker_discogs_session (broker_url, session_token, expires_at)
@@ -87,7 +88,7 @@ pub fn clear_broker_discogs_session(
     conn: &Connection,
     broker_url: &str,
 ) -> Result<(), rusqlite::Error> {
-    crate::keychain::delete_session_token(broker_url).map_err(|msg| {
+    crate::adapters::platform::keychain::delete_session_token(broker_url).map_err(|msg| {
         rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_ERROR), Some(msg))
     })?;
 

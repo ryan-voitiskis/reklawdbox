@@ -65,7 +65,7 @@ pub(in crate::mcp) fn handle_save_weight_preset(
         serde_json::to_string(&normalized_json).map_err(|e| mcp_internal_error(e.to_string()))?;
 
     let store = server.cache_store_conn()?;
-    crate::store::save_weight_preset(&store, &params.name, scorer_type_str, &json_str)
+    crate::adapters::state::save_weight_preset(&store, &params.name, scorer_type_str, &json_str)
         .map_err(|e| mcp_internal_error(format!("Failed to save preset: {e}")))?;
 
     let result = serde_json::json!({
@@ -87,7 +87,7 @@ pub(in crate::mcp) fn handle_list_weight_presets(
     });
 
     let store = server.cache_store_conn()?;
-    let saved = crate::store::list_weight_presets(&store, scorer_type_str)
+    let saved = crate::adapters::state::list_weight_presets(&store, scorer_type_str)
         .map_err(|e| mcp_internal_error(format!("Failed to list presets: {e}")))?;
 
     let mut presets: Vec<serde_json::Value> = Vec::new();
@@ -161,8 +161,9 @@ pub(in crate::mcp) fn handle_delete_weight_preset(
     }
 
     let store = server.cache_store_conn()?;
-    let deleted = crate::store::delete_weight_preset(&store, &params.name, scorer_type_str)
-        .map_err(|e| mcp_internal_error(format!("Failed to delete preset: {e}")))?;
+    let deleted =
+        crate::adapters::state::delete_weight_preset(&store, &params.name, scorer_type_str)
+            .map_err(|e| mcp_internal_error(format!("Failed to delete preset: {e}")))?;
 
     let result = serde_json::json!({
         "deleted": deleted,

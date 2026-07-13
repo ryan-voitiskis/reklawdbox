@@ -19,3 +19,6 @@ pub(crate) use sequence::*;
 pub(crate) use timbre::*;
 pub(crate) use transition::*;
 pub(crate) use weights::*;
+
+#[cfg(test)]
+mod tests;

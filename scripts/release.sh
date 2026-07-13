@@ -52,14 +52,14 @@ run_mcp_smoke() {
 docs_contract_changed() {
   changed_since_base \
     site \
-    src/tools \
-    src/audio.rs \
-    src/color.rs \
-    src/genre.rs \
-    src/types.rs \
-    src/tags.rs \
+    src/domain \
+    src/application \
+    src/adapters \
+    src/mcp \
     src/cli \
+    src/bootstrap \
     src/main.rs \
+    src/README.md \
     Cargo.toml \
     Cargo.lock \
     scripts/mcp-smoke.mjs \

@@ -37,11 +37,11 @@ pub(crate) struct LookupIdentity {
 
 impl LookupIdentity {
     pub(crate) fn new(artist: String, title: String, album: Option<String>) -> Self {
-        let norm_artist = crate::normalize::normalize_for_matching(&artist);
-        let norm_title = crate::normalize::normalize_for_matching(&title);
+        let norm_artist = crate::domain::metadata::normalize_for_matching(&artist);
+        let norm_title = crate::domain::metadata::normalize_for_matching(&title);
         let norm_album = album
             .as_deref()
-            .map(crate::normalize::normalize_for_matching)
+            .map(crate::domain::metadata::normalize_for_matching)
             .filter(|album| !album.is_empty());
         Self {
             artist,

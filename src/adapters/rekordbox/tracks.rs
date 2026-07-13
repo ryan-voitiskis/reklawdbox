@@ -3,7 +3,9 @@ use std::fmt::Write as _;
 
 use rusqlite::{Connection, params};
 
-use crate::types::{FileKind, GenreCount, KeyCount, LibraryStats, Track, rating_to_stars};
+use crate::domain::library::{
+    FileKind, GenreCount, KeyCount, LibraryStats, Track, rating_to_stars,
+};
 
 /// Column list for track queries (SELECT clause without FROM).
 macro_rules! track_columns {
@@ -245,7 +247,7 @@ pub(super) fn apply_search_filters(
         write!(sql,
             " AND (c.Rating >= ?{idx_encoded} OR (c.Rating BETWEEN 0 AND 5 AND c.Rating >= ?{idx_star_scale}))"
         ).unwrap();
-        let min_rating = crate::types::stars_to_rating(rating_min) as i32;
+        let min_rating = crate::domain::library::stars_to_rating(rating_min) as i32;
         bind_values.push(Box::new(min_rating));
         bind_values.push(Box::new(rating_min as i32));
     }

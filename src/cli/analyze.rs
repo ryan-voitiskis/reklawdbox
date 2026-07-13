@@ -7,8 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapters::audio as audio_adapter;
 #[cfg(test)]
-use crate::audio;
-use crate::{db, store};
+use crate::adapters::audio;
+use crate::adapters::{rekordbox as db, state as store};
 
 use super::runtime::cache_writer::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, cache_probe_for_path,
@@ -500,7 +500,7 @@ async fn cli_analyze_single_track(
     essentia_python: Option<&str>,
     cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<CliCacheWriteMsg>>,
 ) -> Result<CliTrackResult, CliTrackFailure> {
-    let report = super::analysis_job::run(
+    let report = crate::application::analysis::job::run(
         raw_file_path,
         needs_stratum,
         needs_essentia,
@@ -868,7 +868,7 @@ mod batch_tests {
 #[cfg(test)]
 mod task_tests {
     use super::{handle_analysis_result, handle_decode_result, mark_track_outcome};
-    use crate::audio::{AudioError, StratumResult};
+    use crate::adapters::audio::{AudioError, StratumResult};
     use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard};
     use std::time::Duration;
 

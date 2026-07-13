@@ -54,7 +54,7 @@ fn check_filename(
 // Scan operation
 // ---------------------------------------------------------------------------
 
-use crate::audio::AUDIO_EXTENSIONS;
+use crate::adapters::audio::AUDIO_EXTENSIONS;
 const BATCH_SIZE: usize = 500;
 
 #[derive(Debug, Serialize)]

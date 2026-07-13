@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use crate::application::classification;
-pub(in crate::mcp) use crate::application::classification::evidence::parse_response_json;
-use crate::classify::{ClassificationAction, ClassificationConfidence, ClassificationResult};
-use crate::genre;
+use crate::domain::classification::taxonomy as genre;
+use crate::domain::classification::{
+    ClassificationAction, ClassificationConfidence, ClassificationResult,
+};
+use crate::domain::metadata::TrackChange;
 use crate::mcp::classification::{
     AuditGenresParams, CalibrateAudioProfilesParams, CalibrationCoverageParams, ClassifyFormat,
     ClassifyTracksParams,
@@ -11,7 +13,6 @@ use crate::mcp::classification::{
 use crate::mcp::enrichment::{ResolveTracksOpts, resolve_tracks};
 use crate::mcp::error::{cache_error, mcp_internal_error, ok_json};
 use crate::mcp::server::ReklawdboxServer;
-use crate::types::TrackChange;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
@@ -129,7 +130,7 @@ pub(in crate::mcp) fn handle_classify_tracks(
             let compact: Vec<_> = results
                 .iter()
                 .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
-                .map(crate::classify::ClassificationResult::to_compact)
+                .map(crate::domain::classification::ClassificationResult::to_compact)
                 .collect();
             serde_json::json!({
                 "summary": summary,
@@ -414,7 +415,7 @@ pub(in crate::mcp) fn handle_calibrate_audio_profiles(
     // 1. Get playlist tracks
     let (tracks, _playlist_name) = {
         let conn = server.rekordbox_conn()?;
-        let playlists = crate::db::get_playlists(&conn).map_err(|e| {
+        let playlists = crate::adapters::rekordbox::get_playlists(&conn).map_err(|e| {
             McpError::internal_error(format!("Failed to list playlists: {e}"), None)
         })?;
         let playlist = playlists
@@ -427,9 +428,10 @@ pub(in crate::mcp) fn handle_calibrate_audio_profiles(
                 )
             })?;
         let tracks =
-            crate::db::get_playlist_tracks_unbounded(&conn, &playlist.id, None).map_err(|e| {
-                McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
-            })?;
+            crate::adapters::rekordbox::get_playlist_tracks_unbounded(&conn, &playlist.id, None)
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
+                })?;
         (tracks, playlist.name.clone())
     };
 
@@ -467,7 +469,7 @@ pub(in crate::mcp) fn handle_calibration_coverage(
 
     let (tracks, resolved_playlist_name) = {
         let conn = server.rekordbox_conn()?;
-        let playlists = crate::db::get_playlists(&conn).map_err(|e| {
+        let playlists = crate::adapters::rekordbox::get_playlists(&conn).map_err(|e| {
             McpError::internal_error(format!("Failed to list playlists: {e}"), None)
         })?;
         let playlist = playlists
@@ -482,9 +484,10 @@ pub(in crate::mcp) fn handle_calibration_coverage(
                 )
             })?;
         let tracks =
-            crate::db::get_playlist_tracks_unbounded(&conn, &playlist.id, None).map_err(|e| {
-                McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
-            })?;
+            crate::adapters::rekordbox::get_playlist_tracks_unbounded(&conn, &playlist.id, None)
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to get playlist tracks: {e}"), None)
+                })?;
         (tracks, playlist.name.clone())
     };
 

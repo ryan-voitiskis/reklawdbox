@@ -2,11 +2,11 @@ use rusqlite::Connection;
 
 use rmcp::ErrorData as McpError;
 
+use crate::adapters::rekordbox as db;
 use crate::application::enrichment::resolve::{TrackScope, track_scope};
-use crate::db;
-use crate::genre;
+use crate::domain::classification::taxonomy as genre;
+use crate::domain::library::Track;
 use crate::mcp::{SearchFilterParams, db_error, mcp_internal_error};
-use crate::types::Track;
 
 pub(in crate::mcp) struct ResolveTracksOpts {
     /// Default max_tracks when track_ids are absent and max_tracks param is None.
@@ -400,7 +400,7 @@ pub(in crate::mcp) fn resolve_tracks(
     max_tracks_param: Option<u32>,
     offset: Option<u32>,
     opts: &ResolveTracksOpts,
-) -> Result<Vec<crate::types::Track>, McpError> {
+) -> Result<Vec<crate::domain::library::Track>, McpError> {
     let effective_max: Option<u32> = match opts.default_max_tracks {
         Some(default_when_no_ids) => {
             let default = track_ids.map_or(default_when_no_ids, |ids| {
@@ -616,7 +616,7 @@ mod pending_page_characterization_tests {
             play_count: 0,
             bit_rate: 0,
             sample_rate: 0,
-            file_kind: crate::types::FileKind::Unknown(0),
+            file_kind: crate::domain::library::FileKind::Unknown(0),
             date_added: String::new(),
             position: None,
             played_at: None,

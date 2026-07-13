@@ -15,10 +15,7 @@ pub use server::ReklawdboxServer;
 
 // Capability imports remain private to the MCP transport boundary.
 use analysis::{
-    AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, AudioCacheIdentity, BatchProgress,
-    ESSENTIA_IMPORT_CHECK_SCRIPT, audio_cache_identities_with_current_stratum_input,
-    check_analysis_cache, essentia_setup_hint, essentia_venv_dir, get_fresh_analysis_entry,
-    resolve_file_path, validate_essentia_python,
+    AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, BatchProgress, resolve_file_path,
 };
 use audit::AuditOperation;
 use enrichment::{
@@ -37,15 +34,11 @@ use metadata::{
 };
 use planning::{
     BuildSetParams, DeleteWeightPresetParams, DescribePoolParams, DiscoverPoolsParams,
-    ExpandPoolParams, HarmonicMixingStyle, ListWeightPresetsParams, PoolAxisScoresPresentation,
-    PoolCohesionResult, PoolPreset, PoolWeightInput, QueryTransitionCandidatesParams,
-    SaveWeightPresetParams, ScorePoolCompatibilityParams, ScoreTransitionParams, ScorerType,
-    SequencingPriority, TrackProfile, TransitionScoresPresentation, TransitionWeightInput,
-    format_camelot, map_genre_through_taxonomy, resolve_pool_weights, resolve_transition_weights,
-    round_to_3_decimals, transpose_camelot_key,
+    ExpandPoolParams, HarmonicMixingStyle, ListWeightPresetsParams, PoolPreset, PoolWeightInput,
+    QueryTransitionCandidatesParams, SaveWeightPresetParams, ScorePoolCompatibilityParams,
+    ScoreTransitionParams, ScorerType, SequencingPriority, TransitionWeightInput,
+    resolve_pool_weights, resolve_transition_weights,
 };
 
-#[cfg(test)]
-mod eval_scoring;
 #[cfg(test)]
 mod tests;

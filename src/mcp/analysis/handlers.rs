@@ -3,17 +3,21 @@ use std::process::Stdio;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::application::analysis::{batch as analysis_batch, job as analysis_job};
-use crate::audio;
-use crate::db;
-use crate::mcp::{
-    AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, AudioCacheIdentity, BatchPage, BatchProgress,
-    ESSENTIA_IMPORT_CHECK_SCRIPT, ReklawdboxServer,
-    audio_cache_identities_with_current_stratum_input, cache_error, check_analysis_cache, db_error,
-    essentia_setup_hint, essentia_venv_dir, mcp_internal_error, ok_json, ok_structured_json,
-    resolve_file_path, resolve_pending_tracks, validate_essentia_python,
+use crate::adapters::audio::{
+    self, ESSENTIA_IMPORT_CHECK_SCRIPT, essentia_setup_hint, essentia_venv_dir,
+    validate_essentia_python,
 };
-use crate::store;
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
+use crate::application::analysis::identity::{
+    AudioCacheIdentity, audio_cache_identities_with_current_stratum_input, check_analysis_cache,
+};
+use crate::application::analysis::{batch as analysis_batch, job as analysis_job};
+use crate::mcp::{
+    AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, BatchPage, BatchProgress, ReklawdboxServer,
+    cache_error, db_error, mcp_internal_error, ok_json, ok_structured_json, resolve_file_path,
+    resolve_pending_tracks,
+};
 
 pub(in crate::mcp) async fn handle_analyze_track_audio(
     server: &ReklawdboxServer,
@@ -149,7 +153,7 @@ pub(in crate::mcp) struct BatchTrackAnalysis {
 
 fn audio_completion_flags(
     store_conn: &rusqlite::Connection,
-    tracks: &[crate::types::Track],
+    tracks: &[crate::domain::library::Track],
     essentia_required: bool,
 ) -> Result<Vec<bool>, McpError> {
     let identities = audio_cache_identities_with_current_stratum_input(
@@ -694,8 +698,8 @@ mod pending_page_tests {
     use super::*;
     use crate::mcp::enrichment::pending_batch_page;
 
-    fn track(id: &str, path: String) -> crate::types::Track {
-        crate::types::Track {
+    fn track(id: &str, path: String) -> crate::domain::library::Track {
+        crate::domain::library::Track {
             id: id.to_string(),
             title: id.to_string(),
             artist: "Test Artist".to_string(),
@@ -715,7 +719,7 @@ mod pending_page_tests {
             play_count: 0,
             bit_rate: 0,
             sample_rate: 0,
-            file_kind: crate::types::FileKind::Wav,
+            file_kind: crate::domain::library::FileKind::Wav,
             date_added: String::new(),
             position: None,
             played_at: None,
@@ -725,7 +729,7 @@ mod pending_page_tests {
     fn store() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().expect("temporary store directory should create");
         let path = dir.path().join("store.sqlite3");
-        let conn = crate::store::open(path.to_str().expect("store path should be UTF-8"))
+        let conn = crate::adapters::state::open(path.to_str().expect("store path should be UTF-8"))
             .expect("temporary store should open");
         (dir, conn)
     }
@@ -988,7 +992,7 @@ mod pending_page_tests {
             .expect("Essentia-aware completion should resolve");
         assert_eq!(with_essentia, [false, true]);
 
-        let completion = |candidates: &[crate::types::Track]| {
+        let completion = |candidates: &[crate::domain::library::Track]| {
             Ok(candidates
                 .iter()
                 .map(|track| with_essentia[usize::from(track.id == "second")])

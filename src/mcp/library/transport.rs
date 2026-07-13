@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::db;
+use crate::adapters::rekordbox as db;
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct SearchFilterParams {

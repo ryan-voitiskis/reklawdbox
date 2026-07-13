@@ -1,7 +1,7 @@
 # Electronic Genre Taxonomy Research
 
 **Date:** 2026-06-14
-**Scope:** Canonical genres in `src/genre.rs`, with emphasis on claims that can
+**Scope:** Canonical genres in `src/domain/classification/taxonomy/catalog.rs`, with emphasis on claims that can
 inform `genre_classification` rules, DSP feature design, calibration review, and
 metadata weighting.
 

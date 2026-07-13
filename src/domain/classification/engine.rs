@@ -5,12 +5,13 @@
 
 use std::collections::HashMap;
 
+#[cfg(test)]
+use super::MappedGenre;
 use super::profiles::{self as audio_profile, ProfileRegistry};
 use super::taxonomy::{self as genre, GenreFamily};
-#[allow(unused_imports)]
-pub(crate) use super::{
+use super::{
     AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    CompactClassificationResult, GenreCandidate, MappedGenre, TrackEvidence,
+    GenreCandidate, TrackEvidence,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3108,8 +3109,6 @@ mod tests {
 
     #[test]
     fn profile_votes_influence_consensus() {
-        use crate::audio_profile;
-
         // Build a registry with Dub Techno prototype: low BPM, low centroid, moderate danceability
         let dub_techno_tracks: Vec<AudioFeatures> = (0..8)
             .map(|i| {
@@ -3193,8 +3192,6 @@ mod tests {
 
     #[test]
     fn sparse_audio_with_registry_reports_calibrated_coverage_gap() {
-        use crate::audio_profile;
-
         let house_tracks: Vec<AudioFeatures> = (0..8)
             .map(|_| make_audio(128.0, 2.0, 3.0, 0.9, 1500.0))
             .collect();

@@ -1,0 +1,613 @@
+use crate::mcp::classification;
+use crate::mcp::classification::{CalibrationCoverageParams, ClassifyFormat, ClassifyTracksParams};
+use crate::mcp::library::SearchFilterParams;
+use std::collections::HashSet;
+
+use rmcp::handler::server::wrapper::Parameters;
+use rusqlite::{Connection, params};
+use serde::Deserialize;
+
+use crate::adapters::{rekordbox as db, state as store};
+use crate::domain::classification::taxonomy as genre;
+
+use super::common::{
+    call_tool_via_router, create_server_with_connections, create_single_track_test_db,
+    default_http_client_for_tests, extract_json, insert_test_track, set_test_audio_analysis,
+    write_test_audio_file,
+};
+
+const GOLDEN_GENRES_FIXTURE_PATH: &str = "src/mcp/classification/fixtures/golden_genres.json";
+
+#[derive(Debug, Deserialize)]
+struct GoldenGenreFixtureEntry {
+    artist: String,
+    title: String,
+    expected_genre: String,
+    notes: String,
+}
+
+fn canonical_genre_name(raw_genre: &str) -> String {
+    if let Some(canonical) = genre::canonical_genre_name(raw_genre) {
+        return canonical.to_string();
+    }
+    if let Some(alias_target) = genre::canonical_genre_from_alias(raw_genre) {
+        return alias_target.to_string();
+    }
+    raw_genre.to_string()
+}
+
+fn load_golden_genres_fixture() -> Vec<GoldenGenreFixtureEntry> {
+    let raw = std::fs::read_to_string(GOLDEN_GENRES_FIXTURE_PATH)
+        .expect("golden genres fixture should be readable");
+    serde_json::from_str(&raw).expect("golden genres fixture should be valid JSON")
+}
+
+fn find_track_by_artist_and_title(
+    conn: &Connection,
+    artist: &str,
+    title: &str,
+) -> Option<crate::domain::library::Track> {
+    let sql = format!(
+        "{}
+             WHERE c.rb_local_deleted = 0
+               AND lower(COALESCE(a.Name, '')) = lower(?1)
+               AND lower(COALESCE(c.Title, '')) = lower(?2)
+             LIMIT 1",
+        db::TRACK_SELECT
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .expect("fixture lookup query should prepare");
+    let mut rows = stmt
+        .query_map(params![artist, title], db::row_to_track)
+        .expect("fixture lookup query should run");
+    match rows.next() {
+        Some(Ok(track)) => Some(track),
+        Some(Err(e)) => panic!("fixture lookup failed for {artist} - {title}: {e}"),
+        None => None,
+    }
+}
+
+fn make_result(
+    genre: Option<&'static str>,
+    confidence: crate::domain::classification::ClassificationConfidence,
+    action: crate::domain::classification::ClassificationAction,
+    artist: &str,
+) -> crate::domain::classification::ClassificationResult {
+    crate::domain::classification::ClassificationResult {
+        track_id: String::new(),
+        artist: artist.to_string(),
+        title: String::new(),
+        current_genre: String::new(),
+        genre,
+        confidence,
+        action,
+        evidence: vec![],
+        candidates: vec![],
+        flags: vec![],
+        review_hint: None,
+    }
+}
+
+#[tokio::test]
+async fn get_genre_taxonomy_via_router_returns_genres() {
+    let result = call_tool_via_router("get_genre_taxonomy", None).await;
+    let payload = extract_json(&result);
+
+    let genres = payload
+        .get("genres")
+        .and_then(serde_json::Value::as_array)
+        .expect("genres should be present");
+    assert!(
+        !genres.is_empty(),
+        "genres should include configured taxonomy entries"
+    );
+}
+
+#[tokio::test]
+async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("classify-stratum-only.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("classify-stratum-only", &audio_path_str);
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET GenreID = '', BPM = 16000 WHERE ID = ?1",
+            ["classify-stratum-only"],
+        )
+        .expect("BPM-only test track should be ungenred and fast");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":160.0,"duration_seconds":240.0,"analyzer_version":"18"}"#,
+    )
+    .expect("fresh Stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .classify_tracks(Parameters(ClassifyTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["classify-stratum-only".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            offset: None,
+            genre_overrides: None,
+            format: Some(ClassifyFormat::Full),
+            auto_stage: Some(vec![crate::mcp::classification::StageLevel::Medium]),
+        }))
+        .await
+        .expect("classify_tracks should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["staging"]["staged"], 0);
+    assert_eq!(payload["staging"]["total_pending"], 0);
+    assert_eq!(payload["results"][0]["genre"], serde_json::Value::Null);
+    assert_eq!(payload["results"][0]["confidence"], "insufficient");
+}
+
+#[tokio::test]
+async fn calibration_coverage_reports_verified_playlist_readiness() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let mut deep_paths = Vec::new();
+    for i in 1..=5 {
+        let path = audio_dir.path().join(format!("cal-deep-{i}.flac"));
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + i);
+        deep_paths.push((path.to_string_lossy().to_string(), file_size, file_mtime));
+    }
+    let tech_path = audio_dir.path().join("cal-tech-1.flac");
+    let (tech_size, tech_mtime) = write_test_audio_file(&tech_path, 1100);
+    let tech_path_str = tech_path.to_string_lossy().to_string();
+    let no_genre_path = audio_dir.path().join("cal-no-genre.flac");
+    write_test_audio_file(&no_genre_path, 1101);
+    let no_genre_path_str = no_genre_path.to_string_lossy().to_string();
+    let unknown_path = audio_dir.path().join("cal-unknown.flac");
+    write_test_audio_file(&unknown_path, 1102);
+    let unknown_path_str = unknown_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("cal-deep-1", &deep_paths[0].0);
+    db_conn
+        .execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Imaginary Style');
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    for i in 2..=5 {
+        insert_test_track(
+            &db_conn,
+            &format!("cal-deep-{i}"),
+            &format!("Deep Verified {i}"),
+            "g1",
+            &deep_paths[i as usize - 1].0,
+        );
+    }
+    insert_test_track(
+        &db_conn,
+        "cal-tech-1",
+        "Techno Missing Audio",
+        "g2",
+        &tech_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-no-genre",
+        "No Genre Verified",
+        "",
+        &no_genre_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-unknown",
+        "Unknown Verified",
+        "g3",
+        &unknown_path_str,
+    );
+
+    for (track_no, track_id) in [
+        "cal-deep-1",
+        "cal-deep-2",
+        "cal-deep-3",
+        "cal-deep-4",
+        "cal-deep-5",
+        "cal-tech-1",
+        "cal-no-genre",
+        "cal-unknown",
+    ]
+    .iter()
+    .enumerate()
+    {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    for (path, file_size, file_mtime) in &deep_paths {
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::adapters::audio::ANALYZER_STRATUM,
+            *file_size,
+            *file_mtime,
+            crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
+        )
+        .expect("stratum analysis should be seeded");
+    }
+    set_test_audio_analysis(
+        &store_conn,
+        &tech_path_str,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        tech_size + 1,
+        tech_mtime,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("stale-identity stratum analysis should be seeded");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["playlist"], "genre_verified");
+    assert_eq!(payload["total_tracks"], 8);
+    assert_eq!(payload["tracks_with_canonical_genre"], 6);
+    assert_eq!(payload["tracks_with_audio_features"], 5);
+    assert_eq!(payload["missing_audio_features"], 1);
+    assert_eq!(payload["tracks_with_stratum_features"], 5);
+    assert_eq!(payload["missing_stratum_features"], 1);
+    assert_eq!(payload["tracks_with_essentia_features"], 0);
+    assert_eq!(payload["missing_essentia_features"], 6);
+    assert_eq!(payload["skipped_no_genre"], 1);
+    assert_eq!(payload["skipped_unknown_genre"], 1);
+    assert_eq!(
+        payload["min_tracks_per_genre"],
+        crate::domain::classification::profiles::MIN_TRACKS
+    );
+    assert_eq!(payload["genres_ready_to_calibrate"], 1);
+    assert_eq!(payload["genres_below_min_tracks"], 1);
+
+    let genres = payload["genres"]
+        .as_array()
+        .expect("genres should be an array");
+    let deep_house = genres
+        .iter()
+        .find(|g| g["genre"] == "Deep House")
+        .expect("Deep House coverage should be present");
+    assert_eq!(deep_house["playlist_tracks"], 5);
+    assert_eq!(deep_house["tracks_with_audio_features"], 5);
+    assert_eq!(deep_house["tracks_with_stratum_features"], 5);
+    assert_eq!(deep_house["tracks_with_essentia_features"], 0);
+    assert_eq!(deep_house["prototype_ready"], true);
+    assert_eq!(deep_house["status"], "ready_to_calibrate");
+
+    let techno = genres
+        .iter()
+        .find(|g| g["genre"] == "Techno")
+        .expect("Techno coverage should be present");
+    assert_eq!(techno["playlist_tracks"], 1);
+    assert_eq!(techno["tracks_with_audio_features"], 0);
+    assert_eq!(techno["missing_audio_features"], 1);
+    assert_eq!(techno["tracks_with_stratum_features"], 0);
+    assert_eq!(techno["missing_stratum_features"], 1);
+    assert_eq!(techno["status"], "needs_more_verified_audio");
+}
+
+#[tokio::test]
+async fn calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
+    let db_conn = create_single_track_test_db("cal-cap-1", "/music/cal-cap-1.flac");
+    db_conn
+        .execute_batch(
+            "
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    let mut track_ids = vec!["cal-cap-1".to_string()];
+    for i in 2..=201 {
+        let track_id = format!("cal-cap-{i}");
+        insert_test_track(
+            &db_conn,
+            &track_id,
+            &format!("Calibration Cap {i}"),
+            "g1",
+            &format!("/music/cal-cap-{i}.flac"),
+        );
+        track_ids.push(track_id);
+    }
+
+    for (track_no, track_id) in track_ids.iter().enumerate() {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["total_tracks"], 201);
+    assert_eq!(payload["tracks_with_canonical_genre"], 201);
+    assert_eq!(payload["missing_audio_features"], 201);
+    assert_eq!(payload["missing_stratum_features"], 201);
+    assert_eq!(payload["missing_essentia_features"], 201);
+    assert_eq!(
+        payload["genres"][0]["playlist_tracks"], 201,
+        "calibration coverage must not use the ordinary 200-track playlist cap"
+    );
+}
+
+#[test]
+fn golden_genres_fixture_is_well_formed() {
+    let entries = load_golden_genres_fixture();
+    assert!(
+        !entries.is_empty(),
+        "golden genres fixture should contain at least one entry"
+    );
+
+    let mut unique = HashSet::new();
+    for entry in &entries {
+        assert!(
+            !entry.artist.trim().is_empty(),
+            "fixture artist must be non-empty"
+        );
+        assert!(
+            !entry.title.trim().is_empty(),
+            "fixture title must be non-empty"
+        );
+        assert!(
+            !entry.notes.trim().is_empty(),
+            "fixture notes must be non-empty"
+        );
+        assert!(
+            genre::is_known_genre(&entry.expected_genre),
+            "expected_genre '{}' must be in taxonomy",
+            entry.expected_genre
+        );
+        assert!(
+            genre::canonical_genre_from_alias(&entry.expected_genre).is_none(),
+            "expected_genre '{}' must be canonical, not alias",
+            entry.expected_genre
+        );
+
+        let key = format!(
+            "{}::{}",
+            entry.artist.to_lowercase(),
+            entry.title.to_lowercase()
+        );
+        assert!(unique.insert(key), "duplicate (artist, title) in fixture");
+    }
+}
+
+#[test]
+#[ignore]
+fn golden_dataset_genre_accuracy() {
+    let entries = load_golden_genres_fixture();
+    let Some(conn) = db::open_real_db() else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    let mut compared = 0usize;
+    let mut correct = 0usize;
+    let mut missing_tracks = Vec::new();
+    let mut no_genre = Vec::new();
+    let mut mismatches = Vec::new();
+
+    for entry in &entries {
+        let Some(track) = find_track_by_artist_and_title(&conn, &entry.artist, &entry.title) else {
+            missing_tracks.push(format!("{} - {}", entry.artist, entry.title));
+            continue;
+        };
+
+        if track.genre.trim().is_empty() {
+            no_genre.push(format!("{} - {}", entry.artist, entry.title));
+            continue;
+        }
+
+        compared += 1;
+        let actual = canonical_genre_name(&track.genre);
+        if actual.eq_ignore_ascii_case(&entry.expected_genre) {
+            correct += 1;
+        } else {
+            mismatches.push(format!(
+                "{} - {}: expected '{}', actual '{}' ({})",
+                entry.artist, entry.title, entry.expected_genre, actual, entry.notes
+            ));
+        }
+    }
+
+    let accuracy = if compared == 0 {
+        0.0
+    } else {
+        (correct as f64 / compared as f64) * 100.0
+    };
+    eprintln!(
+        "[integration] golden dataset: total={} compared={} correct={} accuracy={:.1}%",
+        entries.len(),
+        compared,
+        correct,
+        accuracy
+    );
+    if !missing_tracks.is_empty() {
+        eprintln!("[integration] missing tracks ({}):", missing_tracks.len());
+        for item in &missing_tracks {
+            eprintln!("  - {item}");
+        }
+    }
+    if !no_genre.is_empty() {
+        eprintln!(
+            "[integration] tracks with empty genre ({}):",
+            no_genre.len()
+        );
+        for item in &no_genre {
+            eprintln!("  - {item}");
+        }
+    }
+    if !mismatches.is_empty() {
+        eprintln!("[integration] mismatches ({}):", mismatches.len());
+        for item in &mismatches {
+            eprintln!("  - {item}");
+        }
+    }
+
+    assert!(
+        !missing_tracks.is_empty() || compared > 0,
+        "fixture should either report missing tracks or compare at least one track"
+    );
+}
+
+#[test]
+fn genre_distribution_empty_input() {
+    let dist = classification::build_genre_distribution(&[]);
+    assert_eq!(dist, serde_json::json!([]));
+}
+
+#[test]
+fn genre_distribution_excludes_confirm_and_genreless() {
+    use crate::domain::classification::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Confirm, "Artist A"),
+        make_result(None, C::Insufficient, A::Suggest, "Artist B"),
+        make_result(Some("House"), C::Medium, A::Suggest, "Artist C"),
+    ];
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only House should appear");
+    assert_eq!(arr[0]["genre"], "House");
+    assert_eq!(arr[0]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_groups_and_sorts_by_count() {
+    use crate::domain::classification::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Suggest, "A"),
+        make_result(Some("Techno"), C::High, A::Suggest, "B"),
+        make_result(Some("Techno"), C::Medium, A::Suggest, "A"),
+        make_result(Some("House"), C::High, A::Suggest, "C"),
+    ];
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    // Techno (3) should be first, House (1) second
+    assert_eq!(arr[0]["genre"], "Techno");
+    assert_eq!(arr[0]["count"], 3);
+    assert_eq!(arr[0]["by_confidence"]["high"], 2);
+    assert_eq!(arr[0]["by_confidence"]["medium"], 1);
+    assert_eq!(arr[1]["genre"], "House");
+    assert_eq!(arr[1]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_top_artists_capped_and_counted() {
+    use crate::domain::classification::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let mut results = Vec::new();
+    // 6 different artists -- top_artists should cap at 5
+    for i in 0..6 {
+        results.push(make_result(
+            Some("Techno"),
+            C::High,
+            A::Suggest,
+            &format!("Artist {i}"),
+        ));
+    }
+    // Artist 0 appears at two confidence levels -- should show "(2)"
+    results.push(make_result(
+        Some("Techno"),
+        C::Medium,
+        A::Suggest,
+        "Artist 0",
+    ));
+
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    let top = arr[0]["top_artists"].as_array().unwrap();
+    assert_eq!(top.len(), 5, "top_artists capped at 5");
+    // First entry should be "Artist 0 (2)" since it has the highest count
+    assert_eq!(top[0].as_str().unwrap(), "Artist 0 (2)");
+}

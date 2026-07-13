@@ -29,9 +29,9 @@ pub(crate) struct HydrationTrackIdentity {
 
 impl HydrationTrackIdentity {
     pub(crate) fn new(track_id: String, artist: String, title: String, album: String) -> Self {
-        let norm_artist = crate::normalize::normalize_for_matching(&artist);
-        let norm_title = crate::normalize::normalize_for_matching(&title);
-        let norm_album = crate::normalize::normalize_for_matching(&album);
+        let norm_artist = crate::domain::metadata::normalize_for_matching(&artist);
+        let norm_title = crate::domain::metadata::normalize_for_matching(&title);
+        let norm_album = crate::domain::metadata::normalize_for_matching(&album);
         let norm_album = (!norm_album.is_empty()).then_some(norm_album);
         Self {
             track_id,
@@ -362,7 +362,7 @@ impl HydrationAnalysisOutcome {
     }
 }
 
-/// Dispatch the `Analysis` hydration stage through the shared Plan 039 job.
+/// Dispatch the `Analysis` hydration stage through the shared application job.
 pub(crate) async fn run_analysis_stage<T>(
     raw_file_path: &str,
     needs_stratum: bool,

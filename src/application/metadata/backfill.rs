@@ -288,7 +288,7 @@ pub(crate) fn extract_bandcamp_year(entry: Option<&state::EnrichmentCacheEntry>)
 
 pub(crate) fn scan_years(
     store_conn: &rusqlite::Connection,
-    tracks: &[crate::types::Track],
+    tracks: &[crate::domain::library::Track],
 ) -> BackfillYearsScanResult {
     let mut r = BackfillYearsScanResult::default();
 
@@ -498,7 +498,7 @@ pub(crate) struct BackfillLabelsScanResult {
 
 pub(crate) fn scan_labels(
     store_conn: &rusqlite::Connection,
-    tracks: &[crate::types::Track],
+    tracks: &[crate::domain::library::Track],
 ) -> BackfillLabelsScanResult {
     let mut result = BackfillLabelsScanResult::default();
 
@@ -748,7 +748,7 @@ pub(crate) fn extract_album(entry: Option<&state::EnrichmentCacheEntry>) -> Opti
 
 pub(crate) fn scan_albums(
     store_conn: &rusqlite::Connection,
-    tracks: &[crate::types::Track],
+    tracks: &[crate::domain::library::Track],
 ) -> BackfillAlbumsScanResult {
     let mut r = BackfillAlbumsScanResult::default();
 

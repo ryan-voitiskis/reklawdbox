@@ -1,16 +1,14 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::db;
+use crate::adapters::rekordbox as db;
+use crate::domain::planning::{PoolCohesionResult, TrackProfile, round_to_3_decimals};
+use crate::mcp::planning::PoolAxisScoresPresentation;
 use crate::mcp::{
-    DescribePoolParams, DiscoverPoolsParams, ExpandPoolParams, PoolAxisScoresPresentation,
-    PoolCohesionResult, ReklawdboxServer, ResolveTracksOpts, ScorePoolCompatibilityParams,
-    TrackProfile, db_error, mcp_internal_error, ok_json, resolve_pool_weights, resolve_tracks,
-    round_to_3_decimals,
+    DescribePoolParams, DiscoverPoolsParams, ExpandPoolParams, ReklawdboxServer, ResolveTracksOpts,
+    ScorePoolCompatibilityParams, db_error, mcp_internal_error, ok_json, resolve_pool_weights,
+    resolve_tracks,
 };
-
-#[cfg(test)]
-pub(in crate::mcp) use crate::application::planning::sweep_optimal_reference_bpm;
 
 pub(in crate::mcp) fn handle_score_pool_compatibility(
     server: &ReklawdboxServer,

@@ -11,7 +11,7 @@ use crate::domain::planning::{
 };
 
 pub(crate) struct BuildSetOptions {
-    pub(crate) tracks: Vec<crate::types::Track>,
+    pub(crate) tracks: Vec<crate::domain::library::Track>,
     pub(crate) requested_target: usize,
     pub(crate) energy_curve: Option<EnergyCurve>,
     pub(crate) opening_track_id: Option<String>,

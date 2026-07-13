@@ -51,8 +51,11 @@ pub enum StageLevel {
 }
 
 impl StageLevel {
-    pub fn matches_confidence(&self, conf: &crate::classify::ClassificationConfidence) -> bool {
-        use crate::classify::ClassificationConfidence;
+    pub fn matches_confidence(
+        &self,
+        conf: &crate::domain::classification::ClassificationConfidence,
+    ) -> bool {
+        use crate::domain::classification::ClassificationConfidence;
         matches!(
             (self, conf),
             (Self::High, ClassificationConfidence::High)
@@ -112,7 +115,7 @@ pub struct GenreOverrideInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classify::ClassificationConfidence;
+    use crate::domain::classification::ClassificationConfidence;
 
     #[test]
     fn stage_level_matches_only_corresponding_confidence() {

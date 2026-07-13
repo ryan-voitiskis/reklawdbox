@@ -7,10 +7,12 @@ use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 use rusqlite::Connection;
 
+use crate::adapters::audio::probe_essentia_python_path;
+
 use super::analysis::{
     AnalyzeAudioBatchOutput, AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, CacheCoverageParams,
     handle_analyze_audio_batch, handle_analyze_track_audio, handle_cache_coverage,
-    handle_setup_essentia, probe_essentia_python_path,
+    handle_setup_essentia,
 };
 use super::audit::{
     AuditOperation, ScanBrokenLinksParams, ScanDuplicatesOutput, ScanDuplicatesParams,
@@ -59,8 +61,8 @@ use super::planning::{
     handle_score_pool_compatibility, handle_score_transition,
 };
 
-use crate::db;
-use crate::store;
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
 
 #[derive(Clone)]
 pub struct ReklawdboxServer {

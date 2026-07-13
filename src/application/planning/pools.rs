@@ -20,7 +20,7 @@ pub(crate) struct ProfileBatch {
 }
 
 pub(crate) fn build_pool_profiles(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
 ) -> ProfileBatch {
     let skipped: Vec<_> = tracks.iter().map(|track| track.id.clone()).collect();
@@ -71,7 +71,7 @@ pub(crate) struct PairwisePoolEvaluation {
 }
 
 pub(crate) fn evaluate_pool_pair(
-    tracks: [crate::types::Track; 2],
+    tracks: [crate::domain::library::Track; 2],
     store: &Connection,
     master_tempo: bool,
     reference_bpm: Option<f64>,
@@ -110,8 +110,8 @@ pub(crate) struct CandidatePoolEvaluation {
 }
 
 pub(crate) fn evaluate_candidate_pool(
-    candidate: crate::types::Track,
-    pool: Vec<crate::types::Track>,
+    candidate: crate::domain::library::Track,
+    pool: Vec<crate::domain::library::Track>,
     store: &Connection,
     master_tempo: bool,
     reference_bpm: Option<f64>,
@@ -150,7 +150,7 @@ pub(crate) struct CohesionEvaluation {
 }
 
 pub(crate) fn evaluate_pool_cohesion(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     master_tempo: bool,
     reference_bpm: Option<f64>,
@@ -200,7 +200,7 @@ pub(crate) struct PoolDescription {
 }
 
 pub(crate) fn describe_pool(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     master_tempo: bool,
     reference_bpm: Option<f64>,
@@ -319,7 +319,7 @@ pub(crate) struct ExpansionSeed {
 }
 
 pub(crate) fn prepare_pool_expansion(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     reference_bpm: Option<f64>,
 ) -> Result<ExpansionSeed, String> {
@@ -373,7 +373,7 @@ pub(crate) struct ExpandedPool {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_pool(
     seed: ExpansionSeed,
-    candidate_tracks: Vec<crate::types::Track>,
+    candidate_tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     additions: usize,
     cross_genre: bool,
@@ -525,7 +525,7 @@ pub(crate) struct DiscoveredPools {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn discover_track_pools(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     master_tempo: bool,
     reference_bpm: Option<f64>,

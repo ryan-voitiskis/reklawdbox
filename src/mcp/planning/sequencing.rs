@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::db;
+use crate::adapters::rekordbox as db;
+use crate::domain::planning::{format_camelot, round_to_3_decimals, transpose_camelot_key};
+use crate::mcp::planning::TransitionScoresPresentation;
 use crate::mcp::{
     BuildSetParams, HarmonicMixingStyle, QueryTransitionCandidatesParams, ReklawdboxServer,
-    ScoreTransitionParams, TransitionScoresPresentation, db_error, format_camelot,
-    mcp_internal_error, ok_json, resolve_transition_weights, round_to_3_decimals,
-    transpose_camelot_key,
+    ScoreTransitionParams, db_error, mcp_internal_error, ok_json, resolve_transition_weights,
 };
 
 pub(in crate::mcp) fn handle_score_transition(

@@ -3,11 +3,10 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[allow(unused_imports)]
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
 use crate::application::metadata::backfill::{scan_albums, stage_suggestions};
-use crate::db;
 use crate::mcp::{ReklawdboxServer, db_error, mcp_internal_error, ok_json};
-use crate::store;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct BackfillAlbumsParams {
@@ -104,7 +103,7 @@ pub(in crate::mcp) async fn handle_backfill_albums(
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let enriched: usize;
-                match crate::bandcamp::lookup(
+                match crate::adapters::providers::bandcamp::lookup(
                     &server.context.enrichment.http,
                     &raw_artist,
                     &raw_title,

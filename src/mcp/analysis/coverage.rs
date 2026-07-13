@@ -1,14 +1,17 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::audio;
-use crate::db;
+use crate::adapters::audio;
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
+use crate::application::analysis::identity::{
+    AudioCacheIdentity, audio_cache_identities_with_current_stratum_input, resolved_audio_cache_key,
+};
 use crate::mcp::enrichment::{
     ResolveTracksOpts, describe_resolve_scope, resolve_tracks, to_percent,
 };
 use crate::mcp::error::{cache_error, db_error, ok_json};
 use crate::mcp::server::ReklawdboxServer;
-use crate::store;
 
 use super::CacheCoverageParams;
 
@@ -61,22 +64,19 @@ pub(in crate::mcp) fn handle_cache_coverage(
     let mut enrichment_has_label = 0usize;
 
     {
-        let current_audio_identities =
-            crate::mcp::analysis::audio_cache_identities_with_current_stratum_input(
-                tracks.iter().map(|track| track.file_path.as_str()),
-            );
+        let current_audio_identities = audio_cache_identities_with_current_stratum_input(
+            tracks.iter().map(|track| track.file_path.as_str()),
+        );
         let track_keys: Vec<_> = tracks
             .iter()
             .zip(current_audio_identities)
             .map(|(t, audio_identity)| {
-                let norm_artist = crate::normalize::normalize_for_matching(&t.artist);
-                let norm_title = crate::normalize::normalize_for_matching(&t.title);
+                let norm_artist = crate::domain::metadata::normalize_for_matching(&t.artist);
+                let norm_title = crate::domain::metadata::normalize_for_matching(&t.title);
                 let audio_key = audio_identity
                     .as_ref()
                     .map(|identity| identity.cache_key.clone())
-                    .unwrap_or_else(|| {
-                        crate::mcp::analysis::resolved_audio_cache_key(&t.file_path)
-                    });
+                    .unwrap_or_else(|| resolved_audio_cache_key(&t.file_path));
                 (norm_artist, norm_title, audio_key, audio_identity)
             })
             .collect();
@@ -104,7 +104,7 @@ pub(in crate::mcp) fn handle_cache_coverage(
             .filter_map(|(_, _, _, identity)| {
                 identity
                     .as_ref()
-                    .map(crate::mcp::analysis::AudioCacheIdentity::as_essentia_store_identity)
+                    .map(AudioCacheIdentity::as_essentia_store_identity)
             })
             .collect();
 

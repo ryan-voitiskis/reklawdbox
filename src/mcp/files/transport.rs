@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::tags;
+use crate::adapters::audio::tags;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct ReadFileTagsParams {

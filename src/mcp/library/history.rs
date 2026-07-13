@@ -4,7 +4,7 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rusqlite::Connection;
 
-use crate::db;
+use crate::adapters::rekordbox as db;
 use crate::mcp::library::{GetPlayStatsParams, GetSessionTracksParams, GetSessionsParams};
 use crate::mcp::{db_error, ok_json};
 

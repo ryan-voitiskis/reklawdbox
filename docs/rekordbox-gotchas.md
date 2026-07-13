@@ -27,5 +27,5 @@ Implementation-specific gotchas for reklawdbox development. For the broader list
 
 ## XML
 
-- XML rating values: `0/51/102/153/204/255` (not `0-5`) — use `stars_to_rating()` / `rating_to_stars()` in `src/types.rs`
+- XML rating values: `0/51/102/153/204/255` (not `0-5`) — use `stars_to_rating()` / `rating_to_stars()` in `src/domain/library/rating.rs`
 - `COLLECTION Entries` count in XML must match actual track count or import fails

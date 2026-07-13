@@ -8,7 +8,9 @@ mod color;
 mod model;
 mod normalization;
 
-pub(crate) use changes::{ChangeManager, ChangeSnapshotGuard};
-pub(crate) use color::{COLORS, canonical_color_name, color_name_to_code, is_valid_color};
-pub(crate) use model::{EditableField, FieldDiff, TrackChange, TrackDiff};
+pub(crate) use changes::ChangeManager;
+#[cfg(test)]
+pub(crate) use color::color_name_to_code;
+pub(crate) use color::{COLORS, canonical_color_name, is_valid_color};
+pub(crate) use model::{EditableField, TrackChange, TrackDiff};
 pub(crate) use normalization::normalize_for_matching;

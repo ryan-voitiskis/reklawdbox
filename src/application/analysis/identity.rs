@@ -433,6 +433,73 @@ mod tests {
     }
 
     #[test]
+    fn grid_input_fingerprint_is_stable_and_versioned() {
+        let first = RekordboxGridInput::from_grid(Some(grid()));
+        let second = RekordboxGridInput::from_grid(Some(grid()));
+
+        assert_eq!(first.fingerprint, second.fingerprint);
+        assert!(first.fingerprint.starts_with("grid:v1:"));
+        assert!(!first.fingerprint.contains('/'));
+    }
+
+    #[test]
+    fn grid_input_fingerprint_covers_every_semantic_series() {
+        let base = RekordboxGridInput::from_grid(Some(grid())).fingerprint;
+
+        let mut beat_changed = grid();
+        beat_changed.beats[1] = f32::from_bits(beat_changed.beats[1].to_bits() + 1);
+        let mut downbeat_changed = grid();
+        downbeat_changed.downbeats[0] = 1.0;
+        let mut bar_changed = grid();
+        bar_changed.bars[1] = 3.0;
+        let mut length_changed = grid();
+        length_changed.beats.push(2.5);
+        let mut order_changed = grid();
+        order_changed.beats.swap(0, 1);
+
+        for changed in [
+            beat_changed,
+            downbeat_changed,
+            bar_changed,
+            length_changed,
+            order_changed,
+        ] {
+            assert_ne!(
+                RekordboxGridInput::from_grid(Some(changed)).fingerprint,
+                base
+            );
+        }
+    }
+
+    #[test]
+    fn grid_input_fingerprint_distinguishes_hmm_source() {
+        let hmm = RekordboxGridInput::from_grid(None);
+        let grid = RekordboxGridInput::from_grid(Some(grid()));
+
+        assert_eq!(hmm.fingerprint, "hmm:v1");
+        assert!(hmm.grid.is_none());
+        assert_ne!(hmm.fingerprint, grid.fingerprint);
+    }
+
+    #[test]
+    fn stratum_analysis_keeps_the_fingerprint_paired_with_its_grid_snapshot() {
+        let analyzed_input = RekordboxGridInput::from_grid(Some(grid()));
+        let analyzed_fingerprint = analyzed_input.fingerprint.clone();
+        let mut changed_grid = grid();
+        changed_grid.beats[0] = 0.25;
+        let later_current = RekordboxGridInput::from_grid(Some(changed_grid));
+
+        let analyzed = analyze_with_stratum_input_using(analyzed_input, |snapshot| {
+            assert_eq!(snapshot.unwrap().beats, grid().beats);
+            Ok(audio::StratumResult::default())
+        })
+        .unwrap();
+
+        assert_eq!(analyzed.input_fingerprint, analyzed_fingerprint);
+        assert_ne!(analyzed.input_fingerprint, later_current.fingerprint);
+    }
+
+    #[test]
     fn grid_fingerprint_is_stable_and_versioned() {
         let first = RekordboxGridInput::from_grid(Some(grid()));
         let second = RekordboxGridInput::from_grid(Some(grid()));

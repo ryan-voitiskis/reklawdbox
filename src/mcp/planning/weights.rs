@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use super::scoring::{PoolWeights, PriorityWeights};
+use crate::domain::planning::{PoolWeights, PriorityWeights};
 use crate::mcp::planning::{
     PoolPreset, PoolWeightInput, PoolWeightSpec, SequencingPriority, TransitionWeightInput,
     TransitionWeightSpec,
@@ -122,7 +122,6 @@ fn resolve_pool_named(name: &str, store: &Connection) -> Result<PoolWeights, Str
 
 #[cfg(test)]
 mod tests {
-    use super::super::scoring::{PoolWeights, PriorityWeights};
     use super::*;
 
     fn approx_eq(a: f64, b: f64) -> bool {

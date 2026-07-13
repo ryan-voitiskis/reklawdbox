@@ -16,7 +16,7 @@ use crate::domain::planning::{
 };
 
 pub(crate) fn build_track_profile(
-    track: crate::types::Track,
+    track: crate::domain::library::Track,
     store_conn: &Connection,
 ) -> Result<TrackProfile, String> {
     build_track_profiles(vec![track], store_conn)?
@@ -25,7 +25,7 @@ pub(crate) fn build_track_profile(
 }
 
 pub(crate) fn build_track_profiles(
-    tracks: Vec<crate::types::Track>,
+    tracks: Vec<crate::domain::library::Track>,
     store_conn: &Connection,
 ) -> Result<Vec<TrackProfile>, String> {
     let identities = audio_cache_identities_with_current_stratum_input(
@@ -46,15 +46,15 @@ pub(crate) fn build_track_profiles(
     let stratum = state::batch_get_fresh_audio_analysis(
         store_conn,
         &stratum_identities,
-        crate::audio::ANALYZER_STRATUM,
-        crate::audio::STRATUM_SCHEMA_VERSION,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
     )
     .map_err(|error| format!("Stratum cache read error: {error}"))?;
     let essentia = state::batch_get_fresh_audio_analysis(
         store_conn,
         &essentia_identities,
-        crate::audio::ANALYZER_ESSENTIA,
-        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
     )
     .map_err(|error| format!("Essentia cache read error: {error}"))?;
 
@@ -75,14 +75,14 @@ pub(crate) fn build_track_profiles(
 }
 
 fn build_track_profile_from_cache(
-    track: crate::types::Track,
+    track: crate::domain::library::Track,
     stratum_entry: Option<&CachedAudioAnalysis>,
     essentia_entry: Option<&CachedAudioAnalysis>,
 ) -> TrackProfile {
     let stratum_json = stratum_entry
         .and_then(|cached| serde_json::from_str::<serde_json::Value>(&cached.features_json).ok());
     let essentia_data = essentia_entry.and_then(|cached| {
-        serde_json::from_str::<crate::audio::EssentiaOutput>(&cached.features_json).ok()
+        serde_json::from_str::<crate::adapters::audio::EssentiaOutput>(&cached.features_json).ok()
     });
 
     // Prefer Rekordbox BPM — it's the value the DJ sees and can manually correct.
@@ -231,8 +231,8 @@ pub(crate) struct TransitionEvaluation {
 }
 
 pub(crate) fn evaluate_transition(
-    from_track: crate::types::Track,
-    to_track: crate::types::Track,
+    from_track: crate::domain::library::Track,
+    to_track: crate::domain::library::Track,
     store: &Connection,
     phase: Option<EnergyPhase>,
     weights: &PriorityWeights,
@@ -269,8 +269,8 @@ pub(crate) struct RankedTransitionCandidates {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rank_transition_candidates(
-    from_track: crate::types::Track,
-    pool_tracks: Vec<crate::types::Track>,
+    from_track: crate::domain::library::Track,
+    pool_tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
     phase: Option<EnergyPhase>,
     weights: &PriorityWeights,

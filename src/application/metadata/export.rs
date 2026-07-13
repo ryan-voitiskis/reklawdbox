@@ -297,7 +297,7 @@ mod tests {
             play_count: 0,
             bit_rate: 0,
             sample_rate: 0,
-            file_kind: crate::types::FileKind::Flac,
+            file_kind: crate::domain::library::FileKind::Flac,
             date_added: String::new(),
             position: None,
             played_at: None,

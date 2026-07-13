@@ -7,13 +7,13 @@ use rusqlite::Connection;
 
 use crate::adapters::rekordbox::xml;
 use crate::application::metadata::export as metadata_export;
-use crate::changes::ChangeManager;
+use crate::domain::metadata::ChangeManager;
+use crate::domain::metadata::TrackChange;
 use crate::mcp::{
     ClearChangesParams, PreviewChangesParams, PreviewFormat, ReklawdboxServer,
     SuggestNormalizationsParams, UpdateTracksParams, WriteXmlParams, cache_error, db_error,
     mcp_internal_error, ok_json,
 };
-use crate::types::TrackChange;
 
 pub(in crate::mcp) fn handle_update_tracks(
     changes: &ChangeManager,
@@ -188,7 +188,7 @@ pub(in crate::mcp) fn handle_clear_caches(
     server: &ReklawdboxServer,
 ) -> Result<CallToolResult, McpError> {
     let conn = server.cache_store_conn()?;
-    let result = crate::store::clear_caches(&conn).map_err(cache_error)?;
+    let result = crate::adapters::state::clear_caches(&conn).map_err(cache_error)?;
 
     let staged = server.context.mutation.changes.clear(None).0;
 

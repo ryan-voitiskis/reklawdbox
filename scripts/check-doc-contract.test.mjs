@@ -1552,7 +1552,7 @@ test('SOP discovery resolves composed parameters and rejects bare parameterized 
   }]
   assert.throws(
     () => validateSopContracts([], cyclic),
-    /src\/tools\/params\.rs:1: SOP tool cyclic_args input schema composition is unsupported: cyclic JSON Schema ref/,
+    /src\/mcp\/\*\/transport\.rs:1: SOP tool cyclic_args input schema composition is unsupported: cyclic JSON Schema ref/,
   )
 })
 
@@ -3011,15 +3011,34 @@ test('docs gates preserve both manifests in push, pull request, and release inve
     }
   }
 
-  for (const sourcePath of ['src/audio.rs', 'src/color.rs', 'src/genre.rs']) {
+  for (
+    const ciSourcePath of [
+      'src/domain/**',
+      'src/application/**',
+      'src/adapters/**',
+      'src/mcp/**',
+      'src/cli/**',
+      'src/bootstrap/**',
+      'src/main.rs',
+      'src/README.md',
+    ]
+  ) {
     for (const inventoryName of ['push', 'pullRequest', 'release']) {
+      const sourcePath = inventoryName === 'release'
+        ? ciSourcePath.replace('/**', '')
+        : ciSourcePath
       const incomplete = structuredClone(inventories)
       incomplete[inventoryName] = incomplete[inventoryName].filter(
         (entry) => entry !== sourcePath,
       )
       assert.throws(
         () => validateDocsGatePathInventories(incomplete),
-        new RegExp(sourcePath.replaceAll('/', '\\/').replace('.', '\\.')),
+        new RegExp(
+          sourcePath
+            .replaceAll('/', '\\/')
+            .replaceAll('.', '\\.')
+            .replaceAll('*', '\\*'),
+        ),
       )
     }
   }
@@ -3047,7 +3066,7 @@ pub const COLORS: &[(&str, i32)] = &[
 ];
 `
   const content = [
-    '{/* doc-contract:color-palette source=src/color.rs */}',
+    '{/* doc-contract:color-palette source=src/domain/metadata/color.rs */}',
     '',
     '| Color name | XML hex |',
     '| --- | --- |',
@@ -3065,12 +3084,12 @@ pub const COLORS: &[(&str, i32)] = &[
   const missing = content.replace('| Lemon | `0xFFFF00` |\n', '')
   assert.throws(
     () => validateColorPaletteContract(document(missing, file), source),
-    /xml-export\.mdx:1: color palette differs from src\/color\.rs; missing: Lemon/,
+    /xml-export\.mdx:1: color palette differs from src\/domain\/metadata\/color\.rs; missing: Lemon/,
   )
   const wrong = content.replace('`0x00FF00`', '`0x00AA00`')
   assert.throws(
     () => validateColorPaletteContract(document(wrong, file), source),
-    /xml-export\.mdx:1: Green XML hex is 0x00AA00, src\/color\.rs expects 0x00FF00/,
+    /xml-export\.mdx:1: Green XML hex is 0x00AA00, src\/domain\/metadata\/color\.rs expects 0x00FF00/,
   )
   const duplicate = content.replace(
     '| Lemon | `0xFFFF00` |',
@@ -3078,7 +3097,7 @@ pub const COLORS: &[(&str, i32)] = &[
   )
   assert.throws(
     () => validateColorPaletteContract(document(duplicate, file), source),
-    /xml-export\.mdx:1: duplicate color row Blue; source=src\/color\.rs/,
+    /xml-export\.mdx:1: duplicate color row Blue; source=src\/domain\/metadata\/color\.rs/,
   )
 })
 
@@ -3086,7 +3105,7 @@ test('batch audio extension contract follows the canonical Rust set', () => {
   const source =
     'pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["flac", "wav", "mp3", "m4a", "aac", "aiff"];'
   const content = [
-    '<!-- doc-contract:batch-audio-extensions source=src/audio.rs -->',
+    '<!-- doc-contract:batch-audio-extensions source=src/adapters/audio/mod.rs -->',
     '',
     '```sh',
     'find "/batch" -maxdepth 1 -type f \\',
@@ -3104,7 +3123,7 @@ test('batch audio extension contract follows the canonical Rust set', () => {
   const missing = content.replace(' -o -iname "*.aac"', '')
   assert.throws(
     () => validateBatchAudioExtensionsContract(document(missing, file), source),
-    /batch-import\.mdx:1: batch audio extensions differ from src\/audio\.rs; missing: aac/,
+    /batch-import\.mdx:1: batch audio extensions differ from src\/adapters\/audio\/mod\.rs; missing: aac/,
   )
   const extra = content.replace(
     ' -o -iname "*.aiff"',
@@ -3112,7 +3131,7 @@ test('batch audio extension contract follows the canonical Rust set', () => {
   )
   assert.throws(
     () => validateBatchAudioExtensionsContract(document(extra, file), source),
-    /batch-import\.mdx:1: batch audio extensions differ from src\/audio\.rs; missing: none; extra: ogg/,
+    /batch-import\.mdx:1: batch audio extensions differ from src\/adapters\/audio\/mod\.rs; missing: none; extra: ogg/,
   )
   const duplicate = content.replace(
     ' -o -iname "*.aiff"',
@@ -3121,7 +3140,7 @@ test('batch audio extension contract follows the canonical Rust set', () => {
   assert.throws(
     () =>
       validateBatchAudioExtensionsContract(document(duplicate, file), source),
-    /batch-import\.mdx:1: batch audio extension block contains a duplicate extension; source=src\/audio\.rs/,
+    /batch-import\.mdx:1: batch audio extension block contains a duplicate extension; source=src\/adapters\/audio\/mod\.rs/,
   )
 })
 
@@ -3443,14 +3462,14 @@ test('runtime help derives nine topics and validates URLs from every payload', (
   assert.equal(topics.length, 9)
   const built = new Set(['getting-started/index.html'])
   const payloads = topics.map((topic) => ({
-    source: `src/tools/help_handler.rs:1: help(${JSON.stringify(topic)})`,
+    source: `src/mcp/help.rs:1: help(${JSON.stringify(topic)})`,
     payload: { guide: 'https://reklawdbox.com/getting-started/' },
   }))
   assert.doesNotThrow(() => validateRuntimeHelpUrls(payloads, built))
   payloads[4].payload.guide = 'https://reklawdbox.com/missing-topic-guide/'
   assert.throws(
     () => validateRuntimeHelpUrls(payloads, built),
-    /src\/tools\/help_handler\.rs:1: help\(.+\): runtime-help URL is not built/,
+    /src\/mcp\/help\.rs:1: help\(.+\): runtime-help URL is not built/,
   )
 })
 

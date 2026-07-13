@@ -1,12 +1,12 @@
 use crate::mcp::ReklawdboxServer;
 
+use crate::adapters::providers::discogs;
+use crate::adapters::state as store;
 use crate::application::enrichment::discogs_auth::{
     AuthResolution, DiscogsAuthGateway, DiscogsSessionPersistence, PersistedDiscogsSession,
     conditional_clear_rejected_token,
     resolve_auth_transition_locked as resolve_application_auth_transition,
 };
-use crate::discogs;
-use crate::store;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 

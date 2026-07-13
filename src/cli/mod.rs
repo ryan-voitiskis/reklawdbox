@@ -1,6 +1,5 @@
 //! Command-line surface: parsing, runtime policy, progress, and presentation.
 
-mod analysis_job;
 mod analyze;
 mod backup;
 pub(crate) mod command;

@@ -74,7 +74,7 @@ pub struct EnrichTracksParams {
     #[schemars(
         description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])"
     )]
-    pub providers: Option<Vec<crate::types::Provider>>,
+    pub providers: Option<Vec<crate::application::enrichment::model::EnrichmentProvider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,
     #[schemars(description = "Bypass cache and fetch fresh data (default false)")]

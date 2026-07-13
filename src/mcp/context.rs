@@ -4,8 +4,8 @@ use std::sync::{Mutex, OnceLock, Weak};
 
 use rusqlite::Connection;
 
-use crate::changes::ChangeManager;
-use crate::discogs;
+use crate::adapters::providers::discogs;
+use crate::domain::metadata::ChangeManager;
 
 #[cfg(test)]
 use super::enrichment::discogs_auth::DiscogsAuthTestDependencies;

@@ -1,44 +1,13 @@
 mod adapters;
-mod anlz;
 mod application;
-mod audio;
-mod audio_profile;
-mod audit;
-mod backup;
-mod bandcamp;
-mod beatport;
 mod bootstrap;
-mod changes;
-mod classify;
 mod cli;
-mod color;
-mod config;
-#[cfg(test)]
-mod corpus;
-mod db;
-mod discogs;
 mod domain;
-#[cfg(test)]
-mod eval_routing;
-#[cfg(test)]
-mod eval_tasks;
-mod genre;
-mod keychain;
 mod mcp;
-mod musicbrainz;
-mod normalize;
-mod rate_limit;
-mod store;
-mod tags;
-mod types;
-mod xml;
 
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 use std::io::IsTerminal;
-
-#[cfg(test)]
-pub(crate) use bootstrap::environment::project_root;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,11 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-    genre::init_overrides(cfg.genre_overrides);
+    domain::classification::taxonomy::init_overrides(cfg.genre_overrides);
     match bootstrap::mode::detect(std::env::args(), std::io::stdin().is_terminal()) {
         bootstrap::mode::LaunchMode::Cli => cli::run().await,
         bootstrap::mode::LaunchMode::McpStdio => {
-            let server = mcp::ReklawdboxServer::new(db::resolve_db_path());
+            let server = mcp::ReklawdboxServer::new(adapters::rekordbox::resolve_db_path());
             let service = server.serve(stdio()).await?;
             service.waiting().await?;
             Ok(())
@@ -70,8 +39,8 @@ mod tests {
     #[test]
     #[ignore]
     fn real_change_pipeline() {
-        let conn = crate::db::open_real_db().expect("backup tarball not found");
-        let params = crate::db::SearchParams {
+        let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
+        let params = crate::adapters::rekordbox::SearchParams {
             query: None,
             artist: None,
             genre: None,
@@ -92,12 +61,12 @@ mod tests {
             limit: Some(5),
             offset: None,
         };
-        let tracks = crate::db::search_tracks(&conn, &params).unwrap();
+        let tracks = crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap();
         assert!(!tracks.is_empty(), "need tracks for pipeline test");
 
         let track = &tracks[0];
-        let cm = crate::changes::ChangeManager::new();
-        let (staged, total) = cm.stage(vec![crate::types::TrackChange {
+        let cm = crate::domain::metadata::ChangeManager::new();
+        let (staged, total) = cm.stage(vec![crate::domain::metadata::TrackChange {
             track_id: track.id.clone(),
             genre: Some("Deep House".to_string()),
             comments: Some("integration test".to_string()),
@@ -130,7 +99,7 @@ mod tests {
         assert_eq!(modified_track.comments, "integration test");
         assert_eq!(modified_track.rating, 4);
 
-        let xml = crate::xml::generate_xml(&modified);
+        let xml = crate::adapters::rekordbox::xml::generate_xml(&modified);
         assert!(xml.contains("Genre=\"Deep House\""));
         assert!(xml.contains("Comments=\"integration test\""));
         assert!(xml.contains("Rating=\"204\""));

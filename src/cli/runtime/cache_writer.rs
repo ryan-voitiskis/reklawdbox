@@ -18,8 +18,9 @@ pub(crate) use crate::application::analysis::model::AnalysisCacheWrite as CliCac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::audio;
+    use crate::adapters::state::{self as store, CachedAudioAnalysis};
     use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard, bounded};
-    use crate::{audio, store, store::CachedAudioAnalysis};
     use serde::ser::Error as _;
 
     fn cached(file_size: i64, file_mtime: i64) -> CachedAudioAnalysis {

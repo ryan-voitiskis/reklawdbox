@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 
 use rusqlite::{Connection, params};
 
-use crate::types::Track;
+use crate::domain::library::Track;
 
 use super::tracks::{
     SearchParams, TRACK_SELECT, apply_search_filters, escape_like, row_to_track,

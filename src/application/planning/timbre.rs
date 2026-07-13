@@ -23,7 +23,7 @@ fn hash_length_delimited(hasher: &mut Sha256, value: &[u8]) {
 }
 
 fn timbral_features_from_essentia(
-    essentia: &crate::audio::EssentiaOutput,
+    essentia: &crate::adapters::audio::EssentiaOutput,
 ) -> Option<TimbralFeatures> {
     Some(TimbralFeatures {
         mfcc_mean: essentia.mfcc_mean.clone()?,
@@ -46,8 +46,8 @@ fn load_timbral_source_snapshot_for_schema(
 ) -> Result<TimbralSourceSnapshot, String> {
     let rows = state_analysis::load_timbral_source_rows(
         store_conn,
-        crate::audio::ANALYZER_ESSENTIA,
-        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
     )
     .map_err(|error| format!("DB error: {error}"))?;
 
@@ -55,7 +55,7 @@ fn load_timbral_source_snapshot_for_schema(
     hash_length_delimited(&mut hasher, vector_schema_version.as_bytes());
     hash_length_delimited(
         &mut hasher,
-        crate::audio::ESSENTIA_SCHEMA_VERSION.as_bytes(),
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION.as_bytes(),
     );
     let mut vectors = Vec::new();
     let mut expected_dimensions = None;
@@ -69,17 +69,17 @@ fn load_timbral_source_snapshot_for_schema(
         }
         let cached = state_analysis::CachedAudioAnalysis {
             file_path: row.file_path.clone(),
-            analyzer: crate::audio::ANALYZER_ESSENTIA.to_string(),
+            analyzer: crate::adapters::audio::ANALYZER_ESSENTIA.to_string(),
             file_size: row.file_size,
             file_mtime: row.file_mtime,
-            analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+            analysis_version: crate::adapters::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
             input_fingerprint: row.input_fingerprint,
             features_json: row.features_json.clone(),
             created_at: String::new(),
         };
         if !state_analysis::is_audio_analysis_fresh(
             Some(&cached),
-            crate::audio::ESSENTIA_SCHEMA_VERSION,
+            crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
             identity.file_size,
             identity.file_mtime,
             "",
@@ -87,11 +87,11 @@ fn load_timbral_source_snapshot_for_schema(
             continue;
         }
 
-        let essentia: crate::audio::EssentiaOutput = match serde_json::from_str(&row.features_json)
-        {
-            Ok(essentia) => essentia,
-            Err(_) => continue,
-        };
+        let essentia: crate::adapters::audio::EssentiaOutput =
+            match serde_json::from_str(&row.features_json) {
+                Ok(essentia) => essentia,
+                Err(_) => continue,
+            };
         let Some(features) = timbral_features_from_essentia(&essentia) else {
             continue;
         };
@@ -139,7 +139,7 @@ fn persisted_stats(
         dims: normalization.dims,
         sample_count: normalization.sample_count,
         source_fingerprint: snapshot.source_fingerprint.clone(),
-        analysis_version: crate::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
+        analysis_version: crate::adapters::audio::ESSENTIA_SCHEMA_VERSION.to_string(),
         vector_schema_version: TIMBRAL_VECTOR_SCHEMA_VERSION.to_string(),
     }
 }
@@ -182,7 +182,7 @@ pub(crate) fn ensure_timbral_norm_stats(
     if let Some(stats) = existing {
         let expected_dimensions = snapshot.vectors[0].len();
         let provenance_matches = stats.source_fingerprint == snapshot.source_fingerprint
-            && stats.analysis_version == crate::audio::ESSENTIA_SCHEMA_VERSION
+            && stats.analysis_version == crate::adapters::audio::ESSENTIA_SCHEMA_VERSION
             && stats.vector_schema_version == TIMBRAL_VECTOR_SCHEMA_VERSION;
         let dimensions_are_coherent = stats.dims.len() == expected_dimensions
             && stats

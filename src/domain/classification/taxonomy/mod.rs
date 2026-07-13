@@ -8,13 +8,14 @@ mod aliases;
 mod catalog;
 mod metadata;
 
+#[cfg(test)]
+pub(crate) use aliases::{ALIASES, LABEL_GENRES, extract_parenthetical_base, label_genre_map};
 pub(crate) use aliases::{
-    ALIASES, LABEL_GENRES, canonical_genre_from_alias, extract_genre_tokens,
-    extract_parenthetical_base, genre_alias_map, init_overrides, label_genre, label_genre_map,
+    canonical_genre_from_alias, extract_genre_tokens, genre_alias_map, init_overrides, label_genre,
     map_genre_through_taxonomy,
 };
 pub(crate) use catalog::{GENRES, canonical_genre_name, is_known_genre, resolve_genre};
-pub(crate) use metadata::{BpmRange, GenreFamily, genre_bpm_range, genre_depth, genre_family};
+pub(crate) use metadata::{GenreFamily, genre_bpm_range, genre_depth, genre_family};
 
 #[cfg(test)]
 use aliases::{GENRE_TOKENS, LABEL_SUFFIXES, build_alias_map};

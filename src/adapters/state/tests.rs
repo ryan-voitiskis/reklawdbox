@@ -213,7 +213,7 @@ fn audio_analysis_input_fingerprint_controls_single_freshness() {
         set_audio_analysis(
             &conn,
             "/music/legacy-stratum.flac",
-            crate::audio::ANALYZER_STRATUM,
+            crate::adapters::audio::ANALYZER_STRATUM,
             10,
             20,
             "s1",
@@ -569,7 +569,7 @@ fn test_broker_discogs_session_round_trip() {
     let url = "https://broker.example.com/store-round-trip-test";
 
     // Ensure clean keychain state from any prior failed run.
-    let _ = crate::keychain::delete_session_token(url);
+    let _ = crate::adapters::platform::keychain::delete_session_token(url);
 
     set_broker_discogs_session(&conn, url, "session-token-1", 1_800_000_000).unwrap();
 
@@ -610,7 +610,7 @@ fn test_broker_discogs_session_migrates_legacy_plaintext() {
     let url = "https://broker.example.com/store-migration-test";
 
     // Ensure clean keychain state.
-    let _ = crate::keychain::delete_session_token(url);
+    let _ = crate::adapters::platform::keychain::delete_session_token(url);
 
     conn.execute(
         "INSERT INTO broker_discogs_session (broker_url, session_token, expires_at)
@@ -636,7 +636,7 @@ fn test_broker_discogs_session_migrates_legacy_plaintext() {
         "plaintext token should be cleared from SQLite"
     );
 
-    let kc_token = crate::keychain::get_session_token(url).unwrap();
+    let kc_token = crate::adapters::platform::keychain::get_session_token(url).unwrap();
     assert_eq!(kc_token.as_deref(), Some("legacy-plaintext-token"));
 
     clear_broker_discogs_session(&conn, url).unwrap();

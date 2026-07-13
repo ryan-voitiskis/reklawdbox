@@ -5,9 +5,11 @@ use std::fmt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use super::RATE_LIMITER;
 use super::auth::{AuthRemediation, expired_session_remediation};
 use super::broker::BrokerConfig;
-use super::{RATE_LIMITER, wait_for_rate_limit};
+use super::wait_for_rate_limit;
 use crate::adapters::providers::rate_limit;
 
 #[derive(Debug, Clone)]

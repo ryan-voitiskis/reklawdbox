@@ -180,7 +180,7 @@ impl CorpusIndex {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| {
-                crate::project_root()
+                Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join(REKORDBOX_MANIFEST_PATH_RELATIVE)
                     .to_string_lossy()
                     .into_owned()

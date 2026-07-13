@@ -1,22 +1,21 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
+use crate::adapters::audio;
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
+use crate::application::analysis::identity::{
+    AudioCacheIdentity, audio_cache_identities_with_current_stratum_input,
+    get_fresh_analysis_entry, resolved_audio_cache_key,
+};
 use crate::application::enrichment::resolve::{
     canonical_current_genre, resolve_cached_provider_data,
 };
-use crate::audio;
-use crate::db;
-use crate::genre;
+use crate::domain::classification::taxonomy as genre;
 use crate::mcp::{
     ReklawdboxServer, ResolveFormat, ResolveTrackDataParams, ResolveTracksDataParams,
-    ResolveTracksOpts, cache_error, db_error, get_fresh_analysis_entry, map_genre_through_taxonomy,
-    mcp_internal_error, ok_json, resolve_tracks,
+    ResolveTracksOpts, cache_error, db_error, mcp_internal_error, ok_json, resolve_tracks,
 };
-use crate::store;
-
-// Keep the Plan 040 tools facade reachable until its planned cleanup; all
-// resolution decisions below still come from the application use case.
-const _: fn(&str) -> (Option<String>, &'static str) = map_genre_through_taxonomy;
 
 pub(in crate::mcp) fn handle_resolve_track_data(
     server: &ReklawdboxServer,
@@ -31,9 +30,9 @@ pub(in crate::mcp) fn handle_resolve_track_data(
             })?
     };
 
-    let norm_artist = crate::normalize::normalize_for_matching(&track.artist);
-    let norm_title = crate::normalize::normalize_for_matching(&track.title);
-    let norm_album = crate::normalize::normalize_for_matching(&track.album);
+    let norm_artist = crate::domain::metadata::normalize_for_matching(&track.artist);
+    let norm_title = crate::domain::metadata::normalize_for_matching(&track.title);
+    let norm_album = crate::domain::metadata::normalize_for_matching(&track.album);
     let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
     let essentia_installed = server.essentia_python_path().is_some();
@@ -109,21 +108,20 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
     let essentia_installed = server.essentia_python_path().is_some();
 
     // Pre-compute normalized keys and resolved audio paths.
-    let current_audio_identities =
-        crate::mcp::analysis::audio_cache_identities_with_current_stratum_input(
-            tracks.iter().map(|track| track.file_path.as_str()),
-        );
+    let current_audio_identities = audio_cache_identities_with_current_stratum_input(
+        tracks.iter().map(|track| track.file_path.as_str()),
+    );
     let norm_keys: Vec<_> = tracks
         .iter()
         .zip(current_audio_identities)
         .map(|(t, audio_identity)| {
-            let a = crate::normalize::normalize_for_matching(&t.artist);
-            let ti = crate::normalize::normalize_for_matching(&t.title);
-            let al = crate::normalize::normalize_for_matching(&t.album);
+            let a = crate::domain::metadata::normalize_for_matching(&t.artist);
+            let ti = crate::domain::metadata::normalize_for_matching(&t.title);
+            let al = crate::domain::metadata::normalize_for_matching(&t.album);
             let audio_key = audio_identity
                 .as_ref()
                 .map(|identity| identity.cache_key.clone())
-                .unwrap_or_else(|| crate::mcp::analysis::resolved_audio_cache_key(&t.file_path));
+                .unwrap_or_else(|| resolved_audio_cache_key(&t.file_path));
             (
                 a,
                 ti,
@@ -145,7 +143,7 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
         .filter_map(|(_, _, _, _, identity)| {
             identity
                 .as_ref()
-                .map(crate::mcp::analysis::AudioCacheIdentity::as_essentia_store_identity)
+                .map(AudioCacheIdentity::as_essentia_store_identity)
         })
         .collect();
     for (a, t, al, _, _) in &norm_keys {
@@ -227,13 +225,13 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
 
 /// Build the resolved JSON payload for a single track.
 pub(crate) fn resolve_single_track(
-    track: &crate::types::Track,
+    track: &crate::domain::library::Track,
     discogs_cache: Option<&store::EnrichmentCacheEntry>,
     beatport_cache: Option<&store::EnrichmentCacheEntry>,
     stratum_cache: Option<&store::CachedAudioAnalysis>,
     essentia_cache: Option<&store::CachedAudioAnalysis>,
     essentia_installed: bool,
-    staged: Option<&crate::types::TrackChange>,
+    staged: Option<&crate::domain::metadata::TrackChange>,
 ) -> serde_json::Value {
     let rekordbox = serde_json::json!({
         "title": track.title,
@@ -384,7 +382,7 @@ pub(crate) fn resolve_single_track(
 /// Build a compact resolved JSON for classification workflows.
 /// Returns only fields needed for the decision tree, ~400-500 bytes per track.
 fn resolve_single_track_compact(
-    track: &crate::types::Track,
+    track: &crate::domain::library::Track,
     discogs_cache: Option<&store::EnrichmentCacheEntry>,
     beatport_cache: Option<&store::EnrichmentCacheEntry>,
     stratum_cache: Option<&store::CachedAudioAnalysis>,

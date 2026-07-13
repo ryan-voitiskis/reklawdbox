@@ -362,7 +362,7 @@ For the full XML↔DB field mapping and DB-only field list, see [XML Import/Expo
 ### Genre Strategy for reklawdbox
 
 The `Genre` field is free text — Rekordbox has no predefined genre list.
-reklawdbox uses a flat canonical taxonomy (e.g., "Deep House", "Techno", "Minimal") defined in `src/genre.rs`. Genre classification follows the [genre classification SOP](https://reklawdbox.com/workflows/genre-classification/).
+reklawdbox uses a flat canonical taxonomy (e.g., "Deep House", "Techno", "Minimal") defined in `src/domain/classification/taxonomy/catalog.rs`. Genre classification follows the [genre classification SOP](https://reklawdbox.com/workflows/genre-classification/).
 
 - `Comments` field is excellent for additional tags that don't fit genre
 - `Grouping` can serve as a secondary classification

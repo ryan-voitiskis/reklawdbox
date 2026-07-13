@@ -1,9 +1,9 @@
+use crate::adapters::providers::discogs;
 #[cfg(test)]
 pub(in crate::mcp) use crate::application::enrichment::lookup::lookup_output_with_cache_metadata;
-use crate::discogs;
 
 #[cfg(test)]
-use crate::beatport;
+use crate::adapters::providers::beatport;
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]

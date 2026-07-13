@@ -8,7 +8,7 @@ use crate::application::analysis::identity::{
 };
 use crate::domain::classification::{ClassificationResult, engine::classify_track_with_profiles};
 use crate::domain::library::Track;
-use crate::normalize;
+use crate::domain::metadata as normalize;
 
 use super::evidence::build_track_evidence;
 

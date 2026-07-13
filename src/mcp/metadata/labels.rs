@@ -3,15 +3,14 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[allow(unused_imports)]
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
 use crate::application::metadata::backfill::{scan_labels, stage_suggestions};
-use crate::db;
+use crate::domain::metadata as normalize;
 use crate::mcp::{
     OffsetPage, ReklawdboxServer, db_error, lookup_bandcamp_remote, mcp_internal_error,
     offset_page_bounds, ok_structured_json,
 };
-use crate::normalize;
-use crate::store;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct BackfillLabelsParams {

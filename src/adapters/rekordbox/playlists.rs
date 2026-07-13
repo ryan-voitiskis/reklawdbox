@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use rusqlite::{Connection, params};
 
-use crate::types::{Playlist, Track};
+use crate::domain::library::{Playlist, Track};
 
 use super::tracks::{TRACK_COLUMNS, TRACK_JOINS, row_to_track};
 

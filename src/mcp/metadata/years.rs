@@ -3,17 +3,13 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
+use crate::application::metadata::backfill::{scan_years, stage_suggestions};
 use crate::mcp::{
     ReklawdboxServer, db_error, lookup_bandcamp_remote, lookup_musicbrainz_remote,
     mcp_internal_error, ok_json,
 };
-// Temporary compatibility consumer for the legacy classify-handler re-export; retire in Plan 046.
-#[allow(unused_imports)]
-use crate::application::metadata::backfill::{scan_years, stage_suggestions};
-use crate::db;
-#[allow(unused_imports)]
-use crate::mcp::classification::parse_response_json as _;
-use crate::store;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct BackfillYearsParams {

@@ -6,7 +6,7 @@ fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| {
-            crate::audio::AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+            crate::adapters::audio::AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
         })
 }
 

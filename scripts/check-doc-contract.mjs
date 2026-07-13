@@ -1391,11 +1391,11 @@ export function validateMcpOutputContracts(
     const tool = liveByName.get(toolName)
     if (!tool) {
       issues.push(
-        `src/tools/mod.rs:1: selected MCP output tool missing: ${toolName}`,
+        `src/mcp/server.rs:1: selected MCP output tool missing: ${toolName}`,
       )
     } else if (!tool.outputSchema) {
       issues.push(
-        `src/tools/mod.rs:1: selected MCP output tool has no outputSchema: ${toolName}`,
+        `src/mcp/server.rs:1: selected MCP output tool has no outputSchema: ${toolName}`,
       )
     } else if (!rootMarked.has(toolName)) {
       const reference = referenceByName.get(toolName)
@@ -1404,7 +1404,7 @@ export function validateMcpOutputContracts(
         `${
           slug
             ? `site/src/content/docs/mcp-tools/${slug}.mdx`
-            : 'src/tools/mod.rs'
+            : 'src/mcp/server.rs'
         }:1: ${toolName} has no root doc-contract:mcp-output surface`,
       )
     }
@@ -1520,7 +1520,7 @@ function sopPropertiesByTool(liveTools) {
       )
     } catch (error) {
       throw new Error(
-        `src/tools/params.rs:1: SOP tool ${tool.name} input schema composition is unsupported: ${error.message}`,
+        `src/mcp/*/transport.rs:1: SOP tool ${tool.name} input schema composition is unsupported: ${error.message}`,
       )
     }
   }
@@ -2016,7 +2016,7 @@ export function compareRuntimeHelp(workflows, payload) {
   const expectedMenu = menu.map((workflow) => workflow.title)
   if (JSON.stringify(liveMenu) !== JSON.stringify(expectedMenu)) {
     throw new Error(
-      `src/tools/help_handler.rs:1: runtime help menu drift; live: ${
+      `src/mcp/help.rs:1: runtime help menu drift; live: ${
         liveMenu.join(', ')
       }; canonical: ${expectedMenu.join(', ')}`,
     )
@@ -2028,7 +2028,7 @@ export function compareRuntimeHelp(workflows, payload) {
   const expectedRecommended = recommended.map((workflow) => workflow.title)
   if (JSON.stringify(liveRecommended) !== JSON.stringify(expectedRecommended)) {
     throw new Error(
-      `src/tools/help_handler.rs:1: runtime recommended order drift; live: ${
+      `src/mcp/help.rs:1: runtime recommended order drift; live: ${
         liveRecommended.join(', ')
       }; canonical: ${expectedRecommended.join(', ')}`,
     )
@@ -2920,7 +2920,9 @@ function parseColorPairs(source) {
     /pub const COLORS\s*:\s*&\[\(&str,\s*i32\)\]\s*=\s*&\[([\s\S]*?)\];/,
   )
   if (!match) {
-    throw new Error('src/color.rs: canonical COLORS constant not found')
+    throw new Error(
+      'src/domain/metadata/color.rs: canonical COLORS constant not found',
+    )
   }
   const pairPattern = /\("([^"]+)",\s*0x([0-9A-Fa-f]{6})\)/g
   const pairs = [...match[1].matchAll(pairPattern)].map((entry) => [
@@ -2932,11 +2934,15 @@ function parseColorPairs(source) {
     .replaceAll(',', '')
     .trim()
   if (remainder || pairs.length === 0) {
-    throw new Error('src/color.rs: canonical COLORS entries are malformed')
+    throw new Error(
+      'src/domain/metadata/color.rs: canonical COLORS entries are malformed',
+    )
   }
   const names = pairs.map(([name]) => name)
   if (new Set(names).size !== names.length) {
-    throw new Error('src/color.rs: canonical COLORS contains duplicate names')
+    throw new Error(
+      'src/domain/metadata/color.rs: canonical COLORS contains duplicate names',
+    )
   }
   return new Map(pairs)
 }
@@ -2945,7 +2951,7 @@ export function validateColorPaletteContract(document, colorSource) {
   const marker = boundedSourceContract(
     document,
     'color-palette',
-    'src/color.rs',
+    'src/domain/metadata/color.rs',
   )
   const canonical = parseColorPairs(colorSource)
   const boundedLines = marker.body.trim().split('\n')
@@ -2956,7 +2962,7 @@ export function validateColorPaletteContract(document, colorSource) {
   ) {
     throw markerError(
       marker,
-      'color palette marker may contain only its contiguous table; source=src/color.rs',
+      'color palette marker may contain only its contiguous table; source=src/domain/metadata/color.rs',
     )
   }
   const table = parseMarkdownTable(marker.body, marker)
@@ -2976,13 +2982,13 @@ export function validateColorPaletteContract(document, colorSource) {
     if (documented.has(name)) {
       throw markerError(
         marker,
-        `duplicate color row ${name}; source=src/color.rs`,
+        `duplicate color row ${name}; source=src/domain/metadata/color.rs`,
       )
     }
     if (!/^0X[0-9A-F]{6}$/.test(xmlHex)) {
       throw markerError(
         marker,
-        `${name} has invalid XML hex ${xmlHex}; source=src/color.rs`,
+        `${name} has invalid XML hex ${xmlHex}; source=src/domain/metadata/color.rs`,
       )
     }
     documented.set(name, xmlHex.replace(/^0X/, '0x'))
@@ -2992,7 +2998,7 @@ export function validateColorPaletteContract(document, colorSource) {
   if (missing.length || extra.length) {
     throw markerError(
       marker,
-      `color palette differs from src/color.rs; missing: ${
+      `color palette differs from src/domain/metadata/color.rs; missing: ${
         missing.join(', ') || 'none'
       }; extra: ${extra.join(', ') || 'none'}`,
     )
@@ -3003,7 +3009,7 @@ export function validateColorPaletteContract(document, colorSource) {
         marker,
         `${name} XML hex is ${
           documented.get(name)
-        }, src/color.rs expects ${expected}`,
+        }, src/domain/metadata/color.rs expects ${expected}`,
       )
     }
   }
@@ -3013,18 +3019,18 @@ export function validateBatchAudioExtensionsContract(document, audioSource) {
   const marker = boundedSourceContract(
     document,
     'batch-audio-extensions',
-    'src/audio.rs',
+    'src/adapters/audio/mod.rs',
   )
   const canonical = parseRustStringList(
     audioSource,
     'AUDIO_EXTENSIONS',
-    'src/audio.rs',
+    'src/adapters/audio/mod.rs',
   )
   const blocks = fencedBlocks(marker.body, `${document.file}:${marker.line}`)
   if (blocks.length !== 1 || !['sh', 'bash'].includes(blocks[0]?.info)) {
     throw markerError(
       marker,
-      'batch audio extensions contract must contain exactly one shell block; source=src/audio.rs',
+      'batch audio extensions contract must contain exactly one shell block; source=src/adapters/audio/mod.rs',
     )
   }
   const extensions = [...blocks[0].body.matchAll(
@@ -3033,7 +3039,7 @@ export function validateBatchAudioExtensionsContract(document, audioSource) {
   if (new Set(extensions).size !== extensions.length) {
     throw markerError(
       marker,
-      'batch audio extension block contains a duplicate extension; source=src/audio.rs',
+      'batch audio extension block contains a duplicate extension; source=src/adapters/audio/mod.rs',
     )
   }
   const canonicalSet = new Set(canonical)
@@ -3043,7 +3049,7 @@ export function validateBatchAudioExtensionsContract(document, audioSource) {
   if (missing.length || extra.length) {
     throw markerError(
       marker,
-      `batch audio extensions differ from src/audio.rs; missing: ${
+      `batch audio extensions differ from src/adapters/audio/mod.rs; missing: ${
         missing.join(', ') || 'none'
       }; extra: ${extra.join(', ') || 'none'}`,
     )
@@ -4302,14 +4308,14 @@ async function readExistingArtifacts(root, relativeFiles) {
 
 const REQUIRED_CI_DOC_PATHS = [
   'site/**',
-  'src/tools/**',
-  'src/audio.rs',
-  'src/color.rs',
-  'src/genre.rs',
-  'src/types.rs',
-  'src/tags.rs',
+  'src/domain/**',
+  'src/application/**',
+  'src/adapters/**',
+  'src/mcp/**',
   'src/cli/**',
+  'src/bootstrap/**',
   'src/main.rs',
+  'src/README.md',
   'Cargo.toml',
   'Cargo.lock',
   'scripts/mcp-smoke.mjs',
@@ -4324,14 +4330,14 @@ const REQUIRED_CI_DOC_PATHS = [
 
 const REQUIRED_RELEASE_DOC_PATHS = [
   'site',
-  'src/tools',
-  'src/audio.rs',
-  'src/color.rs',
-  'src/genre.rs',
-  'src/types.rs',
-  'src/tags.rs',
+  'src/domain',
+  'src/application',
+  'src/adapters',
+  'src/mcp',
   'src/cli',
+  'src/bootstrap',
   'src/main.rs',
+  'src/README.md',
   'Cargo.toml',
   'Cargo.lock',
   'scripts/mcp-smoke.mjs',
@@ -4475,12 +4481,12 @@ export async function loadMcpInventory(
     ensureTransport(initialized, 'src/main.rs:1: initialize')
     client.notify('notifications/initialized')
     const toolList = await client.listTools()
-    ensureTransport(toolList, 'src/tools/mod.rs:1: tools/list')
+    ensureTransport(toolList, 'src/mcp/server.rs:1: tools/list')
     const help = await client.callTool('help', {})
-    ensureTransport(help, 'src/tools/help_handler.rs:1: tools/call help')
+    ensureTransport(help, 'src/mcp/help.rs:1: tools/call help')
     if (help.isError) {
       throw new Error(
-        'src/tools/help_handler.rs:1: DB-free help() returned a tool error',
+        'src/mcp/help.rs:1: DB-free help() returned a tool error',
       )
     }
     const topicHelp = new Map()
@@ -4488,13 +4494,11 @@ export async function loadMcpInventory(
       const result = await client.callTool('help', { topic })
       ensureTransport(
         result,
-        `src/tools/help_handler.rs:1: tools/call help(${
-          JSON.stringify(topic)
-        })`,
+        `src/mcp/help.rs:1: tools/call help(${JSON.stringify(topic)})`,
       )
       if (result.isError) {
         throw new Error(
-          `src/tools/help_handler.rs:1: DB-free help(${
+          `src/mcp/help.rs:1: DB-free help(${
             JSON.stringify(topic)
           }) returned a tool error`,
         )
@@ -4645,8 +4649,8 @@ async function main() {
     'site/src/content/docs/reference/xml-export.mdx',
   ])
   const [audioSource, colorSource] = await Promise.all([
-    fs.readFile(path.join(root, 'src/audio.rs'), 'utf8'),
-    fs.readFile(path.join(root, 'src/color.rs'), 'utf8'),
+    fs.readFile(path.join(root, 'src/adapters/audio/mod.rs'), 'utf8'),
+    fs.readFile(path.join(root, 'src/domain/metadata/color.rs'), 'utf8'),
   ])
   check(() => {
     if (!batchImportDocument) {
@@ -4663,7 +4667,7 @@ async function main() {
   ])
   check(() => validateCliContracts(cliDocument, readCliInventory(options.bin)))
 
-  const helpPayload = parseToolJson(help, 'src/tools/help_handler.rs:1: help()')
+  const helpPayload = parseToolJson(help, 'src/mcp/help.rs:1: help()')
   check(() => compareRuntimeHelp(workflows, helpPayload))
   const runtimeWorkflows = workflows
     .filter((workflow) => workflow.runtimeHelp)
@@ -4674,19 +4678,17 @@ async function main() {
     const topic = workflow.runtimeHelp.topic
     const payload = parseToolJson(
       topicHelp.get(topic),
-      `src/tools/help_handler.rs:1: help(${JSON.stringify(topic)})`,
+      `src/mcp/help.rs:1: help(${JSON.stringify(topic)})`,
     )
     if (payload.workflow !== workflow.title) {
       issues.push(
-        `src/tools/help_handler.rs:1: help(${
-          JSON.stringify(topic)
-        }) returned workflow ${JSON.stringify(payload.workflow)}, expected ${
-          JSON.stringify(workflow.title)
-        }`,
+        `src/mcp/help.rs:1: help(${JSON.stringify(topic)}) returned workflow ${
+          JSON.stringify(payload.workflow)
+        }, expected ${JSON.stringify(workflow.title)}`,
       )
     }
     return {
-      source: `src/tools/help_handler.rs:1: help(${JSON.stringify(topic)})`,
+      source: `src/mcp/help.rs:1: help(${JSON.stringify(topic)})`,
       payload,
     }
   })
@@ -4836,7 +4838,7 @@ async function main() {
   check(() =>
     validateRuntimeHelpUrls(
       [
-        { source: 'src/tools/help_handler.rs:1: help()', payload: helpPayload },
+        { source: 'src/mcp/help.rs:1: help()', payload: helpPayload },
         ...topicPayloads,
       ],
       builtPaths,

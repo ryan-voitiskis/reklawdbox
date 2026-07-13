@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write as IoWrite;
 use std::path::Path;
 
-use crate::types::Track;
+use crate::domain::library::Track;
 
 const TARGET_REKORDBOX_VERSION: &str = "7.2.10";
 
@@ -83,7 +83,7 @@ pub fn path_to_rekordbox_location_uri(file_path: &str) -> String {
 }
 
 fn write_collection_track(out: &mut String, track: &Track, track_id: usize) {
-    let rating = crate::types::stars_to_rating(track.rating);
+    let rating = crate::domain::library::stars_to_rating(track.rating);
     let location = xml_escape(&path_to_rekordbox_location_uri(&track.file_path));
     let kind = track.file_kind.as_kind_str();
 
@@ -253,7 +253,7 @@ mod tests {
             play_count: 12,
             bit_rate: 1411,
             sample_rate: 44100,
-            file_kind: crate::types::FileKind::Flac,
+            file_kind: crate::domain::library::FileKind::Flac,
             date_added: "2023-01-15".to_string(),
             position: None,
             played_at: None,
@@ -560,9 +560,9 @@ mod tests {
 
     // ==================== Integration tests (real DB) ====================
 
-    fn load_real_tracks(limit: usize) -> Option<Vec<crate::types::Track>> {
-        let conn = crate::db::open_real_db()?;
-        let params = crate::db::SearchParams {
+    fn load_real_tracks(limit: usize) -> Option<Vec<crate::domain::library::Track>> {
+        let conn = crate::adapters::rekordbox::open_real_db()?;
+        let params = crate::adapters::rekordbox::SearchParams {
             query: None,
             artist: None,
             genre: None,
@@ -583,7 +583,7 @@ mod tests {
             limit: Some(limit as u32),
             offset: None,
         };
-        Some(crate::db::search_tracks(&conn, &params).unwrap())
+        Some(crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap())
     }
 
     #[test]
@@ -652,7 +652,7 @@ mod tests {
         let xml = generate_xml(&tracks);
 
         for track in &tracks {
-            let rating_xml = crate::types::stars_to_rating(track.rating);
+            let rating_xml = crate::domain::library::stars_to_rating(track.rating);
             let expected_rating = format!("Rating=\"{rating_xml}\"");
             assert!(
                 xml.contains(&expected_rating),
@@ -704,7 +704,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_full_library_xml_generation() {
-        let conn = crate::db::open_real_db().expect("backup tarball not found");
+        let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
 
         let mut all = Vec::new();
         let page_size: u32 = 200;
@@ -712,13 +712,13 @@ mod tests {
         loop {
             let sql = format!(
                 "{}WHERE c.rb_local_deleted = 0 ORDER BY c.ID LIMIT {} OFFSET {}",
-                crate::db::TRACK_SELECT,
+                crate::adapters::rekordbox::TRACK_SELECT,
                 page_size,
                 offset
             );
             let mut stmt = conn.prepare(&sql).unwrap();
-            let batch: Vec<crate::types::Track> = stmt
-                .query_map([], crate::db::row_to_track)
+            let batch: Vec<crate::domain::library::Track> = stmt
+                .query_map([], crate::adapters::rekordbox::row_to_track)
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();

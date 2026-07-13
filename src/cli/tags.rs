@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::tags;
+use crate::adapters::audio::tags;
 
 use super::presentation::{display_field_name, expand_paths};
 

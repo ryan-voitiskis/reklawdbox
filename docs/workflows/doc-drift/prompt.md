@@ -27,9 +27,9 @@ The documentation surfaces to audit are:
 1. **Site docs** (`site/src/content/docs/`) — MCP tool reference pages, CLI
    docs, workflow guides, concept pages, getting-started guides
 2. **Embedded SOPs** (`site/src/partials/sops/*.mdx`) — these are
-   `include_str!`'d into the binary via `src/tools/help_handler.rs`
+   `include_str!`'d into the binary via `src/mcp/help.rs`
 3. **Tool schemas** — `#[tool(description = "...")]` annotations and schemars
-   `#[schemars(description = "...")]` on parameter structs in `src/tools/`
+   `#[schemars(description = "...")]` on parameter structs in `src/mcp/`
 4. **CLI help text** — clap `#[command]` and `#[arg]` annotations in
    `src/cli/`
 5. **README.md** — project root

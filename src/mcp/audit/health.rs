@@ -4,8 +4,8 @@ use std::sync::Arc;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::audio;
-use crate::db;
+use crate::adapters::audio;
+use crate::adapters::rekordbox as db;
 use crate::mcp::analysis::scan_audio_directory;
 use crate::mcp::audit::{
     DuplicateDetectionLevel, ScanBrokenLinksParams, ScanDuplicatesParams, ScanOrphanFilesParams,
@@ -315,14 +315,14 @@ async fn handle_duplicates_metadata(
     let memberships = db::playlist_membership_counts(&conn, &all_ids).map_err(db_error)?;
     drop(conn);
 
-    let track_map: HashMap<&str, &crate::types::Track> =
+    let track_map: HashMap<&str, &crate::domain::library::Track> =
         tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
     let mut total_dup_tracks = 0usize;
     let mut dup_groups = Vec::new();
 
     for group in &groups {
-        let group_tracks: Vec<&crate::types::Track> = group
+        let group_tracks: Vec<&crate::domain::library::Track> = group
             .track_ids
             .iter()
             .filter_map(|id| track_map.get(id.as_str()).copied())
@@ -462,14 +462,14 @@ async fn handle_duplicates_exact(
         (tracks, memberships)
     };
 
-    let track_map: HashMap<&str, &crate::types::Track> =
+    let track_map: HashMap<&str, &crate::domain::library::Track> =
         tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
     let mut total_dup_tracks = 0usize;
     let mut dup_groups = Vec::new();
 
     for (hash, ids) in &groups_to_report {
-        let group_tracks: Vec<&crate::types::Track> = ids
+        let group_tracks: Vec<&crate::domain::library::Track> = ids
             .iter()
             .filter_map(|id| track_map.get(id.as_str()).copied())
             .collect();
@@ -517,7 +517,7 @@ fn hash_file(path: &str) -> std::io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn pick_suggested_keep(tracks: &[&crate::types::Track]) -> Option<String> {
+fn pick_suggested_keep(tracks: &[&crate::domain::library::Track]) -> Option<String> {
     tracks
         .iter()
         .max_by(|a, b| {
@@ -530,7 +530,10 @@ fn pick_suggested_keep(tracks: &[&crate::types::Track]) -> Option<String> {
         .map(|t| t.id.clone())
 }
 
-fn track_to_dup_entry(track: &crate::types::Track, in_playlists: i32) -> serde_json::Value {
+fn track_to_dup_entry(
+    track: &crate::domain::library::Track,
+    in_playlists: i32,
+) -> serde_json::Value {
     serde_json::json!({
         "track_id": track.id,
         "artist": track.artist,
@@ -548,7 +551,7 @@ fn track_to_dup_entry(track: &crate::types::Track, in_playlists: i32) -> serde_j
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FileKind, Track};
+    use crate::domain::library::{FileKind, Track};
 
     fn make_track(id: &str, bit_rate: i32, sample_rate: i32, play_count: i32, rating: u8) -> Track {
         Track {

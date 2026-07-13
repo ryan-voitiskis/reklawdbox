@@ -325,11 +325,11 @@ pub fn set_audio_analysis_with_fingerprint(
     features_json: &str,
 ) -> Result<(), rusqlite::Error> {
     let valid_stratum_fingerprint = input_fingerprint
-        == crate::audio::STRATUM_HMM_INPUT_FINGERPRINT
+        == crate::adapters::audio::STRATUM_HMM_INPUT_FINGERPRINT
         || input_fingerprint
             .strip_prefix("grid:v1:")
             .is_some_and(|hash| !hash.is_empty());
-    if analyzer == crate::audio::ANALYZER_STRATUM && !valid_stratum_fingerprint {
+    if analyzer == crate::adapters::audio::ANALYZER_STRATUM && !valid_stratum_fingerprint {
         return Err(rusqlite::Error::InvalidParameterName(
             "Stratum input_fingerprint must use grid:v1:... or hmm:v1".to_string(),
         ));

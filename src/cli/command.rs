@@ -4,7 +4,7 @@ use std::path::Path;
 
 use clap::{CommandFactory, Parser};
 
-use crate::store;
+use crate::adapters::state as store;
 
 #[derive(Parser)]
 #[command(
@@ -71,9 +71,9 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn disconnect_broker() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = match crate::discogs::BrokerConfig::from_env() {
-        crate::discogs::BrokerConfigStatus::Ok(cfg) => cfg,
-        crate::discogs::BrokerConfigStatus::InvalidUrl(url) => {
+    let cfg = match crate::adapters::providers::discogs::BrokerConfig::from_env() {
+        crate::adapters::providers::discogs::BrokerConfigStatus::Ok(cfg) => cfg,
+        crate::adapters::providers::discogs::BrokerConfigStatus::InvalidUrl(url) => {
             eprintln!("invalid broker URL: {url}");
             return Ok(());
         }

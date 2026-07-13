@@ -1,6 +1,9 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
+use crate::adapters::providers::musicbrainz;
+use crate::adapters::rekordbox as db;
+use crate::adapters::state as store;
 use crate::application::analysis::batch::CacheWriteRequest;
 use crate::application::enrichment::hydrate::{
     EnrichmentCachePolicy, EnrichmentCacheWrite, EnrichmentCacheWriterReport,
@@ -15,15 +18,12 @@ use crate::application::enrichment::lookup::{
     self as enrichment_lookup, LookupIdentity, LookupPolicy, LookupProvider, PersistLookupError,
 };
 use crate::application::enrichment::model::CacheLookupOutcome;
-use crate::db;
 use crate::mcp::{
     BatchPage, BatchProgress, EnrichTracksParams, LookupBandcampParams, LookupBeatportParams,
     LookupDiscogsParams, LookupMusicBrainzParams, ReklawdboxServer, auth_remediation_message,
     cache_error, db_error, lookup_discogs_remote, mcp_internal_error, ok_json, ok_structured_json,
     resolve_pending_tracks,
 };
-use crate::musicbrainz;
-use crate::store;
 
 #[cfg(test)]
 use super::core::take_test_beatport_lookup_override;
@@ -58,7 +58,7 @@ async fn lookup_beatport_remote(
     server: &ReklawdboxServer,
     artist: &str,
     title: &str,
-) -> Result<Option<crate::beatport::BeatportResult>, String> {
+) -> Result<Option<crate::adapters::providers::beatport::BeatportResult>, String> {
     #[cfg(test)]
     if let Some(result) = take_test_beatport_lookup_override(artist, title) {
         return result;
@@ -74,7 +74,7 @@ pub(in crate::mcp) async fn lookup_bandcamp_remote(
     server: &ReklawdboxServer,
     artist: &str,
     title: &str,
-) -> Result<Option<crate::bandcamp::BandcampResult>, String> {
+) -> Result<Option<crate::adapters::providers::bandcamp::BandcampResult>, String> {
     let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
     enrichment_lookup::dispatch_bandcamp(&server.context.enrichment.http, &identity, None)
         .await
@@ -312,7 +312,7 @@ fn enrichment_join_failures(
     track_id: &str,
     artist: &str,
     title: &str,
-    providers: &[crate::types::Provider],
+    providers: &[crate::application::enrichment::model::EnrichmentProvider],
     stage: &str,
     error: &str,
 ) -> Vec<serde_json::Value> {
@@ -331,7 +331,7 @@ fn enrichment_join_failures(
         .collect()
 }
 
-fn hydration_identity(track: &crate::types::Track) -> HydrationTrackIdentity {
+fn hydration_identity(track: &crate::domain::library::Track) -> HydrationTrackIdentity {
     HydrationTrackIdentity::new(
         track.id.clone(),
         track.artist.clone(),
@@ -368,9 +368,9 @@ pub(in crate::mcp) async fn handle_enrich_tracks(
 ) -> Result<CallToolResult, McpError> {
     let skip_cached = params.skip_cached.unwrap_or(true);
     let force_refresh = params.force_refresh.unwrap_or(false);
-    let providers = params
-        .providers
-        .unwrap_or_else(|| vec![crate::types::Provider::Discogs]);
+    let providers = params.providers.unwrap_or_else(|| {
+        vec![crate::application::enrichment::model::EnrichmentProvider::Discogs]
+    });
     let store_path = server.cache_store_path();
 
     // Initialize/migrate the store without holding its MutexGuard alongside
@@ -546,8 +546,8 @@ mod pending_page_tests {
     use super::*;
     use crate::mcp::enrichment::pending_batch_page;
 
-    fn track(id: &str, album: &str) -> crate::types::Track {
-        crate::types::Track {
+    fn track(id: &str, album: &str) -> crate::domain::library::Track {
+        crate::domain::library::Track {
             id: id.to_string(),
             title: "Shared Title".to_string(),
             artist: "Shared Artist".to_string(),
@@ -567,7 +567,7 @@ mod pending_page_tests {
             play_count: 0,
             bit_rate: 0,
             sample_rate: 0,
-            file_kind: crate::types::FileKind::Unknown(0),
+            file_kind: crate::domain::library::FileKind::Unknown(0),
             date_added: String::new(),
             position: None,
             played_at: None,
@@ -577,17 +577,17 @@ mod pending_page_tests {
     fn store() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().expect("temporary store directory should create");
         let path = dir.path().join("store.sqlite3");
-        let conn = crate::store::open(path.to_str().expect("store path should be UTF-8"))
+        let conn = crate::adapters::state::open(path.to_str().expect("store path should be UTF-8"))
             .expect("temporary store should open");
         (dir, conn)
     }
 
     fn cache(conn: &rusqlite::Connection, provider: &str, album: Option<&str>, quality: &str) {
-        crate::store::set_enrichment(
+        crate::adapters::state::set_enrichment(
             conn,
             provider,
-            &crate::normalize::normalize_for_matching("Shared Artist"),
-            &crate::normalize::normalize_for_matching("Shared Title"),
+            &crate::domain::metadata::normalize_for_matching("Shared Artist"),
+            &crate::domain::metadata::normalize_for_matching("Shared Title"),
             album,
             Some(quality),
             None,
@@ -597,8 +597,8 @@ mod pending_page_tests {
 
     fn completion(
         conn: &rusqlite::Connection,
-        tracks: &[crate::types::Track],
-        providers: &[crate::types::Provider],
+        tracks: &[crate::domain::library::Track],
+        providers: &[crate::application::enrichment::model::EnrichmentProvider],
     ) -> Result<Vec<bool>, rusqlite::Error> {
         let identities: Vec<_> = tracks.iter().map(hydration_identity).collect();
         enrichment_completion_flags(conn, &identities, providers)
@@ -611,7 +611,7 @@ mod pending_page_tests {
             track("release-a", "Release A"),
             track("release-b", "Release B"),
         ];
-        let album_a = crate::normalize::normalize_for_matching("Release A");
+        let album_a = crate::domain::metadata::normalize_for_matching("Release A");
         cache(&conn, "discogs", Some(&album_a), "none");
         cache(&conn, "beatport", None, "exact");
 
@@ -619,8 +619,8 @@ mod pending_page_tests {
             &conn,
             &tracks,
             &[
-                crate::types::Provider::Discogs,
-                crate::types::Provider::Beatport,
+                crate::application::enrichment::model::EnrichmentProvider::Discogs,
+                crate::application::enrichment::model::EnrichmentProvider::Beatport,
             ],
         )
         .expect("completion lookup should succeed");
@@ -652,7 +652,7 @@ mod pending_page_tests {
     fn enrich_tracks_pending_page_keeps_error_and_partial_provider_work_pending() {
         let (_dir, conn) = store();
         let tracks = vec![track("error", "Error Album")];
-        let album = crate::normalize::normalize_for_matching("Error Album");
+        let album = crate::domain::metadata::normalize_for_matching("Error Album");
         cache(&conn, "discogs", Some(&album), "error");
         cache(&conn, "beatport", None, "exact");
 
@@ -660,9 +660,9 @@ mod pending_page_tests {
             &conn,
             &tracks,
             &[
-                crate::types::Provider::Discogs,
-                crate::types::Provider::Beatport,
-                crate::types::Provider::Bandcamp,
+                crate::application::enrichment::model::EnrichmentProvider::Discogs,
+                crate::application::enrichment::model::EnrichmentProvider::Beatport,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
         )
         .expect("completion lookup should succeed");
@@ -703,7 +703,9 @@ mod pending_page_tests {
             ),
             std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             &cache_tx,
-            async { Ok::<Option<crate::beatport::BeatportResult>, String>(None) },
+            async {
+                Ok::<Option<crate::adapters::providers::beatport::BeatportResult>, String>(None)
+            },
         )
         .await;
 
@@ -719,21 +721,25 @@ mod pending_page_tests {
         let (_dir, conn) = store();
         let tracks = vec![track("first", "A"), track("second", "B")];
         for album in ["A", "B"] {
-            let normalized = crate::normalize::normalize_for_matching(album);
+            let normalized = crate::domain::metadata::normalize_for_matching(album);
             cache(&conn, "discogs", Some(&normalized), "none");
         }
         cache(&conn, "bandcamp", None, "none");
 
-        let discogs_only = completion(&conn, &tracks, &[crate::types::Provider::Discogs])
-            .expect("single-provider completion should resolve");
+        let discogs_only = completion(
+            &conn,
+            &tracks,
+            &[crate::application::enrichment::model::EnrichmentProvider::Discogs],
+        )
+        .expect("single-provider completion should resolve");
         assert_eq!(discogs_only, [true, true]);
 
         let expanded = completion(
             &conn,
             &tracks,
             &[
-                crate::types::Provider::Discogs,
-                crate::types::Provider::Bandcamp,
+                crate::application::enrichment::model::EnrichmentProvider::Discogs,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
         )
         .expect("expanded-provider completion should resolve");
@@ -750,14 +756,14 @@ mod pending_page_tests {
             &conn,
             &tracks,
             &[
-                crate::types::Provider::Discogs,
-                crate::types::Provider::Bandcamp,
+                crate::application::enrichment::model::EnrichmentProvider::Discogs,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
         )
         .expect("expanded-provider completion should resolve");
         assert_eq!(expanded, [false, false]);
 
-        let completion = |candidates: &[crate::types::Track]| {
+        let completion = |candidates: &[crate::domain::library::Track]| {
             Ok(candidates
                 .iter()
                 .map(|track| expanded[usize::from(track.id == "second")])
@@ -784,9 +790,9 @@ mod pending_page_tests {
             "Retry Artist",
             "Retry Title",
             &[
-                crate::types::Provider::Discogs,
-                crate::types::Provider::Beatport,
-                crate::types::Provider::Bandcamp,
+                crate::application::enrichment::model::EnrichmentProvider::Discogs,
+                crate::application::enrichment::model::EnrichmentProvider::Beatport,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
             "cache_writer_join",
             "sentinel join failure",
@@ -819,7 +825,7 @@ mod cache_write_tests {
 
     fn test_write(title: &str) -> EnrichCacheWrite {
         EnrichCacheWrite {
-            provider: crate::types::Provider::Beatport,
+            provider: crate::application::enrichment::model::EnrichmentProvider::Beatport,
             norm_artist: "test artist".to_string(),
             norm_title: title.to_string(),
             norm_album: None,
