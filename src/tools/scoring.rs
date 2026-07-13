@@ -4,6 +4,7 @@ use rusqlite::Connection;
 
 use super::*;
 use crate::genre;
+pub(super) use crate::genre::map_genre_through_taxonomy;
 
 const WARMUP_PHASE_END: f64 = 0.15;
 const BUILD_PHASE_END: f64 = 0.45;
@@ -2586,16 +2587,4 @@ pub(super) fn find_bridge_tracks(pools: &[DiscoveredPool]) -> Vec<(String, Vec<u
         .collect();
     bridges.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     bridges
-}
-
-pub(super) fn map_genre_through_taxonomy(style: &str) -> (Option<String>, &'static str) {
-    if let Some(canonical) = genre::canonical_genre_name(style) {
-        (Some(canonical.to_string()), "exact")
-    } else if let Some(canonical) = genre::canonical_genre_from_alias(style) {
-        (Some(canonical.to_string()), "alias")
-    } else if let Some(canonical) = genre::extract_parenthetical_base(style) {
-        (Some(canonical.to_string()), "parenthetical")
-    } else {
-        (None, "unknown")
-    }
 }

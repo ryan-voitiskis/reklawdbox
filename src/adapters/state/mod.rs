@@ -6,6 +6,7 @@
 pub(crate) mod analysis;
 mod audit;
 mod broker;
+pub(crate) mod classification;
 mod connection;
 mod enrichment;
 mod maintenance;

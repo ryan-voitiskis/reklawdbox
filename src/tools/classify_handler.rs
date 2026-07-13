@@ -1,26 +1,18 @@
-use std::collections::{BTreeMap, HashMap};
-
-use rmcp::ErrorData as McpError;
-use rmcp::model::CallToolResult;
-use tracing::warn;
+use std::collections::HashMap;
 
 use super::resolve::*;
-use super::scoring::map_genre_through_taxonomy;
 use super::{ReklawdboxServer, mcp_internal_error, ok_json};
-use crate::audio;
-use crate::audio_profile;
-use crate::classify::{
-    AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    MappedGenre, TrackEvidence, classify_track_with_profiles,
-};
+use crate::application::classification;
+pub(super) use crate::application::classification::evidence::parse_response_json;
+use crate::classify::{ClassificationAction, ClassificationConfidence, ClassificationResult};
 use crate::genre;
-use crate::normalize;
-use crate::store;
 use crate::tools::params::{
     AuditGenresParams, CalibrateAudioProfilesParams, CalibrationCoverageParams, ClassifyFormat,
     ClassifyTracksParams,
 };
 use crate::types::TrackChange;
+use rmcp::ErrorData as McpError;
+use rmcp::model::CallToolResult;
 
 pub(super) fn handle_classify_tracks(
     server: &ReklawdboxServer,
@@ -78,7 +70,11 @@ pub(super) fn handle_classify_tracks(
         )));
     }
 
-    let (results, cache_errors) = classify_batch(server, &tracks, &overrides)?;
+    let (results, cache_errors) = {
+        let store_conn = server.cache_store_conn()?;
+        classification::classify_batch(&store_conn, &tracks, &overrides)
+            .map_err(super::cache_error)?
+    };
 
     let (high, medium, low, insufficient) = count_by_confidence(&results);
     let (suggest, conflict, confirm, manual) = count_by_action(&results);
@@ -201,7 +197,10 @@ pub(super) fn handle_audit_genres(
     };
 
     let include_confirmed = params.include_confirmed.unwrap_or(false);
-    let (results, cache_errors) = classify_batch(server, &tracks, &[])?;
+    let (results, cache_errors) = {
+        let store_conn = server.cache_store_conn()?;
+        classification::classify_batch(&store_conn, &tracks, &[]).map_err(super::cache_error)?
+    };
 
     let visible: Vec<&ClassificationResult> = results
         .iter()
@@ -404,394 +403,6 @@ fn build_dispatch_groups(
     (serde_json::Value::Array(artists), stats)
 }
 
-fn classify_batch(
-    server: &ReklawdboxServer,
-    tracks: &[crate::types::Track],
-    overrides: &[(String, String)],
-) -> Result<(Vec<ClassificationResult>, u32), McpError> {
-    // Pre-compute normalized keys and resolved audio paths.
-    let current_audio_identities =
-        super::analysis::audio_cache_identities_with_current_stratum_input(
-            tracks.iter().map(|track| track.file_path.as_str()),
-        );
-    let norm_keys: Vec<_> = tracks
-        .iter()
-        .zip(current_audio_identities)
-        .map(|(t, audio_identity)| {
-            let a = normalize::normalize_for_matching(&t.artist);
-            let ti = normalize::normalize_for_matching(&t.title);
-            let al = normalize::normalize_for_matching(&t.album);
-            let audio_key = audio_identity
-                .as_ref()
-                .map(|identity| identity.cache_key.clone())
-                .unwrap_or_else(|| super::analysis::resolved_audio_cache_key(&t.file_path));
-            (
-                a,
-                ti,
-                (!al.is_empty()).then_some(al),
-                audio_key,
-                audio_identity,
-            )
-        })
-        .collect();
-
-    // Build batch keys.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
-    let stratum_identities: Vec<_> = norm_keys
-        .iter()
-        .filter_map(|(_, _, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
-        .collect();
-    let essentia_identities: Vec<_> = norm_keys
-        .iter()
-        .filter_map(|(_, _, _, _, identity)| {
-            identity
-                .as_ref()
-                .map(super::analysis::AudioCacheIdentity::as_essentia_store_identity)
-        })
-        .collect();
-    for (a, t, al, _, _) in &norm_keys {
-        let album = al.as_deref().unwrap_or("");
-        enrich_keys.push(("discogs", a, t, album));
-        enrich_keys.push(("beatport", a, t, ""));
-    }
-
-    // Batch load — 3 queries total instead of 4N.
-    let (enrich_map, stratum_map, essentia_map, profile_registry) = {
-        let store_conn = server.cache_store_conn()?;
-        let enrich_map =
-            store::batch_get_enrichment(&store_conn, &enrich_keys).map_err(super::cache_error)?;
-        let stratum_map = store::batch_get_fresh_audio_analysis(
-            &store_conn,
-            &stratum_identities,
-            audio::ANALYZER_STRATUM,
-            audio::STRATUM_SCHEMA_VERSION,
-        )
-        .map_err(super::cache_error)?;
-        let essentia_map = store::batch_get_fresh_audio_analysis(
-            &store_conn,
-            &essentia_identities,
-            audio::ANALYZER_ESSENTIA,
-            audio::ESSENTIA_SCHEMA_VERSION,
-        )
-        .map_err(super::cache_error)?;
-        let registry = audio_profile::load_from_db(&store_conn).map_err(super::cache_error)?;
-        (enrich_map, stratum_map, essentia_map, registry)
-    };
-
-    let mut results = Vec::with_capacity(tracks.len());
-
-    for (track, (norm_artist, norm_title, norm_album, audio_key, _)) in
-        tracks.iter().zip(&norm_keys)
-    {
-        let album = norm_album.as_deref().unwrap_or("");
-        let discogs_key = (
-            "discogs".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            album.to_string(),
-        );
-        let beatport_key = (
-            "beatport".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-
-        let discogs_cache = enrich_map.get(&discogs_key);
-        let beatport_cache = enrich_map.get(&beatport_key);
-        let stratum_cache = stratum_map.get(audio_key);
-        let essentia_cache = essentia_map.get(audio_key);
-
-        let evidence = build_track_evidence(
-            track,
-            discogs_cache,
-            beatport_cache,
-            stratum_cache,
-            essentia_cache,
-            overrides,
-        );
-        results.push(classify_track_with_profiles(
-            &evidence,
-            profile_registry.as_ref(),
-        ));
-    }
-
-    Ok((results, 0))
-}
-
-fn build_track_evidence(
-    track: &crate::types::Track,
-    discogs_cache: Option<&store::EnrichmentCacheEntry>,
-    beatport_cache: Option<&store::EnrichmentCacheEntry>,
-    stratum_cache: Option<&store::CachedAudioAnalysis>,
-    essentia_cache: Option<&store::CachedAudioAnalysis>,
-    overrides: &[(String, String)],
-) -> TrackEvidence {
-    let discogs_val = parse_response_json(discogs_cache);
-    let discogs_mapped = extract_discogs_genres(discogs_val.as_ref(), overrides);
-
-    let beatport_val = parse_response_json(beatport_cache);
-    let (beatport_genre, beatport_raw) = extract_beatport_genre(beatport_val.as_ref(), overrides);
-
-    let effective_label = if !track.label.is_empty() {
-        Some(track.label.clone())
-    } else {
-        discogs_val
-            .as_ref()
-            .and_then(|v| v.get("label"))
-            .and_then(|v| v.as_str())
-            .filter(|l| !l.is_empty())
-            .map(std::string::ToString::to_string)
-    };
-    let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
-
-    let audio = extract_audio_features(track, stratum_cache, essentia_cache);
-    let has_audio = audio.is_some();
-
-    TrackEvidence {
-        track_id: track.id.clone(),
-        artist: track.artist.clone(),
-        title: track.title.clone(),
-        current_genre: track.genre.clone(),
-        bpm: track.bpm,
-        discogs_mapped,
-        beatport_genre,
-        beatport_raw,
-        label: effective_label,
-        label_genre: label_genre_val,
-        audio,
-        has_discogs: discogs_cache.is_some(),
-        has_beatport: beatport_cache.is_some(),
-        has_audio,
-    }
-}
-
-pub(super) fn parse_response_json(
-    cache: Option<&store::EnrichmentCacheEntry>,
-) -> Option<serde_json::Value> {
-    cache.and_then(|c| {
-        c.response_json.as_ref().and_then(|json_str| {
-            match serde_json::from_str::<serde_json::Value>(json_str) {
-                Ok(val) => Some(val),
-                Err(e) => {
-                    warn!(
-                        provider = c.provider.as_str(),
-                        artist = c.query_artist.as_str(),
-                        title = c.query_title.as_str(),
-                        "Cached response_json failed to parse: {e}"
-                    );
-                    None
-                }
-            }
-        })
-    })
-}
-
-fn apply_override(raw: &str, overrides: &[(String, String)]) -> Option<String> {
-    let lower = raw.trim().to_ascii_lowercase();
-    overrides
-        .iter()
-        .find(|(from, _)| *from == lower)
-        .map(|(_, to)| to.clone())
-}
-
-fn extract_discogs_genres(
-    discogs_val: Option<&serde_json::Value>,
-    overrides: &[(String, String)],
-) -> Vec<MappedGenre> {
-    let Some(styles) = discogs_val
-        .and_then(|v| v.get("styles"))
-        .and_then(|v| v.as_array())
-    else {
-        return vec![];
-    };
-
-    let mut genre_counts: HashMap<&'static str, usize> = HashMap::new();
-
-    for style in styles.iter().filter_map(|s| s.as_str()) {
-        if let Some(override_genre) = apply_override(style, overrides) {
-            if let Some(canonical) = genre::canonical_genre_name(&override_genre) {
-                *genre_counts.entry(canonical).or_insert(0) += 1;
-                continue;
-            } else {
-                warn!(
-                    from = style,
-                    to = override_genre.as_str(),
-                    "Genre override target is not a canonical genre — override ignored"
-                );
-            }
-        }
-        let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-        if mapping_type != "unknown"
-            && let Some(genre_name) = maps_to
-            && let Some(canonical) = genre::canonical_genre_name(&genre_name)
-        {
-            *genre_counts.entry(canonical).or_insert(0) += 1;
-        }
-    }
-
-    genre_counts
-        .into_iter()
-        .map(|(genre, style_count)| MappedGenre { genre, style_count })
-        .collect()
-}
-
-fn extract_beatport_genre(
-    beatport_val: Option<&serde_json::Value>,
-    overrides: &[(String, String)],
-) -> (Option<&'static str>, Option<String>) {
-    let raw_str = beatport_val
-        .and_then(|v| v.get("genre"))
-        .and_then(|v| v.as_str())
-        .filter(|g| !g.is_empty());
-
-    let Some(raw) = raw_str else {
-        return (None, None);
-    };
-
-    if let Some(override_genre) = apply_override(raw, overrides) {
-        if let Some(canonical) = genre::canonical_genre_name(&override_genre) {
-            return (Some(canonical), Some(raw.to_string()));
-        } else {
-            warn!(
-                from = raw,
-                to = override_genre.as_str(),
-                "Genre override target is not a canonical genre — override ignored"
-            );
-        }
-    }
-
-    let (maps_to, mapping_type) = map_genre_through_taxonomy(raw);
-    let canonical = if mapping_type != "unknown" && maps_to.is_some() {
-        maps_to.and_then(|g| genre::canonical_genre_name(&g))
-    } else {
-        None
-    };
-
-    (canonical, Some(raw.to_string()))
-}
-
-fn extract_audio_features(
-    track: &crate::types::Track,
-    stratum_cache: Option<&store::CachedAudioAnalysis>,
-    essentia_cache: Option<&store::CachedAudioAnalysis>,
-) -> Option<AudioFeatures> {
-    let stratum_json = stratum_cache.and_then(|sc| {
-        match serde_json::from_str::<serde_json::Value>(&sc.features_json) {
-            Ok(val) => Some(val),
-            Err(e) => {
-                warn!(
-                    file = track.file_path.as_str(),
-                    "Stratum features_json failed to parse: {e}"
-                );
-                None
-            }
-        }
-    });
-    let essentia_data = essentia_cache.and_then(|ec| {
-        match serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json) {
-            Ok(val) => Some(val),
-            Err(e) => {
-                warn!(
-                    file = track.file_path.as_str(),
-                    "Essentia features_json failed to parse: {e}"
-                );
-                None
-            }
-        }
-    });
-
-    if stratum_json.is_none() && essentia_data.is_none() {
-        return None;
-    }
-
-    let stratum_bpm = stratum_json
-        .as_ref()
-        .and_then(|sj| sj.get("bpm"))
-        .and_then(serde_json::Value::as_f64);
-    let bpm_agreement = stratum_bpm.map(|sb| (sb - track.bpm).abs() <= 2.0);
-
-    Some(AudioFeatures {
-        rekordbox_bpm: track.bpm,
-        stratum_bpm,
-        bpm_agreement,
-        essentia_bpm: essentia_data.as_ref().and_then(|e| e.bpm_essentia),
-        duration_seconds: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("duration_seconds"))
-            .and_then(serde_json::Value::as_f64),
-        danceability: essentia_data.as_ref().and_then(|e| e.danceability),
-        dynamic_complexity: essentia_data.as_ref().and_then(|e| e.dynamic_complexity),
-        rhythm_regularity: essentia_data.as_ref().and_then(|e| e.rhythm_regularity),
-        spectral_centroid_mean: essentia_data
-            .as_ref()
-            .and_then(|e| e.spectral_centroid_mean),
-        // Scalar features from Stratum
-        decay_mid_tau: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("decay_mid_tau"))
-            .and_then(serde_json::Value::as_f64),
-        decay_high_tau: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("decay_high_tau"))
-            .and_then(serde_json::Value::as_f64),
-        key_clarity: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("key_clarity"))
-            .and_then(serde_json::Value::as_f64),
-        key_confidence: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("key_confidence"))
-            .and_then(serde_json::Value::as_f64),
-        kick_pattern: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_pattern"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        kick_pattern_confidence: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_pattern_confidence"))
-            .and_then(serde_json::Value::as_f64),
-        kick_kicks_per_bar: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_kicks_per_bar"))
-            .and_then(serde_json::Value::as_f64),
-        kick_onset_count: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_onset_count"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok()),
-        kick_rate_basis: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_rate_basis"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        kick_histogram: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_histogram"))
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_f64)
-                    .collect()
-            }),
-        // Scalar features from Essentia
-        onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
-        loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),
-        loudness_range: essentia_data.as_ref().and_then(|e| e.loudness_range),
-        spectral_centroid_cv: essentia_data.as_ref().and_then(|e| e.spectral_centroid_cv),
-        spectral_flux_mean: essentia_data.as_ref().and_then(|e| e.spectral_flux_mean),
-        dissonance_mean: essentia_data.as_ref().and_then(|e| e.dissonance_mean),
-        // Vector features from Essentia (for timbral distances)
-        mfcc_mean: essentia_data.as_ref().and_then(|e| e.mfcc_mean.clone()),
-        mfcc_std: essentia_data.as_ref().and_then(|e| e.mfcc_std.clone()),
-        spectral_contrast_mean: essentia_data
-            .as_ref()
-            .and_then(|e| e.spectral_contrast_mean.clone()),
-    })
-}
-
 pub(super) fn handle_calibrate_audio_profiles(
     server: &ReklawdboxServer,
     params: CalibrateAudioProfilesParams,
@@ -827,157 +438,23 @@ pub(super) fn handle_calibrate_audio_profiles(
         ));
     }
 
-    // 2. Load audio features for each track
-    let store_conn = server.cache_store_conn()?;
-    let mut samples: Vec<(&'static str, AudioFeatures)> = Vec::new();
-    let mut skipped_no_genre = 0u32;
-    let mut skipped_no_audio = 0u32;
-    let mut skipped_unknown_genre = 0u32;
-    let mut eligible_tracks = Vec::new();
-
-    for track in &tracks {
-        // Must have a genre tag
-        if track.genre.is_empty() {
-            skipped_no_genre += 1;
-            continue;
-        }
-
-        // Resolve to canonical genre
-        let canonical = match genre::resolve_genre(&track.genre) {
-            Some(g) => g,
-            None => {
-                skipped_unknown_genre += 1;
-                continue;
+    let result = {
+        let store_conn = server.cache_store_conn()?;
+        match classification::calibrate_audio_profiles(&store_conn, &tracks, playlist_name) {
+            Ok(result) => result,
+            Err(classification::CalibrationError::NoSamples) => {
+                return Err(McpError::internal_error(
+                    "No tracks with both genre tags and audio features found.",
+                    None,
+                ));
             }
-        };
-
-        eligible_tracks.push((track, canonical));
-    }
-
-    let current_audio_identities =
-        super::analysis::audio_cache_identities_with_current_stratum_input(
-            eligible_tracks
-                .iter()
-                .map(|(track, _)| track.file_path.as_str()),
-        );
-    let eligible_tracks: Vec<_> = eligible_tracks
-        .into_iter()
-        .zip(current_audio_identities)
-        .map(|((track, canonical), identity)| (track, canonical, identity))
-        .collect();
-    let stratum_identities: Vec<_> = eligible_tracks
-        .iter()
-        .filter_map(|(_, _, identity)| identity.as_ref()?.as_stratum_store_identity())
-        .collect();
-    let essentia_identities: Vec<_> = eligible_tracks
-        .iter()
-        .filter_map(|(_, _, identity)| {
-            identity
-                .as_ref()
-                .map(super::analysis::AudioCacheIdentity::as_essentia_store_identity)
-        })
-        .collect();
-    let stratum_map = store::batch_get_fresh_audio_analysis(
-        &store_conn,
-        &stratum_identities,
-        audio::ANALYZER_STRATUM,
-        audio::STRATUM_SCHEMA_VERSION,
-    )
-    .map_err(super::cache_error)?;
-    let essentia_map = store::batch_get_fresh_audio_analysis(
-        &store_conn,
-        &essentia_identities,
-        audio::ANALYZER_ESSENTIA,
-        audio::ESSENTIA_SCHEMA_VERSION,
-    )
-    .map_err(super::cache_error)?;
-
-    for (track, canonical, audio_identity) in eligible_tracks {
-        let audio_key = audio_identity
-            .as_ref()
-            .map(|identity| identity.cache_key.as_str());
-        let stratum_cache = audio_key.and_then(|key| stratum_map.get(key));
-        let essentia_cache = audio_key.and_then(|key| essentia_map.get(key));
-
-        match extract_audio_features(track, stratum_cache, essentia_cache) {
-            Some(features) => samples.push((canonical, features)),
-            None => {
-                skipped_no_audio += 1;
+            Err(classification::CalibrationError::Store(error)) => {
+                return Err(super::cache_error(error));
             }
         }
-    }
-
-    if samples.is_empty() {
-        return Err(McpError::internal_error(
-            "No tracks with both genre tags and audio features found.",
-            None,
-        ));
-    }
-
-    // 3. Calibrate
-    let sample_refs: Vec<(&str, &AudioFeatures)> = samples.iter().map(|(g, f)| (*g, f)).collect();
-    let registry = audio_profile::calibrate(&sample_refs);
-
-    // 4. Save to SQLite
-    audio_profile::save_to_db(&store_conn, &registry).map_err(super::cache_error)?;
-
-    // 5. Build summary
-    let mut genre_summaries: Vec<serde_json::Value> = registry
-        .prototypes
-        .values()
-        .map(|proto| {
-            let mut top_features: Vec<(&str, f64)> = proto
-                .features
-                .iter()
-                .map(|(&name, stat)| (name, stat.fisher_weight))
-                .collect();
-            top_features.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            top_features.truncate(5);
-
-            let feature_strs: Vec<String> = top_features
-                .iter()
-                .map(|(name, weight)| format!("{name} ({:.0}%)", weight * 100.0))
-                .collect();
-
-            serde_json::json!({
-                "genre": proto.genre,
-                "n_verified": proto.total_n,
-                "n_features": proto.features.len(),
-                "has_timbral": proto.mfcc_centroid.is_some(),
-                "top_discriminators": feature_strs,
-            })
-        })
-        .collect();
-    genre_summaries.sort_by(|a, b| {
-        let na = a["n_verified"].as_u64().unwrap_or(0);
-        let nb = b["n_verified"].as_u64().unwrap_or(0);
-        nb.cmp(&na)
-    });
-
-    let result = serde_json::json!({
-        "status": "calibrated",
-        "playlist": playlist_name,
-        "total_tracks": tracks.len(),
-        "tracks_with_features": samples.len(),
-        "skipped_no_genre": skipped_no_genre,
-        "skipped_unknown_genre": skipped_unknown_genre,
-        "skipped_no_audio": skipped_no_audio,
-        "prototypes_built": registry.prototypes.len(),
-        "genres": genre_summaries,
-    });
+    };
 
     ok_json(&result)
-}
-
-#[derive(Debug, Default)]
-struct CalibrationGenreStats {
-    playlist_tracks: u32,
-    tracks_with_audio_features: u32,
-    missing_audio_features: u32,
-    tracks_with_stratum_features: u32,
-    missing_stratum_features: u32,
-    tracks_with_essentia_features: u32,
-    missing_essentia_features: u32,
 }
 
 pub(super) fn handle_calibration_coverage(
@@ -1009,194 +486,11 @@ pub(super) fn handle_calibration_coverage(
         (tracks, playlist.name.clone())
     };
 
-    let store_conn = server.cache_store_conn()?;
-    let existing_registry = audio_profile::load_from_db(&store_conn).map_err(super::cache_error)?;
-    let existing_profiles: HashMap<&'static str, u32> = existing_registry
-        .as_ref()
-        .map(|registry| {
-            registry
-                .prototypes
-                .values()
-                .map(|proto| (proto.genre, proto.total_n))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut by_genre: BTreeMap<&'static str, CalibrationGenreStats> = BTreeMap::new();
-    let mut skipped_no_genre = 0u32;
-    let mut skipped_unknown_genre = 0u32;
-    let mut eligible_tracks = Vec::new();
-
-    for track in &tracks {
-        if track.genre.trim().is_empty() {
-            skipped_no_genre += 1;
-            continue;
-        }
-
-        let Some(canonical) = genre::resolve_genre(&track.genre) else {
-            skipped_unknown_genre += 1;
-            continue;
-        };
-
-        let stats = by_genre.entry(canonical).or_default();
-        stats.playlist_tracks += 1;
-
-        eligible_tracks.push((track, canonical));
-    }
-
-    let current_audio_identities =
-        super::analysis::audio_cache_identities_with_current_stratum_input(
-            eligible_tracks
-                .iter()
-                .map(|(track, _)| track.file_path.as_str()),
-        );
-    let eligible_tracks: Vec<_> = eligible_tracks
-        .into_iter()
-        .zip(current_audio_identities)
-        .map(|((track, canonical), identity)| (track, canonical, identity))
-        .collect();
-    let stratum_identities: Vec<_> = eligible_tracks
-        .iter()
-        .filter_map(|(_, _, identity)| identity.as_ref()?.as_stratum_store_identity())
-        .collect();
-    let essentia_identities: Vec<_> = eligible_tracks
-        .iter()
-        .filter_map(|(_, _, identity)| {
-            identity
-                .as_ref()
-                .map(super::analysis::AudioCacheIdentity::as_essentia_store_identity)
-        })
-        .collect();
-    let stratum_map = store::batch_get_fresh_audio_analysis(
-        &store_conn,
-        &stratum_identities,
-        audio::ANALYZER_STRATUM,
-        audio::STRATUM_SCHEMA_VERSION,
-    )
-    .map_err(super::cache_error)?;
-    let essentia_map = store::batch_get_fresh_audio_analysis(
-        &store_conn,
-        &essentia_identities,
-        audio::ANALYZER_ESSENTIA,
-        audio::ESSENTIA_SCHEMA_VERSION,
-    )
-    .map_err(super::cache_error)?;
-
-    for (track, canonical, audio_identity) in eligible_tracks {
-        let stats = by_genre
-            .get_mut(canonical)
-            .expect("eligible track genre stats should already exist");
-        let audio_key = audio_identity
-            .as_ref()
-            .map(|identity| identity.cache_key.as_str());
-        let stratum = audio_key.and_then(|key| stratum_map.get(key));
-        let essentia = audio_key.and_then(|key| essentia_map.get(key));
-
-        if stratum.is_some() {
-            stats.tracks_with_stratum_features += 1;
-        } else {
-            stats.missing_stratum_features += 1;
-        }
-        if essentia.is_some() {
-            stats.tracks_with_essentia_features += 1;
-        } else {
-            stats.missing_essentia_features += 1;
-        }
-
-        if extract_audio_features(track, stratum, essentia).is_some() {
-            stats.tracks_with_audio_features += 1;
-        } else {
-            stats.missing_audio_features += 1;
-        }
-    }
-
-    let mut ready_to_calibrate = 0u32;
-    let mut below_min_tracks = 0u32;
-    let mut stored_profiles_present = 0u32;
-    let mut total_with_audio_features = 0u32;
-    let mut total_missing_audio_features = 0u32;
-    let mut total_with_stratum_features = 0u32;
-    let mut total_missing_stratum_features = 0u32;
-    let mut total_with_essentia_features = 0u32;
-    let mut total_missing_essentia_features = 0u32;
-
-    let genres: Vec<serde_json::Value> = by_genre
-        .iter()
-        .map(|(&genre, stats)| {
-            let stored_n = existing_profiles.get(genre).copied();
-            let prototype_ready = stats.tracks_with_audio_features >= audio_profile::MIN_TRACKS;
-            if prototype_ready && stored_n.is_none() {
-                ready_to_calibrate += 1;
-            }
-            if !prototype_ready {
-                below_min_tracks += 1;
-            }
-            if stored_n.is_some() {
-                stored_profiles_present += 1;
-            }
-            total_with_audio_features += stats.tracks_with_audio_features;
-            total_missing_audio_features += stats.missing_audio_features;
-            total_with_stratum_features += stats.tracks_with_stratum_features;
-            total_missing_stratum_features += stats.missing_stratum_features;
-            total_with_essentia_features += stats.tracks_with_essentia_features;
-            total_missing_essentia_features += stats.missing_essentia_features;
-
-            let status = if prototype_ready && stored_n.is_some() {
-                "profile_present"
-            } else if prototype_ready {
-                "ready_to_calibrate"
-            } else {
-                "needs_more_verified_audio"
-            };
-
-            serde_json::json!({
-                "genre": genre,
-                "playlist_tracks": stats.playlist_tracks,
-                "tracks_with_audio_features": stats.tracks_with_audio_features,
-                "missing_audio_features": stats.missing_audio_features,
-                "tracks_with_stratum_features": stats.tracks_with_stratum_features,
-                "missing_stratum_features": stats.missing_stratum_features,
-                "tracks_with_essentia_features": stats.tracks_with_essentia_features,
-                "missing_essentia_features": stats.missing_essentia_features,
-                "prototype_ready": prototype_ready,
-                "profile": {
-                    "stored": stored_n.is_some(),
-                    "n_verified": stored_n,
-                },
-                "status": status,
-            })
-        })
-        .collect();
-
-    let playlist_genres: std::collections::HashSet<&str> = by_genre.keys().copied().collect();
-    let mut stored_profiles_not_in_playlist: Vec<&str> = existing_profiles
-        .keys()
-        .filter(|genre| !playlist_genres.contains(**genre))
-        .copied()
-        .collect();
-    stored_profiles_not_in_playlist.sort_unstable();
-
-    let result = serde_json::json!({
-        "status": "ok",
-        "playlist": resolved_playlist_name,
-        "total_tracks": tracks.len(),
-        "tracks_with_canonical_genre": by_genre.values().map(|stats| stats.playlist_tracks).sum::<u32>(),
-        "tracks_with_audio_features": total_with_audio_features,
-        "missing_audio_features": total_missing_audio_features,
-        "tracks_with_stratum_features": total_with_stratum_features,
-        "missing_stratum_features": total_missing_stratum_features,
-        "tracks_with_essentia_features": total_with_essentia_features,
-        "missing_essentia_features": total_missing_essentia_features,
-        "skipped_no_genre": skipped_no_genre,
-        "skipped_unknown_genre": skipped_unknown_genre,
-        "min_tracks_per_genre": audio_profile::MIN_TRACKS,
-        "prototypes_existing": existing_profiles.len(),
-        "genres_ready_to_calibrate": ready_to_calibrate,
-        "genres_below_min_tracks": below_min_tracks,
-        "genres_with_stored_profiles": stored_profiles_present,
-        "stored_profiles_not_in_playlist": stored_profiles_not_in_playlist,
-        "genres": genres,
-    });
+    let result = {
+        let store_conn = server.cache_store_conn()?;
+        classification::calibration_coverage(&store_conn, &tracks, &resolved_playlist_name)
+            .map_err(super::cache_error)?
+    };
 
     ok_json(&result)
 }
