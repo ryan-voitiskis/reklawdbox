@@ -261,6 +261,27 @@ fn audio_join_failures(
         .collect()
 }
 
+fn audio_cache_write_failure(
+    track_id: &str,
+    artist: &str,
+    title: &str,
+    analyzer: &str,
+    error: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "track_id": track_id,
+        "artist": artist,
+        "title": title,
+        "analyzer": analyzer,
+        "stage": if error.contains("store open failed") {
+            "cache_writer_open"
+        } else {
+            "cache_write"
+        },
+        "error": error,
+    })
+}
+
 type CacheWriteMsg = crate::application::analysis::model::AnalysisCacheWrite;
 type AudioCacheWriteRequest = analysis_batch::CacheWriteRequest<CacheWriteMsg>;
 
@@ -554,16 +575,13 @@ pub(super) async fn handle_analyze_audio_batch(
                     }));
                 }
                 if let Some(ref error) = row.stratum_cache_write_error {
-                    progress.failures.push(serde_json::json!({
-                        "track_id": &row.track_id, "artist": &row.artist,
-                        "title": &row.title, "analyzer": audio::ANALYZER_STRATUM,
-                        "stage": if error.contains("store open failed") {
-                            "cache_writer_open"
-                        } else {
-                            "cache_write"
-                        },
-                        "error": error,
-                    }));
+                    progress.failures.push(audio_cache_write_failure(
+                        &row.track_id,
+                        &row.artist,
+                        &row.title,
+                        audio::ANALYZER_STRATUM,
+                        error,
+                    ));
                 }
                 match row.essentia_cache_hit {
                     Some(true) => essentia_cached += 1,
@@ -580,16 +598,13 @@ pub(super) async fn handle_analyze_audio_batch(
                     }));
                 }
                 if let Some(ref error) = row.essentia_cache_write_error {
-                    progress.failures.push(serde_json::json!({
-                        "track_id": &row.track_id, "artist": &row.artist,
-                        "title": &row.title, "analyzer": audio::ANALYZER_ESSENTIA,
-                        "stage": if error.contains("store open failed") {
-                            "cache_writer_open"
-                        } else {
-                            "cache_write"
-                        },
-                        "error": error,
-                    }));
+                    progress.failures.push(audio_cache_write_failure(
+                        &row.track_id,
+                        &row.artist,
+                        &row.title,
+                        audio::ANALYZER_ESSENTIA,
+                        error,
+                    ));
                 }
                 if row.stratum_dsp.is_some() {
                     rows.push(row);
@@ -860,31 +875,74 @@ mod pending_page_tests {
 
     #[tokio::test]
     async fn analyze_audio_batch_pending_page_writer_failure_retains_retry_identity() {
-        let directory = tempfile::tempdir().expect("temporary directory should create");
-        let (cache_tx, cache_rx) = tokio::sync::mpsc::channel(1);
-        let message = CacheWriteMsg {
-            file_path: "/tmp/retry.wav".to_string(),
-            analyzer: audio::ANALYZER_STRATUM.to_string(),
-            file_size: 1,
-            file_mtime: 2,
-            analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
-            input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
-            features_json: "{}".to_string(),
-        };
-        let retry_path = message.file_path.clone();
-        let writer_path = directory.path().to_string_lossy().to_string();
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let writer = tokio::task::spawn_blocking(move || {
-            analysis_batch::run_analysis_cache_writer(writer_path, cache_rx, cancel)
-        });
-        let error = analysis_batch::send_cache_message(&cache_tx, message, "stratum-dsp analysis")
-            .await
-            .expect_err("directory path cannot be opened as a cache database");
-        drop(cache_tx);
-        let report = writer.await.expect("cache writer task should join");
-        assert_eq!(retry_path, "/tmp/retry.wav");
-        assert!(error.contains("cache store open failed"));
-        assert_eq!(report.failed, 1);
+        const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+        const TEST_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(5);
+
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let directory = tempfile::tempdir().expect("temporary directory should create");
+            let track_id = "retry-track";
+            let artist = "Retry Artist";
+            let title = "Retry Title";
+            let analyzer = audio::ANALYZER_STRATUM;
+            let (cache_tx, cache_rx) = tokio::sync::mpsc::channel(1);
+            let message = CacheWriteMsg {
+                file_path: "/tmp/retry.wav".to_string(),
+                analyzer: analyzer.to_string(),
+                file_size: 1,
+                file_mtime: 2,
+                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+                input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
+                features_json: "{}".to_string(),
+            };
+            let writer_path = directory.path().to_string_lossy().to_string();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let mut writer = tokio::task::spawn_blocking(move || {
+                analysis_batch::run_analysis_cache_writer(writer_path, cache_rx, cancel)
+            });
+            let acknowledged = tokio::time::timeout(
+                STEP_TIMEOUT,
+                analysis_batch::send_cache_message(&cache_tx, message, "stratum-dsp analysis"),
+            )
+            .await;
+            let error = match acknowledged {
+                Ok(result) => result.expect_err("cache writer should reject an invalid store path"),
+                Err(_) => {
+                    drop(cache_tx);
+                    writer.abort();
+                    let _ = tokio::time::timeout(STEP_TIMEOUT, &mut writer).await;
+                    panic!("cache acknowledgement timed out");
+                }
+            };
+            drop(cache_tx);
+            let report = match tokio::time::timeout(STEP_TIMEOUT, &mut writer).await {
+                Ok(result) => result.expect("cache writer task should join"),
+                Err(_) => {
+                    writer.abort();
+                    let _ = tokio::time::timeout(STEP_TIMEOUT, &mut writer).await;
+                    panic!("cache writer join timed out");
+                }
+            };
+            assert_eq!(report.failed, 1);
+
+            let failure = audio_cache_write_failure(track_id, artist, title, analyzer, &error);
+            assert_eq!(failure["track_id"], track_id);
+            assert_eq!(failure["artist"], artist);
+            assert_eq!(failure["title"], title);
+            assert_eq!(failure["analyzer"], analyzer);
+            assert_eq!(failure["stage"], "cache_writer_open");
+            assert_eq!(failure["error"], error);
+
+            let ordinary_failure = audio_cache_write_failure(
+                track_id,
+                artist,
+                title,
+                analyzer,
+                "injected write rejection",
+            );
+            assert_eq!(ordinary_failure["stage"], "cache_write");
+        })
+        .await
+        .expect("MCP writer failure presentation scenario timed out");
     }
 
     #[test]

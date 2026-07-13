@@ -436,24 +436,49 @@ mod tests {
     fn grid_fingerprint_is_stable_and_versioned() {
         let first = RekordboxGridInput::from_grid(Some(grid()));
         let second = RekordboxGridInput::from_grid(Some(grid()));
+        let mut changed_grid = grid();
+        changed_grid.bars.push(4.5);
+        let changed = RekordboxGridInput::from_grid(Some(changed_grid));
+        let no_grid = RekordboxGridInput::from_grid(None);
         assert_eq!(first.fingerprint, second.fingerprint);
         assert!(first.fingerprint.starts_with("grid:v1:"));
+        assert_ne!(first.fingerprint, changed.fingerprint);
+        assert_eq!(no_grid.fingerprint, audio::STRATUM_HMM_INPUT_FINGERPRINT);
     }
 
     #[test]
     fn audio_cache_identity_preserves_field_contract() {
-        let identity = AudioCacheIdentity {
-            cache_key: "/tmp/example.flac".to_string(),
-            file_size: 11,
-            file_mtime: 22,
-            stratum_input_fingerprint: Some("hmm:v1".to_string()),
-        };
-        assert_eq!(identity.cache_key, "/tmp/example.flac");
-        assert_eq!(identity.file_size, 11);
-        assert_eq!(identity.file_mtime, 22);
+        let directory = tempfile::tempdir().expect("temporary audio directory");
+        let path = directory.path().join("identity.flac");
+        let payload = b"synthetic identity fixture";
+        std::fs::write(&path, payload).expect("write synthetic audio identity fixture");
+        let raw_path = path.to_string_lossy();
+        let identity = audio_cache_identities_with_current_stratum_input([raw_path.as_ref()])
+            .into_iter()
+            .next()
+            .flatten()
+            .expect("identity should resolve from the synthetic file");
+        let metadata = std::fs::metadata(&path).expect("read synthetic fixture metadata");
+
+        assert_eq!(identity.cache_key, raw_path);
+        assert_eq!(identity.file_size, payload.len() as i64);
+        assert_eq!(identity.file_mtime, file_mtime_unix(&metadata));
         assert_eq!(
             identity.stratum_input_fingerprint.as_deref(),
-            Some("hmm:v1")
+            Some(audio::STRATUM_HMM_INPUT_FINGERPRINT)
         );
+
+        let stratum = identity
+            .as_stratum_store_identity()
+            .expect("Stratum identity should include its input fingerprint");
+        assert_eq!(stratum.file_path, raw_path);
+        assert_eq!(stratum.file_size, payload.len() as i64);
+        assert_eq!(
+            stratum.input_fingerprint,
+            audio::STRATUM_HMM_INPUT_FINGERPRINT
+        );
+        let essentia = identity.as_essentia_store_identity();
+        assert_eq!(essentia.file_path, raw_path);
+        assert_eq!(essentia.input_fingerprint, "");
     }
 }
