@@ -24,12 +24,12 @@ mod eval_routing;
 mod eval_tasks;
 mod genre;
 mod keychain;
+mod mcp;
 mod musicbrainz;
 mod normalize;
 mod rate_limit;
 mod store;
 mod tags;
-mod tools;
 mod types;
 mod xml;
 
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match bootstrap::mode::detect(std::env::args(), std::io::stdin().is_terminal()) {
         bootstrap::mode::LaunchMode::Cli => cli::run().await,
         bootstrap::mode::LaunchMode::McpStdio => {
-            let server = tools::ReklawdboxServer::new(db::resolve_db_path());
+            let server = mcp::ReklawdboxServer::new(db::resolve_db_path());
             let service = server.serve(stdio()).await?;
             service.waiting().await?;
             Ok(())

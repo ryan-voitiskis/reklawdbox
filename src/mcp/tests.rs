@@ -1,0 +1,11403 @@
+use super::classification;
+use super::context::ServerContext;
+use super::error::mcp_internal_error;
+use super::server::ReklawdboxServer;
+use super::{analysis::*, audit::*, classification::*, enrichment::*, files::*, help::*};
+use super::{library::*, metadata::*, planning::*};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::{ErrorData as McpError, ServiceExt};
+use rusqlite::{Connection, params};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use tempfile::TempDir;
+
+use crate::changes::ChangeManager;
+use crate::types::{EditableField, TrackChange};
+use crate::{db, genre, store};
+
+fn extract_json(result: &CallToolResult) -> serde_json::Value {
+    let text = result
+        .content
+        .first()
+        .and_then(|content| content.as_text())
+        .map(|text| text.text.as_str())
+        .expect("tool result should include text content");
+
+    serde_json::from_str(text).expect("tool text content should be valid JSON")
+}
+
+fn set_test_audio_analysis(
+    conn: &Connection,
+    file_path: &str,
+    analyzer: &str,
+    file_size: i64,
+    file_mtime: i64,
+    analysis_version: &str,
+    features_json: &str,
+) -> Result<(), rusqlite::Error> {
+    let input_fingerprint = if analyzer == crate::audio::ANALYZER_STRATUM {
+        crate::audio::STRATUM_HMM_INPUT_FINGERPRINT
+    } else {
+        ""
+    };
+    store::set_audio_analysis_with_fingerprint(
+        conn,
+        file_path,
+        analyzer,
+        file_size,
+        file_mtime,
+        analysis_version,
+        input_fingerprint,
+        features_json,
+    )
+}
+
+async fn call_tool_via_router(
+    tool_name: &str,
+    arguments: Option<serde_json::Map<String, serde_json::Value>>,
+) -> CallToolResult {
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let (server_result, client_result) = tokio::join!(
+        ReklawdboxServer::new(None).serve(server_io),
+        ().serve(client_io)
+    );
+    let mut server = server_result.expect("server should start over in-memory transport");
+    let mut client = client_result.expect("client should connect over in-memory transport");
+    let mut params = CallToolRequestParams::new(tool_name.to_owned());
+    if let Some(arguments) = arguments {
+        params = params.with_arguments(arguments);
+    }
+
+    let result = client
+        .call_tool(params)
+        .await
+        .expect("tool call through router should succeed");
+
+    client
+        .close()
+        .await
+        .expect("client should close cleanly after tool call");
+    server
+        .close()
+        .await
+        .expect("server should close cleanly after tool call");
+
+    result
+}
+
+fn assert_structured_matches_text(result: &CallToolResult, tool_name: &str) {
+    let structured = result
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("{tool_name} should return structured content"));
+    assert_eq!(
+        structured,
+        &extract_json(result),
+        "{tool_name} structured content and compatibility JSON text should match"
+    );
+}
+
+fn resolve_local_schema<'a>(
+    root: &'a serde_json::Value,
+    schema: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    schema
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix('#'))
+        .and_then(|pointer| root.pointer(pointer))
+        .unwrap_or(schema)
+}
+
+fn schema_allows_type(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    expected: &str,
+) -> bool {
+    let schema = resolve_local_schema(root, schema);
+    schema["type"].as_str() == Some(expected)
+        || schema["type"]
+            .as_array()
+            .is_some_and(|types| types.iter().any(|value| value.as_str() == Some(expected)))
+        || ["anyOf", "oneOf"].iter().any(|keyword| {
+            schema[*keyword].as_array().is_some_and(|alternatives| {
+                alternatives
+                    .iter()
+                    .any(|alternative| schema_allows_type(root, alternative, expected))
+            })
+        })
+}
+
+fn assert_terminal_cursor_contract(
+    tool_name: &str,
+    continuation_field: &str,
+    result: &CallToolResult,
+) {
+    let router = ReklawdboxServer::build_tool_router();
+    let tool = router
+        .get(tool_name)
+        .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+    let tool_schema = serde_json::to_value(tool).expect("tool metadata should serialize");
+    let output_schema = &tool_schema["outputSchema"];
+    assert!(
+        output_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == continuation_field)),
+        "{tool_name} should require {continuation_field}"
+    );
+    let continuation_schema = resolve_local_schema(
+        output_schema,
+        &output_schema["properties"][continuation_field],
+    );
+    assert!(
+        continuation_schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "next_offset")),
+        "{tool_name} should require {continuation_field}.next_offset"
+    );
+    let cursor_schema = &continuation_schema["properties"]["next_offset"];
+    assert!(
+        schema_allows_type(output_schema, cursor_schema, "integer"),
+        "{tool_name} next_offset should allow integers"
+    );
+    assert!(
+        schema_allows_type(output_schema, cursor_schema, "null"),
+        "{tool_name} next_offset should allow terminal nulls; schema was {cursor_schema}"
+    );
+
+    let structured = result
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("{tool_name} should return structured content"));
+    let continuation = structured[continuation_field]
+        .as_object()
+        .unwrap_or_else(|| panic!("{tool_name} should return {continuation_field} as an object"));
+    assert!(
+        continuation.contains_key("next_offset"),
+        "{tool_name} terminal payload should retain required next_offset"
+    );
+    assert_eq!(
+        continuation["next_offset"],
+        serde_json::Value::Null,
+        "{tool_name} terminal payload should encode next_offset as null"
+    );
+}
+
+#[tokio::test]
+async fn batch_output_schema_contract_advertises_and_returns_typed_payloads() {
+    let router = ReklawdboxServer::build_tool_router();
+    for (tool_name, continuation_field) in [
+        ("enrich_tracks", "page"),
+        ("analyze_audio_batch", "page"),
+        ("backfill_labels", "conflict_page"),
+        ("scan_duplicates", "page"),
+    ] {
+        let tool = router
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+        let schema = serde_json::to_value(tool).expect("tool metadata should serialize");
+        assert!(
+            schema["outputSchema"].is_object(),
+            "{tool_name} should advertise outputSchema"
+        );
+        assert!(
+            schema["outputSchema"]["properties"][continuation_field].is_object(),
+            "{tool_name} outputSchema should require {continuation_field}"
+        );
+    }
+
+    let db_conn = create_selector_pagination_test_db();
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+
+    let enrich = server
+        .enrich_tracks(Parameters(EnrichTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["t1".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(0),
+            offset: Some(0),
+            providers: None,
+            skip_cached: Some(true),
+            force_refresh: Some(false),
+            concurrency: Some(1),
+        }))
+        .await
+        .expect("zero-work enrichment should succeed");
+    assert_structured_matches_text(&enrich, "enrich_tracks");
+    assert_terminal_cursor_contract("enrich_tracks", "page", &enrich);
+    assert_eq!(extract_json(&enrich)["summary"]["tracks_total"], 0);
+    assert_eq!(extract_json(&enrich)["summary"]["total"], 0);
+    assert_eq!(extract_json(&enrich)["summary"]["cached"], 0);
+
+    let audio = server
+        .analyze_audio_batch(Parameters(AnalyzeAudioBatchParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["t1".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(0),
+            offset: Some(0),
+            skip_cached: Some(true),
+            concurrency: Some(1),
+        }))
+        .await
+        .expect("zero-work audio batch should succeed");
+    assert_structured_matches_text(&audio, "analyze_audio_batch");
+    assert_terminal_cursor_contract("analyze_audio_batch", "page", &audio);
+    assert_eq!(extract_json(&audio)["summary"]["total"], 0);
+    assert_eq!(extract_json(&audio)["summary"]["cached"], 0);
+    assert_eq!(extract_json(&audio)["summary"]["essentia_cached"], 0);
+
+    let labels = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(true),
+            auto_enrich: Some(false),
+            max_conflicts: Some(0),
+            conflict_offset: Some(0),
+        }))
+        .await
+        .expect("dry-run label backfill should succeed");
+    assert_structured_matches_text(&labels, "backfill_labels");
+    assert_terminal_cursor_contract("backfill_labels", "conflict_page", &labels);
+
+    let duplicates = server
+        .scan_duplicates(Parameters(ScanDuplicatesParams::default()))
+        .await
+        .expect("empty metadata duplicate scan should succeed");
+    assert_structured_matches_text(&duplicates, "scan_duplicates");
+    assert_terminal_cursor_contract("scan_duplicates", "page", &duplicates);
+}
+
+#[tokio::test]
+async fn backfill_labels_conflict_page_later_dry_run_does_not_repeat_staging() {
+    let db_conn = create_selector_pagination_test_db();
+    db_conn
+        .execute("UPDATE djmdContent SET LabelID = NULL WHERE ID = 't3'", [])
+        .expect("unlabeled staging fixture should update");
+    let tracks = db::get_tracks_by_ids(
+        &db_conn,
+        &["t1".to_string(), "t2".to_string(), "t3".to_string()],
+    )
+    .expect("label fixture tracks should load");
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    {
+        let store_conn = server.cache_store_conn().expect("test store should open");
+        for track in &tracks {
+            let label = if track.id == "t3" {
+                "Filled Label"
+            } else {
+                "Conflicting Label"
+            };
+            let response = serde_json::json!({"label": label}).to_string();
+            store::set_enrichment(
+                &store_conn,
+                "discogs",
+                &crate::normalize::normalize_for_matching(&track.artist),
+                &crate::normalize::normalize_for_matching(&track.title),
+                Some(&crate::normalize::normalize_for_matching(&track.album)),
+                Some("exact"),
+                Some(&response),
+            )
+            .expect("label cache fixture should write");
+        }
+    }
+
+    let first = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(false),
+            auto_enrich: Some(false),
+            max_conflicts: Some(1),
+            conflict_offset: Some(0),
+        }))
+        .await
+        .expect("mutating label pass should succeed");
+    let first_payload = extract_json(&first);
+    assert_eq!(first_payload["staged"], 1);
+    assert_eq!(first_payload["conflict_page"]["returned"], 1);
+    assert_eq!(first_payload["conflict_page"]["next_offset"], 1);
+    assert_eq!(first_payload["conflicts_truncated"], true);
+    let pending_after_first = server.context.mutation.changes.pending_ids();
+    assert_eq!(pending_after_first, vec!["t3".to_string()]);
+
+    let second = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(true),
+            auto_enrich: Some(false),
+            max_conflicts: Some(1),
+            conflict_offset: Some(1),
+        }))
+        .await
+        .expect("later dry-run conflict page should succeed");
+    let second_payload = extract_json(&second);
+    assert_eq!(second_payload["staged"], 0);
+    assert_eq!(second_payload["conflict_page"]["offset"], 1);
+    assert_eq!(second_payload["conflict_page"]["returned"], 1);
+    assert_eq!(
+        second_payload["conflict_page"]["next_offset"],
+        serde_json::Value::Null
+    );
+    assert!(second_payload.get("conflicts_truncated").is_none());
+    assert_eq!(
+        server.context.mutation.changes.pending_ids(),
+        pending_after_first
+    );
+}
+
+#[test]
+fn help_public_contract() {
+    let menu = handle_help(HelpParams::default()).expect("DB-free help menu should succeed");
+    let payload = extract_json(&menu);
+    let workflows = payload["workflows"]
+        .as_array()
+        .expect("help menu should expose workflow records");
+    assert_eq!(
+        workflows.len(),
+        9,
+        "runtime help menu should contain nine SOPs"
+    );
+    for workflow in workflows {
+        assert!(workflow["name"].is_string());
+        assert!(workflow["summary"].is_string());
+        assert!(workflow["key_tools"].is_array());
+    }
+
+    assert_eq!(
+        payload["reference"], "https://reklawdbox.com/mcp-tools/",
+        "runtime help should link to the built MCP reference"
+    );
+    assert!(
+        !payload
+            .to_string()
+            .contains(&["/reference", "tools/"].join("/")),
+        "runtime help must not retain the retired tool-reference route"
+    );
+
+    let expected_topics = [
+        "genre",
+        "genre audit",
+        "set",
+        "pool",
+        "chapter",
+        "audit",
+        "import",
+        "metadata",
+        "label",
+        "year",
+        "album",
+        "health",
+    ];
+    let help_schema = schemars::schema_for!(HelpParams);
+    let topic_description = help_schema.as_value()["properties"]["topic"]["description"]
+        .as_str()
+        .expect("HelpParams.topic should advertise its public vocabulary");
+    let schema_topics = topic_description
+        .split('\'')
+        .enumerate()
+        .filter_map(|(index, value)| (index % 2 == 1).then_some(value))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        schema_topics, expected_topics,
+        "HelpParams should advertise exactly the twelve public topics"
+    );
+    let expected_tip = format!(
+        "Call help(topic={}) for the full step-by-step SOP.",
+        expected_topics
+            .iter()
+            .map(|topic| format!("'{topic}'"))
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    assert_eq!(
+        payload["tip"].as_str(),
+        Some(expected_tip.as_str()),
+        "the visible topic tip should match the schema vocabulary and order"
+    );
+
+    let recommended = payload["recommended_order"]
+        .as_str()
+        .expect("help menu should expose a recommended sequence");
+    let numbered = recommended
+        .lines()
+        .filter(|line| line.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        numbered.len(),
+        7,
+        "recommended sequence should contain seven steps"
+    );
+    for (index, line) in numbered.iter().enumerate() {
+        assert!(
+            line.starts_with(&format!("{}. ", index + 1)),
+            "recommended sequence should be consecutively numbered"
+        );
+    }
+    assert!(
+        recommended.contains("workflow-specific")
+            && recommended.contains("scoped cache_coverage")
+            && recommended.contains("provider access is conditional"),
+        "help should explain scoped, conditional readiness"
+    );
+    assert!(
+        !recommended.contains("run `reklawdbox hydrate`"),
+        "help must not impose universal hydration"
+    );
+    assert!(
+        recommended.contains("Reload Tag") && recommended.contains("metadata or playlist XML"),
+        "help should expose the real Rekordbox checkpoints"
+    );
+
+    let topic_routes = [
+        ("genre", "Genre Classification"),
+        ("genre audit", "Genre Audit"),
+        ("set", "Set Building"),
+        ("pool", "Pool Building"),
+        ("chapter", "Chapter Set Planning"),
+        ("audit", "Collection Audit"),
+        ("import", "Batch Import"),
+        ("metadata", "Metadata Backfill"),
+        ("label", "Metadata Backfill"),
+        ("year", "Metadata Backfill"),
+        ("album", "Metadata Backfill"),
+        ("health", "Library Health"),
+    ];
+    for (topic, expected_workflow) in topic_routes {
+        let response = handle_help(HelpParams {
+            topic: Some(topic.to_owned()),
+        })
+        .unwrap_or_else(|error| panic!("DB-free help topic {topic:?} failed: {error:?}"));
+        let topic_payload = extract_json(&response);
+        assert_eq!(
+            topic_payload["workflow"], expected_workflow,
+            "topic {topic}"
+        );
+        assert!(topic_payload["key_tools"].is_array(), "topic {topic}");
+        assert!(
+            topic_payload["sop"]
+                .as_str()
+                .is_some_and(|sop| !sop.is_empty()),
+            "topic {topic}"
+        );
+        if topic == "audit" {
+            assert!(
+                topic_payload["sop"]
+                    .as_str()
+                    .is_some_and(|sop| sop.contains("Reload Tag")),
+                "collection audit should retain its Reload Tag checkpoint"
+            );
+        }
+        if topic == "album" {
+            assert!(
+                topic_payload["sop"]
+                    .as_str()
+                    .is_some_and(|sop| sop.contains("Step 1c")),
+                "metadata help should retain its label-research checkpoint"
+            );
+        }
+    }
+    let unknown = extract_json(
+        &handle_help(HelpParams {
+            topic: Some("not-a-public-topic".to_owned()),
+        })
+        .expect("unknown topic should return a DB-free guidance payload"),
+    );
+    assert_eq!(
+        unknown["error"],
+        format!(
+            "No workflow matching 'not-a-public-topic'. Try: {}.",
+            expected_topics.join(", ")
+        )
+    );
+}
+
+#[test]
+fn cache_coverage_public_schema() {
+    let router = ReklawdboxServer::build_tool_router();
+    let tool_schema = |tool_name: &str| {
+        let tool = router
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+        serde_json::to_value(tool).expect("tool metadata should serialize")
+    };
+    let resolve_schema = tool_schema("resolve_tracks_data");
+    let coverage_schema = tool_schema("cache_coverage");
+    let properties = |tool_name: &str, schema: &serde_json::Value| {
+        schema["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{tool_name} should expose input properties"))
+            .clone()
+    };
+
+    let resolve_properties = properties("resolve_tracks_data", &resolve_schema);
+    let coverage_properties = properties("cache_coverage", &coverage_schema);
+
+    let resolve_names = resolve_properties.keys().cloned().collect::<HashSet<_>>();
+    let coverage_names = coverage_properties.keys().cloned().collect::<HashSet<_>>();
+
+    assert_eq!(resolve_names.len(), 20);
+    assert_eq!(coverage_names.len(), 19);
+    for (name, schema) in [
+        ("resolve_tracks_data", &resolve_schema),
+        ("cache_coverage", &coverage_schema),
+    ] {
+        assert!(
+            schema["inputSchema"]["required"]
+                .as_array()
+                .is_none_or(Vec::is_empty),
+            "{name} selectors should all remain optional"
+        );
+    }
+
+    assert!(
+        !coverage_names.contains("format"),
+        "cache_coverage must not advertise the ignored format parameter"
+    );
+    assert_eq!(
+        resolve_names
+            .difference(&coverage_names)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from(["format".to_owned()]),
+        "resolve_tracks_data should differ from cache_coverage only by format"
+    );
+    assert!(
+        coverage_names.is_subset(&resolve_names),
+        "cache_coverage should retain every shared selector and filter"
+    );
+    for (name, mut coverage_schema) in coverage_properties {
+        let mut resolve_schema = resolve_properties
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| panic!("resolve_tracks_data should retain shared property {name}"));
+        coverage_schema
+            .as_object_mut()
+            .expect("property schemas should be objects")
+            .remove("description");
+        resolve_schema
+            .as_object_mut()
+            .expect("property schemas should be objects")
+            .remove("description");
+        assert_eq!(
+            resolve_schema, coverage_schema,
+            "shared property {name} should have the same public type contract"
+        );
+    }
+    assert!(
+        coverage_schema["inputSchema"]["properties"]["track_ids"]["description"]
+            .as_str()
+            .is_some_and(
+                |description| description.contains("check") && !description.contains("resolve")
+            )
+    );
+    assert!(
+        coverage_schema["inputSchema"]["properties"]["max_tracks"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("unbounded"))
+    );
+}
+
+#[test]
+fn color_input_public_contract() {
+    let changes = ChangeManager::new();
+    handle_update_tracks(
+        &changes,
+        UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "color-name".to_owned(),
+                genre: None,
+                comments: None,
+                rating: None,
+                color: Some("turquoise".to_owned()),
+                label: None,
+                year: None,
+                album: None,
+            }],
+        },
+    )
+    .expect("a canonical color name should validate without a database");
+    assert_eq!(
+        changes
+            .get("color-name")
+            .expect("accepted color should be staged")
+            .color
+            .as_deref(),
+        Some("Turquoise"),
+        "accepted color names should be canonicalized"
+    );
+
+    let error = handle_update_tracks(
+        &ChangeManager::new(),
+        UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "color-hex".to_owned(),
+                genre: None,
+                comments: None,
+                rating: None,
+                color: Some("0x25FDE9".to_owned()),
+                label: None,
+                year: None,
+                album: None,
+            }],
+        },
+    )
+    .expect_err("serialized XML hex must not be accepted as a tool input");
+    let message = format!("{error:?}");
+    for name in [
+        "Blue",
+        "Green",
+        "Lemon",
+        "Orange",
+        "Red",
+        "Rose",
+        "Turquoise",
+        "Violet",
+    ] {
+        assert!(
+            message.contains(name),
+            "invalid color guidance should include {name}: {message}"
+        );
+    }
+
+    let mut track = make_test_track("color-xml", "House", 124.0, "8A");
+    track.color_code = crate::color::color_name_to_code("Turquoise")
+        .expect("canonical color should have an XML code");
+    let xml = crate::xml::generate_xml(&[track]);
+    assert!(
+        xml.contains("Colour=\"0x25FDE9\""),
+        "canonical color integers should serialize as uppercase 0xRRGGBB"
+    );
+}
+
+#[tokio::test]
+async fn playlist_import_help_contract() {
+    for topic in ["set", "pool", "chapter"] {
+        let arguments = serde_json::json!({ "topic": topic }).as_object().cloned();
+        let result = call_tool_via_router("help", arguments).await;
+        let payload = extract_json(&result);
+        let sop = payload["sop"]
+            .as_str()
+            .unwrap_or_else(|| panic!("help topic '{topic}' should return SOP text"));
+        let lower = sop.to_lowercase();
+
+        for required in [
+            "rekordbox xml",
+            "playlists",
+            "drag",
+            "track count",
+            "first and last",
+            "track order",
+        ] {
+            assert!(
+                lower.contains(required),
+                "help topic '{topic}' should include playlist import guidance containing '{required}'"
+            );
+        }
+        assert!(
+            !sop.contains("import XmlPlaylistImportSteps"),
+            "help topic '{topic}' must not expose the MDX component import"
+        );
+        assert!(
+            !sop.contains("<XmlPlaylistImportSteps />"),
+            "help topic '{topic}' must not expose an unresolved MDX component tag"
+        );
+    }
+}
+
+const GOLDEN_GENRES_FIXTURE_PATH: &str = "src/mcp/classification/fixtures/golden_genres.json";
+
+#[derive(Debug, Deserialize)]
+struct GoldenGenreFixtureEntry {
+    artist: String,
+    title: String,
+    expected_genre: String,
+    notes: String,
+}
+
+fn default_http_client_for_tests() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("Reklawdbox/0.1")
+        .build()
+        .expect("default test HTTP client should build")
+}
+
+const DISCOGS_AUTH_TEST_NOW: i64 = 2_000_000_000;
+const DISCOGS_AUTH_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DiscogsBrokerEndpoint {
+    Start,
+    Status,
+    Finalize,
+    Search,
+}
+
+#[derive(Clone)]
+struct DiscogsBrokerFailure {
+    status: String,
+    body: String,
+}
+
+struct DiscogsBrokerDelay {
+    endpoint: DiscogsBrokerEndpoint,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+    release: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+struct DiscogsBrokerDelayControl {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl DiscogsBrokerDelayControl {
+    async fn wait_until_entered(&mut self, phase: &str) -> Result<(), String> {
+        tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, &mut self.entered)
+            .await
+            .map_err(|_| format!("{phase} did not reach the delayed broker response"))?
+            .map_err(|_| format!("{phase} delay notification was canceled"))
+    }
+
+    fn release(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
+struct DiscogsBrokerFixtureState {
+    starts: AtomicUsize,
+    statuses: AtomicUsize,
+    finalizes: AtomicUsize,
+    searches: AtomicUsize,
+    request_changed: tokio::sync::Notify,
+    status: Mutex<String>,
+    rejected_tokens: Mutex<HashSet<String>>,
+    failures: Mutex<HashMap<DiscogsBrokerEndpoint, DiscogsBrokerFailure>>,
+    delay: Mutex<Option<DiscogsBrokerDelay>>,
+}
+
+impl DiscogsBrokerFixtureState {
+    fn new(status: &str) -> Self {
+        Self {
+            starts: AtomicUsize::new(0),
+            statuses: AtomicUsize::new(0),
+            finalizes: AtomicUsize::new(0),
+            searches: AtomicUsize::new(0),
+            request_changed: tokio::sync::Notify::new(),
+            status: Mutex::new(status.to_string()),
+            rejected_tokens: Mutex::new(HashSet::new()),
+            failures: Mutex::new(HashMap::new()),
+            delay: Mutex::new(None),
+        }
+    }
+
+    fn count(&self, endpoint: DiscogsBrokerEndpoint) -> usize {
+        match endpoint {
+            DiscogsBrokerEndpoint::Start => self.starts.load(Ordering::SeqCst),
+            DiscogsBrokerEndpoint::Status => self.statuses.load(Ordering::SeqCst),
+            DiscogsBrokerEndpoint::Finalize => self.finalizes.load(Ordering::SeqCst),
+            DiscogsBrokerEndpoint::Search => self.searches.load(Ordering::SeqCst),
+        }
+    }
+
+    fn record(&self, endpoint: DiscogsBrokerEndpoint) {
+        match endpoint {
+            DiscogsBrokerEndpoint::Start => &self.starts,
+            DiscogsBrokerEndpoint::Status => &self.statuses,
+            DiscogsBrokerEndpoint::Finalize => &self.finalizes,
+            DiscogsBrokerEndpoint::Search => &self.searches,
+        }
+        .fetch_add(1, Ordering::SeqCst);
+        self.request_changed.notify_waiters();
+    }
+
+    async fn wait_for_count(
+        &self,
+        endpoint: DiscogsBrokerEndpoint,
+        expected: usize,
+        phase: &str,
+    ) -> Result<(), String> {
+        let wait = async {
+            loop {
+                let notified = self.request_changed.notified();
+                if self.count(endpoint) >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, wait)
+            .await
+            .map_err(|_| format!("{phase} did not observe {expected} broker requests"))
+    }
+
+    fn reject_token(&self, token: &str) {
+        self.rejected_tokens
+            .lock()
+            .expect("broker fixture rejected-token mutex should not be poisoned")
+            .insert(token.to_string());
+    }
+
+    fn fail_endpoint(&self, endpoint: DiscogsBrokerEndpoint, body: &str) {
+        self.failures
+            .lock()
+            .expect("broker fixture failure mutex should not be poisoned")
+            .insert(
+                endpoint,
+                DiscogsBrokerFailure {
+                    status: "500 Internal Server Error".to_string(),
+                    body: body.to_string(),
+                },
+            );
+    }
+
+    fn failure(&self, endpoint: DiscogsBrokerEndpoint) -> Option<DiscogsBrokerFailure> {
+        self.failures
+            .lock()
+            .expect("broker fixture failure mutex should not be poisoned")
+            .get(&endpoint)
+            .cloned()
+    }
+
+    fn delay_next(&self, endpoint: DiscogsBrokerEndpoint) -> DiscogsBrokerDelayControl {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let mut delay = self
+            .delay
+            .lock()
+            .expect("broker fixture delay mutex should not be poisoned");
+        assert!(delay.is_none(), "only one broker delay may be active");
+        *delay = Some(DiscogsBrokerDelay {
+            endpoint,
+            entered: Some(entered_tx),
+            release: Some(release_rx),
+        });
+        DiscogsBrokerDelayControl {
+            entered: entered_rx,
+            release: Some(release_tx),
+        }
+    }
+
+    async fn apply_delay(&self, endpoint: DiscogsBrokerEndpoint) -> Result<(), String> {
+        let delayed = {
+            let mut delay = self
+                .delay
+                .lock()
+                .map_err(|_| "broker fixture delay mutex poisoned".to_string())?;
+            if delay
+                .as_ref()
+                .is_some_and(|delay| delay.endpoint == endpoint)
+            {
+                delay.take()
+            } else {
+                None
+            }
+        };
+        if let Some(mut delayed) = delayed {
+            if let Some(entered) = delayed.entered.take() {
+                let _ = entered.send(());
+            }
+            let release = delayed
+                .release
+                .take()
+                .ok_or_else(|| "broker fixture release channel missing".to_string())?;
+            tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, release)
+                .await
+                .map_err(|_| "broker fixture delayed response timed out".to_string())?
+                .map_err(|_| "broker fixture delayed response canceled".to_string())?;
+        }
+        Ok(())
+    }
+}
+
+struct DiscogsBrokerFixture {
+    base_url: String,
+    state: Arc<DiscogsBrokerFixtureState>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<Result<(), String>>>,
+}
+
+impl DiscogsBrokerFixture {
+    async fn start(status: &str) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local Discogs broker fixture should bind");
+        let address = listener
+            .local_addr()
+            .expect("local Discogs broker fixture should have an address");
+        let state = Arc::new(DiscogsBrokerFixtureState::new(status));
+        let server_state = Arc::clone(&state);
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accepted = listener.accept() => {
+                        let (stream, _) = accepted
+                            .map_err(|error| format!("broker fixture accept failed: {error}"))?;
+                        let state = Arc::clone(&server_state);
+                        connections.spawn(async move {
+                            let _ = serve_discogs_broker_connection(stream, state).await;
+                        });
+                    }
+                }
+            }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+            Ok(())
+        });
+        Self {
+            base_url: format!("http://{address}"),
+            state,
+            shutdown: Some(shutdown_tx),
+            task: Some(task),
+        }
+    }
+
+    fn config(&self) -> crate::discogs::BrokerConfig {
+        crate::discogs::BrokerConfig {
+            base_url: self.base_url.clone(),
+            broker_token: None,
+        }
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let mut task = self.task.take().expect("broker fixture task should exist");
+        match tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, &mut task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => panic!("broker fixture shutdown failed: {error}"),
+            Ok(Err(error)) => panic!("broker fixture task failed: {error}"),
+            Err(_) => {
+                task.abort();
+                let _ = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, &mut task).await;
+                panic!("broker fixture shutdown timed out");
+            }
+        }
+    }
+}
+
+impl Drop for DiscogsBrokerFixture {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn read_discogs_broker_request(stream: &mut tokio::net::TcpStream) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("broker fixture request read failed: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if request.len() > 64 * 1024 {
+            return Err("broker fixture request headers too large".to_string());
+        }
+    }
+    String::from_utf8(request).map_err(|_| "broker fixture request was not UTF-8".to_string())
+}
+
+fn discogs_bearer_token(request: &str) -> Option<&str> {
+    request.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.eq_ignore_ascii_case("authorization") {
+            value.trim().strip_prefix("Bearer ")
+        } else {
+            None
+        }
+    })
+}
+
+async fn write_discogs_broker_response(
+    stream: &mut tokio::net::TcpStream,
+    status: &str,
+    body: &str,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| format!("broker fixture response write failed: {error}"))
+}
+
+async fn serve_discogs_broker_connection(
+    mut stream: tokio::net::TcpStream,
+    state: Arc<DiscogsBrokerFixtureState>,
+) -> Result<(), String> {
+    let request = read_discogs_broker_request(&mut stream).await?;
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or_else(|| "broker fixture request line missing".to_string())?;
+
+    let endpoint = if path.starts_with("/v1/device/session/start") {
+        DiscogsBrokerEndpoint::Start
+    } else if path.starts_with("/v1/device/session/status") {
+        DiscogsBrokerEndpoint::Status
+    } else if path.starts_with("/v1/device/session/finalize") {
+        DiscogsBrokerEndpoint::Finalize
+    } else if path.starts_with("/v1/discogs/proxy/search") {
+        DiscogsBrokerEndpoint::Search
+    } else {
+        return write_discogs_broker_response(
+            &mut stream,
+            "404 Not Found",
+            r#"{"error":"not found"}"#,
+        )
+        .await;
+    };
+
+    state.record(endpoint);
+    state.apply_delay(endpoint).await?;
+    if let Some(failure) = state.failure(endpoint) {
+        return write_discogs_broker_response(&mut stream, &failure.status, &failure.body).await;
+    }
+
+    match endpoint {
+        DiscogsBrokerEndpoint::Start => {
+            write_discogs_broker_response(
+                &mut stream,
+                "200 OK",
+                r#"{"device_id":"device-test-value","pending_token":"pending-test-value","auth_url":"https://auth.example/device","poll_interval_seconds":1,"expires_at":2000003600}"#,
+            )
+            .await
+        }
+        DiscogsBrokerEndpoint::Status => {
+            let status = state
+                .status
+                .lock()
+                .map_err(|_| "broker fixture status mutex poisoned".to_string())?
+                .clone();
+            write_discogs_broker_response(
+                &mut stream,
+                "200 OK",
+                &format!(r#"{{"status":"{status}","expires_at":2000003600}}"#),
+            )
+            .await
+        }
+        DiscogsBrokerEndpoint::Finalize => {
+            write_discogs_broker_response(
+                &mut stream,
+                "200 OK",
+                r#"{"session_token":"session-test-value","expires_at":2000003600}"#,
+            )
+            .await
+        }
+        DiscogsBrokerEndpoint::Search => {
+            let rejected = discogs_bearer_token(&request).is_some_and(|token| {
+                state
+                    .rejected_tokens
+                    .lock()
+                    .expect("broker fixture rejected-token mutex should not be poisoned")
+                    .contains(token)
+            });
+            if rejected {
+                write_discogs_broker_response(
+                    &mut stream,
+                    "401 Unauthorized",
+                    r#"{"error":"authorization required"}"#,
+                )
+                .await
+            } else {
+                write_discogs_broker_response(&mut stream, "200 OK", r#"{"result":null}"#).await
+            }
+        }
+    }
+}
+
+fn install_discogs_auth_test_dependencies(
+    server: &ReklawdboxServer,
+    fixture: &DiscogsBrokerFixture,
+    persistence: Arc<InMemoryDiscogsSessionPersistence>,
+    entry_barrier: Option<Arc<tokio::sync::Barrier>>,
+) {
+    let mut dependencies =
+        DiscogsAuthTestDependencies::new(fixture.config(), DISCOGS_AUTH_TEST_NOW, persistence);
+    if let Some(barrier) = entry_barrier {
+        dependencies = dependencies.with_entry_barrier(barrier);
+    }
+    server
+        .set_discogs_auth_test_dependencies(dependencies)
+        .expect("per-server Discogs auth dependencies should install");
+}
+
+fn discogs_auth_url(
+    result: &Result<Option<crate::discogs::DiscogsResult>, crate::discogs::LookupError>,
+) -> Option<&str> {
+    match result {
+        Err(crate::discogs::LookupError::AuthRequired(remediation)) => {
+            remediation.auth_url.as_deref()
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+struct DiscogsAuthTasks<T> {
+    handles: Vec<Option<tokio::task::JoinHandle<T>>>,
+}
+
+impl<T> Default for DiscogsAuthTasks<T> {
+    fn default() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+}
+
+impl<T: Send + 'static> DiscogsAuthTasks<T> {
+    fn spawn(&mut self, future: impl Future<Output = T> + Send + 'static) -> usize {
+        let index = self.handles.len();
+        self.handles.push(Some(tokio::spawn(future)));
+        index
+    }
+
+    async fn join(&mut self, index: usize, phase: &str) -> Result<T, String> {
+        let joined = {
+            let handle = self
+                .handles
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("{phase} task handle is unavailable"))?;
+            tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, handle).await
+        };
+
+        match joined {
+            Ok(Ok(output)) => {
+                self.handles[index] = None;
+                Ok(output)
+            }
+            Ok(Err(error)) => {
+                self.handles[index] = None;
+                Err(format!("{phase} task failed: {error}"))
+            }
+            Err(_) => {
+                let cleanup = self.abort_and_reap(index, phase).await;
+                match cleanup {
+                    Ok(()) => Err(format!(
+                        "{phase} did not finish within five seconds; task aborted and reaped"
+                    )),
+                    Err(cleanup_error) => Err(format!(
+                        "{phase} did not finish within five seconds; {cleanup_error}"
+                    )),
+                }
+            }
+        }
+    }
+
+    async fn abort_and_reap(&mut self, index: usize, phase: &str) -> Result<(), String> {
+        let Some(handle) = self.handles.get_mut(index).and_then(Option::as_mut) else {
+            return Ok(());
+        };
+        handle.abort();
+        let reaped = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, handle).await;
+        match reaped {
+            Ok(_) => {
+                self.handles[index] = None;
+                Ok(())
+            }
+            Err(_) => Err(format!(
+                "{phase} task did not reap within five seconds after abort"
+            )),
+        }
+    }
+
+    async fn abort_all_and_reap(&mut self, phase: &str) -> Result<(), String> {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+
+        let mut cleanup_errors = Vec::new();
+        for index in 0..self.handles.len() {
+            if let Err(error) = self.abort_and_reap(index, phase).await {
+                cleanup_errors.push(error);
+            }
+        }
+        if cleanup_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(cleanup_errors.join("; "))
+        }
+    }
+
+    fn has_active_tasks(&self) -> bool {
+        self.handles.iter().any(Option::is_some)
+    }
+}
+
+impl<T> Drop for DiscogsAuthTasks<T> {
+    fn drop(&mut self) {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+    }
+}
+
+async fn finish_discogs_auth_scenario<T: Send + 'static>(
+    tasks: &mut DiscogsAuthTasks<T>,
+    outcome: Result<Result<(), String>, tokio::time::error::Elapsed>,
+    phase: &str,
+) {
+    let failure = match outcome {
+        Ok(Ok(())) if !tasks.has_active_tasks() => return,
+        Ok(Ok(())) => format!("{phase} left an auth task active"),
+        Ok(Err(error)) => format!("{phase} failed: {error}"),
+        Err(_) => format!("{phase} did not finish within five seconds"),
+    };
+
+    let cleanup = tasks.abort_all_and_reap(phase).await;
+    match cleanup {
+        Ok(()) => panic!("{failure}; remaining tasks aborted and reaped"),
+        Err(error) => panic!("{failure}; cleanup failed: {error}"),
+    }
+}
+
+fn set_discogs_pending(server: &ReklawdboxServer, device_id: &str, expires_at: i64) {
+    *server
+        .context
+        .enrichment
+        .discogs_pending
+        .lock()
+        .expect("Discogs pending state should not be poisoned") =
+        Some(crate::discogs::PendingDeviceSession {
+            device_id: device_id.to_string(),
+            pending_token: "pending-fixture-value".to_string(),
+            auth_url: "https://auth.example/device".to_string(),
+            poll_interval_seconds: 1,
+            expires_at,
+        });
+}
+
+fn assert_sanitized_discogs_transition_error(
+    result: Result<Option<crate::discogs::AuthRemediation>, crate::discogs::LookupError>,
+    expected: &str,
+) {
+    match result {
+        Err(crate::discogs::LookupError::Message(message)) => assert!(
+            message == expected,
+            "Discogs transition failure should use the stable sanitized message"
+        ),
+        Ok(_) | Err(_) => panic!("Discogs transition should return a sanitized message error"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discogs_auth_concurrent_single_start() {
+    let mut tasks = DiscogsAuthTasks::default();
+    let scenario = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let server = ReklawdboxServer::new(None);
+        install_discogs_auth_test_dependencies(
+            &server,
+            &fixture,
+            persistence,
+            Some(Arc::new(tokio::sync::Barrier::new(2))),
+        );
+        let mut delayed_start = fixture.state.delay_next(DiscogsBrokerEndpoint::Start);
+
+        let first_server = server.clone();
+        let first = tasks.spawn(async move {
+            lookup_discogs_remote(&first_server, "Race Artist", "Race Start One", None).await
+        });
+        let second_server = server.clone();
+        let second = tasks.spawn(async move {
+            lookup_discogs_remote(&second_server, "Race Artist", "Race Start Two", None).await
+        });
+
+        delayed_start
+            .wait_until_entered("concurrent device-session start")
+            .await?;
+        delayed_start.release();
+
+        let first = tasks.join(first, "first concurrent auth lookup").await?;
+        let second = tasks.join(second, "second concurrent auth lookup").await?;
+        assert_eq!(
+            discogs_auth_url(&first),
+            Some("https://auth.example/device")
+        );
+        assert_eq!(
+            discogs_auth_url(&second),
+            Some("https://auth.example/device")
+        );
+        assert_eq!(
+            fixture.state.count(DiscogsBrokerEndpoint::Start),
+            1,
+            "concurrent unauthenticated calls must start one device session"
+        );
+        let pending_device_id = server
+            .context
+            .enrichment
+            .discogs_pending
+            .lock()
+            .expect("Discogs pending state should not be poisoned")
+            .as_ref()
+            .map(|pending| pending.device_id.clone());
+        assert_eq!(pending_device_id.as_deref(), Some("device-test-value"));
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario).await;
+    finish_discogs_auth_scenario(&mut tasks, outcome, "concurrent start scenario").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discogs_auth_concurrent_single_finalize() {
+    let mut tasks = DiscogsAuthTasks::default();
+    let scenario = async {
+        let fixture = DiscogsBrokerFixture::start("authorized").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let server = ReklawdboxServer::new(None);
+        set_discogs_pending(&server, "authorized-device", DISCOGS_AUTH_TEST_NOW + 3_600);
+        install_discogs_auth_test_dependencies(
+            &server,
+            &fixture,
+            Arc::clone(&persistence),
+            Some(Arc::new(tokio::sync::Barrier::new(2))),
+        );
+        let mut delayed_finalize = fixture.state.delay_next(DiscogsBrokerEndpoint::Finalize);
+
+        let first_server = server.clone();
+        let first = tasks.spawn(async move {
+            lookup_discogs_remote(
+                &first_server,
+                "Finalize Artist",
+                "Finalize Search One",
+                None,
+            )
+            .await
+        });
+        let second_server = server.clone();
+        let second = tasks.spawn(async move {
+            lookup_discogs_remote(
+                &second_server,
+                "Finalize Artist",
+                "Finalize Search Two",
+                None,
+            )
+            .await
+        });
+
+        delayed_finalize
+            .wait_until_entered("authorized device-session finalize")
+            .await?;
+        delayed_finalize.release();
+
+        let first = tasks.join(first, "first post-finalize search").await?;
+        let second = tasks.join(second, "second post-finalize search").await?;
+        assert!(matches!(first, Ok(None)));
+        assert!(matches!(second, Ok(None)));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Status), 1);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Finalize), 1);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Search), 2);
+        assert_eq!(persistence.store_count(), 1);
+        assert!(persistence.has_session(&fixture.base_url));
+        assert!(
+            server
+                .context
+                .enrichment
+                .discogs_pending
+                .lock()
+                .expect("Discogs pending state should not be poisoned")
+                .is_none()
+        );
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario).await;
+    finish_discogs_auth_scenario(&mut tasks, outcome, "concurrent finalize scenario").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discogs_auth_transition_expired_pending_starts_one_replacement() {
+    let mut tasks = DiscogsAuthTasks::default();
+    let scenario = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let server = ReklawdboxServer::new(None);
+        set_discogs_pending(&server, "expired-device", DISCOGS_AUTH_TEST_NOW);
+        install_discogs_auth_test_dependencies(
+            &server,
+            &fixture,
+            persistence,
+            Some(Arc::new(tokio::sync::Barrier::new(2))),
+        );
+        let mut delayed_start = fixture.state.delay_next(DiscogsBrokerEndpoint::Start);
+
+        let first_server = server.clone();
+        let first = tasks
+            .spawn(async move { resolve_discogs_auth_transition_for_test(&first_server).await });
+        let second_server = server.clone();
+        let second = tasks
+            .spawn(async move { resolve_discogs_auth_transition_for_test(&second_server).await });
+
+        delayed_start
+            .wait_until_entered("expired pending replacement start")
+            .await?;
+        delayed_start.release();
+
+        let first = tasks.join(first, "first expired transition").await?;
+        let second = tasks.join(second, "second expired transition").await?;
+        assert!(matches!(first, Ok(Some(_))));
+        assert!(matches!(second, Ok(Some(_))));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Start), 1);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Status), 1);
+        let pending_device_id = server
+            .context
+            .enrichment
+            .discogs_pending
+            .lock()
+            .expect("Discogs pending state should not be poisoned")
+            .as_ref()
+            .map(|pending| pending.device_id.clone());
+        assert_eq!(pending_device_id.as_deref(), Some("device-test-value"));
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario).await;
+    finish_discogs_auth_scenario(&mut tasks, outcome, "expired pending scenario").await;
+}
+
+#[tokio::test]
+async fn discogs_auth_transition_persistence_errors_keep_recoverable_state() {
+    let scenario = async {
+        let fixture = DiscogsBrokerFixture::start("authorized").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        persistence.fail_next_store();
+        let server = ReklawdboxServer::new(None);
+        set_discogs_pending(&server, "persistence-device", DISCOGS_AUTH_TEST_NOW + 3_600);
+        install_discogs_auth_test_dependencies(&server, &fixture, Arc::clone(&persistence), None);
+
+        let first = resolve_discogs_auth_transition_for_test(&server).await;
+        assert!(matches!(
+            first,
+            Err(crate::discogs::LookupError::Message(_))
+        ));
+        assert!(
+            server
+                .context
+                .enrichment
+                .discogs_pending
+                .lock()
+                .expect("Discogs pending state should not be poisoned")
+                .is_some()
+        );
+        assert!(!persistence.has_session(&fixture.base_url));
+
+        let second = resolve_discogs_auth_transition_for_test(&server).await;
+        assert!(matches!(second, Ok(None)));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Finalize), 2);
+        assert_eq!(persistence.store_count(), 1);
+        assert!(persistence.has_session(&fixture.base_url));
+        assert!(
+            server
+                .context
+                .enrichment
+                .discogs_pending
+                .lock()
+                .expect("Discogs pending state should not be poisoned")
+                .is_none()
+        );
+
+        persistence.set_session(
+            &fixture.base_url,
+            "expired-session-fixture",
+            DISCOGS_AUTH_TEST_NOW,
+        );
+        persistence.fail_next_clear();
+        let clear_failure = resolve_discogs_auth_transition_for_test(&server).await;
+        assert!(matches!(
+            clear_failure,
+            Err(crate::discogs::LookupError::Message(_))
+        ));
+        assert!(persistence.has_session(&fixture.base_url));
+        fixture.shutdown().await;
+    };
+
+    tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario)
+        .await
+        .expect("persistence error scenario should finish within five seconds");
+}
+
+#[tokio::test]
+async fn discogs_auth_transition_errors_are_sanitized() {
+    let scenario = async {
+        let start_fixture = DiscogsBrokerFixture::start("pending").await;
+        start_fixture.state.fail_endpoint(
+            DiscogsBrokerEndpoint::Start,
+            r#"{"pending_token":"fixture-private-start","broker_credential":"fixture-private-broker"}"#,
+        );
+        let start_persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let start_server = ReklawdboxServer::new(None);
+        start_server
+            .set_discogs_auth_test_dependencies(DiscogsAuthTestDependencies::new(
+                crate::discogs::BrokerConfig {
+                    base_url: start_fixture.base_url.clone(),
+                    broker_token: Some("fixture-private-broker".to_string()),
+                },
+                DISCOGS_AUTH_TEST_NOW,
+                Arc::clone(&start_persistence),
+            ))
+            .expect("start-error dependencies should install");
+        let start_result = resolve_discogs_auth_transition_for_test(&start_server).await;
+        assert_sanitized_discogs_transition_error(
+            start_result,
+            "Discogs authentication start failed. Retry the lookup to start authorization.",
+        );
+        assert_eq!(start_fixture.state.count(DiscogsBrokerEndpoint::Start), 1);
+        assert!(!start_persistence.has_session(&start_fixture.base_url));
+        start_fixture.shutdown().await;
+
+        let status_fixture = DiscogsBrokerFixture::start("pending").await;
+        status_fixture.state.fail_endpoint(
+            DiscogsBrokerEndpoint::Status,
+            r#"{"pending_token":"fixture-private-status","response_header":"fixture-private-header"}"#,
+        );
+        let status_persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let status_server = ReklawdboxServer::new(None);
+        set_discogs_pending(
+            &status_server,
+            "status-error-device",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        install_discogs_auth_test_dependencies(
+            &status_server,
+            &status_fixture,
+            status_persistence,
+            None,
+        );
+        let status_result = resolve_discogs_auth_transition_for_test(&status_server).await;
+        assert_sanitized_discogs_transition_error(
+            status_result,
+            "Discogs authentication status check failed. Retry the lookup to continue authorization.",
+        );
+        assert_eq!(status_fixture.state.count(DiscogsBrokerEndpoint::Status), 1);
+        assert!(
+            status_server
+                .context
+                .enrichment
+                .discogs_pending
+                .lock()
+                .expect("Discogs pending state should not be poisoned")
+                .is_some()
+        );
+        status_fixture.shutdown().await;
+
+        let finalize_fixture = DiscogsBrokerFixture::start("authorized").await;
+        finalize_fixture.state.fail_endpoint(
+            DiscogsBrokerEndpoint::Finalize,
+            r#"{"session_token":"fixture-private-session","pending_token":"fixture-private-finalize"}"#,
+        );
+        let finalize_persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let finalize_server = ReklawdboxServer::new(None);
+        set_discogs_pending(
+            &finalize_server,
+            "finalize-error-device",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        install_discogs_auth_test_dependencies(
+            &finalize_server,
+            &finalize_fixture,
+            Arc::clone(&finalize_persistence),
+            None,
+        );
+        let finalize_result = resolve_discogs_auth_transition_for_test(&finalize_server).await;
+        assert_sanitized_discogs_transition_error(
+            finalize_result,
+            "Discogs authentication finalization failed. Retry the lookup to complete authorization.",
+        );
+        assert_eq!(
+            finalize_fixture
+                .state
+                .count(DiscogsBrokerEndpoint::Finalize),
+            1
+        );
+        assert!(!finalize_persistence.has_session(&finalize_fixture.base_url));
+        assert!(
+            finalize_server
+                .context
+                .enrichment
+                .discogs_pending
+                .lock()
+                .expect("Discogs pending state should not be poisoned")
+                .is_some()
+        );
+        finalize_fixture.shutdown().await;
+
+        let closed_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("closed-endpoint listener should bind");
+        let closed_address = closed_listener
+            .local_addr()
+            .expect("closed-endpoint listener should have an address");
+        drop(closed_listener);
+        let connection_server = ReklawdboxServer::new(None);
+        connection_server
+            .set_discogs_auth_test_dependencies(DiscogsAuthTestDependencies::new(
+                crate::discogs::BrokerConfig {
+                    base_url: format!("http://{closed_address}"),
+                    broker_token: None,
+                },
+                DISCOGS_AUTH_TEST_NOW,
+                Arc::new(InMemoryDiscogsSessionPersistence::default()),
+            ))
+            .expect("connection-error dependencies should install");
+        let connection_result = resolve_discogs_auth_transition_for_test(&connection_server).await;
+        assert_sanitized_discogs_transition_error(
+            connection_result,
+            "Discogs authentication start failed. Retry the lookup to start authorization.",
+        );
+    };
+
+    tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario)
+        .await
+        .expect("sanitized transition-error scenario should finish within five seconds");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discogs_auth_transition_cancelled_waiter_reuses_committed_state() {
+    let mut tasks = DiscogsAuthTasks::default();
+    let scenario = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        let server = ReklawdboxServer::new(None);
+        install_discogs_auth_test_dependencies(&server, &fixture, Arc::clone(&persistence), None);
+        let mut delayed_start = fixture.state.delay_next(DiscogsBrokerEndpoint::Start);
+
+        let owner_server = server.clone();
+        let owner = tasks
+            .spawn(async move { resolve_discogs_auth_transition_for_test(&owner_server).await });
+        delayed_start
+            .wait_until_entered("owner device-session start")
+            .await?;
+
+        let (waiter_entered_tx, waiter_entered_rx) = tokio::sync::oneshot::channel();
+        let waiter_server = server.clone();
+        let waiter = tasks.spawn(async move {
+            let _ = waiter_entered_tx.send(());
+            resolve_discogs_auth_transition_for_test(&waiter_server).await
+        });
+        tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, waiter_entered_rx)
+            .await
+            .map_err(|_| "waiting lookup should enter within five seconds".to_string())?
+            .map_err(|_| "waiting lookup entry notification should arrive".to_string())?;
+        tasks
+            .abort_and_reap(waiter, "cancelled auth-lock waiter")
+            .await?;
+
+        delayed_start.release();
+        let owner = tasks.join(owner, "auth transition owner").await?;
+        assert!(matches!(owner, Ok(Some(_))));
+
+        let next = resolve_discogs_auth_transition_for_test(&server).await;
+        assert!(matches!(next, Ok(Some(_))));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Start), 1);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Status), 1);
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario).await;
+    finish_discogs_auth_scenario(&mut tasks, outcome, "cancelled waiter scenario").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discogs_auth_rejected_token_compare_clear_and_searches_run_outside_lock() {
+    let mut concurrent_search_tasks = DiscogsAuthTasks::default();
+    let concurrent_searches = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        persistence.set_session(
+            &fixture.base_url,
+            "concurrent-search-session-fixture",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        let server = ReklawdboxServer::new(None);
+        install_discogs_auth_test_dependencies(&server, &fixture, Arc::clone(&persistence), None);
+        let mut delayed_search = fixture.state.delay_next(DiscogsBrokerEndpoint::Search);
+
+        let first_server = server.clone();
+        let first = concurrent_search_tasks.spawn(async move {
+            lookup_discogs_remote(&first_server, "Search Artist", "First Search", None).await
+        });
+        delayed_search
+            .wait_until_entered("first ordinary Discogs search")
+            .await?;
+
+        let second_server = server.clone();
+        let second = concurrent_search_tasks.spawn(async move {
+            lookup_discogs_remote(&second_server, "Search Artist", "Second Search", None).await
+        });
+        fixture
+            .state
+            .wait_for_count(
+                DiscogsBrokerEndpoint::Search,
+                2,
+                "second ordinary Discogs search while the first is delayed",
+            )
+            .await?;
+        delayed_search.release();
+
+        let first = concurrent_search_tasks
+            .join(first, "first ordinary Discogs search")
+            .await?;
+        let second = concurrent_search_tasks
+            .join(second, "second ordinary Discogs search")
+            .await?;
+        assert!(matches!(first, Ok(None)));
+        assert!(matches!(second, Ok(None)));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Search), 2);
+        assert_eq!(persistence.clear_count(), 0);
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, concurrent_searches).await;
+    finish_discogs_auth_scenario(
+        &mut concurrent_search_tasks,
+        outcome,
+        "ordinary searches outside the auth lock",
+    )
+    .await;
+
+    let mut replacement_tasks = DiscogsAuthTasks::default();
+    let replacement_survives = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        persistence.set_session(
+            &fixture.base_url,
+            "rejected-old-session-fixture",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        fixture.state.reject_token("rejected-old-session-fixture");
+        let server = ReklawdboxServer::new(None);
+        install_discogs_auth_test_dependencies(&server, &fixture, Arc::clone(&persistence), None);
+        let mut delayed_search = fixture.state.delay_next(DiscogsBrokerEndpoint::Search);
+
+        let lookup_server = server.clone();
+        let lookup = replacement_tasks.spawn(async move {
+            lookup_discogs_remote(&lookup_server, "Race Artist", "Replacement Wins", None).await
+        });
+        delayed_search
+            .wait_until_entered("rejected old-token search")
+            .await?;
+        persistence.set_session(
+            &fixture.base_url,
+            "new-session-fixture",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        delayed_search.release();
+
+        let result = replacement_tasks
+            .join(lookup, "replacement-token retry")
+            .await?;
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Search), 2);
+        assert_eq!(persistence.clear_count(), 0);
+        assert!(persistence.session_matches(&fixture.base_url, "new-session-fixture"));
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, replacement_survives).await;
+    finish_discogs_auth_scenario(
+        &mut replacement_tasks,
+        outcome,
+        "new persisted session surviving stale rejection",
+    )
+    .await;
+
+    let mut bounded_retry_tasks = DiscogsAuthTasks::default();
+    let retry_is_bounded = async {
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        persistence.set_session(
+            &fixture.base_url,
+            "first-rejected-session-fixture",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        fixture.state.reject_token("first-rejected-session-fixture");
+        fixture
+            .state
+            .reject_token("second-rejected-session-fixture");
+        let server = ReklawdboxServer::new(None);
+        install_discogs_auth_test_dependencies(&server, &fixture, Arc::clone(&persistence), None);
+        let mut delayed_search = fixture.state.delay_next(DiscogsBrokerEndpoint::Search);
+
+        let lookup_server = server.clone();
+        let lookup = bounded_retry_tasks.spawn(async move {
+            lookup_discogs_remote(&lookup_server, "Race Artist", "Bounded Retry", None).await
+        });
+        delayed_search
+            .wait_until_entered("first rejected search in bounded retry")
+            .await?;
+        persistence.set_session(
+            &fixture.base_url,
+            "second-rejected-session-fixture",
+            DISCOGS_AUTH_TEST_NOW + 3_600,
+        );
+        delayed_search.release();
+
+        let result = bounded_retry_tasks
+            .join(lookup, "bounded rejected-token retry")
+            .await?;
+        assert!(matches!(
+            result,
+            Err(crate::discogs::LookupError::AuthRequired(_))
+        ));
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Search), 2);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Start), 0);
+        assert_eq!(persistence.clear_count(), 1);
+        assert!(!persistence.has_session(&fixture.base_url));
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, retry_is_bounded).await;
+    finish_discogs_auth_scenario(
+        &mut bounded_retry_tasks,
+        outcome,
+        "rejected-token recovery bounded to one retry",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enrich_tracks_discogs_auth_concurrency_starts_one_session_without_cache_writes() {
+    let mut batch_tasks = DiscogsAuthTasks::default();
+    let scenario = async {
+        let db_conn = create_single_track_test_db(
+            "discogs-auth-batch-one",
+            "/tmp/discogs-auth-batch-one.flac",
+        );
+        insert_test_track(
+            &db_conn,
+            "discogs-auth-batch-two",
+            "Concurrent Auth Two",
+            "g1",
+            "/tmp/discogs-auth-batch-two.flac",
+        );
+        let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+        let fixture = DiscogsBrokerFixture::start("pending").await;
+        let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+        install_discogs_auth_test_dependencies(
+            &server,
+            &fixture,
+            Arc::clone(&persistence),
+            Some(Arc::new(tokio::sync::Barrier::new(2))),
+        );
+        let mut delayed_start = fixture.state.delay_next(DiscogsBrokerEndpoint::Start);
+
+        let batch_server = server.clone();
+        let batch = batch_tasks.spawn(async move {
+            batch_server
+                .enrich_tracks(Parameters(EnrichTracksParams {
+                    filters: SearchFilterParams::default(),
+                    track_ids: Some(vec![
+                        "discogs-auth-batch-one".to_string(),
+                        "discogs-auth-batch-two".to_string(),
+                    ]),
+                    playlist_id: None,
+                    max_tracks: Some(2),
+                    offset: None,
+                    providers: Some(vec![crate::types::Provider::Discogs]),
+                    skip_cached: Some(false),
+                    force_refresh: Some(true),
+                    concurrency: Some(2),
+                }))
+                .await
+        });
+
+        delayed_start
+            .wait_until_entered("concurrent enrichment device-session start")
+            .await?;
+        delayed_start.release();
+        let result = batch_tasks
+            .join(batch, "concurrent Discogs enrichment batch")
+            .await
+            .map_err(|error| format!("concurrent Discogs enrichment task failed: {error}"))?
+            .map_err(|error| {
+                format!("concurrent Discogs enrichment should return a batch payload: {error:?}")
+            })?;
+        let payload = extract_json(&result);
+
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Start), 1);
+        assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Status), 1);
+        assert_eq!(payload["summary"]["tracks_total"], 2);
+        assert_eq!(payload["summary"]["total"], 2);
+        assert_eq!(payload["summary"]["enriched"], 0);
+        assert_eq!(payload["summary"]["cached"], 0);
+        assert_eq!(payload["summary"]["skipped"], 0);
+        assert_eq!(payload["summary"]["failed"], 2);
+        assert_cache_write_summary(&payload, 0, 0, 0);
+
+        let failures = payload["failures"]
+            .as_array()
+            .expect("concurrent Discogs failures should be an array");
+        assert_eq!(failures.len(), 2);
+        let errors = failures
+            .iter()
+            .map(|failure| {
+                assert_eq!(failure["provider"], "discogs");
+                failure["error"]
+                    .as_str()
+                    .expect("Discogs auth failure should include an error")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.contains("Auth URL: https://auth.example/device"))
+        );
+        assert_eq!(errors[0], errors[1]);
+
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("pending-test-value"));
+        assert!(!serialized.contains("session-test-value"));
+        assert!(!persistence.has_session(&fixture.base_url));
+        fixture.shutdown().await;
+        Ok::<(), String>(())
+    };
+
+    let outcome = tokio::time::timeout(DISCOGS_AUTH_TEST_TIMEOUT, scenario).await;
+    finish_discogs_auth_scenario(
+        &mut batch_tasks,
+        outcome,
+        "concurrent Discogs enrichment scenario",
+    )
+    .await;
+}
+
+fn backup_script_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &std::path::Path) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_executable_script(path: &std::path::Path, contents: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(path, contents).expect("test script should be written");
+    let mut permissions = std::fs::metadata(path)
+        .expect("test script metadata should be readable")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("test script should be executable");
+}
+
+#[cfg(unix)]
+fn run_embedded_backup_script(
+    args: &[&str],
+    home: &std::path::Path,
+    db_path: Option<&std::path::Path>,
+    stdin: Option<&str>,
+) -> std::process::Output {
+    run_embedded_backup_script_with_temp_dir(args, home, db_path, stdin, &home.join("tmp"))
+}
+
+#[cfg(unix)]
+fn run_embedded_backup_script_with_temp_dir(
+    args: &[&str],
+    home: &std::path::Path,
+    db_path: Option<&std::path::Path>,
+    stdin: Option<&str>,
+    temp_dir: &std::path::Path,
+) -> std::process::Output {
+    use std::io::Write as _;
+    use std::os::unix::process::CommandExt as _;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let (script, _script_dir) = crate::backup::write_embedded_script_for_test()
+        .expect("embedded backup script should be materialized");
+    let fake_bin = home.join("test-bin");
+    std::fs::create_dir_all(&fake_bin).expect("fake binary directory should create");
+    write_executable_script(&fake_bin.join("pgrep"), "#!/bin/sh\nexit 1\n");
+    std::fs::create_dir_all(temp_dir).expect("child temp directory should create");
+
+    let mut command = Command::new("/bin/bash");
+    command
+        .arg(&script)
+        .args(args)
+        .env_clear()
+        .env("HOME", home)
+        .env("TMPDIR", temp_dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("LANG", "C")
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(path) = db_path {
+        command.env("REKORDBOX_DB_PATH", path);
+    }
+
+    let mut child = command
+        .spawn()
+        .expect("embedded backup child should launch");
+    if let Some(input) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("backup child stdin should be piped")
+            .write_all(input.as_bytes())
+            .expect("backup child input should be written");
+    } else {
+        drop(child.stdin.take());
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child
+            .try_wait()
+            .expect("backup child status should be readable")
+        {
+            Some(_) => break,
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            None => {
+                let process_group = -(child.id() as i32);
+                unsafe {
+                    libc::kill(process_group, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                panic!("embedded backup child exceeded the 10-second test timeout");
+            }
+        }
+    }
+
+    child
+        .wait_with_output()
+        .expect("backup child output should be collected")
+}
+
+#[cfg(unix)]
+fn child_output_text(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[cfg(unix)]
+fn backup_archives(home: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
+    let backup_dir = home.join("Music/rekordbox-backups");
+    let mut archives = if backup_dir.is_dir() {
+        std::fs::read_dir(&backup_dir)
+            .expect("backup directory should be readable")
+            .map(|entry| {
+                entry
+                    .expect("backup directory entry should be readable")
+                    .path()
+            })
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".tar.gz"))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    archives.sort();
+    archives
+}
+
+#[cfg(unix)]
+fn tar_members(archive: &std::path::Path) -> Vec<String> {
+    let output = std::process::Command::new("tar")
+        .args(["-tzf"])
+        .arg(archive)
+        .output()
+        .expect("tar member listing should launch");
+    assert!(
+        output.status.success(),
+        "tar member listing should succeed: {}",
+        child_output_text(&output)
+    );
+    String::from_utf8(output.stdout)
+        .expect("tar member names should be UTF-8 test paths")
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(unix)]
+fn create_backup_archive_fixture(
+    archive: &std::path::Path,
+    source: &std::path::Path,
+    members: &[&str],
+) {
+    let output = std::process::Command::new("tar")
+        .args(["-czf"])
+        .arg(archive)
+        .arg("-C")
+        .arg(source)
+        .arg("--")
+        .args(members)
+        .output()
+        .expect("DB backup fixture creation should launch");
+    assert!(
+        output.status.success(),
+        "DB backup fixture creation should succeed: {}",
+        child_output_text(&output)
+    );
+}
+
+const WRITE_XML_TASK_TIMEOUT: Duration = Duration::from_secs(5);
+
+type WriteXmlTaskOutput = Result<CallToolResult, McpError>;
+
+struct WriteXmlTaskCleanup {
+    handles: Vec<Option<tokio::task::JoinHandle<WriteXmlTaskOutput>>>,
+}
+
+impl WriteXmlTaskCleanup {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, handle: tokio::task::JoinHandle<WriteXmlTaskOutput>) {
+        self.handles.push(Some(handle));
+    }
+
+    fn all_pending(&self) -> bool {
+        self.handles
+            .iter()
+            .flatten()
+            .all(|handle| !handle.is_finished())
+    }
+
+    async fn join(&mut self, index: usize, phase: &str) -> Result<WriteXmlTaskOutput, String> {
+        let mut handle = self
+            .handles
+            .get_mut(index)
+            .and_then(Option::take)
+            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
+
+        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(err)) => Err(format!("{phase}: task join failed: {err}")),
+            Err(_) => {
+                handle.abort();
+                let cleanup = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await;
+                if cleanup.is_err() {
+                    return Err(format!(
+                        "{phase}: task timed out and abort cleanup did not finish within five seconds"
+                    ));
+                }
+                Err(format!("{phase}: task did not finish within five seconds"))
+            }
+        }
+    }
+
+    async fn abort(&mut self, index: usize, phase: &str) -> Result<(), String> {
+        let mut handle = self
+            .handles
+            .get_mut(index)
+            .and_then(Option::take)
+            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
+        handle.abort();
+        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
+            Ok(Err(err)) if err.is_cancelled() => Ok(()),
+            Ok(Err(err)) => Err(format!("{phase}: aborted task join failed: {err}")),
+            Ok(Ok(_)) => Err(format!("{phase}: task completed before cancellation")),
+            Err(_) => Err(format!(
+                "{phase}: aborted task did not join within five seconds"
+            )),
+        }
+    }
+
+    async fn abort_all(&mut self) -> Result<(), String> {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+
+        for (index, slot) in self.handles.iter_mut().enumerate() {
+            let Some(mut handle) = slot.take() else {
+                continue;
+            };
+            if tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+            {
+                return Err(format!(
+                    "task {index} did not join during cleanup within five seconds"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WriteXmlTaskCleanup {
+    fn drop(&mut self) {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+    }
+}
+
+fn spawn_queued_write_xml(
+    server: ReklawdboxServer,
+    params: WriteXmlParams,
+    queued: Arc<tokio::sync::Notify>,
+) -> tokio::task::JoinHandle<WriteXmlTaskOutput> {
+    tokio::spawn(async move {
+        let mut request = Box::pin(server.write_xml(Parameters(params)));
+        std::future::poll_fn(|cx| match request.as_mut().poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(()),
+            std::task::Poll::Ready(_) => {
+                panic!("write_xml completed instead of waiting for the held export lock")
+            }
+        })
+        .await;
+        queued.notify_one();
+        request.await
+    })
+}
+
+async fn wait_for_queued_write_xml(
+    queued: &tokio::sync::Notify,
+    phase: &str,
+) -> Result<(), String> {
+    tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, queued.notified())
+        .await
+        .map_err(|_| format!("{phase}: write_xml did not queue within five seconds"))
+}
+
+const AUDIO_FILE_MUTATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+type AudioFileMutationTaskOutput = Result<CallToolResult, McpError>;
+
+struct AudioFileMutationTaskCleanup {
+    handles: Vec<Option<tokio::task::JoinHandle<AudioFileMutationTaskOutput>>>,
+}
+
+impl AudioFileMutationTaskCleanup {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, handle: tokio::task::JoinHandle<AudioFileMutationTaskOutput>) {
+        self.handles.push(Some(handle));
+    }
+
+    fn all_pending(&self) -> bool {
+        self.handles
+            .iter()
+            .flatten()
+            .all(|handle| !handle.is_finished())
+    }
+
+    async fn join(
+        &mut self,
+        index: usize,
+        phase: &str,
+    ) -> Result<AudioFileMutationTaskOutput, String> {
+        let outcome = {
+            let handle = self
+                .handles
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("{phase}: task handle is missing"))?;
+
+            match tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, &mut *handle).await {
+                Ok(Ok(output)) => Ok(output),
+                Ok(Err(err)) => Err(format!("{phase}: task join failed: {err}")),
+                Err(_) => {
+                    handle.abort();
+                    let cleanup =
+                        tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, &mut *handle).await;
+                    if cleanup.is_err() {
+                        return Err(format!(
+                            "{phase}: task timed out and abort cleanup did not finish within five seconds"
+                        ));
+                    }
+                    Err(format!("{phase}: task did not finish within five seconds"))
+                }
+            }
+        };
+        self.handles[index].take();
+        outcome
+    }
+
+    async fn abort_all(&mut self) -> Result<(), String> {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+
+        for (index, slot) in self.handles.iter_mut().enumerate() {
+            let Some(mut handle) = slot.take() else {
+                continue;
+            };
+            if tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+            {
+                return Err(format!(
+                    "audio mutation task {index} did not join during cleanup within five seconds"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AudioFileMutationTaskCleanup {
+    fn drop(&mut self) {
+        for handle in self.handles.iter().flatten() {
+            handle.abort();
+        }
+    }
+}
+
+fn write_audio_file_mutation_wav(path: &std::path::Path) {
+    let data_size: u32 = 2;
+    let file_size = 36 + data_size;
+    let mut header = Vec::new();
+    header.extend_from_slice(b"RIFF");
+    header.extend_from_slice(&file_size.to_le_bytes());
+    header.extend_from_slice(b"WAVE");
+    header.extend_from_slice(b"fmt ");
+    header.extend_from_slice(&16u32.to_le_bytes());
+    header.extend_from_slice(&1u16.to_le_bytes());
+    header.extend_from_slice(&1u16.to_le_bytes());
+    header.extend_from_slice(&44_100u32.to_le_bytes());
+    header.extend_from_slice(&88_200u32.to_le_bytes());
+    header.extend_from_slice(&2u16.to_le_bytes());
+    header.extend_from_slice(&16u16.to_le_bytes());
+    header.extend_from_slice(b"data");
+    header.extend_from_slice(&data_size.to_le_bytes());
+    header.extend_from_slice(&[0u8; 2]);
+    std::fs::write(path, header).expect("synthetic WAV should write");
+}
+
+fn seed_audio_file_wav_layer(
+    path: &std::path::Path,
+    target: crate::tags::WavTarget,
+    tags: HashMap<String, Option<String>>,
+) {
+    let result = crate::tags::write_file_tags(&crate::tags::WriteEntry {
+        path: path.to_path_buf(),
+        tags,
+        wav_targets: vec![target],
+        comment_mode: crate::tags::CommentMode::Replace,
+    });
+    assert!(
+        matches!(result, crate::tags::FileWriteResult::Ok { .. }),
+        "synthetic WAV layer should seed successfully: {result:?}"
+    );
+}
+
+fn write_audio_file_mutation_png(path: &std::path::Path) {
+    let png = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5,
+        1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    std::fs::write(path, png).expect("synthetic PNG should write");
+}
+
+fn audio_file_mutation_write_entry(
+    path: &std::path::Path,
+    comment: &str,
+    comment_mode: crate::tags::CommentMode,
+) -> WriteFileTagsEntry {
+    WriteFileTagsEntry {
+        path: path.display().to_string(),
+        tags: HashMap::from([("comment".to_string(), Some(comment.to_string()))]),
+        wav_targets: Some(vec![crate::tags::WavTarget::Id3v2]),
+        comment_mode: Some(comment_mode),
+    }
+}
+
+fn audio_file_mutation_state(path: &std::path::Path) -> Result<(Option<String>, bool), String> {
+    let fields = ["comment".to_string()];
+    match crate::tags::read_file_tags(path, Some(&fields), true) {
+        crate::tags::FileReadResult::Wav {
+            id3v2, cover_art, ..
+        } => Ok((id3v2.get("comment").cloned().flatten(), cover_art.is_some())),
+        crate::tags::FileReadResult::Single {
+            tags, cover_art, ..
+        } => Ok((tags.get("comment").cloned().flatten(), cover_art.is_some())),
+        crate::tags::FileReadResult::Error { error, .. } => Err(error),
+    }
+}
+
+fn assert_cover_art_invalid_params(error: &McpError, rejected: &str) {
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains(&format!("{rejected:?}")));
+    assert!(error.message.contains("front_cover"));
+    assert!(error.message.contains("back_cover"));
+}
+
+#[tokio::test]
+async fn dry_run_response_reports_wav_layers_without_mutation() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("dry-run.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    seed_audio_file_wav_layer(
+        &audio_path,
+        crate::tags::WavTarget::Id3v2,
+        HashMap::from([("artist".to_string(), Some("ID3 old".to_string()))]),
+    );
+    seed_audio_file_wav_layer(
+        &audio_path,
+        crate::tags::WavTarget::RiffInfo,
+        HashMap::from([("artist".to_string(), Some("RIFF old".to_string()))]),
+    );
+    let fields = ["artist".to_string()];
+    let before_tags = serde_json::to_value(crate::tags::read_file_tags(
+        &audio_path,
+        Some(&fields),
+        false,
+    ))
+    .expect("pre-dry-run tags should serialize");
+    let before_bytes = std::fs::read(&audio_path).expect("synthetic WAV should read");
+
+    let server = ReklawdboxServer::new(None);
+    let output = server
+        .write_file_tags(Parameters(WriteFileTagsParams {
+            writes: vec![WriteFileTagsEntry {
+                path: audio_path.display().to_string(),
+                tags: HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+                wav_targets: None,
+                comment_mode: None,
+            }],
+            dry_run: Some(true),
+        }))
+        .await
+        .expect("MCP WAV dry-run should succeed");
+    let payload = extract_json(&output);
+    let preview = &payload["results"][0];
+
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["summary"]["files_previewed"], 1);
+    assert_eq!(payload["summary"]["files_failed"], 0);
+    assert_eq!(
+        preview["changes_by_layer"]["id3v2"]["artist"]["old"],
+        "ID3 old"
+    );
+    assert_eq!(
+        preview["changes_by_layer"]["riff_info"]["artist"]["old"],
+        "RIFF old"
+    );
+    assert_eq!(preview["changes"], preview["changes_by_layer"]["id3v2"]);
+    assert_eq!(
+        preview["wav_targets"],
+        serde_json::json!(["id3v2", "riff_info"])
+    );
+
+    let after_tags = serde_json::to_value(crate::tags::read_file_tags(
+        &audio_path,
+        Some(&fields),
+        false,
+    ))
+    .expect("post-dry-run tags should serialize");
+    assert_eq!(after_tags, before_tags);
+    assert_eq!(
+        std::fs::read(&audio_path).expect("synthetic WAV should still read"),
+        before_bytes
+    );
+}
+
+#[tokio::test]
+async fn cover_art_invalid_picture_type_extract_is_invalid_params_before_io() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let output_path = temp_dir.path().join("should-not-exist.png");
+    let server = ReklawdboxServer::new(None);
+
+    let error = server
+        .extract_cover_art(Parameters(ExtractCoverArtParams {
+            path: temp_dir.path().join("missing.wav").display().to_string(),
+            output_path: Some(output_path.display().to_string()),
+            picture_type: Some("garbage".to_string()),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_cover_art_invalid_params(&error, "garbage");
+    assert!(!output_path.exists());
+}
+
+#[tokio::test]
+async fn cover_art_invalid_picture_type_embed_starts_no_file_work() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let audio_path = temp_dir.path().join("unchanged.wav");
+    let missing_target = temp_dir.path().join("missing.wav");
+    let missing_image = temp_dir.path().join("missing.png");
+    write_audio_file_mutation_wav(&audio_path);
+    let original_audio = std::fs::read(&audio_path).expect("synthetic WAV should read");
+    let server = ReklawdboxServer::new(None);
+
+    let error = server
+        .embed_cover_art(Parameters(EmbedCoverArtParams {
+            image_path: missing_image.display().to_string(),
+            target_audio_files: vec![
+                audio_path.display().to_string(),
+                missing_target.display().to_string(),
+            ],
+            picture_type: Some("Front_Cover".to_string()),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_cover_art_invalid_params(&error, "Front_Cover");
+    assert_eq!(
+        std::fs::read(&audio_path).expect("synthetic WAV should remain readable"),
+        original_audio
+    );
+    assert_eq!(server.audio_file_mutation_registry_len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cover_art_valid_aliases_work_through_mcp_handlers() {
+    let temp_dir = tempfile::tempdir().expect("temp directory should create");
+    let audio_path = temp_dir.path().join("alias.wav");
+    let image_path = temp_dir.path().join("alias.png");
+    let output_path = temp_dir.path().join("alias-extracted.png");
+    write_audio_file_mutation_wav(&audio_path);
+    write_audio_file_mutation_png(&image_path);
+    let server = ReklawdboxServer::new(None);
+
+    let embed = server
+        .embed_cover_art(Parameters(EmbedCoverArtParams {
+            image_path: image_path.display().to_string(),
+            target_audio_files: vec![audio_path.display().to_string()],
+            picture_type: Some("cover_front".to_string()),
+        }))
+        .await
+        .expect("cover_front embed alias should succeed");
+    assert_eq!(extract_json(&embed)["summary"]["files_embedded"], 1);
+
+    let extract = server
+        .extract_cover_art(Parameters(ExtractCoverArtParams {
+            path: audio_path.display().to_string(),
+            output_path: Some(output_path.display().to_string()),
+            picture_type: Some("cover_front".to_string()),
+        }))
+        .await
+        .expect("cover_front extract alias should succeed");
+    let payload = extract_json(&extract);
+    assert_eq!(payload["picture_type"], "front_cover");
+    assert_eq!(
+        std::fs::read(output_path).expect("extracted art should read"),
+        std::fs::read(image_path).expect("source art should read")
+    );
+}
+
+fn cover_art_picture_type_schema_description<T: schemars::JsonSchema>() -> String {
+    let schema = schemars::schema_for!(T);
+    schema
+        .as_value()
+        .pointer("/properties/picture_type/description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("{} picture_type description is missing", T::schema_name()))
+        .to_string()
+}
+
+fn cover_art_accepted_picture_type_tokens(description: &str) -> Vec<&str> {
+    let (_, accepted) = description
+        .split_once("Accepted exact values:")
+        .expect("schema should introduce accepted picture types");
+    let (accepted, _) = accepted
+        .split_once(". Unknown values are rejected")
+        .expect("schema should terminate the accepted picture type list");
+    accepted
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+#[test]
+fn cover_art_picture_type_schema_descriptions_match_parser_contract() {
+    for (surface, description) in [
+        (
+            "extract_cover_art",
+            cover_art_picture_type_schema_description::<ExtractCoverArtParams>(),
+        ),
+        (
+            "embed_cover_art",
+            cover_art_picture_type_schema_description::<EmbedCoverArtParams>(),
+        ),
+    ] {
+        assert_eq!(
+            cover_art_accepted_picture_type_tokens(&description),
+            crate::tags::ACCEPTED_PICTURE_TYPES,
+            "{surface} schema picture types drifted: {description}"
+        );
+        assert!(description.contains("Unknown values are rejected"));
+    }
+}
+
+async fn wait_at_audio_file_mutation_barrier(
+    barrier: &tokio::sync::Barrier,
+    phase: &str,
+) -> Result<(), String> {
+    tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, barrier.wait())
+        .await
+        .map(|_| ())
+        .map_err(|_| format!("{phase}: barrier did not release within five seconds"))
+}
+
+async fn wait_for_audio_file_mutation_strong_count(
+    server: &ReklawdboxServer,
+    canonical_path: &std::path::Path,
+    minimum: usize,
+    phase: &str,
+) -> Result<(), String> {
+    let wait = async {
+        loop {
+            let strong_count = {
+                let locks = server
+                    .context
+                    .mutation
+                    .audio_file_mutation_locks
+                    .lock()
+                    .map_err(|_| "audio file mutation registry poisoned".to_string())?;
+                locks
+                    .get(canonical_path)
+                    .map_or(0, std::sync::Weak::strong_count)
+            };
+            if strong_count >= minimum {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+
+    tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, wait)
+        .await
+        .map_err(|_| format!("{phase}: lock waiters did not arrive within five seconds"))?
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn audio_file_mutation_canonical_aliases_share_and_serialize_lock() {
+    let cwd = std::env::current_dir().expect("current directory should resolve");
+    let temp_dir = tempfile::Builder::new()
+        .prefix("audio-file-mutation-alias-")
+        .tempdir_in(&cwd)
+        .expect("temp audio directory should create under the working directory");
+    let audio_path = temp_dir.path().join("identity.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    let absolute_path = std::fs::canonicalize(&audio_path).expect("audio path should canonicalize");
+    let relative_path = absolute_path
+        .strip_prefix(&cwd)
+        .expect("temp audio path should be relative to the working directory")
+        .to_path_buf();
+    let symlink_path = temp_dir.path().join("identity-alias.wav");
+    std::os::unix::fs::symlink(&absolute_path, &symlink_path).expect("audio symlink should create");
+
+    let canonical_absolute = tokio::time::timeout(
+        AUDIO_FILE_MUTATION_TIMEOUT,
+        tokio::fs::canonicalize(&absolute_path),
+    )
+    .await
+    .expect("absolute canonicalization should finish within five seconds")
+    .expect("absolute audio path should canonicalize");
+    let canonical_relative = tokio::time::timeout(
+        AUDIO_FILE_MUTATION_TIMEOUT,
+        tokio::fs::canonicalize(&relative_path),
+    )
+    .await
+    .expect("relative canonicalization should finish within five seconds")
+    .expect("relative audio path should canonicalize");
+    let canonical_symlink = tokio::time::timeout(
+        AUDIO_FILE_MUTATION_TIMEOUT,
+        tokio::fs::canonicalize(&symlink_path),
+    )
+    .await
+    .expect("symlink canonicalization should finish within five seconds")
+    .expect("symlink audio path should canonicalize");
+    assert_eq!(canonical_absolute, canonical_relative);
+    assert_eq!(canonical_absolute, canonical_symlink);
+
+    let server = ReklawdboxServer::new(None);
+    let absolute_lock = server
+        .audio_file_mutation_lock(&canonical_absolute)
+        .expect("absolute mutation lock should resolve");
+    let relative_lock = server
+        .audio_file_mutation_lock(&canonical_relative)
+        .expect("relative mutation lock should resolve");
+    let symlink_lock = server
+        .audio_file_mutation_lock(&canonical_symlink)
+        .expect("symlink mutation lock should resolve");
+    assert!(Arc::ptr_eq(&absolute_lock, &relative_lock));
+    assert!(Arc::ptr_eq(&absolute_lock, &symlink_lock));
+
+    let held_guard = tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, absolute_lock.lock())
+        .await
+        .expect("canonical lock should be acquired within five seconds");
+    let mut alias_waiter = Box::pin(symlink_lock.lock());
+    std::future::poll_fn(|cx| match alias_waiter.as_mut().poll(cx) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(_) => {
+            panic!("alias lock acquired while the canonical identity was held")
+        }
+    })
+    .await;
+    drop(held_guard);
+    let _alias_guard = tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, &mut alias_waiter)
+        .await
+        .expect("alias lock should acquire after release within five seconds");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn audio_file_mutation_duplicate_alias_writes_preserve_input_order() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("ordered.wav");
+    let symlink_path = temp_dir.path().join("ordered-alias.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    std::os::unix::fs::symlink(&audio_path, &symlink_path).expect("audio symlink should create");
+
+    let seed = crate::tags::WriteEntry {
+        path: audio_path.clone(),
+        tags: HashMap::from([("comment".to_string(), Some("base".to_string()))]),
+        wav_targets: vec![crate::tags::WavTarget::Id3v2],
+        comment_mode: crate::tags::CommentMode::Replace,
+    };
+    assert!(matches!(
+        crate::tags::write_file_tags(&seed),
+        crate::tags::FileWriteResult::Ok { .. }
+    ));
+
+    let server = ReklawdboxServer::new(None);
+    let params = WriteFileTagsParams {
+        writes: vec![
+            audio_file_mutation_write_entry(
+                &audio_path,
+                "before",
+                crate::tags::CommentMode::Prepend,
+            ),
+            audio_file_mutation_write_entry(
+                &symlink_path,
+                "after",
+                crate::tags::CommentMode::Append,
+            ),
+        ],
+        dry_run: Some(false),
+    };
+    let mut tasks = AudioFileMutationTaskCleanup::new();
+    tasks.push(tokio::spawn(async move {
+        server.write_file_tags(Parameters(params)).await
+    }));
+    let output = match tasks.join(0, "duplicate alias write").await {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => panic!("duplicate alias write returned an MCP error: {err:?}"),
+        Err(err) => panic!("duplicate alias write failed: {err}"),
+    };
+
+    let payload = extract_json(&output);
+    assert_eq!(payload["summary"]["files_written"], 2);
+    assert_eq!(payload["summary"]["files_failed"], 0);
+    assert_eq!(
+        payload["results"][0]["path"].as_str(),
+        Some(audio_path.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        payload["results"][1]["path"].as_str(),
+        Some(symlink_path.to_string_lossy().as_ref())
+    );
+    let (comment, _) =
+        audio_file_mutation_state(&audio_path).expect("ordered audio tags should remain readable");
+    assert_eq!(comment.as_deref(), Some("before | base | after"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn audio_file_mutation_dual_layer_wav_preserves_symlink_and_updates_target() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("target.wav");
+    let symlink_path = temp_dir.path().join("alias.wav");
+    write_audio_file_mutation_wav(&audio_path);
+    std::os::unix::fs::symlink(&audio_path, &symlink_path).expect("audio symlink should create");
+
+    let server = ReklawdboxServer::new(None);
+    let output = server
+        .write_file_tags(Parameters(WriteFileTagsParams {
+            writes: vec![WriteFileTagsEntry {
+                path: symlink_path.to_string_lossy().to_string(),
+                tags: HashMap::from([("comment".to_string(), Some("through-link".to_string()))]),
+                wav_targets: None,
+                comment_mode: None,
+            }],
+            dry_run: Some(false),
+        }))
+        .await
+        .expect("dual-layer symlink write should succeed");
+
+    let payload = extract_json(&output);
+    assert_eq!(payload["summary"]["files_written"], 1);
+    assert!(
+        std::fs::symlink_metadata(&symlink_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let (comment, _) =
+        audio_file_mutation_state(&audio_path).expect("target tags should remain readable");
+    assert_eq!(comment.as_deref(), Some("through-link"));
+}
+
+#[tokio::test]
+async fn audio_file_mutation_tag_and_art_requests_share_one_lock() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let audio_path = temp_dir.path().join("shared.wav");
+    let image_path = temp_dir.path().join("cover.png");
+    write_audio_file_mutation_wav(&audio_path);
+    write_audio_file_mutation_png(&image_path);
+    let canonical_path =
+        std::fs::canonicalize(&audio_path).expect("audio path should canonicalize");
+
+    let server = ReklawdboxServer::new(None);
+    let shared_lock = server
+        .audio_file_mutation_lock(&canonical_path)
+        .expect("shared mutation lock should resolve");
+    let mut held_guard = Some(
+        tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, shared_lock.lock())
+            .await
+            .expect("shared lock should acquire within five seconds"),
+    );
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let mut tasks = AudioFileMutationTaskCleanup::new();
+
+    {
+        let server = server.clone();
+        let barrier = Arc::clone(&barrier);
+        let params = WriteFileTagsParams {
+            writes: vec![audio_file_mutation_write_entry(
+                &audio_path,
+                "tag-update",
+                crate::tags::CommentMode::Replace,
+            )],
+            dry_run: Some(false),
+        };
+        tasks.push(tokio::spawn(async move {
+            tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, barrier.wait())
+                .await
+                .map_err(|_| mcp_internal_error("tag request barrier timed out"))?;
+            server.write_file_tags(Parameters(params)).await
+        }));
+    }
+    {
+        let server = server.clone();
+        let barrier = Arc::clone(&barrier);
+        let params = EmbedCoverArtParams {
+            image_path: image_path.display().to_string(),
+            target_audio_files: vec![audio_path.display().to_string()],
+            picture_type: Some("front_cover".to_string()),
+        };
+        tasks.push(tokio::spawn(async move {
+            tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, barrier.wait())
+                .await
+                .map_err(|_| mcp_internal_error("art request barrier timed out"))?;
+            server.embed_cover_art(Parameters(params)).await
+        }));
+    }
+
+    let scenario = async {
+        wait_at_audio_file_mutation_barrier(&barrier, "shared request start").await?;
+        wait_for_audio_file_mutation_strong_count(
+            &server,
+            &canonical_path,
+            3,
+            "shared tag and art waiters",
+        )
+        .await?;
+        if !tasks.all_pending() {
+            return Err("tag and art requests should both wait on the held lock".to_string());
+        }
+
+        drop(held_guard.take());
+        let tag_output = tasks
+            .join(0, "shared tag request")
+            .await?
+            .map_err(|err| format!("shared tag request returned an MCP error: {err:?}"))?;
+        let art_output = tasks
+            .join(1, "shared art request")
+            .await?
+            .map_err(|err| format!("shared art request returned an MCP error: {err:?}"))?;
+        Ok::<_, String>((tag_output, art_output))
+    };
+
+    let scenario_result = tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, scenario).await;
+    let (tag_output, art_output) = match scenario_result {
+        Ok(Ok(outputs)) => outputs,
+        Ok(Err(err)) => {
+            drop(held_guard.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("shared tag/art scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_guard.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("shared tag/art scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    assert_eq!(extract_json(&tag_output)["summary"]["files_written"], 1);
+    assert_eq!(extract_json(&art_output)["summary"]["files_embedded"], 1);
+    let (comment, has_cover_art) =
+        audio_file_mutation_state(&audio_path).expect("shared audio tags should remain readable");
+    assert_eq!(comment.as_deref(), Some("tag-update"));
+    assert!(has_cover_art, "cover art should survive the tag mutation");
+}
+
+#[tokio::test]
+async fn audio_file_mutation_different_file_progress_is_independent() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let first_path = temp_dir.path().join("first.wav");
+    let second_path = temp_dir.path().join("second.wav");
+    write_audio_file_mutation_wav(&first_path);
+    write_audio_file_mutation_wav(&second_path);
+    let canonical_first =
+        std::fs::canonicalize(&first_path).expect("first audio path should canonicalize");
+
+    let server = ReklawdboxServer::new(None);
+    let first_lock = server
+        .audio_file_mutation_lock(&canonical_first)
+        .expect("first mutation lock should resolve");
+    let mut held_guard = Some(
+        tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, first_lock.lock())
+            .await
+            .expect("first lock should acquire within five seconds"),
+    );
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let mut tasks = AudioFileMutationTaskCleanup::new();
+
+    for (path, comment, barrier_error) in [
+        (
+            first_path.clone(),
+            "first-update",
+            "first request barrier timed out",
+        ),
+        (
+            second_path.clone(),
+            "second-update",
+            "second request barrier timed out",
+        ),
+    ] {
+        let server = server.clone();
+        let barrier = Arc::clone(&barrier);
+        let params = WriteFileTagsParams {
+            writes: vec![audio_file_mutation_write_entry(
+                &path,
+                comment,
+                crate::tags::CommentMode::Replace,
+            )],
+            dry_run: Some(false),
+        };
+        tasks.push(tokio::spawn(async move {
+            tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, barrier.wait())
+                .await
+                .map_err(|_| mcp_internal_error(barrier_error))?;
+            server.write_file_tags(Parameters(params)).await
+        }));
+    }
+
+    let scenario = async {
+        wait_at_audio_file_mutation_barrier(&barrier, "independent request start").await?;
+        wait_for_audio_file_mutation_strong_count(
+            &server,
+            &canonical_first,
+            2,
+            "first file waiter",
+        )
+        .await?;
+
+        let second_output = tasks
+            .join(1, "independent second-file request")
+            .await?
+            .map_err(|err| format!("second-file request returned an MCP error: {err:?}"))?;
+        if !tasks.all_pending() {
+            return Err(
+                "first-file request should remain blocked after second completes".to_string(),
+            );
+        }
+        let (second_comment, _) = audio_file_mutation_state(&second_path)
+            .map_err(|err| format!("second file became unreadable: {err}"))?;
+        if second_comment.as_deref() != Some("second-update") {
+            return Err(format!(
+                "second file did not complete independently: {second_comment:?}"
+            ));
+        }
+
+        drop(held_guard.take());
+        let first_output = tasks
+            .join(0, "released first-file request")
+            .await?
+            .map_err(|err| format!("first-file request returned an MCP error: {err:?}"))?;
+        Ok::<_, String>((first_output, second_output))
+    };
+
+    let scenario_result = tokio::time::timeout(AUDIO_FILE_MUTATION_TIMEOUT, scenario).await;
+    let (first_output, second_output) = match scenario_result {
+        Ok(Ok(outputs)) => outputs,
+        Ok(Err(err)) => {
+            drop(held_guard.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("independent-file scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_guard.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("independent-file scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    assert_eq!(extract_json(&first_output)["summary"]["files_written"], 1);
+    assert_eq!(extract_json(&second_output)["summary"]["files_written"], 1);
+    let (first_comment, _) =
+        audio_file_mutation_state(&first_path).expect("first audio tags should remain readable");
+    assert_eq!(first_comment.as_deref(), Some("first-update"));
+}
+
+#[test]
+fn audio_file_mutation_registry_prunes_dead_weak_entries() {
+    let temp_dir = tempfile::tempdir().expect("temp audio directory should create");
+    let first_path = temp_dir.path().join("first.wav");
+    let second_path = temp_dir.path().join("second.wav");
+    write_audio_file_mutation_wav(&first_path);
+    write_audio_file_mutation_wav(&second_path);
+    let canonical_first =
+        std::fs::canonicalize(&first_path).expect("first audio path should canonicalize");
+    let canonical_second =
+        std::fs::canonicalize(&second_path).expect("second audio path should canonicalize");
+    let server = ReklawdboxServer::new(None);
+
+    let first_lock = server
+        .audio_file_mutation_lock(&canonical_first)
+        .expect("first mutation lock should resolve");
+    assert_eq!(
+        server
+            .audio_file_mutation_registry_len()
+            .expect("registry length should read"),
+        1
+    );
+    drop(first_lock);
+
+    let second_lock = server
+        .audio_file_mutation_lock(&canonical_second)
+        .expect("second mutation lock should resolve");
+    assert_eq!(
+        server
+            .audio_file_mutation_registry_len()
+            .expect("registry length should read after cleanup"),
+        1,
+        "requesting a new identity should remove the stale first Weak entry"
+    );
+    drop(second_lock);
+
+    let _replacement_lock = server
+        .audio_file_mutation_lock(&canonical_first)
+        .expect("replacement mutation lock should resolve");
+    assert_eq!(
+        server
+            .audio_file_mutation_registry_len()
+            .expect("bounded registry length should read"),
+        1
+    );
+}
+
+fn create_server_with_connections(
+    db_conn: Connection,
+    store_conn: Connection,
+    http: reqwest::Client,
+) -> ReklawdboxServer {
+    create_server_with_store_path(db_conn, store_conn, http, None)
+}
+
+fn create_server_with_store_path(
+    db_conn: Connection,
+    store_conn: Connection,
+    http: reqwest::Client,
+    store_path: Option<String>,
+) -> ReklawdboxServer {
+    let mut context = ServerContext::new(None, http);
+    context.database.store_path = store_path;
+    context
+        .database
+        .db
+        .set(Ok(Mutex::new(db_conn)))
+        .expect("test DB should initialize exactly once");
+    context
+        .database
+        .effective_db_path
+        .set(Ok(std::path::PathBuf::from(
+            "/tmp/reklawdbox-tests/master.db",
+        )))
+        .expect("test effective DB path should initialize exactly once");
+    context
+        .database
+        .internal_db
+        .set(Ok(Mutex::new(store_conn)))
+        .expect("test internal store should initialize exactly once");
+
+    ReklawdboxServer {
+        context: Arc::new(context),
+        tool_router: ReklawdboxServer::build_tool_router(),
+    }
+}
+
+fn create_real_server_with_temp_store(
+    http: reqwest::Client,
+) -> Option<(ReklawdboxServer, TempDir)> {
+    let db_conn = db::open_real_db()?;
+    let store_dir = tempfile::tempdir().ok()?;
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn =
+        store::open(&store_path_str).expect("internal store should open for integration test");
+
+    let server = create_server_with_store_path(db_conn, store_conn, http, Some(store_path_str));
+    Some((server, store_dir))
+}
+
+fn sample_real_tracks(server: &ReklawdboxServer, limit: u32) -> Vec<crate::types::Track> {
+    let conn = server
+        .rekordbox_conn()
+        .expect("real DB connection should be available for integration test");
+    db::search_tracks(
+        &conn,
+        &db::SearchParams {
+            has_genre: Some(true),
+            exclude_samples: true,
+            limit: Some(limit),
+            ..Default::default()
+        },
+    )
+    .expect("sample search should succeed")
+    .into_iter()
+    .filter(|t| !t.artist.trim().is_empty() && !t.title.trim().is_empty())
+    .collect()
+}
+
+fn write_test_audio_file(path: &std::path::Path, size: usize) -> (i64, i64) {
+    let data = vec![b'a'; size];
+    std::fs::write(path, data).expect("test audio file should write");
+    let metadata = std::fs::metadata(path).expect("test audio file metadata should exist");
+    let file_size = metadata.len() as i64;
+    let file_mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+    (file_size, file_mtime)
+}
+
+fn create_single_track_test_db(track_id: &str, raw_file_path: &str) -> Connection {
+    let conn = Connection::open_in_memory().expect("in-memory DB should open");
+    conn.execute_batch(
+        "
+            CREATE TABLE djmdArtist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdAlbum (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdGenre (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdKey (
+                ID VARCHAR(255) PRIMARY KEY,
+                ScaleName VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdLabel (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdColor (
+                ID VARCHAR(255) PRIMARY KEY,
+                ColorCode INTEGER,
+                Commnt VARCHAR(255),
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdContent (
+                ID VARCHAR(255) PRIMARY KEY,
+                Title VARCHAR(255),
+                ArtistID VARCHAR(255),
+                AlbumID VARCHAR(255),
+                GenreID VARCHAR(255),
+                KeyID VARCHAR(255),
+                ColorID VARCHAR(255),
+                LabelID VARCHAR(255),
+                RemixerID VARCHAR(255),
+                BPM INTEGER DEFAULT 0,
+                Rating INTEGER DEFAULT 0,
+                Commnt TEXT DEFAULT '',
+                ReleaseYear INTEGER DEFAULT 0,
+                Length INTEGER DEFAULT 0,
+                FolderPath VARCHAR(255) DEFAULT '',
+                DJPlayCount VARCHAR(255) DEFAULT '0',
+                BitRate INTEGER DEFAULT 0,
+                SampleRate INTEGER DEFAULT 0,
+                FileType INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT '',
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+
+            INSERT INTO djmdArtist (ID, Name) VALUES ('a1', 'Aníbal');
+            INSERT INTO djmdAlbum (ID, Name) VALUES ('al1', 'Encoded Paths');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g1', 'Deep House');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k1', 'Am');
+            INSERT INTO djmdLabel (ID, Name) VALUES ('l1', 'Test Label');
+            INSERT INTO djmdColor (ID, ColorCode, Commnt) VALUES ('c1', 16711935, 'Rose');
+            ",
+    )
+    .expect("test schema should initialize");
+
+    conn.execute(
+        "INSERT INTO djmdContent (
+                ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                SampleRate, FileType, created_at, rb_local_deleted
+            ) VALUES (
+                ?1, 'Señorita', 'a1', 'al1', 'g1', 'k1', 'c1', 'l1', '',
+                12800, 204, 'percent path test', 2025, 240, ?2, '0', 1411,
+                44100, 5, '2025-01-01', 0
+            )",
+        params![track_id, raw_file_path],
+    )
+    .expect("test track should insert");
+
+    conn
+}
+
+fn insert_test_track(
+    conn: &Connection,
+    track_id: &str,
+    title: &str,
+    genre_id: &str,
+    file_path: &str,
+) {
+    conn.execute(
+        "INSERT INTO djmdContent (
+                ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                SampleRate, FileType, created_at, rb_local_deleted
+            ) VALUES (
+                ?1, ?2, 'a1', 'al1', ?3, 'k1', 'c1', 'l1', '',
+                12700, 102, 'cache coverage test', 2025, 220, ?4, '0', 1411,
+                44100, 5, '2025-01-02', 0
+            )",
+        params![track_id, title, genre_id, file_path],
+    )
+    .expect("test track should insert");
+}
+
+fn create_selector_pagination_test_db() -> Connection {
+    let conn = create_single_track_test_db("t1", "/music/01-known.flac");
+    conn.execute_batch(
+        "
+            CREATE TABLE djmdSongPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-known-2', 'Techno');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-1', 'Wonky Bass');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-2', 'Alien Rhythms');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g-unknown-3', 'Future Tribal');
+
+            UPDATE djmdContent
+            SET Title = '01 Known', GenreID = 'g1', FolderPath = '/music/01-known.flac'
+            WHERE ID = 't1';
+        ",
+    )
+    .expect("selector pagination fixture schema should initialize");
+
+    insert_test_track(
+        &conn,
+        "t2",
+        "02 Unknown First",
+        "g-unknown-1",
+        "/music/02-unknown.flac",
+    );
+    insert_test_track(&conn, "t3", "03 Known", "g-known-2", "/music/03-known.flac");
+    insert_test_track(
+        &conn,
+        "t4",
+        "04 Unknown Second",
+        "g-unknown-2",
+        "/music/04-unknown.flac",
+    );
+    insert_test_track(&conn, "t5", "05 Empty", "", "/music/05-empty.flac");
+    insert_test_track(
+        &conn,
+        "t6",
+        "06 Unknown Sample",
+        "g-unknown-3",
+        &format!("/music{}06-unknown-sample.wav", db::SAMPLER_PATH_FRAGMENT),
+    );
+
+    for (row_id, track_id, position) in [
+        ("sp1", "t1", 1),
+        ("sp2", "t6", 2),
+        ("sp3", "t2", 3),
+        ("sp4", "t3", 4),
+        ("sp5", "t4", 5),
+        ("sp6", "t5", 6),
+    ] {
+        conn.execute(
+            "INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo)
+             VALUES (?1, 'selector-playlist', ?2, ?3)",
+            params![row_id, track_id, position],
+        )
+        .expect("selector pagination playlist row should insert");
+    }
+
+    conn
+}
+
+fn selector_pagination_opts(
+    default_max_tracks: Option<u32>,
+    max_tracks_cap: Option<u32>,
+    exclude_samplers: bool,
+) -> ResolveTracksOpts {
+    ResolveTracksOpts {
+        default_max_tracks,
+        max_tracks_cap,
+        exclude_samplers,
+    }
+}
+
+fn track_ids(tracks: &[crate::types::Track]) -> Vec<&str> {
+    tracks.iter().map(|track| track.id.as_str()).collect()
+}
+
+fn tracks_from_tool_result(result: &CallToolResult) -> Vec<crate::types::Track> {
+    serde_json::from_value(extract_json(result)).expect("tool result should contain tracks")
+}
+
+#[test]
+fn selector_pagination_playlist_offset_preserves_position() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t6"]);
+    assert_eq!(tracks[0].position, Some(2));
+}
+
+#[test]
+fn selector_pagination_playlist_pages_do_not_repeat() {
+    let conn = create_selector_pagination_test_db();
+    let opts = selector_pagination_opts(Some(50), Some(200), false);
+    let first = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(0),
+        &opts,
+    )
+    .expect("first playlist page should resolve");
+    let second = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(2),
+        &opts,
+    )
+    .expect("second playlist page should resolve");
+
+    assert_eq!(track_ids(&first), ["t1", "t6"]);
+    assert_eq!(track_ids(&second), ["t2", "t3"]);
+}
+
+#[test]
+fn selector_pagination_explicit_ids_follow_caller_order_after_deduplication() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec![
+        "t3".to_string(),
+        "t1".to_string(),
+        "t1".to_string(),
+        "t2".to_string(),
+    ];
+    let tracks = resolve_tracks(
+        &conn,
+        Some(&ids),
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("explicit ID selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t1"]);
+}
+
+#[test]
+fn pending_batch_page_explicit_ids_keep_caller_order_and_apply_cap() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec![
+        "t3".to_string(),
+        "t1".to_string(),
+        "t1".to_string(),
+        "t2".to_string(),
+    ];
+    let selection = resolve_pending_tracks(
+        &conn,
+        Some(&ids),
+        None,
+        SearchFilterParams::default(),
+        Some(10),
+        Some(0),
+        50,
+        2,
+        false,
+        |tracks| Ok(vec![false; tracks.len()]),
+    )
+    .expect("pending explicit-ID selector should resolve");
+
+    assert_eq!(track_ids(&selection.selected), ["t3", "t1"]);
+    assert_eq!(
+        selection.page,
+        BatchPage {
+            matched_tracks: 3,
+            start_offset: 0,
+            examined_tracks: 2,
+            selected_tracks: 2,
+            fully_cached_skipped: 0,
+            next_offset: Some(2),
+            has_more: true,
+        }
+    );
+}
+
+#[test]
+fn selector_pagination_unknown_genre_search_filters_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("unknown-genre search selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t4"]);
+}
+
+#[test]
+fn selector_pagination_unknown_genre_playlist_filters_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("unknown-genre playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t2"]);
+    assert_eq!(tracks[0].position, Some(3));
+}
+
+#[test]
+fn selector_pagination_sampler_filter_runs_before_offset() {
+    let conn = create_selector_pagination_test_db();
+    let tracks = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(1),
+        Some(1),
+        &selector_pagination_opts(None, None, true),
+    )
+    .expect("sampler-excluding playlist selector should resolve");
+
+    assert_eq!(track_ids(&tracks), ["t2"]);
+    assert_eq!(tracks[0].position, Some(3));
+}
+
+#[test]
+fn selector_pagination_zero_beyond_default_and_cap() {
+    let conn = create_selector_pagination_test_db();
+    let ids = vec!["t1".to_string(), "t2".to_string()];
+    let zero = resolve_tracks(
+        &conn,
+        Some(&ids),
+        None,
+        SearchFilterParams::default(),
+        Some(0),
+        None,
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("zero limit should resolve");
+    assert!(zero.is_empty());
+
+    let beyond = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams {
+            has_unknown_genre: Some(true),
+            ..Default::default()
+        },
+        Some(1),
+        Some(9),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("beyond-end offset should resolve");
+    assert!(beyond.is_empty());
+
+    let defaulted = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        None,
+        None,
+        &selector_pagination_opts(Some(2), Some(200), false),
+    )
+    .expect("default limit should resolve");
+    assert_eq!(track_ids(&defaulted), ["t1", "t2"]);
+
+    let capped = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(10),
+        None,
+        &selector_pagination_opts(Some(50), Some(2), false),
+    )
+    .expect("capped limit should resolve");
+    assert_eq!(track_ids(&capped), ["t1", "t2"]);
+}
+
+#[test]
+fn selector_pagination_sql_fast_paths_apply_offset_once() {
+    let conn = create_selector_pagination_test_db();
+    let bounded_search = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(2),
+        Some(1),
+        &selector_pagination_opts(Some(50), Some(200), false),
+    )
+    .expect("bounded search page should resolve");
+    assert_eq!(track_ids(&bounded_search), ["t2", "t3"]);
+
+    let unbounded_search = resolve_tracks(
+        &conn,
+        None,
+        None,
+        SearchFilterParams::default(),
+        Some(2),
+        Some(1),
+        &selector_pagination_opts(None, None, false),
+    )
+    .expect("unbounded search page should resolve");
+    assert_eq!(track_ids(&unbounded_search), ["t2", "t3"]);
+
+    let unbounded_playlist = resolve_tracks(
+        &conn,
+        None,
+        Some("selector-playlist"),
+        SearchFilterParams::default(),
+        Some(2),
+        Some(2),
+        &selector_pagination_opts(None, None, false),
+    )
+    .expect("unbounded playlist page should resolve");
+    assert_eq!(track_ids(&unbounded_playlist), ["t2", "t3"]);
+}
+
+#[test]
+fn search_tracks_unknown_genre_paginates_after_filtering() {
+    let conn = Mutex::new(create_selector_pagination_test_db());
+    let search = |offset, include_samples| {
+        let guard = conn.lock().expect("test DB mutex should lock");
+        let result = handle_search_tracks(
+            guard,
+            SearchTracksParams {
+                filters: SearchFilterParams {
+                    has_unknown_genre: Some(true),
+                    ..Default::default()
+                },
+                playlist: Some("selector-playlist".to_string()),
+                include_samples,
+                limit: Some(1),
+                offset: Some(offset),
+            },
+        )
+        .expect("unknown-genre search handler should succeed");
+        tracks_from_tool_result(&result)
+    };
+
+    assert_eq!(track_ids(&search(0, None)), ["t2"]);
+    assert_eq!(track_ids(&search(1, None)), ["t4"]);
+    assert!(search(2, None).is_empty());
+    assert_eq!(track_ids(&search(2, Some(true))), ["t6"]);
+}
+
+#[test]
+fn search_tracks_unknown_genre_false_retains_sql_pagination() {
+    let conn = Mutex::new(create_selector_pagination_test_db());
+    let result = handle_search_tracks(
+        conn.lock().expect("test DB mutex should lock"),
+        SearchTracksParams {
+            filters: SearchFilterParams::default(),
+            playlist: Some("selector-playlist".to_string()),
+            include_samples: None,
+            limit: Some(2),
+            offset: Some(1),
+        },
+    )
+    .expect("ordinary search handler should succeed");
+
+    assert_eq!(track_ids(&tracks_from_tool_result(&result)), ["t2", "t3"]);
+}
+
+#[test]
+fn selector_pagination_helpers_skip_then_take_without_reordering() {
+    let conn = create_selector_pagination_test_db();
+    let all = db::search_tracks_unbounded(&conn, &db::SearchParams::default())
+        .expect("fixture tracks should load");
+
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), None, None)),
+        ["t1", "t2", "t3", "t4", "t5", "t6"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), Some(1), None)),
+        ["t2", "t3", "t4", "t5", "t6"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), None, Some(2))),
+        ["t1", "t2"]
+    );
+    assert_eq!(
+        track_ids(&apply_offset_limit(all.clone(), Some(1), Some(2))),
+        ["t2", "t3"]
+    );
+    assert!(apply_offset_limit(all.clone(), Some(99), Some(1)).is_empty());
+    assert!(apply_offset_limit(all, Some(0), Some(0)).is_empty());
+}
+
+#[test]
+fn selector_pagination_helpers_unknown_genre_predicate_is_exact() {
+    let conn = create_selector_pagination_test_db();
+    let mut track = db::get_track(&conn, "t1")
+        .expect("fixture lookup should succeed")
+        .expect("fixture track should exist");
+
+    track.genre = "Techno".to_string();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre = "Hip-Hop".to_string();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre.clear();
+    assert!(!track_has_unknown_genre(&track));
+    track.genre = "Alien Rhythms".to_string();
+    assert!(track_has_unknown_genre(&track));
+}
+
+fn canonical_genre_name(raw_genre: &str) -> String {
+    if let Some(canonical) = genre::canonical_genre_name(raw_genre) {
+        return canonical.to_string();
+    }
+    if let Some(alias_target) = genre::canonical_genre_from_alias(raw_genre) {
+        return alias_target.to_string();
+    }
+    raw_genre.to_string()
+}
+
+fn load_golden_genres_fixture() -> Vec<GoldenGenreFixtureEntry> {
+    let raw = std::fs::read_to_string(GOLDEN_GENRES_FIXTURE_PATH)
+        .expect("golden genres fixture should be readable");
+    serde_json::from_str(&raw).expect("golden genres fixture should be valid JSON")
+}
+
+fn find_track_by_artist_and_title(
+    conn: &Connection,
+    artist: &str,
+    title: &str,
+) -> Option<crate::types::Track> {
+    let sql = format!(
+        "{}
+             WHERE c.rb_local_deleted = 0
+               AND lower(COALESCE(a.Name, '')) = lower(?1)
+               AND lower(COALESCE(c.Title, '')) = lower(?2)
+             LIMIT 1",
+        db::TRACK_SELECT
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .expect("fixture lookup query should prepare");
+    let mut rows = stmt
+        .query_map(params![artist, title], db::row_to_track)
+        .expect("fixture lookup query should run");
+    match rows.next() {
+        Some(Ok(track)) => Some(track),
+        Some(Err(e)) => panic!("fixture lookup failed for {artist} - {title}: {e}"),
+        None => None,
+    }
+}
+
+fn create_build_set_test_db() -> (Connection, Vec<String>, TempDir) {
+    let audio_dir = tempfile::tempdir().expect("build_set temp audio dir should create");
+    let first_track_path = audio_dir.path().join("set-track-1.flac");
+    let conn = create_single_track_test_db(
+        "set-track-1",
+        first_track_path
+            .to_str()
+            .expect("first build_set track path should be UTF-8"),
+    );
+    conn.execute_batch(
+        "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'House');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Tech House');
+
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Em');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k3', 'Bm');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k4', 'F#m');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k5', 'C#m');
+            INSERT INTO djmdKey (ID, ScaleName) VALUES ('k6', 'Dm');
+            ",
+    )
+    .expect("build_set fixture taxonomy inserts should succeed");
+
+    let tracks: [(&str, &str, &str, &str, i32, i32); 5] = [
+        ("set-track-2", "Second Step", "g1", "k2", 12400, 300),
+        ("set-track-3", "Third Wave", "g2", "k3", 12600, 0),
+        ("set-track-4", "Fourth Lift", "g3", "k4", 12800, 360),
+        ("set-track-5", "Fifth Peak", "g3", "k5", 12950, 420),
+        ("set-track-6", "Sixth Release", "g2", "k6", 12350, 250),
+    ];
+
+    for (index, (track_id, title, genre_id, key_id, bpm, length)) in tracks.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, ?2, 'a1', 'al1', ?3, ?4, 'c1', 'l1', '',
+                    ?5, 153, 'build_set fixture', 2025, ?6, ?7, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+            params![
+                *track_id,
+                *title,
+                *genre_id,
+                *key_id,
+                *bpm,
+                *length,
+                audio_dir
+                    .path()
+                    .join(format!("{track_id}.flac"))
+                    .to_string_lossy()
+                    .to_string(),
+            ],
+        )
+        .unwrap_or_else(|e| panic!("fixture track insert {index} should succeed: {e}"));
+    }
+
+    (
+        conn,
+        vec![
+            "set-track-1".to_string(),
+            "set-track-2".to_string(),
+            "set-track-3".to_string(),
+            "set-track-4".to_string(),
+            "set-track-5".to_string(),
+            "set-track-6".to_string(),
+        ],
+        audio_dir,
+    )
+}
+
+fn seed_build_set_cache(store_conn: &Connection, audio_dir: &std::path::Path) {
+    let rows: [(&str, f64, &str, f64); 6] = [
+        ("set-track-1.flac", 122.0, "8A", 1.02),
+        ("set-track-2.flac", 124.0, "9A", 1.20),
+        ("set-track-3.flac", 126.0, "10A", 1.44),
+        ("set-track-4.flac", 128.0, "11A", 1.80),
+        ("set-track-5.flac", 130.0, "12A", 2.22),
+        ("set-track-6.flac", 123.5, "7A", 1.26),
+    ];
+
+    for (index, (file_name, bpm, key_camelot, danceability)) in rows.iter().enumerate() {
+        let path = audio_dir.join(file_name);
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + index);
+        let stratum = serde_json::json!({
+            "bpm": *bpm,
+            "key": "Am",
+            "key_camelot": *key_camelot,
+            "analyzer_version": "stratum-dsp-test"
+        });
+        let essentia = serde_json::json!({
+            "danceability": *danceability,
+            "loudness_integrated": -18.0 + (*danceability * 4.0),
+            "onset_rate": 2.5 + (*danceability * 2.0),
+            "analyzer_version": "essentia-test"
+        });
+        set_test_audio_analysis(
+            store_conn,
+            path.to_str().expect("seed path should be UTF-8"),
+            "stratum-dsp",
+            file_size,
+            file_mtime,
+            "stratum-dsp-test",
+            &stratum.to_string(),
+        )
+        .unwrap_or_else(|e| panic!("stratum cache seed {index} should succeed: {e}"));
+        set_test_audio_analysis(
+            store_conn,
+            path.to_str().expect("seed path should be UTF-8"),
+            "essentia",
+            file_size,
+            file_mtime,
+            "essentia-test",
+            &essentia.to_string(),
+        )
+        .unwrap_or_else(|e| panic!("essentia cache seed {index} should succeed: {e}"));
+    }
+}
+
+#[tokio::test]
+async fn build_set_generates_candidates_and_transition_scores() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids,
+            target_tracks: 4,
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            energy_curve: Some(EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
+            opening_track_id: None,
+            candidates: Some(3),
+            beam_width: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set should succeed for fixture pool");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["pool_size"], 6);
+    assert_eq!(payload["tracks_used"], 4);
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates should be an array");
+    assert_eq!(candidates.len(), 3);
+
+    for candidate in candidates {
+        let tracks = candidate["tracks"]
+            .as_array()
+            .expect("candidate tracks should be an array");
+        let transitions = candidate["transitions"]
+            .as_array()
+            .expect("candidate transitions should be an array");
+        assert_eq!(tracks.len(), 4);
+        assert_eq!(transitions.len(), 3);
+        assert!(
+            candidate["set_score"].as_f64().is_some(),
+            "set_score should be numeric"
+        );
+        let set_score = candidate["set_score"]
+            .as_f64()
+            .expect("set_score should be numeric");
+        assert!(
+            (set_score - round_to_3_decimals(set_score)).abs() < 1e-9,
+            "set_score should be rounded to 3 decimal places"
+        );
+        assert!(
+            candidate["estimated_duration_minutes"].as_i64().is_some(),
+            "estimated_duration_minutes should be numeric"
+        );
+        for transition in transitions {
+            assert!(
+                transition["scores"]["composite"].as_f64().is_some(),
+                "each transition should include numeric composite score"
+            );
+            assert!(
+                transition["key_relation"].is_string(),
+                "each transition should include key_relation"
+            );
+            assert!(
+                transition["bpm_adjustment_pct"].is_number(),
+                "each transition should include bpm_adjustment_pct"
+            );
+        }
+    }
+
+    let candidate_a_ids: Vec<String> = candidates[0]["tracks"]
+        .as_array()
+        .expect("candidate A tracks array")
+        .iter()
+        .map(|track| {
+            track["track_id"]
+                .as_str()
+                .expect("candidate track should include track_id")
+                .to_string()
+        })
+        .collect();
+    let candidate_b_ids: Vec<String> = candidates[1]["tracks"]
+        .as_array()
+        .expect("candidate B tracks array")
+        .iter()
+        .map(|track| {
+            track["track_id"]
+                .as_str()
+                .expect("candidate track should include track_id")
+                .to_string()
+        })
+        .collect();
+    assert_ne!(
+        candidate_a_ids, candidate_b_ids,
+        "candidate generation should include variation"
+    );
+}
+
+#[tokio::test]
+async fn build_set_adapts_energy_curve_to_single_track_pool() {
+    let db_conn = create_single_track_test_db("single-set-1", "/tmp/single-set-1.flac");
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET Length = 0 WHERE ID = ?1",
+            params!["single-set-1"],
+        )
+        .expect("single-track fixture should update");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids: vec!["single-set-1".to_string()],
+            target_tracks: 4,
+            priority: Some(TransitionWeightSpec::Named("energy".into())),
+            energy_curve: Some(EnergyCurveInput::Custom(vec![
+                EnergyPhase::Warmup,
+                EnergyPhase::Build,
+                EnergyPhase::Peak,
+                EnergyPhase::Release,
+            ])),
+            opening_track_id: None,
+            candidates: Some(2),
+            beam_width: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set should succeed for single-track pool");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["pool_size"], 1);
+    assert_eq!(payload["tracks_used"], 1);
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates should be an array");
+    assert_eq!(candidates.len(), 1);
+    let first = &candidates[0];
+    assert_eq!(
+        first["tracks"]
+            .as_array()
+            .expect("tracks should be array")
+            .len(),
+        1
+    );
+    assert_eq!(
+        first["transitions"]
+            .as_array()
+            .expect("transitions should be array")
+            .len(),
+        0
+    );
+    assert_eq!(
+        first["estimated_duration_minutes"]
+            .as_i64()
+            .expect("duration should be integer"),
+        6
+    );
+}
+
+#[tokio::test]
+async fn build_set_produces_candidates_from_homogeneous_key_pool() {
+    let db_conn = create_single_track_test_db("same-key-1", "/tmp/same-key-1.flac");
+    insert_test_track(
+        &db_conn,
+        "same-key-2",
+        "Same Key Two",
+        "g1",
+        "/tmp/same-key-2.flac",
+    );
+    insert_test_track(
+        &db_conn,
+        "same-key-3",
+        "Same Key Three",
+        "g1",
+        "/tmp/same-key-3.flac",
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids: vec![
+                "same-key-1".to_string(),
+                "same-key-2".to_string(),
+                "same-key-3".to_string(),
+            ],
+            target_tracks: 3,
+            priority: Some(TransitionWeightSpec::Named("harmonic".into())),
+            energy_curve: Some(EnergyCurveInput::Preset(EnergyCurvePreset::FlatEnergy)),
+            opening_track_id: None,
+            candidates: Some(2),
+            beam_width: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set should succeed when all tracks share the same key");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["pool_size"], 3);
+    assert_eq!(payload["tracks_used"], 3);
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates should be an array");
+    // With beam search (beam_width=2 from candidates), beam explores different
+    // orderings of the same 3-track pool, yielding 1 or 2 candidates.
+    assert!(
+        !candidates.is_empty() && candidates.len() <= 2,
+        "same-key pool with beam_width=2 should produce 1-2 candidates; got {}",
+        candidates.len()
+    );
+    assert_eq!(
+        candidates[0]["transitions"]
+            .as_array()
+            .expect("transitions should be an array")
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn build_set_recomputes_preset_curve_when_pool_is_smaller_than_target() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let selected: Vec<String> = track_ids.into_iter().take(3).collect();
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids: selected,
+            target_tracks: 6,
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            energy_curve: Some(EnergyCurveInput::Preset(
+                EnergyCurvePreset::WarmupBuildPeakRelease,
+            )),
+            opening_track_id: None,
+            candidates: Some(1),
+            beam_width: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set should succeed when pool is smaller than target");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["tracks_used"], 3);
+    let transitions = payload["candidates"][0]["transitions"]
+        .as_array()
+        .expect("candidate transitions should be an array");
+    assert_eq!(transitions.len(), 2);
+    let second_energy_label = transitions[1]["scores"]["energy"]["label"]
+        .as_str()
+        .expect("second transition should include energy label");
+    assert!(
+        second_energy_label.contains("peak phase"),
+        "phase scaling should include a peak phase for the final transition when tracks_used=3; got: {second_energy_label}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn probe_essentia_python_prefers_env_override_when_valid() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir should create");
+    let fake_python = dir.path().join("fake-python");
+    std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
+        .expect("fake python script should be written");
+    let mut perms = std::fs::metadata(&fake_python)
+        .expect("fake python metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_python, perms).expect("fake python script should be executable");
+
+    let resolved = probe_essentia_python_from_sources(
+        fake_python.to_str(),
+        Some(dir.path().join("missing-default-python")),
+    );
+
+    assert_eq!(
+        resolved.as_deref(),
+        fake_python.to_str(),
+        "valid env override should win over default candidate"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn probe_essentia_python_fails_when_no_version_string() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir should create");
+    let fake_python = dir.path().join("fake-python-empty");
+    std::fs::write(&fake_python, "#!/bin/sh\nexit 0\n")
+        .expect("fake python script should be written");
+    let mut perms = std::fs::metadata(&fake_python)
+        .expect("fake python metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_python, perms).expect("fake python script should be executable");
+
+    let resolved =
+        probe_essentia_python_from_sources(fake_python.to_str(), Some(dir.path().join("other")));
+    assert!(
+        resolved.is_none(),
+        "probe should reject candidates that do not emit version output"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn probe_essentia_python_returns_error_on_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir should create");
+    let fake_python = dir.path().join("fake-python-slow");
+    std::fs::write(&fake_python, "#!/bin/sh\nexec sleep 2\n")
+        .expect("fake python script should be written");
+    let mut perms = std::fs::metadata(&fake_python)
+        .expect("fake python metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_python, perms).expect("fake python script should be executable");
+
+    let start = std::time::Instant::now();
+    let is_valid = validate_essentia_python_with_timeout(
+        fake_python.to_str().unwrap(),
+        Duration::from_millis(100),
+    );
+    assert!(
+        !is_valid,
+        "slow candidate should be rejected when probe timeout elapses"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "probe timeout should fail fast"
+    );
+}
+
+#[test]
+fn lookup_output_wraps_non_object_in_result_envelope() {
+    let output = lookup_output_with_cache_metadata(serde_json::Value::Null, false, None);
+    assert_eq!(output["result"], serde_json::Value::Null);
+    assert_eq!(output["cache_hit"], false);
+    assert!(
+        output.get("cached_at").is_none(),
+        "live payload should not include cached_at"
+    );
+}
+
+#[test]
+fn lookup_output_with_cache_metadata_keeps_object_payload_shape() {
+    let output = lookup_output_with_cache_metadata(
+        serde_json::json!({
+            "genre": "Techno"
+        }),
+        true,
+        Some("2026-02-20T10:00:00Z"),
+    );
+    assert_eq!(output["genre"], "Techno");
+    assert_eq!(output["cache_hit"], true);
+    assert_eq!(output["cached_at"], "2026-02-20T10:00:00Z");
+    assert!(
+        output.get("result").is_none(),
+        "object payloads should not be wrapped in a result envelope"
+    );
+}
+
+#[test]
+fn auth_remediation_message_marks_discogs_auth_as_agent_actionable() {
+    let remediation = crate::discogs::AuthRemediation {
+        message: "Discogs auth required (not a lookup miss).".to_string(),
+        auth_url: Some("https://discogs.example/auth/device".to_string()),
+        poll_interval_seconds: Some(5),
+        expires_at: Some(1_777_000_000),
+    };
+
+    let message = auth_remediation_message(&remediation);
+
+    assert!(message.contains("not a lookup miss"));
+    assert!(message.contains("Auth URL: https://discogs.example/auth/device"));
+    assert!(message.contains("open 'https://discogs.example/auth/device'"));
+    assert!(message.contains("Poll interval if polling instead of browser: 5s"));
+    assert!(message.contains("Auth session expires_at (unix): 1777000000"));
+}
+
+#[tokio::test]
+async fn analyze_track_audio_reports_essentia_unavailable_when_probe_is_none() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("cached-track.flac");
+    std::fs::write(&audio_path, b"fake-audio-data").expect("temp audio file should be created");
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let metadata = std::fs::metadata(&audio_path).expect("temp audio metadata should load");
+    let file_size = metadata.len() as i64;
+    let file_mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+
+    let db_conn = create_single_track_test_db("essentia-missing-1", &audio_path_str);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        "stratum-dsp",
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"stratum-dsp-1.0.0"}"#,
+    )
+    .expect("stratum cache should be seeded");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(None)
+        .expect("essentia probe state should be seeded once");
+
+    let result = server
+        .analyze_track_audio(Parameters(AnalyzeTrackAudioParams {
+            track_id: "essentia-missing-1".to_string(),
+            skip_cached: Some(true),
+        }))
+        .await
+        .expect("analyze_track_audio should succeed with cached stratum data");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["essentia_available"], false);
+    assert!(
+        payload["essentia"].is_null(),
+        "essentia payload should be null when probe is unavailable"
+    );
+    assert_eq!(
+        payload["stratum_cache_hit"], true,
+        "stratum cache should still be used when Essentia is unavailable"
+    );
+    assert!(
+        payload["stratum_dsp"].is_object(),
+        "stratum_dsp should still be returned"
+    );
+    let hint = payload["essentia_setup_hint"]
+        .as_str()
+        .expect("essentia_setup_hint should be present when unavailable");
+    assert!(
+        hint.contains("setup_essentia"),
+        "hint should mention setup_essentia tool"
+    );
+    assert!(
+        hint.contains("CRATE_DIG_ESSENTIA_PYTHON"),
+        "hint should mention the env var that was checked"
+    );
+}
+
+#[test]
+fn analyze_track_audio_cache_miss_when_file_unstatable() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let missing_path = audio_dir.path().join("missing-track.flac");
+    let missing_path_str = missing_path.to_string_lossy().to_string();
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &missing_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        123,
+        456,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0}"#,
+    )
+    .expect("stale stratum cache should seed");
+
+    let cached = check_analysis_cache(
+        &store_conn,
+        &missing_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+    )
+    .expect("cache read should succeed");
+    assert!(cached.is_none(), "unstatable files must be cache misses");
+}
+
+#[test]
+fn audio_cache_grid_fingerprint_mcp_reads_are_analyzer_specific() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("identity.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path = audio_path.to_string_lossy().to_string();
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        "grid:v1:same",
+        r#"{"bpm":128.0}"#,
+    )
+    .unwrap();
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_ESSENTIA,
+        file_size,
+        file_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        "",
+        r#"{"danceability":0.8}"#,
+    )
+    .unwrap();
+    let same =
+        audio_cache_identity_with_stratum_input_fingerprint(&audio_path, "grid:v1:same").unwrap();
+    let changed =
+        audio_cache_identity_with_stratum_input_fingerprint(&audio_path, "grid:v1:changed")
+            .unwrap();
+
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &same,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_ESSENTIA,
+            crate::audio::ESSENTIA_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some(),
+        "Rekordbox grid edits must not invalidate Essentia"
+    );
+    store::set_audio_analysis_with_fingerprint(
+        &store_conn,
+        &audio_path,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        "grid:v1:changed",
+        r#"{"bpm":129.0}"#,
+    )
+    .unwrap();
+    assert!(
+        check_analysis_cache_for_identity(
+            &store_conn,
+            &changed,
+            crate::audio::ANALYZER_STRATUM,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+        )
+        .unwrap()
+        .is_some(),
+        "writing the newly analyzed fingerprint must make Stratum fresh"
+    );
+}
+
+#[test]
+fn audio_cache_grid_fingerprint_batch_deduplicates_resolved_paths_and_keeps_mixed_sources() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let grid_path = audio_dir.path().join("grid track.flac");
+    let hmm_path = audio_dir.path().join("hmm.flac");
+    write_test_audio_file(&grid_path, 1000);
+    write_test_audio_file(&hmm_path, 1001);
+    let grid_path = grid_path.to_string_lossy().to_string();
+    let encoded_grid_path = grid_path.replace(' ', "%20");
+    let hmm_path = hmm_path.to_string_lossy().to_string();
+    let mut lookup_keys = Vec::new();
+
+    let identities = audio_cache_identities_with_fingerprint_loader(
+        [
+            grid_path.as_str(),
+            encoded_grid_path.as_str(),
+            hmm_path.as_str(),
+        ],
+        |cache_key| {
+            lookup_keys.push(cache_key.to_string());
+            if cache_key.ends_with("hmm.flac") {
+                "hmm:v1".to_string()
+            } else {
+                "grid:v1:synthetic".to_string()
+            }
+        },
+    );
+    let identities: Vec<_> = identities.into_iter().map(Option::unwrap).collect();
+
+    assert_eq!(lookup_keys, vec![grid_path.clone(), hmm_path.clone()]);
+    assert_eq!(identities[0].cache_key, grid_path);
+    assert_eq!(identities[1].cache_key, identities[0].cache_key);
+    assert_eq!(
+        identities[0].stratum_input_fingerprint,
+        identities[1].stratum_input_fingerprint
+    );
+    assert_eq!(
+        identities[2].stratum_input_fingerprint.as_deref(),
+        Some("hmm:v1")
+    );
+}
+
+#[test]
+fn track_profile_batch_preserves_order_and_uses_fresh_cached_features() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store = crate::store::open(store_path.to_str().unwrap()).unwrap();
+    let mut tracks = Vec::new();
+
+    for (index, fallback_bpm) in [(0, 0.0), (1, 126.0)] {
+        let audio_path = audio_dir.path().join(format!("profile-{index}.wav"));
+        let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1_000 + index);
+        let mut track =
+            make_test_track(&format!("profile-{index}"), "Deep House", fallback_bpm, "");
+        track.file_path = audio_path.to_string_lossy().to_string();
+        set_test_audio_analysis(
+            &store,
+            &track.file_path,
+            crate::audio::ANALYZER_STRATUM,
+            file_size,
+            file_mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            &format!(
+                r#"{{"bpm":{},"key_camelot":"{}A"}}"#,
+                124 + index,
+                8 + index
+            ),
+        )
+        .unwrap();
+        set_test_audio_analysis(
+            &store,
+            &track.file_path,
+            crate::audio::ANALYZER_ESSENTIA,
+            file_size,
+            file_mtime,
+            crate::audio::ESSENTIA_SCHEMA_VERSION,
+            r#"{"danceability":0.8,"spectral_centroid_mean":1200.0}"#,
+        )
+        .unwrap();
+        tracks.push(track);
+    }
+
+    let profiles = build_track_profiles(tracks, &store).unwrap();
+
+    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles[0].track.id, "profile-0");
+    assert_eq!(profiles[1].track.id, "profile-1");
+    assert_eq!(profiles[0].bpm, 124.0, "missing Rekordbox BPM uses Stratum");
+    assert_eq!(
+        profiles[1].bpm, 126.0,
+        "plausible Rekordbox BPM remains authoritative"
+    );
+    assert_eq!(profiles[0].key_display, "8A");
+    assert_eq!(profiles[1].key_display, "9A");
+    assert_eq!(profiles[0].brightness, Some(1200.0));
+    assert!(profiles.iter().all(|profile| profile.energy > 0.0));
+}
+
+#[tokio::test]
+async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("stale-existing-track.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("stale-existing-1", &audio_path_str);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size + 1,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"stratum-dsp-1.0.0"}"#,
+    )
+    .expect("stale stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(None)
+        .expect("essentia probe state should be seeded once");
+
+    server
+        .analyze_track_audio(Parameters(AnalyzeTrackAudioParams {
+            track_id: "stale-existing-1".to_string(),
+            skip_cached: Some(true),
+        }))
+        .await
+        .expect_err("stale current-schema cache must not bypass decode for an existing file");
+}
+
+#[tokio::test]
+#[ignore]
+async fn analyze_track_audio_essentia_cache_round_trip_real_track() {
+    let Some((server, _store_dir)) =
+        create_real_server_with_temp_store(default_http_client_for_tests())
+    else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    if server.essentia_python_path().is_none() {
+        eprintln!("Skipping: Essentia Python not available");
+        return;
+    }
+
+    let track = sample_real_tracks(&server, 40)
+        .into_iter()
+        .filter(|t| (120.0..=145.0).contains(&t.bpm))
+        .find(|t| resolve_file_path(&t.file_path).is_ok())
+        .expect("integration test needs at least one track with accessible audio file");
+
+    let first = server
+        .analyze_track_audio(Parameters(AnalyzeTrackAudioParams {
+            track_id: track.id.clone(),
+            skip_cached: Some(false),
+        }))
+        .await
+        .expect("initial analysis should succeed");
+    let first_payload = extract_json(&first);
+    assert_eq!(first_payload["essentia_available"], true);
+    assert!(
+        first_payload["essentia"].is_object(),
+        "real Essentia run should produce feature JSON"
+    );
+    assert_eq!(first_payload["essentia_cache_hit"], false);
+    let onset_rate = first_payload["essentia"]["onset_rate"]
+        .as_f64()
+        .expect("onset_rate should be present in Essentia output");
+    let danceability = first_payload["essentia"]["danceability"]
+        .as_f64()
+        .expect("danceability should be present in Essentia output");
+    let loudness_integrated = first_payload["essentia"]["loudness_integrated"]
+        .as_f64()
+        .expect("loudness_integrated should be present in Essentia output");
+    assert!(
+        onset_rate > 1.0,
+        "onset_rate should be rate-like (Hz), got {onset_rate}"
+    );
+    assert!(
+        (0.0..=3.5).contains(&danceability),
+        "danceability should stay in plausible Essentia range [0, ~3], got {danceability}"
+    );
+    assert!(
+        (-30.0..=0.0).contains(&loudness_integrated),
+        "loudness_integrated should be in a plausible LUFS range, got {loudness_integrated}"
+    );
+
+    let second = server
+        .analyze_track_audio(Parameters(AnalyzeTrackAudioParams {
+            track_id: track.id,
+            skip_cached: Some(true),
+        }))
+        .await
+        .expect("cached analysis should succeed");
+    let second_payload = extract_json(&second);
+    assert_eq!(second_payload["essentia_available"], true);
+    assert_eq!(second_payload["stratum_cache_hit"], true);
+    assert_eq!(second_payload["essentia_cache_hit"], true);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn setup_essentia_returns_already_installed_when_override_is_valid() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir should create");
+    let fake_python = dir.path().join("fake-python");
+    std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
+        .expect("fake python script should be written");
+    let mut perms = std::fs::metadata(&fake_python)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_python, perms).expect("fake python should be executable");
+    let fake_path = fake_python.to_string_lossy().to_string();
+
+    let server = ReklawdboxServer::new(None);
+    {
+        let mut guard = server
+            .context
+            .analysis
+            .essentia_python_override
+            .lock()
+            .unwrap();
+        *guard = Some(fake_path.clone());
+    }
+
+    let result = server
+        .setup_essentia()
+        .await
+        .expect("setup_essentia should succeed when already installed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["status"], "already_installed");
+    assert_eq!(payload["python_path"], fake_path.as_str());
+}
+
+#[tokio::test]
+async fn essentia_python_override_takes_precedence() {
+    let server = ReklawdboxServer::new(None);
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(None)
+        .expect("essentia probe should be seeded once");
+    assert!(
+        server.essentia_python_path().is_none(),
+        "should be None before override"
+    );
+
+    {
+        let mut guard = server
+            .context
+            .analysis
+            .essentia_python_override
+            .lock()
+            .unwrap();
+        *guard = Some("/override/python".to_string());
+    }
+    assert_eq!(
+        server.essentia_python_path().as_deref(),
+        Some("/override/python"),
+        "override should take precedence over OnceLock probe"
+    );
+}
+
+#[tokio::test]
+async fn write_xml_no_change_path_returns_message() {
+    let server = ReklawdboxServer::new(None);
+
+    let result = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: None,
+            playlists: None,
+        }))
+        .await
+        .expect("write_xml should succeed when no changes are staged");
+
+    let payload = extract_json(&result);
+    assert_eq!(
+        payload
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .expect("message should be present"),
+        "No changes to write."
+    );
+}
+
+#[tokio::test]
+async fn write_xml_no_change_path_via_router_returns_message() {
+    let result = call_tool_via_router("write_xml", None).await;
+    let payload = extract_json(&result);
+
+    assert_eq!(
+        payload
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .expect("message should be present"),
+        "No changes to write."
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_serializes_overlapping_exports() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("overlap-track-1", "/tmp/overlap-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "overlap-track-1".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let first_path = output_dir.path().join("first.xml");
+    let second_path = output_dir.path().join("second.xml");
+    let mut tasks = WriteXmlTaskCleanup::new();
+    let mut held_lock = Some(
+        tokio::time::timeout(
+            WRITE_XML_TASK_TIMEOUT,
+            server.context.mutation.xml_export_lock.lock(),
+        )
+        .await
+        .expect("test should acquire export lock within five seconds"),
+    );
+
+    let scenario = async {
+        let first_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(first_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&first_queued),
+        ));
+        wait_for_queued_write_xml(&first_queued, "first export queue").await?;
+
+        let second_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(second_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&second_queued),
+        ));
+        wait_for_queued_write_xml(&second_queued, "second export queue").await?;
+
+        if !tasks.all_pending() {
+            return Err("queued exports should remain pending while the lock is held".to_string());
+        }
+        if server.context.mutation.changes.pending_count() != 1 {
+            return Err(
+                "queued exports crossed the take boundary while the lock was held".to_string(),
+            );
+        }
+
+        drop(held_lock.take());
+        let first = tasks
+            .join(0, "first overlapping export")
+            .await?
+            .map_err(|err| format!("first overlapping export failed: {err:?}"))?;
+        let second = tasks
+            .join(1, "second overlapping export")
+            .await?
+            .map_err(|err| format!("second overlapping export failed: {err:?}"))?;
+        Ok::<_, String>((extract_json(&first), extract_json(&second)))
+    };
+
+    let scenario_result = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, scenario).await;
+    let (first, second) = match scenario_result {
+        Ok(Ok(payloads)) => payloads,
+        Ok(Err(err)) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("overlapping export scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("overlapping export scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    let applied = [
+        first["changes_applied"].as_u64().unwrap_or_default(),
+        second["changes_applied"].as_u64().unwrap_or_default(),
+    ];
+    assert_eq!(applied.iter().sum::<u64>(), 1);
+    assert_eq!(applied.iter().filter(|&&count| count == 1).count(), 1);
+    assert_eq!(applied.iter().filter(|&&count| count == 0).count(), 1);
+    assert_eq!(server.context.mutation.changes.pending_count(), 0);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_cancelled_waiter_does_not_touch_snapshots() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("cancel-track-1", "/tmp/cancel-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "cancel-track-1".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let active_path = output_dir.path().join("active.xml");
+    let cancelled_path = output_dir.path().join("cancelled.xml");
+    let next_path = output_dir.path().join("next.xml");
+    let mut tasks = WriteXmlTaskCleanup::new();
+    let mut held_lock = Some(
+        tokio::time::timeout(
+            WRITE_XML_TASK_TIMEOUT,
+            server.context.mutation.xml_export_lock.lock(),
+        )
+        .await
+        .expect("test should acquire export lock within five seconds"),
+    );
+
+    let scenario = async {
+        let active_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(active_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&active_queued),
+        ));
+        wait_for_queued_write_xml(&active_queued, "active export queue").await?;
+
+        let cancelled_queued = Arc::new(tokio::sync::Notify::new());
+        tasks.push(spawn_queued_write_xml(
+            server.clone(),
+            WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(cancelled_path.to_string_lossy().to_string()),
+                playlists: None,
+            },
+            Arc::clone(&cancelled_queued),
+        ));
+        wait_for_queued_write_xml(&cancelled_queued, "cancelled export queue").await?;
+
+        if !tasks.all_pending() || server.context.mutation.changes.pending_count() != 1 {
+            return Err("both exports should remain before the take boundary".to_string());
+        }
+        tasks.abort(1, "cancelled queued export").await?;
+        if server.context.mutation.changes.pending_count() != 1 {
+            return Err("cancelling a waiter changed the staged snapshot".to_string());
+        }
+
+        drop(held_lock.take());
+        let active = tasks
+            .join(0, "active export after waiter cancellation")
+            .await?
+            .map_err(|err| format!("active export failed: {err:?}"))?;
+        if server.context.mutation.changes.pending_count() != 0 {
+            return Err("active export should commit its snapshot exactly once".to_string());
+        }
+
+        server.context.mutation.changes.stage(vec![TrackChange {
+            track_id: "cancel-track-1".to_string(),
+            genre: Some("Trance".to_string()),
+            ..Default::default()
+        }]);
+        let next = tokio::time::timeout(
+            WRITE_XML_TASK_TIMEOUT,
+            server.write_xml(Parameters(WriteXmlParams {
+                skip_label_gate: Some(true),
+                output_path: Some(next_path.to_string_lossy().to_string()),
+                playlists: None,
+            })),
+        )
+        .await
+        .map_err(|_| "next export did not finish within five seconds".to_string())?
+        .map_err(|err| format!("next export failed: {err:?}"))?;
+
+        Ok::<_, String>((extract_json(&active), extract_json(&next)))
+    };
+
+    let scenario_result = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, scenario).await;
+    let (active, next) = match scenario_result {
+        Ok(Ok(payloads)) => payloads,
+        Ok(Err(err)) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("cancelled waiter scenario failed: {err}; cleanup: {cleanup:?}");
+        }
+        Err(_) => {
+            drop(held_lock.take());
+            let cleanup = tasks.abort_all().await;
+            panic!("cancelled waiter scenario timed out; cleanup: {cleanup:?}");
+        }
+    };
+
+    assert_eq!(active["changes_applied"], 1);
+    assert_eq!(next["changes_applied"], 1);
+    assert!(!cancelled_path.exists());
+    assert_eq!(server.context.mutation.changes.pending_count(), 0);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_with_playlists_exports_without_staged_changes() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let output_path = output_dir.path().join("playlist-export.xml");
+    let output_path_str = output_path.to_string_lossy().to_string();
+
+    let result = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(output_path_str.clone()),
+            playlists: Some(vec![WriteXmlPlaylistInput {
+                name: "Set & Test".to_string(),
+                track_ids: vec!["playlist-track-1".to_string()],
+            }]),
+        }))
+        .await
+        .expect("write_xml should export playlist-only requests");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["track_count"], 1);
+    assert_eq!(payload["changes_applied"], 0);
+    assert_eq!(payload["playlist_count"], 1);
+    assert_eq!(
+        payload["path"].as_str().expect("path should be present"),
+        output_path_str
+    );
+
+    let xml = std::fs::read_to_string(&output_path).expect("XML output should be readable");
+    assert!(xml.contains("<PLAYLISTS>"));
+    assert!(xml.contains("Name=\"Set &amp; Test\""));
+    assert!(xml.contains("<TRACK Key=\"1\"/>"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_with_playlists_reports_missing_track_ids() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("playlist-track-1", "/tmp/playlist-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let err = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: None,
+            playlists: Some(vec![WriteXmlPlaylistInput {
+                name: "Bad Set".to_string(),
+                track_ids: vec!["does-not-exist".to_string()],
+            }]),
+        }))
+        .await
+        .expect_err("missing playlist track IDs should fail");
+
+    let msg = format!("{err:?}");
+    assert!(msg.contains("Track IDs not found in database"));
+    assert!(msg.contains("does-not-exist"));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_label_gate_blocks_when_set() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("gate-track-1", "/tmp/gate-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "gate-track-1".to_string(),
+        genre: None,
+        comments: None,
+        rating: None,
+        color: None,
+        label: Some("Test Label".to_string()),
+        year: None,
+        album: None,
+    }]);
+
+    server
+        .context
+        .mutation
+        .label_research_gate
+        .store(50, std::sync::atomic::Ordering::Relaxed);
+
+    let err = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: None,
+            output_path: None,
+            playlists: None,
+        }))
+        .await
+        .expect_err("label gate should block write_xml");
+
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("Label research gate"),
+        "error should mention label research gate, got: {msg}"
+    );
+    assert!(
+        msg.contains("50"),
+        "error should mention the unlabeled count, got: {msg}"
+    );
+
+    let result = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: None,
+            playlists: None,
+        }))
+        .await
+        .expect("skip_label_gate=true should bypass the gate");
+
+    let payload = extract_json(&result);
+    assert!(payload.get("track_count").is_some());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_label_gate_clears_when_zero() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("gate-clear-1", "/tmp/gate-clear-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    server
+        .context
+        .mutation
+        .label_research_gate
+        .store(50, std::sync::atomic::Ordering::Relaxed);
+    server
+        .context
+        .mutation
+        .label_research_gate
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "gate-clear-1".to_string(),
+        genre: None,
+        comments: None,
+        rating: None,
+        color: None,
+        label: Some("Test".to_string()),
+        year: None,
+        album: None,
+    }]);
+
+    let result = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: None,
+            output_path: None,
+            playlists: None,
+        }))
+        .await
+        .expect("gate=0 should not block write_xml");
+
+    let payload = extract_json(&result);
+    assert!(payload.get("track_count").is_some());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_deduplicates_playlist_and_staged_tracks() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("staged-track-1", "/tmp/staged-track-1.flac");
+    insert_test_track(
+        &db_conn,
+        "playlist-track-2",
+        "Playlist Only",
+        "g1",
+        "/tmp/playlist-track-2.flac",
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    server
+        .update_tracks(Parameters(UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "staged-track-1".to_string(),
+                genre: None,
+                comments: Some("staged only comment".to_string()),
+                rating: Some(5),
+                color: None,
+                label: None,
+                year: None,
+                album: None,
+            }],
+        }))
+        .await
+        .expect("staging update should succeed");
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let output_path = output_dir.path().join("mixed-export.xml");
+    let output_path_str = output_path.to_string_lossy().to_string();
+
+    let result = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(output_path_str.clone()),
+            playlists: Some(vec![WriteXmlPlaylistInput {
+                name: "Mixed Export".to_string(),
+                track_ids: vec!["playlist-track-2".to_string(), "staged-track-1".to_string()],
+            }]),
+        }))
+        .await
+        .expect("write_xml should succeed for mixed staged + playlist exports");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["track_count"], 2);
+    assert_eq!(payload["changes_applied"], 1);
+    assert_eq!(payload["playlist_count"], 1);
+    assert_eq!(
+        payload["path"].as_str().expect("path should be present"),
+        output_path_str
+    );
+
+    let xml = std::fs::read_to_string(&output_path).expect("XML output should be readable");
+    assert!(xml.contains("<COLLECTION Entries=\"2\">"));
+    assert_eq!(xml.matches("TrackID=\"").count(), 2);
+    assert_eq!(xml.matches("Name=\"Señorita\"").count(), 1);
+    assert_eq!(xml.matches("Name=\"Playlist Only\"").count(), 1);
+
+    let staged_line = xml
+        .lines()
+        .find(|line| line.contains("Name=\"Señorita\""))
+        .expect("staged track line should exist");
+    assert!(
+        staged_line.contains("Comments=\"staged only comment\""),
+        "staged comment should be applied to staged track"
+    );
+    assert!(
+        staged_line.contains("Rating=\"255\""),
+        "5-star staged rating should be encoded as 255"
+    );
+
+    let playlist_only_line = xml
+        .lines()
+        .find(|line| line.contains("Name=\"Playlist Only\""))
+        .expect("playlist-only track line should exist");
+    assert!(
+        playlist_only_line.contains("Comments=\"cache coverage test\""),
+        "playlist-only track should keep DB comments when no staged changes exist"
+    );
+    assert!(
+        playlist_only_line.contains("Rating=\"102\""),
+        "playlist-only track should keep DB-derived rating when not staged"
+    );
+
+    let playlist_line = xml
+        .lines()
+        .find(|line| {
+            line.contains("<NODE")
+                && line.contains("Type=\"1\"")
+                && line.contains("Name=\"Mixed Export\"")
+                && line.contains("Entries=\"2\"")
+                && line.contains("KeyType=\"0\"")
+        })
+        .expect("playlist node should exist with expected attributes");
+    let playlist_start = xml
+        .find(playlist_line)
+        .expect("playlist line should be findable in xml");
+    let playlist_end = playlist_start
+        + xml[playlist_start..]
+            .find("</NODE>")
+            .expect("playlist node should close");
+    let playlist_block = &xml[playlist_start..playlist_end];
+    let key2 = playlist_block
+        .find("<TRACK Key=\"2\"/>")
+        .expect("playlist should reference playlist-only track");
+    let key1 = playlist_block
+        .find("<TRACK Key=\"1\"/>")
+        .expect("playlist should reference staged track");
+    assert!(
+        key2 < key1,
+        "playlist key order should follow input track_ids order"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("staged-track-1", "/tmp/staged-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    server
+        .update_tracks(Parameters(UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "staged-track-1".to_string(),
+                genre: Some("Techno".to_string()),
+                comments: None,
+                rating: None,
+                color: None,
+                label: None,
+                year: None,
+                album: None,
+            }],
+        }))
+        .await
+        .expect("staging update should succeed");
+
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let backup_script = backup_dir.path().join("fail-backup.sh");
+    std::fs::write(
+        &backup_script,
+        "#!/bin/sh\necho 'backup failed intentionally' >&2\nexit 23\n",
+    )
+    .expect("backup script should be written");
+    let mut perms = std::fs::metadata(&backup_script)
+        .expect("backup script metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&backup_script, perms).expect("backup script should be executable");
+
+    let _backup_script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &backup_script);
+
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let output_path = output_dir.path().join("should-not-exist.xml");
+    let err = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(output_path.to_string_lossy().to_string()),
+            playlists: None,
+        }))
+        .await
+        .expect_err("write_xml should fail when backup script fails");
+
+    let msg = format!("{err:?}");
+    assert!(msg.contains("pre-op backup failed with exit status 23"));
+    assert!(msg.contains("backup failed intentionally"));
+    assert!(
+        !output_path.exists(),
+        "XML export should not be written after backup failure"
+    );
+
+    drop(_backup_script_env);
+
+    let retry_path = output_dir.path().join("after-backup-failure.xml");
+    let retry = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(retry_path.to_string_lossy().to_string()),
+            playlists: None,
+        }))
+        .await
+        .expect("staged changes should be restored after backup failure");
+    let payload = extract_json(&retry);
+    assert_eq!(payload["changes_applied"], 1);
+
+    let xml = std::fs::read_to_string(&retry_path).expect("retry XML output should be readable");
+    assert!(
+        xml.contains("Genre=\"Techno\""),
+        "restored staged change should still be exported on retry"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+fn effective_db_path_shared_with_backup_and_rejects_unsafe_paths() {
+    use std::os::unix::fs::symlink;
+
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp DB directory should create");
+    let configured_dir = temp.path().join("Configured Library");
+    std::fs::create_dir(&configured_dir).expect("configured DB directory should create");
+    let configured = configured_dir.join("master.db");
+    std::fs::write(&configured, []).expect("configured master.db should create");
+
+    let alternate_dir = temp.path().join("Environment Library");
+    std::fs::create_dir(&alternate_dir).expect("environment DB directory should create");
+    let alternate = alternate_dir.join("master.db");
+    std::fs::write(&alternate, []).expect("environment master.db should create");
+    let _db_env = EnvVarGuard::set("REKORDBOX_DB_PATH", &alternate);
+
+    let server = ReklawdboxServer::new(Some(configured.to_string_lossy().to_string()));
+    let effective = server
+        .effective_db_path()
+        .expect("constructor override should resolve");
+    assert_eq!(
+        effective,
+        configured
+            .canonicalize()
+            .expect("configured path should canonicalize")
+    );
+    assert_eq!(
+        server
+            .effective_db_path()
+            .expect("cached effective path should resolve"),
+        effective
+    );
+
+    let connection = server
+        .rekordbox_conn()
+        .expect("empty master.db should open through the production read-only path");
+    assert!(
+        connection
+            .execute("CREATE TABLE forbidden_write (id INTEGER)", [])
+            .is_err(),
+        "production Rekordbox connection must remain read-only"
+    );
+    drop(connection);
+
+    let misnamed = configured_dir.join("library.db");
+    std::fs::write(&misnamed, []).expect("misnamed DB fixture should create");
+    let misnamed_server = ReklawdboxServer::new(Some(misnamed.to_string_lossy().to_string()));
+    let misnamed_error = misnamed_server
+        .effective_db_path()
+        .expect_err("misnamed configured DB must be rejected");
+    assert!(misnamed_error.message.contains("must name master.db"));
+
+    let symlink_dir = temp.path().join("Symlinked Library");
+    std::fs::create_dir(&symlink_dir).expect("symlinked DB directory should create");
+    let symlinked = symlink_dir.join("master.db");
+    symlink(&configured, &symlinked).expect("symlink fixture should create");
+    let symlink_server = ReklawdboxServer::new(Some(symlinked.to_string_lossy().to_string()));
+    let symlink_error = symlink_server
+        .effective_db_path()
+        .expect_err("symlinked configured DB must be rejected");
+    assert!(symlink_error.message.contains("symlinks are not supported"));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_path_env_preserves_first_argument_and_parent_env() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let configured_dir = temp.path().join("Configured Library");
+    std::fs::create_dir(&configured_dir).expect("configured directory should create");
+    let configured = configured_dir.join("master.db");
+    std::fs::write(&configured, []).expect("configured master.db should create");
+    let canonical = configured
+        .canonicalize()
+        .expect("configured master.db should canonicalize");
+
+    let parent_value = temp.path().join("parent-process-master.db");
+    let _db_env = EnvVarGuard::set("REKORDBOX_DB_PATH", &parent_value);
+    let marker = temp.path().join("custom-script-marker.txt");
+    let script = temp.path().join("custom backup.sh");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$1\" \"$REKORDBOX_DB_PATH\" > '{}'\n",
+            marker.display()
+        ),
+    );
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let status = crate::backup::run_pre_op_backup(&canonical)
+        .await
+        .expect("custom script zero exit should attest success");
+    assert_eq!(status, crate::backup::BackupStatus::Success);
+    let observed = std::fs::read_to_string(&marker).expect("custom script marker should exist");
+    let mut lines = observed.lines();
+    assert_eq!(lines.next(), Some("--pre-op"));
+    assert_eq!(lines.next(), canonical.to_str());
+    assert_eq!(lines.next(), None);
+    assert_eq!(
+        std::env::var_os("REKORDBOX_DB_PATH"),
+        Some(parent_value.into())
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_failure_output_is_bounded() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("noisy-failure.sh");
+    write_executable_script(
+        &script,
+        "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 9000 ]; do printf x >&2; i=$((i + 1)); done\nexit 17\n",
+    );
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let error = crate::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("nonzero custom script should fail");
+    assert!(error.contains("exit status 17"));
+    assert!(error.contains("[truncated]"));
+    assert!(error.len() < 8_500, "failure output should remain bounded");
+}
+
+#[test]
+#[cfg(unix)]
+fn embedded_backup_custom_db_path_uses_only_configured_directory() {
+    let temp = tempfile::tempdir().expect("backup integration fixture should create");
+    let home = temp.path().join("Isolated Home");
+    let standard = home.join("Library/Pioneer/rekordbox");
+    std::fs::create_dir_all(&standard).expect("fake standard library should create");
+    std::fs::write(standard.join("master.db"), b"standard")
+        .expect("fake standard master should create");
+    std::fs::write(standard.join("networkAnalyze6.db"), b"standard-only")
+        .expect("fake standard sentinel should create");
+
+    let configured = temp.path().join("Configured Library With Spaces");
+    std::fs::create_dir(&configured).expect("configured library should create");
+    std::fs::write(configured.join("master.db"), b"configured")
+        .expect("configured master should create");
+    std::fs::write(configured.join("master.db-wal"), b"configured wal")
+        .expect("configured WAL should create");
+    std::fs::write(configured.join("product.db"), b"configured sentinel")
+        .expect("configured sentinel should create");
+    let db_path = configured.join("master.db");
+
+    let db_output = run_embedded_backup_script(&["--db-only"], &home, Some(&db_path), None);
+    assert!(
+        db_output.status.success(),
+        "configured DB backup should succeed: {}",
+        child_output_text(&db_output)
+    );
+    let db_archives = backup_archives(&home, "db_");
+    assert_eq!(db_archives.len(), 1);
+    let db_members = tar_members(&db_archives[0]);
+    assert!(db_members.contains(&"master.db".to_string()));
+    assert!(db_members.contains(&"master.db-wal".to_string()));
+    assert!(db_members.contains(&"product.db".to_string()));
+    assert!(!db_members.contains(&"networkAnalyze6.db".to_string()));
+
+    let pre_op_output = run_embedded_backup_script(&["--pre-op"], &home, Some(&db_path), None);
+    assert!(
+        pre_op_output.status.success(),
+        "configured pre-op backup should succeed: {}",
+        child_output_text(&pre_op_output)
+    );
+    let pre_op_archives = backup_archives(&home, "pre-op_");
+    assert_eq!(pre_op_archives.len(), 1);
+    assert_eq!(tar_members(&pre_op_archives[0]), db_members);
+}
+
+#[test]
+#[cfg(unix)]
+fn embedded_backup_mode_specific_path_rules() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("backup path-rules fixture should create");
+    let home = temp.path().join("Isolated Home");
+    let standard = home.join("Library/Pioneer/rekordbox");
+    std::fs::create_dir_all(&standard).expect("fake standard library should create");
+    std::fs::write(standard.join("master.db"), b"standard")
+        .expect("fake standard master should create");
+    std::fs::write(standard.join("networkAnalyze6.db"), b"standard sentinel")
+        .expect("fake standard sentinel should create");
+
+    let missing = temp.path().join("Missing Library/master.db");
+    let missing_output = run_embedded_backup_script(&["--db-only"], &home, Some(&missing), None);
+    assert!(!missing_output.status.success());
+    assert!(child_output_text(&missing_output).contains("not found"));
+    assert!(backup_archives(&home, "db_").is_empty());
+
+    let non_file_dir = temp.path().join("Directory Named master.db");
+    std::fs::create_dir(&non_file_dir).expect("non-file configured path should create");
+    let non_file_output =
+        run_embedded_backup_script(&["--db-only"], &home, Some(&non_file_dir), None);
+    assert!(!non_file_output.status.success());
+    assert!(backup_archives(&home, "db_").is_empty());
+
+    let misnamed = temp.path().join("library.db");
+    std::fs::write(&misnamed, b"misnamed").expect("misnamed configured DB should create");
+    let misnamed_output = run_embedded_backup_script(&["--db-only"], &home, Some(&misnamed), None);
+    assert!(!misnamed_output.status.success());
+    assert!(child_output_text(&misnamed_output).contains("must name master.db"));
+
+    let real_dir = temp.path().join("Real Library");
+    let symlink_dir = temp.path().join("Symlink Library");
+    std::fs::create_dir(&real_dir).expect("real library should create");
+    std::fs::create_dir(&symlink_dir).expect("symlink library should create");
+    let real_db = real_dir.join("master.db");
+    std::fs::write(&real_db, b"real").expect("real DB should create");
+    let linked_db = symlink_dir.join("master.db");
+    symlink(&real_db, &linked_db).expect("configured DB symlink should create");
+    let symlink_output = run_embedded_backup_script(&["--db-only"], &home, Some(&linked_db), None);
+    assert!(!symlink_output.status.success());
+    assert!(child_output_text(&symlink_output).contains("symlinks are not supported"));
+    assert!(backup_archives(&home, "db_").is_empty());
+
+    for mode in [["--list"].as_slice(), ["--help"].as_slice()] {
+        let output = run_embedded_backup_script(mode, &home, Some(&missing), None);
+        assert!(
+            output.status.success(),
+            "non-producing mode should not validate a missing DB: {}",
+            child_output_text(&output)
+        );
+    }
+
+    let default_output = run_embedded_backup_script(&["--db-only"], &home, None, None);
+    assert!(
+        default_output.status.success(),
+        "standard default source should remain supported: {}",
+        child_output_text(&default_output)
+    );
+    let default_archives = backup_archives(&home, "db_");
+    assert_eq!(default_archives.len(), 1);
+    let default_members = tar_members(&default_archives[0]);
+    assert!(default_members.contains(&"master.db".to_string()));
+    assert!(default_members.contains(&"networkAnalyze6.db".to_string()));
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_restores_missing_db_safely() {
+    let temp = tempfile::tempdir().expect("DB restore fixture should create");
+    let archive_source = temp.path().join("Archive Source");
+    std::fs::create_dir(&archive_source).expect("archive source should create");
+    std::fs::write(archive_source.join("master.db"), b"restored master")
+        .expect("restore master fixture should create");
+    std::fs::write(archive_source.join("master.db-wal"), b"restored wal")
+        .expect("restore WAL fixture should create");
+    let archive = temp.path().join("db-restore-input.tar.gz");
+    create_backup_archive_fixture(&archive, &archive_source, &["master.db", "master.db-wal"]);
+
+    let empty_home = temp.path().join("Empty Target Home");
+    let empty_standard = empty_home.join("Library/Pioneer/rekordbox");
+    std::fs::create_dir_all(&empty_standard).expect("fake standard target should create");
+    std::fs::write(empty_standard.join("master.db"), b"standard untouched")
+        .expect("fake standard sentinel should create");
+    let empty_target = temp.path().join("Empty Configured Target");
+    std::fs::create_dir(&empty_target).expect("empty configured target should create");
+    let archive_arg = archive.to_str().expect("temp archive path should be UTF-8");
+    let empty_output = run_embedded_backup_script(
+        &["--restore", archive_arg],
+        &empty_home,
+        Some(&empty_target.join("master.db")),
+        Some("YES\n"),
+    );
+    assert!(
+        empty_output.status.success(),
+        "missing-master restore should succeed: {}",
+        child_output_text(&empty_output)
+    );
+    assert!(
+        child_output_text(&empty_output)
+            .contains("No current database files to back up; continuing restore.")
+    );
+    assert_eq!(
+        std::fs::read(empty_target.join("master.db")).expect("restored master should exist"),
+        b"restored master"
+    );
+    assert_eq!(
+        std::fs::read(empty_standard.join("master.db"))
+            .expect("fake standard sentinel should remain"),
+        b"standard untouched"
+    );
+    assert!(backup_archives(&empty_home, "pre-restore_").is_empty());
+
+    let sidecar_home = temp.path().join("Sidecar Target Home");
+    let sidecar_standard = sidecar_home.join("Library/Pioneer/rekordbox");
+    std::fs::create_dir_all(&sidecar_standard).expect("second fake standard target should create");
+    std::fs::write(
+        sidecar_standard.join("master.db"),
+        b"second standard untouched",
+    )
+    .expect("second fake standard sentinel should create");
+    let sidecar_target = temp.path().join("Sidecar Configured Target");
+    std::fs::create_dir(&sidecar_target).expect("sidecar configured target should create");
+    std::fs::write(sidecar_target.join("master.db-wal"), b"current sidecar")
+        .expect("current sidecar should create");
+    let sidecar_output = run_embedded_backup_script(
+        &["--restore", archive_arg],
+        &sidecar_home,
+        Some(&sidecar_target.join("master.db")),
+        Some("YES\n"),
+    );
+    assert!(
+        sidecar_output.status.success(),
+        "sidecar safety backup and restore should succeed: {}",
+        child_output_text(&sidecar_output)
+    );
+    assert!(
+        !child_output_text(&sidecar_output)
+            .contains("No current database files to back up; continuing restore.")
+    );
+    let safety_archives = backup_archives(&sidecar_home, "pre-restore_");
+    assert_eq!(safety_archives.len(), 1);
+    assert_eq!(tar_members(&safety_archives[0]), vec!["master.db-wal"]);
+    assert_eq!(
+        std::fs::read(sidecar_standard.join("master.db"))
+            .expect("second fake standard sentinel should remain"),
+        b"second standard untouched"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_full_round_trip_uses_canonical_root() {
+    let temp = tempfile::tempdir().expect("full backup fixture should create");
+    let home = temp.path().join("Isolated Home");
+    let standard = home.join("Library/Pioneer/rekordbox");
+    std::fs::create_dir_all(&standard).expect("fake standard library should create");
+    std::fs::write(standard.join("master.db"), b"standard untouched")
+        .expect("fake standard sentinel should create");
+
+    let configured = temp.path().join("Target [Library] * With Different Name?");
+    std::fs::create_dir(&configured).expect("configured full library should create");
+    std::fs::create_dir(configured.join("sub directory"))
+        .expect("configured nested directory should create");
+    let many_files = configured.join("many files");
+    std::fs::create_dir(&many_files).expect("many-files directory should create");
+    std::fs::write(configured.join("master.db"), b"original master")
+        .expect("configured master should create");
+    std::fs::write(configured.join(".hidden"), b"hidden")
+        .expect("configured hidden file should create");
+    std::fs::write(configured.join("-leading"), b"leading")
+        .expect("configured leading-dash file should create");
+    std::fs::write(
+        configured.join("sub directory/sentinel.txt"),
+        b"nested original",
+    )
+    .expect("configured nested sentinel should create");
+    for index in 0..320 {
+        let name = format!("bulk-{index:03}-{}.txt", "x".repeat(160));
+        std::fs::write(many_files.join(name), b"bulk restore fixture")
+            .expect("bulk restore fixture should create");
+    }
+    let db_path = configured.join("master.db");
+
+    let full_output = run_embedded_backup_script(&[], &home, Some(&db_path), None);
+    assert!(
+        full_output.status.success(),
+        "configured full backup should succeed: {}",
+        child_output_text(&full_output)
+    );
+    let full_archives = backup_archives(&home, "full_");
+    assert_eq!(full_archives.len(), 1);
+    let members = tar_members(&full_archives[0]);
+    assert!(
+        members.len() > 20,
+        "full restore regression requires more than twenty archive members"
+    );
+    assert!(
+        members
+            .iter()
+            .all(|member| member == "rekordbox" || member.starts_with("rekordbox/")),
+        "full archive should have only the canonical root: {members:?}"
+    );
+    assert!(members.contains(&"rekordbox/master.db".to_string()));
+    assert!(members.contains(&"rekordbox/.hidden".to_string()));
+    assert!(members.contains(&"rekordbox/-leading".to_string()));
+    assert!(members.contains(&"rekordbox/sub directory/sentinel.txt".to_string()));
+
+    std::fs::write(configured.join("master.db"), b"mutated master")
+        .expect("configured master should mutate");
+    std::fs::remove_file(configured.join("sub directory/sentinel.txt"))
+        .expect("original nested sentinel should remove");
+    std::fs::write(configured.join("mutation-only.txt"), b"remove on restore")
+        .expect("mutation-only sentinel should create");
+    let archive_arg = full_archives[0]
+        .to_str()
+        .expect("temp archive path should be UTF-8");
+    let restore_output = run_embedded_backup_script(
+        &["--restore", archive_arg],
+        &home,
+        Some(&db_path),
+        Some("YES\n"),
+    );
+    assert!(
+        restore_output.status.success(),
+        "configured full restore should succeed: {}",
+        child_output_text(&restore_output)
+    );
+    assert_eq!(
+        std::fs::read(configured.join("master.db")).expect("restored master should exist"),
+        b"original master"
+    );
+    assert_eq!(
+        std::fs::read(configured.join("sub directory/sentinel.txt"))
+            .expect("restored nested sentinel should exist"),
+        b"nested original"
+    );
+    assert!(!configured.join("mutation-only.txt").exists());
+    assert_eq!(
+        std::fs::read(standard.join("master.db")).expect("fake standard sentinel should remain"),
+        b"standard untouched"
+    );
+
+    let safety_archives = backup_archives(&home, "full_pre-restore_");
+    assert_eq!(safety_archives.len(), 1);
+    let safety_members = tar_members(&safety_archives[0]);
+    assert!(
+        safety_members
+            .iter()
+            .all(|member| member == "rekordbox" || member.starts_with("rekordbox/")),
+        "full safety archive should also use the canonical root: {safety_members:?}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_nested_backup_directory_survives_full_restore() {
+    let temp = tempfile::tempdir().expect("nested backup fixture should create");
+    let home_and_library = temp.path().join("Nested Home And Library");
+    let external_child_temp = temp.path().join("External Child Temp");
+    std::fs::create_dir(&home_and_library).expect("nested configured library should create");
+    let db_path = home_and_library.join("master.db");
+    std::fs::write(&db_path, b"original nested master")
+        .expect("nested configured master should create");
+    std::fs::write(home_and_library.join("library-sentinel.txt"), b"original")
+        .expect("nested library sentinel should create");
+
+    let backup_output = run_embedded_backup_script_with_temp_dir(
+        &[],
+        &home_and_library,
+        Some(&db_path),
+        None,
+        &external_child_temp,
+    );
+    assert!(
+        backup_output.status.success(),
+        "nested full backup should succeed: {}",
+        child_output_text(&backup_output)
+    );
+    let input_archives = backup_archives(&home_and_library, "full_");
+    assert_eq!(input_archives.len(), 1);
+    let input_archive = input_archives[0].clone();
+    assert!(input_archive.exists());
+
+    std::fs::write(&db_path, b"mutated nested master")
+        .expect("nested configured master should mutate");
+    let archive_arg = input_archive
+        .to_str()
+        .expect("nested archive path should be UTF-8");
+    let restore_output = run_embedded_backup_script_with_temp_dir(
+        &["--restore", archive_arg],
+        &home_and_library,
+        Some(&db_path),
+        Some("YES\n"),
+        &external_child_temp,
+    );
+    assert!(
+        restore_output.status.success(),
+        "nested full restore should succeed: {}",
+        child_output_text(&restore_output)
+    );
+    assert_eq!(
+        std::fs::read(&db_path).expect("nested restored master should exist"),
+        b"original nested master"
+    );
+    assert!(
+        input_archive.exists(),
+        "full restore must preserve its input archive when the backup directory is nested"
+    );
+    assert!(
+        tar_members(&input_archive).contains(&"rekordbox/master.db".to_string()),
+        "preserved input archive should remain readable"
+    );
+    let safety_archives = backup_archives(&home_and_library, "full_pre-restore_");
+    assert_eq!(
+        safety_archives.len(),
+        1,
+        "full restore must preserve its new safety archive when the backup directory is nested"
+    );
+    assert!(safety_archives[0].exists());
+    assert!(
+        tar_members(&safety_archives[0]).contains(&"rekordbox/master.db".to_string()),
+        "preserved safety archive should remain readable"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn backup_script_custom_path_nested_backup_restore_failure_rolls_back_safely() {
+    let temp = tempfile::tempdir().expect("nested rollback fixture should create");
+    let home_and_library = temp.path().join("Nested Rollback Home And Library");
+    let external_child_temp = temp.path().join("External Rollback Child Temp");
+    let backup_dir = home_and_library.join("Music/rekordbox-backups");
+    std::fs::create_dir_all(&backup_dir).expect("nested rollback backup directory should create");
+    let db_path = home_and_library.join("master.db");
+    std::fs::write(&db_path, b"current library must survive")
+        .expect("nested rollback master should create");
+
+    let crafted_source = temp.path().join("Crafted Conflicting Full Archive");
+    let crafted_library = crafted_source.join("rekordbox");
+    std::fs::create_dir_all(crafted_library.join("Music/rekordbox-backups"))
+        .expect("crafted nested backup destination should create");
+    std::fs::write(crafted_library.join("master.db"), b"must not install")
+        .expect("crafted master should create");
+    std::fs::write(
+        crafted_library.join("Music/rekordbox-backups/conflict.txt"),
+        b"must not replace preserved backups",
+    )
+    .expect("crafted backup conflict should create");
+    let input_archive = backup_dir.join("full_conflicting-backup-dir.tar.gz");
+    create_backup_archive_fixture(&input_archive, &crafted_source, &["rekordbox"]);
+
+    let archive_arg = input_archive
+        .to_str()
+        .expect("nested rollback archive path should be UTF-8");
+    let restore_output = run_embedded_backup_script_with_temp_dir(
+        &["--restore", archive_arg],
+        &home_and_library,
+        Some(&db_path),
+        Some("YES\n"),
+        &external_child_temp,
+    );
+    assert!(
+        !restore_output.status.success(),
+        "conflicting restored backup directory must fail closed"
+    );
+    assert!(child_output_text(&restore_output).contains("attempting rollback"));
+    assert_eq!(
+        std::fs::read(&db_path).expect("current master should be rolled back"),
+        b"current library must survive"
+    );
+    assert!(
+        input_archive.exists(),
+        "input archive must survive rollback"
+    );
+    assert!(
+        tar_members(&input_archive).contains(&"rekordbox/master.db".to_string()),
+        "rolled-back input archive should remain readable"
+    );
+    assert!(
+        !backup_dir.join("conflict.txt").exists(),
+        "failed restored backup contents must not replace preserved backups"
+    );
+    let safety_archives = backup_archives(&home_and_library, "full_pre-restore_");
+    assert_eq!(safety_archives.len(), 1);
+    assert!(safety_archives[0].exists());
+    assert!(
+        tar_members(&safety_archives[0]).contains(&"rekordbox/master.db".to_string()),
+        "rolled-back safety archive should remain readable"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn backup_script_custom_path_rejects_symlink_before_custom_script() {
+    use std::os::unix::fs::symlink;
+
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("symlink export fixture should create");
+    let real_dir = temp.path().join("Real Library");
+    let symlink_dir = temp.path().join("Symlink Library");
+    std::fs::create_dir(&real_dir).expect("real library should create");
+    std::fs::create_dir(&symlink_dir).expect("symlink library should create");
+    let real_db = real_dir.join("master.db");
+    std::fs::write(&real_db, b"not opened").expect("real master should create");
+    let linked_db = symlink_dir.join("master.db");
+    symlink(&real_db, &linked_db).expect("configured DB symlink should create");
+
+    let script = temp.path().join("custom-backup.sh");
+    write_executable_script(
+        &script,
+        "#!/bin/sh\ntouch \"$(dirname \"$0\")/custom-script-ran\"\nexit 0\n",
+    );
+    let marker = temp.path().join("custom-script-ran");
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+    let server = ReklawdboxServer::new(Some(linked_db.to_string_lossy().to_string()));
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "symlink-track".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+    let output_path = temp.path().join("must-not-exist.xml");
+
+    let error = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(output_path.to_string_lossy().to_string()),
+            playlists: None,
+        }))
+        .await
+        .expect_err("symlinked effective DB should fail before backup");
+    assert!(error.message.contains("symlinks are not supported"));
+    assert!(!marker.exists(), "custom backup script must not run");
+    assert!(!output_path.exists(), "XML must not be created");
+    assert_eq!(server.context.mutation.changes.pending_count(), 1);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_fails_closed_when_backup_script_missing_and_restores_changes() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let db_conn = create_single_track_test_db("missing-backup-track", "/tmp/missing.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "missing-backup-track".to_string(),
+        genre: Some("Techno".to_string()),
+        ..Default::default()
+    }]);
+
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let missing_script = backup_dir.path().join("missing-backup.sh");
+    let _backup_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &missing_script);
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let output_path = output_dir.path().join("must-not-exist.xml");
+
+    let err = server
+        .write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(output_path.to_string_lossy().to_string()),
+            playlists: None,
+        }))
+        .await
+        .expect_err("missing backup script must block XML export");
+
+    let message = format!("{err:?}");
+    assert!(message.contains(&missing_script.to_string_lossy().to_string()));
+    assert!(!message.contains("REKORDBOX_DB_PATH="));
+    assert!(!message.contains("environment"));
+    assert!(!output_path.exists());
+    assert_eq!(server.context.mutation.changes.pending_count(), 1);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_missing_script_fails_closed() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let missing_script = backup_dir.path().join("missing-backup.sh");
+    let db_path = backup_dir.path().join("master.db");
+    std::fs::write(&db_path, b"test db").expect("temp master.db should create");
+    let _backup_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &missing_script);
+
+    let error = crate::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("missing custom backup script must fail closed");
+    assert!(error.contains(&missing_script.to_string_lossy().to_string()));
+    assert!(!error.contains("REKORDBOX_DB_PATH="));
+    assert!(!error.contains("environment"));
+}
+
+#[tokio::test]
+async fn update_tracks_stages_changes() {
+    let server = ReklawdboxServer::new(None);
+    let known_genre = genre::GENRES
+        .first()
+        .copied()
+        .unwrap_or("House")
+        .to_string();
+
+    let result = server
+        .update_tracks(Parameters(UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "test-track-1".to_string(),
+                genre: Some(known_genre),
+                comments: Some("staged by test".to_string()),
+                rating: Some(4),
+                color: None,
+                label: None,
+                year: None,
+                album: None,
+            }],
+        }))
+        .await
+        .expect("update_tracks should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(
+        payload
+            .get("staged")
+            .and_then(serde_json::Value::as_u64)
+            .expect("staged should be present"),
+        1
+    );
+    assert_eq!(
+        payload
+            .get("total_pending")
+            .and_then(serde_json::Value::as_u64)
+            .expect("total_pending should be present"),
+        1
+    );
+    assert!(
+        payload.get("changes").is_none(),
+        "update_tracks should not echo changes back"
+    );
+}
+
+#[tokio::test]
+async fn update_tracks_via_router_warns_non_taxonomy_genre() {
+    let result = call_tool_via_router(
+        "update_tracks",
+        serde_json::json!({
+            "changes": [{
+                "track_id": "router-test-track-1",
+                "genre": "NotInTaxonomy"
+            }]
+        })
+        .as_object()
+        .cloned(),
+    )
+    .await;
+
+    let payload = extract_json(&result);
+    assert_eq!(
+        payload
+            .get("staged")
+            .and_then(serde_json::Value::as_u64)
+            .expect("staged should be present"),
+        1
+    );
+    let warnings = payload
+        .get("warnings")
+        .and_then(serde_json::Value::as_array)
+        .expect("warnings should be present for non-taxonomy genre");
+    assert!(
+        !warnings.is_empty(),
+        "warnings should include at least one non-taxonomy genre warning"
+    );
+}
+
+#[tokio::test]
+async fn get_genre_taxonomy_via_router_returns_genres() {
+    let result = call_tool_via_router("get_genre_taxonomy", None).await;
+    let payload = extract_json(&result);
+
+    let genres = payload
+        .get("genres")
+        .and_then(serde_json::Value::as_array)
+        .expect("genres should be present");
+    assert!(
+        !genres.is_empty(),
+        "genres should include configured taxonomy entries"
+    );
+}
+
+#[test]
+fn enrich_tracks_invalid_provider_rejected_by_serde() {
+    let json = serde_json::json!({
+        "providers": ["spotify"],
+    });
+    let result = serde_json::from_value::<EnrichTracksParams>(json);
+    assert!(
+        result.is_err(),
+        "serde should reject unknown provider variant"
+    );
+}
+
+fn beatport_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
+    EnrichTracksParams {
+        filters: SearchFilterParams::default(),
+        track_ids: Some(
+            track_ids
+                .iter()
+                .map(|track_id| (*track_id).to_string())
+                .collect(),
+        ),
+        playlist_id: None,
+        max_tracks: Some(u32::try_from(track_ids.len()).expect("test track count should fit u32")),
+        offset: None,
+        providers: Some(vec![crate::types::Provider::Beatport]),
+        skip_cached: Some(false),
+        force_refresh: Some(true),
+        concurrency: Some(2),
+    }
+}
+
+async fn run_beatport_batch_with_timeout(
+    server: &ReklawdboxServer,
+    track_ids: &[&str],
+    context: &str,
+) -> CallToolResult {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.enrich_tracks(Parameters(beatport_batch_params(track_ids))),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{context} should finish within five seconds"))
+    .unwrap_or_else(|error| panic!("{context} should return a batch payload: {error:?}"))
+}
+
+fn set_enrich_test_track_title(conn: &Connection, track_id: &str, title: &str) {
+    conn.execute(
+        "UPDATE djmdContent SET Title = ?2 WHERE ID = ?1",
+        params![track_id, title],
+    )
+    .expect("enrichment test track title should update");
+}
+
+fn create_enrich_cache_writer_test_server(
+    db_conn: Connection,
+) -> (ReklawdboxServer, TempDir, String) {
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str.clone()),
+    );
+    (server, store_dir, store_path_str)
+}
+
+fn install_enrichment_insert_failure(server: &ReklawdboxServer, raw_title: &str) {
+    let normalized_title = crate::normalize::normalize_for_matching(raw_title);
+    let escaped_title = normalized_title.replace('\'', "''");
+    let sql = format!(
+        "CREATE TRIGGER fail_selected_enrichment
+         BEFORE INSERT ON enrichment_cache
+         WHEN NEW.query_title = '{escaped_title}'
+         BEGIN
+             SELECT RAISE(FAIL, 'selected cache write failure');
+         END;"
+    );
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available for trigger setup");
+    conn.execute_batch(&sql)
+        .expect("selective cache-write trigger should install");
+}
+
+fn beatport_match(title: &str) -> crate::beatport::BeatportResult {
+    crate::beatport::BeatportResult {
+        genre: "Techno".to_string(),
+        bpm: Some(128),
+        key: "A minor".to_string(),
+        track_name: title.to_string(),
+        artists: vec!["Aníbal".to_string()],
+        release_date: Some("2026-01-01".to_string()),
+        label: Some("Cache Ack Records".to_string()),
+        fuzzy_match: false,
+    }
+}
+
+fn assert_cache_write_summary(
+    payload: &serde_json::Value,
+    attempted: u64,
+    succeeded: u64,
+    failed: u64,
+) {
+    assert_eq!(payload["summary"]["cache_writes"]["attempted"], attempted);
+    assert_eq!(payload["summary"]["cache_writes"]["succeeded"], succeeded);
+    assert_eq!(payload["summary"]["cache_writes"]["failed"], failed);
+    assert_eq!(attempted, succeeded + failed);
+}
+
+fn assert_cache_write_failure_context(
+    payload: &serde_json::Value,
+    track_id: &str,
+    title: &str,
+    error_prefix: &str,
+) {
+    let failure = payload["failures"]
+        .as_array()
+        .expect("failures should be an array")
+        .iter()
+        .find(|failure| failure["track_id"] == track_id)
+        .unwrap_or_else(|| panic!("failure for {track_id} should be present"));
+    assert_eq!(failure["artist"], "Aníbal");
+    assert_eq!(failure["title"], title);
+    assert_eq!(failure["provider"], "beatport");
+    assert!(
+        failure["error"]
+            .as_str()
+            .expect("cache-write failure should include an error string")
+            .starts_with(error_prefix),
+        "cache-write error should start with {error_prefix}: {failure:?}"
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_persists_no_match_before_skipped() {
+    let db_conn = create_single_track_test_db("ack-no-match", "/tmp/ack-no-match.flac");
+    let title = "Ack No Match";
+    set_enrich_test_track_title(&db_conn, "ack-no-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-no-match"],
+        "acknowledged no-match enrichment",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 1);
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 1, 1, 0);
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
+        .expect("cache read should succeed")
+        .expect("skipped no-match should have a durable negative cache row");
+    assert_eq!(entry.match_quality.as_deref(), Some("none"));
+    assert!(entry.response_json.is_none());
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_failed_no_match_counts_only_failed() {
+    let db_conn = create_single_track_test_db("ack-failed-no-match", "/tmp/ack-failed.flac");
+    let title = "Ack Failed No Match";
+    set_enrich_test_track_title(&db_conn, "ack-failed-no-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    install_enrichment_insert_failure(&server, title);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-failed-no-match"],
+        "failed no-match cache write",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 1, 0, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-failed-no-match",
+        title,
+        "cache write failed:",
+    );
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
+            .expect("cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_open_failure_is_per_attempt() {
+    let db_conn = create_single_track_test_db("ack-open-failure", "/tmp/ack-open-failure.flac");
+    let title = "Ack Writer Open Failure";
+    set_enrich_test_track_title(&db_conn, "ack-open-failure", title);
+    let initialized_store_dir = tempfile::tempdir().expect("initialized store dir should create");
+    let initialized_store_path = initialized_store_dir.path().join("internal.sqlite3");
+    let initialized_store_path_str = initialized_store_path.to_string_lossy().to_string();
+    let store_conn =
+        store::open(&initialized_store_path_str).expect("initialized store should open");
+    let writer_directory = tempfile::tempdir().expect("writer directory should create");
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(writer_directory.path().to_string_lossy().to_string()),
+    );
+    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-open-failure"],
+        "writer-open cache failure",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 1, 0, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-open-failure",
+        title,
+        "cache writer open failed:",
+    );
+
+    let conn =
+        store::open(&initialized_store_path_str).expect("initialized store should remain readable");
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
+            .expect("cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_mixed_success_and_failure_are_exact() {
+    let db_conn = create_single_track_test_db("ack-mixed-success", "/tmp/ack-mixed-success.flac");
+    let successful_raw_title = "Ack Mixed Success";
+    set_enrich_test_track_title(&db_conn, "ack-mixed-success", successful_raw_title);
+    insert_test_track(
+        &db_conn,
+        "ack-mixed-failure",
+        "Matched But Uncached",
+        "g1",
+        "/tmp/ack-mixed-failure.flac",
+    );
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    install_enrichment_insert_failure(&server, "Matched But Uncached");
+    set_test_beatport_lookup_override("Aníbal", successful_raw_title, Ok(None));
+    set_test_beatport_lookup_override(
+        "Aníbal",
+        "Matched But Uncached",
+        Ok(Some(beatport_match("Matched But Uncached"))),
+    );
+
+    let result = run_beatport_batch_with_timeout(
+        &server,
+        &["ack-mixed-success", "ack-mixed-failure"],
+        "mixed cache-write outcomes",
+    )
+    .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 1);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 2, 1, 1);
+    assert_cache_write_failure_context(
+        &payload,
+        "ack-mixed-failure",
+        "Matched But Uncached",
+        "cache write failed:",
+    );
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let success_title = crate::normalize::normalize_for_matching(successful_raw_title);
+    let failed_title = crate::normalize::normalize_for_matching("Matched But Uncached");
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &success_title, None, false,)
+            .expect("successful cache read should succeed")
+            .is_some()
+    );
+    assert!(
+        store::get_enrichment(&conn, "beatport", &norm_artist, &failed_title, None, false,)
+            .expect("failed cache read should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_enrich_cache_writer_persists_match_before_enriched() {
+    let db_conn = create_single_track_test_db("ack-match", "/tmp/ack-match.flac");
+    let title = "Ack Persisted Match";
+    set_enrich_test_track_title(&db_conn, "ack-match", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    set_test_beatport_lookup_override("Aníbal", title, Ok(Some(beatport_match(title))));
+
+    let result =
+        run_beatport_batch_with_timeout(&server, &["ack-match"], "acknowledged match enrichment")
+            .await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 1);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 1, 1, 0);
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
+        .expect("cache read should succeed")
+        .expect("enriched match should have a durable cache row");
+    assert_eq!(entry.match_quality.as_deref(), Some("exact"));
+    assert!(entry.response_json.is_some());
+}
+
+#[tokio::test]
+async fn lookup_discogs_no_match_payload_is_consistent_across_live_and_cache_paths() {
+    let db_conn =
+        create_single_track_test_db("discogs-no-match-track", "/tmp/discogs-no-match.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let artist = "Discogs NoMatch Artist";
+    let title = "Discogs NoMatch Title";
+    set_test_discogs_lookup_override(artist, title, None, Ok(None));
+
+    let live_result = server
+        .lookup_discogs(Parameters(LookupDiscogsParams {
+            track_id: None,
+            artist: Some(artist.to_string()),
+            title: Some(title.to_string()),
+            album: None,
+            force_refresh: Some(true),
+        }))
+        .await
+        .expect("live discogs no-match should succeed");
+    let live_payload = extract_json(&live_result);
+    assert_eq!(live_payload["result"], serde_json::Value::Null);
+    assert_eq!(live_payload["cache_hit"], false);
+    assert!(
+        live_payload.get("cached_at").is_none(),
+        "live payload should omit cached_at"
+    );
+
+    let cache_result = server
+        .lookup_discogs(Parameters(LookupDiscogsParams {
+            track_id: None,
+            artist: Some(artist.to_string()),
+            title: Some(title.to_string()),
+            album: None,
+            force_refresh: Some(false),
+        }))
+        .await
+        .expect("cached discogs no-match should succeed");
+    let cache_payload = extract_json(&cache_result);
+    assert_eq!(cache_payload["result"], serde_json::Value::Null);
+    assert_eq!(cache_payload["cache_hit"], true);
+
+    let cache_hit_timestamp = cache_payload
+        .get("cached_at")
+        .and_then(serde_json::Value::as_str)
+        .expect("cached no-match payload should include cached_at");
+    let norm_artist = crate::normalize::normalize_for_matching(artist);
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let cache_entry = {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store::get_enrichment(&store, "discogs", &norm_artist, &norm_title, None, false)
+            .expect("cache read should succeed")
+            .expect("discogs no-match lookup should create cache entry")
+    };
+    assert!(
+        cache_entry.response_json.is_none(),
+        "discogs no-match cache entry should store null response as no payload"
+    );
+    assert_eq!(
+        cache_hit_timestamp,
+        cache_entry.created_at.as_str(),
+        "cached_at should match persisted cache timestamp"
+    );
+}
+
+#[tokio::test]
+async fn lookup_beatport_no_match_payload_is_consistent_across_live_and_cache_paths() {
+    let db_conn =
+        create_single_track_test_db("beatport-no-match-track", "/tmp/beatport-no-match.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let artist = "Beatport NoMatch Artist";
+    let title = "Beatport NoMatch Title";
+    set_test_beatport_lookup_override(artist, title, Ok(None));
+
+    let live_result = server
+        .lookup_beatport(Parameters(LookupBeatportParams {
+            track_id: None,
+            artist: Some(artist.to_string()),
+            title: Some(title.to_string()),
+            force_refresh: Some(true),
+        }))
+        .await
+        .expect("live beatport no-match should succeed");
+    let live_payload = extract_json(&live_result);
+    assert_eq!(live_payload["result"], serde_json::Value::Null);
+    assert_eq!(live_payload["cache_hit"], false);
+    assert!(
+        live_payload.get("cached_at").is_none(),
+        "live payload should omit cached_at"
+    );
+
+    let cache_result = server
+        .lookup_beatport(Parameters(LookupBeatportParams {
+            track_id: None,
+            artist: Some(artist.to_string()),
+            title: Some(title.to_string()),
+            force_refresh: Some(false),
+        }))
+        .await
+        .expect("cached beatport no-match should succeed");
+    let cache_payload = extract_json(&cache_result);
+    assert_eq!(cache_payload["result"], serde_json::Value::Null);
+    assert_eq!(cache_payload["cache_hit"], true);
+
+    let cache_hit_timestamp = cache_payload
+        .get("cached_at")
+        .and_then(serde_json::Value::as_str)
+        .expect("cached no-match payload should include cached_at");
+    let norm_artist = crate::normalize::normalize_for_matching(artist);
+    let norm_title = crate::normalize::normalize_for_matching(title);
+    let cache_entry = {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
+            .expect("cache read should succeed")
+            .expect("beatport no-match lookup should create cache entry")
+    };
+    assert!(
+        cache_entry.response_json.is_none(),
+        "beatport no-match cache entry should store null response as no payload"
+    );
+    assert_eq!(
+        cache_hit_timestamp,
+        cache_entry.created_at.as_str(),
+        "cached_at should match persisted cache timestamp"
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_discogs_skip_cached_reports_cached_counts() {
+    let db_conn = create_single_track_test_db("cached-track-1", "/tmp/cached-track-1.flac");
+    db_conn
+        .execute(
+            "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, ?2, 'a1', 'al1', 'g1', 'k1', 'c1', 'l1', '',
+                    12700, 153, 'cached batch test', 2025, 230, ?3, '0', 1411,
+                    44100, 5, '2025-01-01', 0
+                )",
+            params![
+                "cached-track-2",
+                "Corazón Cached",
+                "/tmp/cached-track-2.flac"
+            ],
+        )
+        .expect("second test track should insert");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+
+    let artist = "Aníbal";
+    let title_one = "Señorita";
+    let title_two = "Corazón Cached";
+    let norm_artist = crate::normalize::normalize_for_matching(artist);
+    let norm_title_one = crate::normalize::normalize_for_matching(title_one);
+    let norm_title_two = crate::normalize::normalize_for_matching(title_two);
+    let norm_album = crate::normalize::normalize_for_matching("Encoded Paths");
+
+    let cached_one = serde_json::json!({
+        "title": "Anibal - Senorita",
+        "genres": ["Electronic"],
+        "styles": ["Deep House"],
+        "fuzzy_match": false
+    })
+    .to_string();
+    let cached_two = serde_json::json!({
+        "title": "Anibal - Corazon Cached",
+        "genres": ["Electronic"],
+        "styles": ["House"],
+        "fuzzy_match": false
+    })
+    .to_string();
+
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_one,
+        Some(&norm_album),
+        Some("exact"),
+        Some(&cached_one),
+    )
+    .expect("first sentinel discogs cache entry should write");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_two,
+        Some(&norm_album),
+        Some("exact"),
+        Some(&cached_two),
+    )
+    .expect("second sentinel discogs cache entry should write");
+
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
+
+    let params = EnrichTracksParams {
+        filters: SearchFilterParams::default(),
+        track_ids: Some(vec![
+            "cached-track-1".to_string(),
+            "cached-track-2".to_string(),
+        ]),
+        playlist_id: None,
+        max_tracks: Some(10),
+        offset: None,
+        providers: Some(vec![crate::types::Provider::Discogs]),
+        skip_cached: Some(true),
+        force_refresh: Some(false),
+        concurrency: None,
+    };
+
+    let first_result = server
+        .enrich_tracks(Parameters(params))
+        .await
+        .expect("enrich_tracks should succeed when everything is cached");
+    let first_payload = extract_json(&first_result);
+    assert_eq!(first_payload["summary"]["tracks_total"], 2);
+    assert_eq!(first_payload["summary"]["total"], 2);
+    assert_eq!(first_payload["summary"]["enriched"], 0);
+    assert_eq!(first_payload["summary"]["cached"], 2);
+    assert_eq!(first_payload["summary"]["skipped"], 0);
+    assert_eq!(first_payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&first_payload, 0, 0, 0);
+    assert_eq!(first_payload["page"]["matched_tracks"], 2);
+    assert_eq!(first_payload["page"]["examined_tracks"], 2);
+    assert_eq!(first_payload["page"]["selected_tracks"], 0);
+    assert_eq!(first_payload["page"]["fully_cached_skipped"], 2);
+    assert_eq!(
+        first_payload["page"]["next_offset"],
+        serde_json::Value::Null
+    );
+    assert_eq!(first_payload["page"]["has_more"], false);
+    assert_eq!(
+        first_payload["failures"]
+            .as_array()
+            .expect("failures should be an array")
+            .len(),
+        0
+    );
+
+    let second_result = server
+        .enrich_tracks(Parameters(EnrichTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "cached-track-1".to_string(),
+                "cached-track-2".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: Some(10),
+            offset: None,
+            providers: Some(vec![crate::types::Provider::Discogs]),
+            skip_cached: Some(true),
+            force_refresh: Some(false),
+            concurrency: None,
+        }))
+        .await
+        .expect("second enrich_tracks run should also be fully cached");
+    let second_payload = extract_json(&second_result);
+    assert_eq!(second_payload["summary"]["tracks_total"], 2);
+    assert_eq!(second_payload["summary"]["total"], 2);
+    assert_eq!(second_payload["summary"]["enriched"], 0);
+    assert_eq!(second_payload["summary"]["cached"], 2);
+    assert_eq!(second_payload["summary"]["skipped"], 0);
+    assert_eq!(second_payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&second_payload, 0, 0, 0);
+    assert_eq!(second_payload["page"]["fully_cached_skipped"], 2);
+
+    let store = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    let entry_one = store::get_enrichment(
+        &store,
+        "discogs",
+        &norm_artist,
+        &norm_title_one,
+        Some(&norm_album),
+        false,
+    )
+    .expect("cache read should succeed")
+    .expect("first cache entry should still exist");
+    let entry_two = store::get_enrichment(
+        &store,
+        "discogs",
+        &norm_artist,
+        &norm_title_two,
+        Some(&norm_album),
+        false,
+    )
+    .expect("cache read should succeed")
+    .expect("second cache entry should still exist");
+    assert_eq!(
+        entry_one.response_json.as_deref(),
+        Some(cached_one.as_str())
+    );
+    assert_eq!(
+        entry_two.response_json.as_deref(),
+        Some(cached_two.as_str())
+    );
+}
+
+#[tokio::test]
+async fn enrich_tracks_summary_uses_provider_attempt_totals() {
+    let db_conn = create_single_track_test_db("cached-track-1", "/tmp/cached-track-1.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title = crate::normalize::normalize_for_matching("Señorita");
+    let norm_album = crate::normalize::normalize_for_matching("Encoded Paths");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title,
+        Some(&norm_album),
+        Some("exact"),
+        Some(r#"{"styles":["Deep House"]}"#),
+    )
+    .expect("discogs cache should seed");
+    store::set_enrichment(
+        &store_conn,
+        "beatport",
+        &norm_artist,
+        &norm_title,
+        None,
+        Some("exact"),
+        Some(r#"{"genre":"Deep House"}"#),
+    )
+    .expect("beatport cache should seed");
+
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
+    let result = server
+        .enrich_tracks(Parameters(EnrichTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["cached-track-1".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            offset: None,
+            providers: Some(vec![
+                crate::types::Provider::Discogs,
+                crate::types::Provider::Beatport,
+            ]),
+            skip_cached: Some(true),
+            force_refresh: Some(false),
+            concurrency: None,
+        }))
+        .await
+        .expect("enrich_tracks should resolve from cache for both providers");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["tracks_total"], 1);
+    assert_eq!(payload["summary"]["total"], 2);
+    assert_eq!(payload["summary"]["cached"], 2);
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_cache_write_summary(&payload, 0, 0, 0);
+    assert_eq!(payload["page"]["matched_tracks"], 1);
+    assert_eq!(payload["page"]["fully_cached_skipped"], 1);
+}
+
+fn create_fully_current_audio_batch_server(
+    essentia_available: bool,
+) -> (ReklawdboxServer, TempDir, TempDir) {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let first_path = audio_dir.path().join("current-one.flac");
+    let second_path = audio_dir.path().join("current-two.flac");
+    let (first_size, first_mtime) = write_test_audio_file(&first_path, 64);
+    let (second_size, second_mtime) = write_test_audio_file(&second_path, 96);
+    let first_path = first_path.to_string_lossy().to_string();
+    let second_path = second_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("current-one", &first_path);
+    insert_test_track(&db_conn, "current-two", "Current Two", "g1", &second_path);
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_path_str = store_path
+        .to_str()
+        .expect("temp store path should be UTF-8")
+        .to_string();
+    let store_conn = store::open(&store_path_str).expect("temp internal store should open");
+    for (path, size, mtime) in [
+        (&first_path, first_size, first_mtime),
+        (&second_path, second_size, second_mtime),
+    ] {
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::audio::ANALYZER_STRATUM,
+            size,
+            mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":128.0}"#,
+        )
+        .expect("current Stratum cache should seed");
+        if essentia_available {
+            set_test_audio_analysis(
+                &store_conn,
+                path,
+                crate::audio::ANALYZER_ESSENTIA,
+                size,
+                mtime,
+                crate::audio::ESSENTIA_SCHEMA_VERSION,
+                r#"{"energy":0.5}"#,
+            )
+            .expect("current Essentia cache should seed");
+        }
+    }
+
+    let server = create_server_with_store_path(
+        db_conn,
+        store_conn,
+        default_http_client_for_tests(),
+        Some(store_path_str),
+    );
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(essentia_available.then(|| "/unused/test-essentia-python".to_string()))
+        .expect("Essentia availability should initialize exactly once");
+    (server, audio_dir, store_dir)
+}
+
+#[tokio::test]
+async fn analyze_audio_batch_fully_current_reports_page_scoped_cache_counts() {
+    for essentia_available in [false, true] {
+        let (server, _audio_dir, _store_dir) =
+            create_fully_current_audio_batch_server(essentia_available);
+        let result = server
+            .analyze_audio_batch(Parameters(AnalyzeAudioBatchParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["current-one".to_string(), "current-two".to_string()]),
+                playlist_id: None,
+                max_tracks: Some(10),
+                offset: Some(0),
+                skip_cached: Some(true),
+                concurrency: Some(1),
+            }))
+            .await
+            .expect("fully current audio page should succeed without analyzer work");
+        let payload = extract_json(&result);
+
+        assert_eq!(payload["summary"]["total"], 2);
+        assert_eq!(payload["summary"]["analyzed"], 0);
+        assert_eq!(payload["summary"]["cached"], 2);
+        assert_eq!(payload["summary"]["failed"], 0);
+        assert_eq!(payload["summary"]["essentia_available"], essentia_available);
+        assert_eq!(payload["summary"]["essentia_analyzed"], 0);
+        assert_eq!(
+            payload["summary"]["essentia_cached"],
+            if essentia_available { 2 } else { 0 }
+        );
+        assert_eq!(payload["summary"]["essentia_failed"], 0);
+        assert_eq!(payload["page"]["examined_tracks"], 2);
+        assert_eq!(payload["page"]["selected_tracks"], 0);
+        assert_eq!(payload["page"]["fully_cached_skipped"], 2);
+        assert_eq!(payload["page"]["next_offset"], serde_json::Value::Null);
+        assert_eq!(payload["page"]["has_more"], false);
+        assert!(
+            payload["results"]
+                .as_array()
+                .expect("audio results should be an array")
+                .is_empty(),
+            "fully current candidates must not inflate bounded result payloads"
+        );
+    }
+}
+
+#[tokio::test]
+async fn resolve_track_data_uses_decoded_path_for_audio_cache_lookup() {
+    let temp_audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let decoded_path = temp_audio_dir.path().join("Aníbal Track.flac");
+    std::fs::write(&decoded_path, b"fake-audio-data")
+        .expect("decoded path file should exist for resolve_file_path");
+    let metadata = std::fs::metadata(&decoded_path).expect("decoded path metadata should load");
+    let file_size = metadata.len() as i64;
+    let file_mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+
+    let decoded_path_str = decoded_path.to_string_lossy().to_string();
+    let raw_path = decoded_path_str
+        .replace("Aníbal", "An%C3%ADbal")
+        .replace(' ', "%20");
+    assert_ne!(
+        raw_path, decoded_path_str,
+        "raw path must differ from decoded path for this regression test"
+    );
+    assert!(
+        std::fs::metadata(&decoded_path_str).is_ok(),
+        "decoded file path should exist"
+    );
+    assert!(
+        std::fs::metadata(&raw_path).is_err(),
+        "raw encoded path should not exist"
+    );
+
+    let db_conn = create_single_track_test_db("encoded-track-1", &raw_path);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &decoded_path_str,
+        "stratum-dsp",
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"4"}"#,
+    )
+    .expect("audio cache entry should write with decoded cache key");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .resolve_track_data(Parameters(ResolveTrackDataParams {
+            track_id: "encoded-track-1".to_string(),
+        }))
+        .await
+        .expect("resolve_track_data should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(
+        payload["data_completeness"]["stratum_dsp"], true,
+        "decoded path lookup should find stratum cache entry"
+    );
+    assert!(
+        payload["audio_analysis"]["stratum_dsp"].is_object(),
+        "audio_analysis.stratum_dsp should be populated from cache"
+    );
+    assert_eq!(payload["audio_analysis"]["stratum_dsp"]["key"], "Am");
+}
+
+#[tokio::test]
+async fn resolve_track_data_audio_cache_ignores_existing_file_stale_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("resolve-stale-single.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("resolve-stale-single", &audio_path_str);
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime + 1,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"18"}"#,
+    )
+    .expect("stale-mtime stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .resolve_track_data(Parameters(ResolveTrackDataParams {
+            track_id: "resolve-stale-single".to_string(),
+        }))
+        .await
+        .expect("resolve_track_data should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(
+        payload["data_completeness"]["stratum_dsp"], false,
+        "current-schema row with stale file mtime must not count"
+    );
+    assert!(
+        payload["audio_analysis"]["stratum_dsp"].is_null(),
+        "stale stratum row must be excluded from single-track resolve payload"
+    );
+}
+
+#[tokio::test]
+async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let fresh_path = audio_dir.path().join("resolve-fresh.flac");
+    let stale_path = audio_dir.path().join("resolve-stale.flac");
+    let (fresh_size, fresh_mtime) = write_test_audio_file(&fresh_path, 1000);
+    let (stale_size, stale_mtime) = write_test_audio_file(&stale_path, 1001);
+    let fresh_path_str = fresh_path.to_string_lossy().to_string();
+    let stale_path_str = stale_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("resolve-fresh", &fresh_path_str);
+    insert_test_track(
+        &db_conn,
+        "resolve-stale",
+        "Resolve Stale",
+        "g1",
+        &stale_path_str,
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        fresh_size,
+        fresh_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":128.0,"key":"Am","analyzer_version":"18"}"#,
+    )
+    .expect("fresh stratum cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        crate::audio::ANALYZER_ESSENTIA,
+        fresh_size,
+        fresh_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":1.5}"#,
+    )
+    .expect("fresh essentia cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_size + 1,
+        stale_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":140.0,"key":"Cm","analyzer_version":"18"}"#,
+    )
+    .expect("stale-size stratum cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_path_str,
+        crate::audio::ANALYZER_ESSENTIA,
+        stale_size,
+        stale_mtime + 1,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":2.5}"#,
+    )
+    .expect("stale-mtime essentia cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "resolve-fresh".to_string(),
+                "resolve-stale".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: Some(2),
+            format: None,
+        }))
+        .await
+        .expect("resolve_tracks_data should succeed");
+    let payload = extract_json(&result);
+    let items = payload
+        .as_array()
+        .expect("batch resolve should return array");
+    let fresh = items
+        .iter()
+        .find(|item| item["track_id"] == "resolve-fresh")
+        .expect("fresh track should be present");
+    let stale = items
+        .iter()
+        .find(|item| item["track_id"] == "resolve-stale")
+        .expect("stale track should be present");
+
+    assert_eq!(fresh["data_completeness"]["stratum_dsp"], true);
+    assert!(fresh["audio_analysis"]["stratum_dsp"].is_object());
+    assert_eq!(fresh["data_completeness"]["essentia"], true);
+    assert!(fresh["audio_analysis"]["essentia"].is_object());
+
+    assert_eq!(
+        stale["data_completeness"]["stratum_dsp"], false,
+        "current-schema stratum row with stale file size must not count"
+    );
+    assert!(
+        stale["audio_analysis"]["stratum_dsp"].is_null(),
+        "stale stratum row must be excluded from batch resolve payload"
+    );
+    assert_eq!(
+        stale["data_completeness"]["essentia"], false,
+        "current-schema essentia row with stale file mtime must not count"
+    );
+    assert!(
+        stale["audio_analysis"]["essentia"].is_null(),
+        "stale essentia row must be excluded from batch resolve payload"
+    );
+}
+
+#[tokio::test]
+async fn classify_tracks_audio_cache_ignores_stale_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let stale_size_path = audio_dir.path().join("classify-stale-size.flac");
+    let stale_mtime_path = audio_dir.path().join("classify-stale-mtime.flac");
+    let (stale_size_file_size, stale_size_file_mtime) =
+        write_test_audio_file(&stale_size_path, 1000);
+    let (stale_mtime_file_size, stale_mtime_file_mtime) =
+        write_test_audio_file(&stale_mtime_path, 1001);
+    let stale_size_path_str = stale_size_path.to_string_lossy().to_string();
+    let stale_mtime_path_str = stale_mtime_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("classify-stale-size", &stale_size_path_str);
+    insert_test_track(
+        &db_conn,
+        "classify-stale-mtime",
+        "Classify Stale Mtime",
+        "g1",
+        &stale_mtime_path_str,
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let stale_audio_json = r#"{
+        "bpm": 128.0,
+        "duration_seconds": 240.0,
+        "decay_mid_tau": 240.0,
+        "key_clarity": 0.72,
+        "key_confidence": 0.88,
+        "kick_pattern": "four_on_floor"
+    }"#;
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_size_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_size_file_size + 1,
+        stale_size_file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        stale_audio_json,
+    )
+    .expect("stale-size stratum cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_mtime_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        stale_mtime_file_size,
+        stale_mtime_file_mtime + 1,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        stale_audio_json,
+    )
+    .expect("stale-mtime stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .classify_tracks(Parameters(ClassifyTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "classify-stale-size".to_string(),
+                "classify-stale-mtime".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: Some(2),
+            offset: None,
+            genre_overrides: None,
+            format: Some(ClassifyFormat::Full),
+            auto_stage: None,
+        }))
+        .await
+        .expect("classify_tracks should succeed");
+    let payload = extract_json(&result);
+    let results = payload["results"]
+        .as_array()
+        .expect("classification results should be an array");
+    assert_eq!(results.len(), 2);
+
+    for track_id in ["classify-stale-size", "classify-stale-mtime"] {
+        let item = results
+            .iter()
+            .find(|item| item["track_id"] == track_id)
+            .unwrap_or_else(|| panic!("{track_id} should be present"));
+        let flags = item["flags"]
+            .as_array()
+            .expect("classification flags should be an array");
+        assert!(
+            flags.iter().any(|flag| flag == "no-audio"),
+            "current-schema stale identity row for {track_id} must be excluded from classification evidence"
+        );
+    }
+}
+
+#[tokio::test]
+async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let audio_path = audio_dir.path().join("classify-stratum-only.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 1000);
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("classify-stratum-only", &audio_path_str);
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET GenreID = '', BPM = 16000 WHERE ID = ?1",
+            ["classify-stratum-only"],
+        )
+        .expect("BPM-only test track should be ungenred and fast");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":160.0,"duration_seconds":240.0,"analyzer_version":"18"}"#,
+    )
+    .expect("fresh Stratum cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .classify_tracks(Parameters(ClassifyTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec!["classify-stratum-only".to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            offset: None,
+            genre_overrides: None,
+            format: Some(ClassifyFormat::Full),
+            auto_stage: Some(vec![crate::mcp::classification::StageLevel::Medium]),
+        }))
+        .await
+        .expect("classify_tracks should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["staging"]["staged"], 0);
+    assert_eq!(payload["staging"]["total_pending"], 0);
+    assert_eq!(payload["results"][0]["genre"], serde_json::Value::Null);
+    assert_eq!(payload["results"][0]["confidence"], "insufficient");
+}
+
+#[tokio::test]
+async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let with_genre_path = audio_dir.path().join("coverage-1.flac");
+    let fresh_path = audio_dir.path().join("coverage-2.flac");
+    let stale_schema_path = audio_dir.path().join("coverage-3.flac");
+    let stale_identity_path = audio_dir.path().join("coverage-4.flac");
+    write_test_audio_file(&with_genre_path, 1000);
+    let (fresh_size, fresh_mtime) = write_test_audio_file(&fresh_path, 1001);
+    let (stale_schema_size, stale_schema_mtime) = write_test_audio_file(&stale_schema_path, 1002);
+    let (stale_identity_size, stale_identity_mtime) =
+        write_test_audio_file(&stale_identity_path, 1003);
+    let with_genre_path_str = with_genre_path.to_string_lossy().to_string();
+    let fresh_path_str = fresh_path.to_string_lossy().to_string();
+    let stale_schema_path_str = stale_schema_path.to_string_lossy().to_string();
+    let stale_identity_path_str = stale_identity_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("coverage-with-genre", &with_genre_path_str);
+    insert_test_track(
+        &db_conn,
+        "coverage-no-genre-1",
+        "No Genre One",
+        "",
+        &fresh_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "coverage-no-genre-2",
+        "No Genre Two",
+        "",
+        &stale_schema_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "coverage-no-genre-3",
+        "No Genre Three",
+        "",
+        &stale_identity_path_str,
+    );
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let norm_artist = crate::normalize::normalize_for_matching("Aníbal");
+    let norm_title_one = crate::normalize::normalize_for_matching("No Genre One");
+    let norm_title_two = crate::normalize::normalize_for_matching("No Genre Two");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        "stratum-dsp",
+        fresh_size,
+        fresh_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":127.1,"key":"Am"}"#,
+    )
+    .expect("stratum cache should be seeded");
+    set_test_audio_analysis(
+        &store_conn,
+        &fresh_path_str,
+        "essentia",
+        fresh_size,
+        fresh_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":0.81}"#,
+    )
+    .expect("essentia cache should be seeded");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_schema_path_str,
+        "stratum-dsp",
+        stale_schema_size,
+        stale_schema_mtime,
+        "outdated",
+        r#"{"bpm":128.0,"key":"Am"}"#,
+    )
+    .expect("stale-schema stratum cache should be seeded");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_schema_path_str,
+        "essentia",
+        stale_schema_size,
+        stale_schema_mtime,
+        "outdated",
+        r#"{"danceability":0.70}"#,
+    )
+    .expect("stale-schema essentia cache should be seeded");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_identity_path_str,
+        "stratum-dsp",
+        stale_identity_size + 1,
+        stale_identity_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":129.0,"key":"Am"}"#,
+    )
+    .expect("stale-size stratum cache should be seeded");
+    set_test_audio_analysis(
+        &store_conn,
+        &stale_identity_path_str,
+        "essentia",
+        stale_identity_size,
+        stale_identity_mtime + 1,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":0.75}"#,
+    )
+    .expect("stale-mtime essentia cache should be seeded");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_one,
+        Some("encoded paths"),
+        Some("exact"),
+        Some(r#"{"styles":["Deep House"]}"#),
+    )
+    .expect("discogs cache should be seeded for first ungenred track");
+    store::set_enrichment(
+        &store_conn,
+        "beatport",
+        &norm_artist,
+        &norm_title_one,
+        None,
+        Some("exact"),
+        Some(r#"{"genre":"Deep House"}"#),
+    )
+    .expect("beatport cache should be seeded for first ungenred track");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_two,
+        Some("encoded paths"),
+        Some("exact"),
+        Some(r#"{"styles":["Tech House"]}"#),
+    )
+    .expect("discogs cache should be seeded for second ungenred track");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(Some("/tmp/fake-essentia-python".to_string()))
+        .expect("essentia probe cache should be set exactly once");
+
+    let result = server
+        .cache_coverage(Parameters(CacheCoverageParams {
+            filters: SearchFilterParams {
+                has_genre: Some(false),
+                ..Default::default()
+            },
+            track_ids: None,
+            playlist_id: None,
+            max_tracks: None,
+        }))
+        .await
+        .expect("cache_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["scope"]["total_tracks"], 4);
+    assert_eq!(payload["scope"]["matched_tracks"], 3);
+    assert_eq!(payload["scope"]["filter_description"], "has_genre = false");
+
+    assert_eq!(payload["coverage"]["stratum_dsp"]["cached"], 1);
+    assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 33.3);
+
+    assert_eq!(payload["coverage"]["essentia"]["cached"], 1);
+    assert_eq!(payload["coverage"]["essentia"]["percent"], 33.3);
+    assert_eq!(payload["coverage"]["essentia"]["installed"], true);
+
+    assert_eq!(payload["coverage"]["discogs"]["searched"], 2);
+    assert_eq!(payload["coverage"]["discogs"]["searched_percent"], 66.7);
+    assert_eq!(payload["coverage"]["discogs"]["has_result"], 2);
+    assert_eq!(payload["coverage"]["discogs"]["has_result_percent"], 66.7);
+
+    assert_eq!(payload["coverage"]["beatport"]["searched"], 1);
+    assert_eq!(payload["coverage"]["beatport"]["searched_percent"], 33.3);
+    assert_eq!(payload["coverage"]["beatport"]["has_result"], 1);
+    assert_eq!(payload["coverage"]["beatport"]["has_result_percent"], 33.3);
+
+    assert_eq!(payload["gaps"]["no_audio_analysis"], 2);
+    assert_eq!(payload["gaps"]["no_enrichment"], 1);
+    assert_eq!(payload["gaps"]["no_data_at_all"], 1);
+}
+
+#[tokio::test]
+async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
+    let db_conn = create_single_track_test_db("coverage-base", "/music/coverage-base.flac");
+    insert_test_track(
+        &db_conn,
+        "coverage-nonsample",
+        "Coverage Non Sample",
+        "",
+        "/music/coverage-nonsample.flac",
+    );
+    let sampler_path = format!("/music{}CoverageSampler.wav", db::SAMPLER_PATH_FRAGMENT);
+    insert_test_track(
+        &db_conn,
+        "coverage-sampler",
+        "Coverage Sampler",
+        "",
+        &sampler_path,
+    );
+
+    db_conn
+        .execute_batch(
+            "CREATE TABLE djmdSongPlaylist (
+                    PlaylistID VARCHAR(255),
+                    ContentID VARCHAR(255),
+                    TrackNo INTEGER
+                );",
+        )
+        .expect("playlist table should be created for test");
+    db_conn
+        .execute(
+            "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+            params!["pl-cache", "coverage-nonsample", 1],
+        )
+        .expect("non-sampler playlist entry should insert");
+    db_conn
+        .execute(
+            "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+            params!["pl-cache", "coverage-sampler", 2],
+        )
+        .expect("sampler playlist entry should insert");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let id_scope = server
+        .cache_coverage(Parameters(CacheCoverageParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![
+                "coverage-nonsample".to_string(),
+                "coverage-sampler".to_string(),
+            ]),
+            playlist_id: None,
+            max_tracks: None,
+        }))
+        .await
+        .expect("cache_coverage track_ids scope should succeed");
+    let id_payload = extract_json(&id_scope);
+    assert!(id_payload["scope"]["total_tracks"].as_u64().unwrap() >= 2);
+    assert_eq!(id_payload["scope"]["matched_tracks"], 1);
+    assert_eq!(id_payload["gaps"]["no_data_at_all"], 1);
+
+    let playlist_scope = server
+        .cache_coverage(Parameters(CacheCoverageParams {
+            filters: SearchFilterParams::default(),
+            track_ids: None,
+            playlist_id: Some("pl-cache".to_string()),
+            max_tracks: None,
+        }))
+        .await
+        .expect("cache_coverage playlist scope should succeed");
+    let playlist_payload = extract_json(&playlist_scope);
+    assert!(playlist_payload["scope"]["total_tracks"].as_u64().unwrap() >= 2);
+    assert_eq!(playlist_payload["scope"]["matched_tracks"], 1);
+    assert_eq!(playlist_payload["gaps"]["no_data_at_all"], 1);
+}
+
+#[tokio::test]
+async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let mut deep_paths = Vec::new();
+    for i in 1..=5 {
+        let path = audio_dir.path().join(format!("calibrate-deep-{i}.flac"));
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + i);
+        deep_paths.push((path.to_string_lossy().to_string(), file_size, file_mtime));
+    }
+    let techno_path = audio_dir.path().join("calibrate-techno-stale.flac");
+    let (techno_size, techno_mtime) = write_test_audio_file(&techno_path, 1200);
+    let techno_path_str = techno_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("calibrate-deep-1", &deep_paths[0].0);
+    db_conn
+        .execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration schema should initialize");
+
+    for i in 2..=5 {
+        insert_test_track(
+            &db_conn,
+            &format!("calibrate-deep-{i}"),
+            &format!("Calibrate Deep {i}"),
+            "g1",
+            &deep_paths[i as usize - 1].0,
+        );
+    }
+    insert_test_track(
+        &db_conn,
+        "calibrate-techno-stale",
+        "Calibrate Techno Stale",
+        "g2",
+        &techno_path_str,
+    );
+
+    for (track_no, track_id) in [
+        "calibrate-deep-1",
+        "calibrate-deep-2",
+        "calibrate-deep-3",
+        "calibrate-deep-4",
+        "calibrate-deep-5",
+        "calibrate-techno-stale",
+    ]
+    .iter()
+    .enumerate()
+    {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    for (path, file_size, file_mtime) in &deep_paths {
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::audio::ANALYZER_STRATUM,
+            *file_size,
+            *file_mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
+        )
+        .expect("fresh stratum analysis should seed");
+    }
+    set_test_audio_analysis(
+        &store_conn,
+        &techno_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        techno_size + 1,
+        techno_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("stale-identity stratum analysis should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibrate_audio_profiles(Parameters(CalibrateAudioProfilesParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibrate_audio_profiles should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["status"], "calibrated");
+    assert_eq!(payload["total_tracks"], 6);
+    assert_eq!(payload["tracks_with_features"], 5);
+    assert_eq!(payload["skipped_no_audio"], 1);
+}
+
+#[tokio::test]
+async fn calibration_coverage_reports_verified_playlist_readiness() {
+    let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let mut deep_paths = Vec::new();
+    for i in 1..=5 {
+        let path = audio_dir.path().join(format!("cal-deep-{i}.flac"));
+        let (file_size, file_mtime) = write_test_audio_file(&path, 1000 + i);
+        deep_paths.push((path.to_string_lossy().to_string(), file_size, file_mtime));
+    }
+    let tech_path = audio_dir.path().join("cal-tech-1.flac");
+    let (tech_size, tech_mtime) = write_test_audio_file(&tech_path, 1100);
+    let tech_path_str = tech_path.to_string_lossy().to_string();
+    let no_genre_path = audio_dir.path().join("cal-no-genre.flac");
+    write_test_audio_file(&no_genre_path, 1101);
+    let no_genre_path_str = no_genre_path.to_string_lossy().to_string();
+    let unknown_path = audio_dir.path().join("cal-unknown.flac");
+    write_test_audio_file(&unknown_path, 1102);
+    let unknown_path_str = unknown_path.to_string_lossy().to_string();
+
+    let db_conn = create_single_track_test_db("cal-deep-1", &deep_paths[0].0);
+    db_conn
+        .execute_batch(
+            "
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g2', 'Techno');
+            INSERT INTO djmdGenre (ID, Name) VALUES ('g3', 'Imaginary Style');
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    for i in 2..=5 {
+        insert_test_track(
+            &db_conn,
+            &format!("cal-deep-{i}"),
+            &format!("Deep Verified {i}"),
+            "g1",
+            &deep_paths[i as usize - 1].0,
+        );
+    }
+    insert_test_track(
+        &db_conn,
+        "cal-tech-1",
+        "Techno Missing Audio",
+        "g2",
+        &tech_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-no-genre",
+        "No Genre Verified",
+        "",
+        &no_genre_path_str,
+    );
+    insert_test_track(
+        &db_conn,
+        "cal-unknown",
+        "Unknown Verified",
+        "g3",
+        &unknown_path_str,
+    );
+
+    for (track_no, track_id) in [
+        "cal-deep-1",
+        "cal-deep-2",
+        "cal-deep-3",
+        "cal-deep-4",
+        "cal-deep-5",
+        "cal-tech-1",
+        "cal-no-genre",
+        "cal-unknown",
+    ]
+    .iter()
+    .enumerate()
+    {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    for (path, file_size, file_mtime) in &deep_paths {
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::audio::ANALYZER_STRATUM,
+            *file_size,
+            *file_mtime,
+            crate::audio::STRATUM_SCHEMA_VERSION,
+            r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
+        )
+        .expect("stratum analysis should be seeded");
+    }
+    set_test_audio_analysis(
+        &store_conn,
+        &tech_path_str,
+        crate::audio::ANALYZER_STRATUM,
+        tech_size + 1,
+        tech_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("stale-identity stratum analysis should be seeded");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["playlist"], "genre_verified");
+    assert_eq!(payload["total_tracks"], 8);
+    assert_eq!(payload["tracks_with_canonical_genre"], 6);
+    assert_eq!(payload["tracks_with_audio_features"], 5);
+    assert_eq!(payload["missing_audio_features"], 1);
+    assert_eq!(payload["tracks_with_stratum_features"], 5);
+    assert_eq!(payload["missing_stratum_features"], 1);
+    assert_eq!(payload["tracks_with_essentia_features"], 0);
+    assert_eq!(payload["missing_essentia_features"], 6);
+    assert_eq!(payload["skipped_no_genre"], 1);
+    assert_eq!(payload["skipped_unknown_genre"], 1);
+    assert_eq!(
+        payload["min_tracks_per_genre"],
+        crate::audio_profile::MIN_TRACKS
+    );
+    assert_eq!(payload["genres_ready_to_calibrate"], 1);
+    assert_eq!(payload["genres_below_min_tracks"], 1);
+
+    let genres = payload["genres"]
+        .as_array()
+        .expect("genres should be an array");
+    let deep_house = genres
+        .iter()
+        .find(|g| g["genre"] == "Deep House")
+        .expect("Deep House coverage should be present");
+    assert_eq!(deep_house["playlist_tracks"], 5);
+    assert_eq!(deep_house["tracks_with_audio_features"], 5);
+    assert_eq!(deep_house["tracks_with_stratum_features"], 5);
+    assert_eq!(deep_house["tracks_with_essentia_features"], 0);
+    assert_eq!(deep_house["prototype_ready"], true);
+    assert_eq!(deep_house["status"], "ready_to_calibrate");
+
+    let techno = genres
+        .iter()
+        .find(|g| g["genre"] == "Techno")
+        .expect("Techno coverage should be present");
+    assert_eq!(techno["playlist_tracks"], 1);
+    assert_eq!(techno["tracks_with_audio_features"], 0);
+    assert_eq!(techno["missing_audio_features"], 1);
+    assert_eq!(techno["tracks_with_stratum_features"], 0);
+    assert_eq!(techno["missing_stratum_features"], 1);
+    assert_eq!(techno["status"], "needs_more_verified_audio");
+}
+
+#[tokio::test]
+async fn calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
+    let db_conn = create_single_track_test_db("cal-cap-1", "/music/cal-cap-1.flac");
+    db_conn
+        .execute_batch(
+            "
+            CREATE TABLE djmdPlaylist (
+                ID VARCHAR(255) PRIMARY KEY,
+                Name VARCHAR(255),
+                ParentID VARCHAR(255) DEFAULT '',
+                Attribute INTEGER DEFAULT 0,
+                Seq INTEGER DEFAULT 0,
+                rb_local_deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE djmdSongPlaylist (
+                PlaylistID VARCHAR(255),
+                ContentID VARCHAR(255),
+                TrackNo INTEGER
+            );
+            INSERT INTO djmdPlaylist (ID, Name, Seq) VALUES ('pl-verified', 'genre_verified', 1);
+            ",
+        )
+        .expect("calibration coverage schema should initialize");
+
+    let mut track_ids = vec!["cal-cap-1".to_string()];
+    for i in 2..=201 {
+        let track_id = format!("cal-cap-{i}");
+        insert_test_track(
+            &db_conn,
+            &track_id,
+            &format!("Calibration Cap {i}"),
+            "g1",
+            &format!("/music/cal-cap-{i}.flac"),
+        );
+        track_ids.push(track_id);
+    }
+
+    for (track_no, track_id) in track_ids.iter().enumerate() {
+        db_conn
+            .execute(
+                "INSERT INTO djmdSongPlaylist (PlaylistID, ContentID, TrackNo) VALUES (?1, ?2, ?3)",
+                params!["pl-verified", track_id, track_no as i64 + 1],
+            )
+            .expect("playlist entry should insert");
+    }
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .calibration_coverage(Parameters(CalibrationCoverageParams {
+            playlist: Some("genre_verified".to_string()),
+        }))
+        .await
+        .expect("calibration_coverage should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["total_tracks"], 201);
+    assert_eq!(payload["tracks_with_canonical_genre"], 201);
+    assert_eq!(payload["missing_audio_features"], 201);
+    assert_eq!(payload["missing_stratum_features"], 201);
+    assert_eq!(payload["missing_essentia_features"], 201);
+    assert_eq!(
+        payload["genres"][0]["playlist_tracks"], 201,
+        "calibration coverage must not use the ordinary 200-track playlist cap"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn force_refresh_bypasses_enrichment_cache() {
+    let offline_http = reqwest::Client::builder()
+        .user_agent("Reklawdbox/0.1")
+        .proxy(reqwest::Proxy::all("http://127.0.0.1:9").expect("offline proxy URL should parse"))
+        .build()
+        .expect("offline HTTP client should build");
+
+    let Some((server, _store_dir)) = create_real_server_with_temp_store(offline_http) else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    let track = sample_real_tracks(&server, 1)
+        .into_iter()
+        .next()
+        .expect("integration test needs at least one real track");
+    let norm_artist = crate::normalize::normalize_for_matching(&track.artist);
+    let norm_title = crate::normalize::normalize_for_matching(&track.title);
+    let cached_json = serde_json::json!({"genre":"Sentinel Genre","key":"Am","bpm":128});
+    let cached_json_str = cached_json.to_string();
+
+    {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store::set_enrichment(
+            &store,
+            "beatport",
+            &norm_artist,
+            &norm_title,
+            None,
+            Some("exact"),
+            Some(&cached_json_str),
+        )
+        .expect("sentinel cache entry should write");
+    }
+
+    let cache_hit = server
+        .lookup_beatport(Parameters(LookupBeatportParams {
+            track_id: None,
+            artist: Some(track.artist.clone()),
+            title: Some(track.title.clone()),
+            force_refresh: Some(false),
+        }))
+        .await
+        .expect("lookup_beatport(force_refresh=false) should return cache");
+    let cache_hit_json = extract_json(&cache_hit);
+    assert_eq!(cache_hit_json["cache_hit"], true);
+    assert_eq!(cache_hit_json["genre"], "Sentinel Genre");
+
+    let refresh_err = server
+        .lookup_beatport(Parameters(LookupBeatportParams {
+            track_id: None,
+            artist: Some(track.artist.clone()),
+            title: Some(track.title.clone()),
+            force_refresh: Some(true),
+        }))
+        .await
+        .expect_err("force_refresh=true should bypass cache and attempt HTTP call");
+    assert!(
+        format!("{refresh_err}").contains("Beatport error"),
+        "force refresh should fail via offline HTTP path, got: {refresh_err}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
+    let Some((server, _store_dir)) =
+        create_real_server_with_temp_store(default_http_client_for_tests())
+    else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    let candidates = sample_real_tracks(&server, 30);
+    if candidates.is_empty() {
+        eprintln!("Skipping: integration test needs candidate tracks from real DB");
+        return;
+    }
+
+    let mut selected_track: Option<crate::types::Track> = None;
+    for track in candidates.into_iter().take(10) {
+        let lookup = server
+            .lookup_beatport(Parameters(LookupBeatportParams {
+                track_id: None,
+                artist: Some(track.artist.clone()),
+                title: Some(track.title.clone()),
+                force_refresh: Some(true),
+            }))
+            .await;
+
+        let Ok(result) = lookup else {
+            continue;
+        };
+        let payload = extract_json(&result);
+        if payload
+            .get("genre")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        {
+            selected_track = Some(track);
+            break;
+        }
+    }
+
+    let Some(track) = selected_track else {
+        eprintln!(
+            "Skipping: could not find a track with a successful Beatport match; \
+                 rerun when network/providers are available"
+        );
+        return;
+    };
+    let norm_artist = crate::normalize::normalize_for_matching(&track.artist);
+    let norm_title = crate::normalize::normalize_for_matching(&track.title);
+
+    let individual_cache = {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
+            .expect("cache read should succeed")
+            .expect("individual lookup should have created cache entry")
+    };
+    let individual_json: serde_json::Value = serde_json::from_str(
+        individual_cache
+            .response_json
+            .as_deref()
+            .expect("individual beatport cache should contain JSON"),
+    )
+    .expect("individual beatport cache JSON should parse");
+    assert!(
+        individual_json
+            .get("genre")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "individual beatport cache should have string 'genre'"
+    );
+    assert!(
+        individual_json.get("label").is_some(),
+        "individual beatport cache should include 'label' field"
+    );
+    let individual_fields: HashSet<String> = individual_json
+        .as_object()
+        .expect("individual beatport cache should be object")
+        .keys()
+        .cloned()
+        .collect();
+
+    {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store
+            .execute(
+                "DELETE FROM enrichment_cache
+                     WHERE provider = ?1 AND query_artist = ?2 AND query_title = ?3",
+                params!["beatport", &norm_artist, &norm_title],
+            )
+            .expect("cache clear should succeed");
+    }
+
+    let enrich_result = server
+        .enrich_tracks(Parameters(EnrichTracksParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![track.id.clone()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            offset: None,
+            providers: Some(vec![crate::types::Provider::Beatport]),
+            skip_cached: Some(false),
+            force_refresh: Some(true),
+            concurrency: None,
+        }))
+        .await
+        .expect("enrich_tracks should succeed for beatport provider");
+    let enrich_payload = extract_json(&enrich_result);
+    assert_eq!(enrich_payload["summary"]["total"], 1);
+
+    let batch_cache = {
+        let store = server
+            .cache_store_conn()
+            .expect("internal store should be available");
+        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
+            .expect("cache read should succeed")
+            .expect("batch enrich should have created beatport cache entry")
+    };
+    let batch_json: serde_json::Value = serde_json::from_str(
+        batch_cache
+            .response_json
+            .as_deref()
+            .expect("batch beatport cache should contain JSON"),
+    )
+    .expect("batch beatport cache JSON should parse");
+    assert!(
+        batch_json
+            .get("genre")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "batch beatport cache should have string 'genre'"
+    );
+    assert!(
+        batch_json.get("genres").is_none(),
+        "beatport cache should not be transformed into discogs-style 'genres' schema"
+    );
+
+    let batch_fields: HashSet<String> = batch_json
+        .as_object()
+        .expect("batch beatport cache should be object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(
+        batch_fields, individual_fields,
+        "batch and individual beatport cache JSON should share the same schema"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn resolve_tracks_data_batch_consistency() {
+    let Some((server, _store_dir)) =
+        create_real_server_with_temp_store(default_http_client_for_tests())
+    else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    let tracks = sample_real_tracks(&server, 5);
+    assert!(
+        !tracks.is_empty(),
+        "integration test needs tracks from real DB"
+    );
+    let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+
+    let batch_result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(track_ids.clone()),
+            playlist_id: None,
+            max_tracks: Some(track_ids.len() as u32),
+            format: None,
+        }))
+        .await
+        .expect("batch resolve should succeed");
+    let batch_payload = extract_json(&batch_result);
+    let batch_items = batch_payload
+        .as_array()
+        .expect("batch resolve payload should be an array");
+    assert_eq!(
+        batch_items.len(),
+        track_ids.len(),
+        "batch resolve should return one entry per requested track"
+    );
+
+    let mut by_track_id: HashMap<String, serde_json::Value> = HashMap::new();
+    for item in batch_items {
+        let track_id = item
+            .get("track_id")
+            .and_then(serde_json::Value::as_str)
+            .expect("resolved track item should include track_id");
+        by_track_id.insert(track_id.to_string(), item.clone());
+    }
+
+    for track_id in &track_ids {
+        let single_result = server
+            .resolve_track_data(Parameters(ResolveTrackDataParams {
+                track_id: track_id.clone(),
+            }))
+            .await
+            .expect("single resolve should succeed");
+        let single_payload = extract_json(&single_result);
+        assert_eq!(
+            by_track_id
+                .get(track_id)
+                .expect("batch output should include every requested track"),
+            &single_payload,
+            "batch resolve output should match single-track resolve output"
+        );
+    }
+}
+
+#[test]
+fn golden_genres_fixture_is_well_formed() {
+    let entries = load_golden_genres_fixture();
+    assert!(
+        !entries.is_empty(),
+        "golden genres fixture should contain at least one entry"
+    );
+
+    let mut unique = HashSet::new();
+    for entry in &entries {
+        assert!(
+            !entry.artist.trim().is_empty(),
+            "fixture artist must be non-empty"
+        );
+        assert!(
+            !entry.title.trim().is_empty(),
+            "fixture title must be non-empty"
+        );
+        assert!(
+            !entry.notes.trim().is_empty(),
+            "fixture notes must be non-empty"
+        );
+        assert!(
+            genre::is_known_genre(&entry.expected_genre),
+            "expected_genre '{}' must be in taxonomy",
+            entry.expected_genre
+        );
+        assert!(
+            genre::canonical_genre_from_alias(&entry.expected_genre).is_none(),
+            "expected_genre '{}' must be canonical, not alias",
+            entry.expected_genre
+        );
+
+        let key = format!(
+            "{}::{}",
+            entry.artist.to_lowercase(),
+            entry.title.to_lowercase()
+        );
+        assert!(unique.insert(key), "duplicate (artist, title) in fixture");
+    }
+}
+
+#[test]
+#[ignore]
+fn golden_dataset_genre_accuracy() {
+    let entries = load_golden_genres_fixture();
+    let Some(conn) = db::open_real_db() else {
+        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
+        return;
+    };
+
+    let mut compared = 0usize;
+    let mut correct = 0usize;
+    let mut missing_tracks = Vec::new();
+    let mut no_genre = Vec::new();
+    let mut mismatches = Vec::new();
+
+    for entry in &entries {
+        let Some(track) = find_track_by_artist_and_title(&conn, &entry.artist, &entry.title) else {
+            missing_tracks.push(format!("{} - {}", entry.artist, entry.title));
+            continue;
+        };
+
+        if track.genre.trim().is_empty() {
+            no_genre.push(format!("{} - {}", entry.artist, entry.title));
+            continue;
+        }
+
+        compared += 1;
+        let actual = canonical_genre_name(&track.genre);
+        if actual.eq_ignore_ascii_case(&entry.expected_genre) {
+            correct += 1;
+        } else {
+            mismatches.push(format!(
+                "{} - {}: expected '{}', actual '{}' ({})",
+                entry.artist, entry.title, entry.expected_genre, actual, entry.notes
+            ));
+        }
+    }
+
+    let accuracy = if compared == 0 {
+        0.0
+    } else {
+        (correct as f64 / compared as f64) * 100.0
+    };
+    eprintln!(
+        "[integration] golden dataset: total={} compared={} correct={} accuracy={:.1}%",
+        entries.len(),
+        compared,
+        correct,
+        accuracy
+    );
+    if !missing_tracks.is_empty() {
+        eprintln!("[integration] missing tracks ({}):", missing_tracks.len());
+        for item in &missing_tracks {
+            eprintln!("  - {item}");
+        }
+    }
+    if !no_genre.is_empty() {
+        eprintln!(
+            "[integration] tracks with empty genre ({}):",
+            no_genre.len()
+        );
+        for item in &no_genre {
+            eprintln!("  - {item}");
+        }
+    }
+    if !mismatches.is_empty() {
+        eprintln!("[integration] mismatches ({}):", mismatches.len());
+        for item in &mismatches {
+            eprintln!("  - {item}");
+        }
+    }
+
+    assert!(
+        !missing_tracks.is_empty() || compared > 0,
+        "fixture should either report missing tracks or compare at least one track"
+    );
+}
+
+fn make_test_track(id: &str, genre: &str, bpm: f64, key: &str) -> crate::types::Track {
+    crate::types::Track {
+        id: id.to_string(),
+        title: format!("Track {id}"),
+        artist: "Test Artist".to_string(),
+        album: "Test Album".to_string(),
+        genre: genre.to_string(),
+        bpm,
+        key: key.to_string(),
+        rating: 3,
+        comments: "test comment".to_string(),
+        color: "Rose".to_string(),
+        color_code: 1,
+        label: "Test Label".to_string(),
+        remixer: "".to_string(),
+        year: 2023,
+        length: 300,
+        file_path: "/music/test.flac".to_string(),
+        play_count: 5,
+        bit_rate: 1411,
+        sample_rate: 44100,
+        file_kind: crate::types::FileKind::Flac,
+        date_added: "2023-01-15".to_string(),
+        position: None,
+        played_at: None,
+    }
+}
+
+#[test]
+fn resolve_single_track_rekordbox_only() {
+    let track = make_test_track("t1", "Deep House", 126.0, "Am");
+    let result = resolve_single_track(&track, None, None, None, None, false, None);
+
+    let rb = result
+        .get("rekordbox")
+        .expect("rekordbox section should exist");
+    assert_eq!(rb["title"], "Track t1");
+    assert_eq!(rb["artist"], "Test Artist");
+    assert_eq!(rb["genre"], "Deep House");
+    assert_eq!(rb["bpm"], 126.0);
+    assert_eq!(rb["key"], "Am");
+    assert_eq!(rb["duration_s"], 300);
+    assert_eq!(rb["year"], 2023);
+    assert_eq!(rb["rating"], 3);
+    assert_eq!(rb["label"], "Test Label");
+
+    assert!(
+        result["audio_analysis"].is_null(),
+        "audio_analysis should be null without cache"
+    );
+    assert!(
+        result["discogs"].is_null(),
+        "discogs should be null without cache"
+    );
+    assert!(
+        result["beatport"].is_null(),
+        "beatport should be null without cache"
+    );
+    assert!(
+        result["staged_changes"].is_null(),
+        "staged_changes should be null without staged"
+    );
+
+    let dc = result
+        .get("data_completeness")
+        .expect("data_completeness should exist");
+    assert_eq!(dc["rekordbox"], true);
+    assert_eq!(dc["stratum_dsp"], false);
+    assert_eq!(dc["essentia"], false);
+    assert_eq!(dc["essentia_installed"], false);
+    assert_eq!(dc["discogs"], false);
+    assert_eq!(dc["beatport"], false);
+
+    let gt = result
+        .get("genre_taxonomy")
+        .expect("genre_taxonomy should exist");
+    assert_eq!(gt["current_genre_canonical"], "Deep House");
+}
+
+#[test]
+fn resolve_single_track_with_staged_changes() {
+    let track = make_test_track("t2", "House", 128.0, "Cm");
+    let staged = crate::types::TrackChange {
+        track_id: "t2".to_string(),
+        genre: Some("Deep House".to_string()),
+        comments: None,
+        rating: Some(5),
+        color: None,
+        label: None,
+        year: None,
+        album: None,
+    };
+    let result = resolve_single_track(&track, None, None, None, None, false, Some(&staged));
+
+    let sc = result
+        .get("staged_changes")
+        .expect("staged_changes should exist");
+    assert!(
+        !sc.is_null(),
+        "staged_changes should not be null when changes are staged"
+    );
+    assert_eq!(sc["genre"], "Deep House");
+    assert!(sc["comments"].is_null(), "unstaged field should be null");
+    assert_eq!(sc["rating"], 5);
+    assert!(sc["color"].is_null(), "unstaged field should be null");
+    assert!(
+        sc.get("year").is_some_and(serde_json::Value::is_null),
+        "unstaged year should be present and null"
+    );
+    assert!(
+        sc.get("album").is_some_and(serde_json::Value::is_null),
+        "unstaged album should be present and null"
+    );
+}
+
+#[tokio::test]
+async fn resolve_tools_return_all_staged_fields_in_full_format() {
+    let track_id = "resolve-all-staged-fields";
+    let db_conn = create_single_track_test_db(track_id, "/tmp/resolve-all-staged-fields.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let staged = TrackChange {
+        track_id: track_id.to_string(),
+        genre: Some("Techno".to_string()),
+        comments: Some("staged comments".to_string()),
+        rating: Some(5),
+        color: Some("Red".to_string()),
+        label: Some("Staged Label".to_string()),
+        year: Some(1997),
+        album: Some("Staged Album".to_string()),
+    };
+    assert_eq!(server.context.mutation.changes.stage(vec![staged]), (1, 1));
+
+    let expected_staged = serde_json::json!({
+        "genre": "Techno",
+        "comments": "staged comments",
+        "rating": 5,
+        "color": "Red",
+        "label": "Staged Label",
+        "year": 1997,
+        "album": "Staged Album",
+    });
+    let expected_keys: HashSet<&str> = EditableField::ALL
+        .iter()
+        .map(EditableField::as_str)
+        .collect();
+
+    let single_result = server
+        .resolve_track_data(Parameters(ResolveTrackDataParams {
+            track_id: track_id.to_string(),
+        }))
+        .await
+        .expect("resolve_track_data should succeed");
+    let single_payload = extract_json(&single_result);
+    let single_staged = single_payload
+        .get("staged_changes")
+        .expect("resolve_track_data should include staged_changes");
+    assert_eq!(single_staged, &expected_staged);
+    let single_keys: HashSet<&str> = single_staged
+        .as_object()
+        .expect("staged_changes should be an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(single_keys, expected_keys);
+
+    let batch_result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![track_id.to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            format: Some(ResolveFormat::Full),
+        }))
+        .await
+        .expect("full resolve_tracks_data should succeed");
+    let batch_payload = extract_json(&batch_result);
+    let batch_item = batch_payload
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("full resolve_tracks_data should return the requested track");
+    let batch_staged = batch_item
+        .get("staged_changes")
+        .expect("full resolve_tracks_data should include staged_changes");
+    assert_eq!(batch_staged, &expected_staged);
+    assert_eq!(batch_staged, single_staged);
+
+    let compact_result = server
+        .resolve_tracks_data(Parameters(ResolveTracksDataParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(vec![track_id.to_string()]),
+            playlist_id: None,
+            max_tracks: Some(1),
+            format: Some(ResolveFormat::Classification),
+        }))
+        .await
+        .expect("classification resolve_tracks_data should succeed");
+    let compact_payload = extract_json(&compact_result);
+    let compact_item = compact_payload
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("classification resolve_tracks_data should return the requested track");
+    assert_eq!(
+        compact_item.get("track_id"),
+        Some(&serde_json::json!(track_id))
+    );
+    assert!(compact_item.get("artist").is_some());
+    assert!(compact_item.get("audio").is_some());
+    assert!(compact_item.get("rekordbox").is_none());
+    assert!(compact_item.get("staged_changes").is_none());
+}
+
+#[test]
+fn resolve_single_track_taxonomy_mappings() {
+    let track = make_test_track("t3", "Hip-Hop", 130.0, "Fm");
+
+    let discogs_json = serde_json::json!({
+        "title": "Some Release",
+        "year": "2020",
+        "label": "Some Label",
+        "genres": ["Electronic"],
+        "styles": ["Deep House", "Garage House", "Some Unknown Style"],
+        "fuzzy_match": false,
+    });
+    let discogs_cache = store::EnrichmentCacheEntry {
+        provider: "discogs".to_string(),
+        query_artist: "test artist".to_string(),
+        query_title: "track t3".to_string(),
+        query_album: "test album".to_string(),
+        match_quality: Some("exact".to_string()),
+        response_json: Some(serde_json::to_string(&discogs_json).unwrap()),
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let beatport_json = serde_json::json!({
+        "genre": "Techno",
+        "bpm": 130,
+        "key": "Fm",
+        "track_name": "Track t3",
+        "artists": ["Test Artist"],
+    });
+    let beatport_cache = store::EnrichmentCacheEntry {
+        provider: "beatport".to_string(),
+        query_artist: "test artist".to_string(),
+        query_title: "track t3".to_string(),
+        query_album: String::new(),
+        match_quality: Some("exact".to_string()),
+        response_json: Some(serde_json::to_string(&beatport_json).unwrap()),
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let result = resolve_single_track(
+        &track,
+        Some(&discogs_cache),
+        Some(&beatport_cache),
+        None,
+        None,
+        false,
+        None,
+    );
+
+    let dc = &result["data_completeness"];
+    assert_eq!(dc["discogs"], true);
+    assert_eq!(dc["beatport"], true);
+    assert_eq!(dc["stratum_dsp"], false);
+
+    let gt = &result["genre_taxonomy"];
+    assert_eq!(gt["current_genre_canonical"], "Hip Hop");
+
+    let dsm = gt["discogs_style_mappings"]
+        .as_array()
+        .expect("should be array");
+    assert_eq!(dsm.len(), 3);
+
+    let dh = dsm
+        .iter()
+        .find(|m| m["style"] == "Deep House")
+        .expect("Deep House mapping");
+    assert_eq!(dh["mapping_type"], "exact");
+    assert_eq!(dh["maps_to"], "Deep House");
+
+    let gh = dsm
+        .iter()
+        .find(|m| m["style"] == "Garage House")
+        .expect("Garage House mapping");
+    assert_eq!(gh["mapping_type"], "alias");
+    assert_eq!(gh["maps_to"], "House");
+
+    let unknown = dsm
+        .iter()
+        .find(|m| m["style"] == "Some Unknown Style")
+        .expect("unknown mapping");
+    assert_eq!(unknown["mapping_type"], "unknown");
+    assert!(unknown["maps_to"].is_null());
+
+    let bgm = &gt["beatport_genre_mapping"];
+    assert_eq!(bgm["genre"], "Techno");
+    assert_eq!(bgm["mapping_type"], "exact");
+    assert_eq!(bgm["maps_to"], "Techno");
+
+    assert!(
+        result["discogs"].is_object(),
+        "discogs should be parsed object"
+    );
+    assert!(
+        result["beatport"].is_object(),
+        "beatport should be parsed object"
+    );
+}
+
+#[test]
+fn resolve_single_track_empty_genre_is_null() {
+    let track = make_test_track("t4", "", 0.0, "");
+    let result = resolve_single_track(&track, None, None, None, None, false, None);
+
+    let gt = &result["genre_taxonomy"];
+    assert!(
+        gt["current_genre_canonical"].is_null(),
+        "empty genre should map to null canonical"
+    );
+}
+
+#[test]
+fn resolve_single_track_unknown_genre_maps_to_null() {
+    let track = make_test_track("t5", "Polka", 120.0, "C");
+    let result = resolve_single_track(&track, None, None, None, None, false, None);
+
+    let gt = &result["genre_taxonomy"];
+    assert!(
+        gt["current_genre_canonical"].is_null(),
+        "unknown genre 'Polka' should map to null"
+    );
+}
+
+#[test]
+fn resolve_single_track_with_stratum_agreement() {
+    let track = make_test_track("t6", "Techno", 128.0, "Am");
+
+    let stratum_json = serde_json::json!({
+        "bpm": 128.5,
+        "key": "Am",
+        "analyzer_version": "0.1.0",
+    });
+    let stratum_cache = store::CachedAudioAnalysis {
+        file_path: "/music/test.flac".to_string(),
+        analyzer: "stratum-dsp".to_string(),
+        file_size: 12345,
+        file_mtime: 1700000000,
+        analysis_version: "0.1.0".to_string(),
+        input_fingerprint: "hmm:v1".to_string(),
+        features_json: serde_json::to_string(&stratum_json).unwrap(),
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let result = resolve_single_track(&track, None, None, Some(&stratum_cache), None, false, None);
+
+    let aa = result
+        .get("audio_analysis")
+        .expect("audio_analysis should exist");
+    assert!(
+        !aa.is_null(),
+        "audio_analysis should not be null with stratum cache"
+    );
+    assert_eq!(
+        aa["bpm_agreement"], true,
+        "BPM 128.0 vs 128.5 should agree (within 2.0)"
+    );
+    assert_eq!(aa["key_agreement"], true, "Key Am vs Am should agree");
+    assert!(
+        aa["stratum_dsp"].is_object(),
+        "stratum_dsp should be the parsed features"
+    );
+    assert!(
+        aa["essentia"].is_null(),
+        "essentia should be null when not cached"
+    );
+
+    let dc = &result["data_completeness"];
+    assert_eq!(dc["stratum_dsp"], true);
+}
+
+#[test]
+fn resolve_single_track_with_essentia_cache() {
+    let track = make_test_track("t6b", "Techno", 128.0, "Am");
+    let essentia_json = serde_json::json!({
+        "danceability": 0.82,
+        "loudness_integrated": -8.4,
+        "rhythm_regularity": 0.91,
+        "analyzer_version": "2.1b6.dev1389"
+    });
+    let essentia_cache = store::CachedAudioAnalysis {
+        file_path: "/music/test.flac".to_string(),
+        analyzer: "essentia".to_string(),
+        file_size: 12345,
+        file_mtime: 1700000000,
+        analysis_version: "2.1b6.dev1389".to_string(),
+        input_fingerprint: String::new(),
+        features_json: serde_json::to_string(&essentia_json).unwrap(),
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let result = resolve_single_track(&track, None, None, None, Some(&essentia_cache), true, None);
+
+    let aa = &result["audio_analysis"];
+    assert!(
+        aa.is_object(),
+        "audio_analysis should be populated when essentia cache exists"
+    );
+    assert!(
+        aa["stratum_dsp"].is_null(),
+        "stratum_dsp should remain null when not cached"
+    );
+    assert!(
+        aa["essentia"].is_object(),
+        "essentia should expose cached analysis JSON"
+    );
+    assert_eq!(aa["essentia"]["danceability"], 0.82);
+
+    let dc = &result["data_completeness"];
+    assert_eq!(dc["essentia"], true);
+    assert_eq!(dc["essentia_installed"], true);
+}
+
+#[test]
+fn resolve_single_track_stratum_disagreement() {
+    let track = make_test_track("t7", "House", 128.0, "Am");
+
+    let stratum_json = serde_json::json!({
+        "bpm": 64.0,
+        "key": "Cm",
+        "analyzer_version": "0.1.0",
+    });
+    let stratum_cache = store::CachedAudioAnalysis {
+        file_path: "/music/test.flac".to_string(),
+        analyzer: "stratum-dsp".to_string(),
+        file_size: 12345,
+        file_mtime: 1700000000,
+        analysis_version: "0.1.0".to_string(),
+        input_fingerprint: "hmm:v1".to_string(),
+        features_json: serde_json::to_string(&stratum_json).unwrap(),
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let result = resolve_single_track(&track, None, None, Some(&stratum_cache), None, false, None);
+
+    let aa = &result["audio_analysis"];
+    assert_eq!(
+        aa["bpm_agreement"], false,
+        "BPM 128.0 vs 64.0 should disagree"
+    );
+    assert_eq!(aa["key_agreement"], false, "Key Am vs Cm should disagree");
+}
+
+#[test]
+fn resolve_single_track_enrichment_no_match_returns_null() {
+    let track = make_test_track("t8", "House", 126.0, "Am");
+
+    let discogs_cache = store::EnrichmentCacheEntry {
+        provider: "discogs".to_string(),
+        query_artist: "test artist".to_string(),
+        query_title: "track t8".to_string(),
+        query_album: "test album".to_string(),
+        match_quality: Some("none".to_string()),
+        response_json: None,
+        created_at: "2024-01-01".to_string(),
+    };
+
+    let result = resolve_single_track(&track, Some(&discogs_cache), None, None, None, false, None);
+
+    assert!(
+        result["discogs"].is_null(),
+        "discogs with no response_json should be null"
+    );
+    assert_eq!(
+        result["data_completeness"]["discogs"], true,
+        "cache entry exists so completeness is true"
+    );
+}
+
+#[test]
+fn musical_key_to_camelot_converts_major_minor_and_flats() {
+    assert_eq!(
+        musical_key_to_camelot("Am").map(format_camelot).as_deref(),
+        Some("8A")
+    );
+    assert_eq!(
+        musical_key_to_camelot("C").map(format_camelot).as_deref(),
+        Some("8B")
+    );
+    assert_eq!(
+        musical_key_to_camelot("F#m").map(format_camelot).as_deref(),
+        Some("11A")
+    );
+    assert_eq!(
+        musical_key_to_camelot("Bb").map(format_camelot).as_deref(),
+        Some("6B")
+    );
+    assert_eq!(
+        musical_key_to_camelot("Dbm").map(format_camelot).as_deref(),
+        Some("12A")
+    );
+    assert_eq!(
+        key_to_camelot("8a").map(format_camelot).as_deref(),
+        Some("8A")
+    );
+    assert_eq!(musical_key_to_camelot("not-a-key"), None);
+}
+
+#[test]
+fn camelot_distance_scoring_handles_wrap_and_mode_shift() {
+    let wrap_up = score_key_axis(parse_camelot_key("12A"), parse_camelot_key("1A"));
+    assert_eq!(wrap_up.value, 0.9);
+    assert!(
+        wrap_up.label.contains("Camelot adjacent"),
+        "wrap-around up should be treated as +1"
+    );
+
+    let wrap_down = score_key_axis(parse_camelot_key("1A"), parse_camelot_key("12A"));
+    assert_eq!(wrap_down.value, 0.9);
+    assert!(
+        wrap_down.label.contains("Camelot adjacent"),
+        "wrap-around down should be treated as -1"
+    );
+
+    let mood_shift = score_key_axis(parse_camelot_key("6A"), parse_camelot_key("6B"));
+    assert_eq!(mood_shift.value, 0.8);
+
+    let diagonal = score_key_axis(parse_camelot_key("6A"), parse_camelot_key("7B"));
+    assert_eq!(diagonal.value, 0.55);
+    assert!(
+        diagonal.label.contains("Energy diagonal"),
+        "cross-letter ±1 should be Energy diagonal"
+    );
+}
+
+#[test]
+fn key_axis_covers_all_relation_types() {
+    let perfect = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("8A"));
+    assert_eq!(perfect.value, 1.0);
+    assert_eq!(perfect.label, "Perfect");
+
+    let adjacent = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("9A"));
+    assert_eq!(adjacent.value, 0.9);
+    assert!(adjacent.label.contains("Camelot adjacent"));
+
+    let mood = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("8B"));
+    assert_eq!(mood.value, 0.8);
+    assert!(mood.label.contains("Mood shift"));
+
+    let diagonal = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("9B"));
+    assert_eq!(diagonal.value, 0.55);
+    assert!(diagonal.label.contains("Energy diagonal"));
+
+    let extended = score_key_axis(parse_camelot_key("8A"), parse_camelot_key("10A"));
+    assert_eq!(extended.value, 0.45);
+    assert!(extended.label.contains("Extended"));
+
+    let clash = score_key_axis(parse_camelot_key("1A"), parse_camelot_key("6A"));
+    assert_eq!(clash.value, 0.1);
+    assert_eq!(clash.label, "Clash");
+}
+
+#[test]
+fn bpm_exponential_scoring_curve() {
+    // exp(-0.019 * pct²): 0% → 1.0, monotonically decreasing
+    let seamless = score_bpm_axis(128.0, 129.5); // 1.17%
+    assert!(
+        seamless.value > 0.97,
+        "1.17% should score near 1.0, got {}",
+        seamless.value
+    );
+    assert!(seamless.label.contains("Seamless"));
+
+    let comfortable = score_bpm_axis(130.0, 126.5); // 2.69%
+    assert!(
+        comfortable.value > 0.85 && comfortable.value < 0.95,
+        "2.69% should be ~0.87, got {}",
+        comfortable.value
+    );
+    assert!(comfortable.label.contains("Comfortable"));
+
+    let noticeable = score_bpm_axis(120.0, 125.5); // 4.58%
+    assert!(
+        noticeable.value > 0.55 && noticeable.value < 0.75,
+        "4.58% should be ~0.65, got {}",
+        noticeable.value
+    );
+    assert!(noticeable.label.contains("Noticeable"));
+
+    let creative = score_bpm_axis(128.0, 138.0); // 7.81%
+    assert!(
+        creative.value > 0.25 && creative.value < 0.45,
+        "7.81% should be ~0.33, got {}",
+        creative.value
+    );
+    assert!(creative.label.contains("Creative transition needed"));
+
+    let jarring = score_bpm_axis(120.0, 132.0); // 10.0%
+    assert!(
+        jarring.value < 0.20,
+        "10% should be near 0, got {}",
+        jarring.value
+    );
+    assert!(jarring.label.contains("Jarring"));
+
+    let unknown = score_bpm_axis(0.0, 128.0);
+    assert_eq!(unknown.value, 0.5);
+    assert_eq!(unknown.label, "Unknown BPM");
+
+    let at_0 = score_bpm_axis(128.0, 128.0);
+    let at_1 = score_bpm_axis(128.0, 129.28); // ~1%
+    let at_3 = score_bpm_axis(128.0, 131.84); // ~3%
+    let at_5 = score_bpm_axis(128.0, 134.4); // ~5%
+    let at_8 = score_bpm_axis(128.0, 138.24); // ~8%
+    assert!(at_0.value > at_1.value);
+    assert!(at_1.value > at_3.value);
+    assert!(at_3.value > at_5.value);
+    assert!(at_5.value > at_8.value);
+}
+
+#[test]
+fn transpose_camelot_key_circle_of_fifths() {
+    // +1 semitone = +7 Camelot positions: 8A → 3A
+    let k8a = parse_camelot_key("8A").unwrap();
+    let up1 = transpose_camelot_key(k8a, 1);
+    assert_eq!(format_camelot(up1), "3A");
+
+    let full = transpose_camelot_key(k8a, 12);
+    assert_eq!(format_camelot(full), "8A");
+
+    let down1 = transpose_camelot_key(k8a, -1);
+    assert_eq!(format_camelot(down1), "1A");
+
+    let round_trip = transpose_camelot_key(up1, -1);
+    assert_eq!(format_camelot(round_trip), "8A");
+
+    let k5b = parse_camelot_key("5B").unwrap();
+    let up2 = transpose_camelot_key(k5b, 2);
+    assert!(
+        format_camelot(up2).ends_with('B'),
+        "letter should be preserved through transposition"
+    );
+}
+
+#[test]
+fn master_tempo_off_changes_key_scoring() {
+    let from = TrackProfile {
+        track: crate::types::Track {
+            id: "mt-from".to_string(),
+            title: "MT From".to_string(),
+            artist: "Test".to_string(),
+            album: String::new(),
+            genre: "House".to_string(),
+            key: "Am".to_string(),
+            bpm: 128.0,
+            rating: 0,
+            comments: String::new(),
+            color: String::new(),
+            color_code: 0,
+            label: String::new(),
+            remixer: String::new(),
+            year: 0,
+            length: 300,
+            file_path: "/tmp/mt-from.flac".to_string(),
+            play_count: 0,
+            bit_rate: 1411,
+            sample_rate: 44100,
+            file_kind: crate::types::FileKind::Flac,
+            date_added: String::new(),
+            position: None,
+            played_at: None,
+        },
+        camelot_key: parse_camelot_key("8A"),
+        key_display: "8A".to_string(),
+        bpm: 128.0,
+        energy: 0.6,
+        brightness: None,
+        rhythm_regularity: None,
+        loudness_range: None,
+        canonical_genre: Some("House".to_string()),
+        genre_family: GenreFamily::House,
+        timbral: None,
+    };
+
+    // 128/135 BPM → -1 semitone pitch shift
+    let mut to = from.clone();
+    to.track.id = "mt-to".to_string();
+    to.bpm = 135.0;
+    to.camelot_key = parse_camelot_key("8A"); // same key naturally
+
+    let scores_mt_on = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert_eq!(
+        scores_mt_on.key.value, 1.0,
+        "master_tempo on: same key should be perfect"
+    );
+    assert_eq!(scores_mt_on.pitch_shift_semitones, 0);
+    assert!(scores_mt_on.effective_to_key.is_none());
+
+    let scores_mt_off = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert_eq!(
+        scores_mt_off.pitch_shift_semitones, -1,
+        "128→135 BPM should yield -1 semitone shift"
+    );
+    assert_eq!(
+        scores_mt_off.effective_to_key,
+        Some("1A".to_string()),
+        "8A shifted -1 semitone = 1A"
+    );
+    // Continuous detuning blends Perfect (1.0) and Clash (0.1) weighted by
+    // fractional semitones (-0.909), so score is slightly above 0.1.
+    assert!(
+        scores_mt_off.key.value > 0.1 && scores_mt_off.key.value < 0.25,
+        "128→135: key score should be slightly above 0.1 due to detuning blend, got {}",
+        scores_mt_off.key.value,
+    );
+    assert_eq!(
+        scores_mt_on.key.value, 1.0,
+        "master_tempo on: same key is perfect (1.0)"
+    );
+}
+
+#[test]
+fn detuning_eliminates_cliff_at_rounding_boundary() {
+    // Regression: old rounding caused a 10x score cliff at 0.5 semitones.
+    // Continuous detuning should produce similar scores on either side.
+    let from = make_test_profile("cliff-from", "8A", 128.0, 0.5, "House");
+    let to_under = make_test_profile("cliff-under", "8A", 131.5, 0.5, "House");
+    let to_over = make_test_profile("cliff-over", "8A", 132.0, 0.5, "House");
+
+    let ctx = ScoringContext::default();
+
+    let scores_under = score_transition_profiles(
+        &from,
+        &to_under,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        None,
+    );
+    let scores_over = score_transition_profiles(
+        &from,
+        &to_over,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        None,
+    );
+
+    let diff = (scores_under.key.value - scores_over.key.value).abs();
+    assert!(
+        diff < 0.15,
+        "Key scores across the rounding boundary should be similar: \
+         under={:.3} (shift {:.3}), over={:.3} (shift {:.3}), diff={:.3}",
+        scores_under.key.value,
+        12.0 * (128.0_f64 / 131.5).log2(),
+        scores_over.key.value,
+        12.0 * (128.0_f64 / 132.0).log2(),
+        diff,
+    );
+
+    assert!(
+        scores_under.key.value < 0.85,
+        "~0.46 semitone detuning should noticeably reduce key score, got {}",
+        scores_under.key.value,
+    );
+}
+
+#[test]
+fn detuning_smooth_degradation_with_increasing_shift() {
+    let from = make_test_profile("smooth-from", "8A", 128.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let bpms = [128.0, 129.0, 130.0, 131.0, 132.0, 133.0, 134.0, 135.0];
+    let mut prev_score = 1.1_f64;
+
+    for &bpm in &bpms {
+        let to = make_test_profile("smooth-to", "8A", bpm, 0.5, "House");
+        let scores = score_transition_profiles(
+            &from,
+            &to,
+            None,
+            None,
+            &priority_weights(SequencingPriority::Balanced),
+            false,
+            None,
+            &ctx,
+            None,
+        );
+
+        assert!(
+            scores.key.value <= prev_score + 0.01,
+            "Key score should not increase: at {bpm} BPM got {:.3}, prev was {:.3}",
+            scores.key.value,
+            prev_score,
+        );
+        prev_score = scores.key.value;
+    }
+
+    let same = make_test_profile("smooth-same", "8A", 128.0, 0.5, "House");
+    let scores_same = score_transition_profiles(
+        &from,
+        &same,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        None,
+    );
+    assert_eq!(scores_same.key.value, 1.0, "Same BPM should be perfect");
+}
+
+#[test]
+fn detuning_master_tempo_on_unchanged() {
+    let from = make_test_profile("mt-on-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("mt-on-to", "8A", 135.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ctx,
+        None,
+    );
+
+    assert_eq!(
+        scores.key.value, 1.0,
+        "Master tempo ON: same key should always be perfect regardless of BPM"
+    );
+}
+
+#[test]
+fn detuning_label_shows_cents_when_audible() {
+    let from = make_test_profile("label-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("label-to", "8A", 130.5, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        None,
+    );
+
+    assert!(
+        scores.key.label.contains("detuned"),
+        "Label should mention detuning for ~34 cents shift, got: {}",
+        scores.key.label,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_bilinear_interpolation() {
+    // Both tracks have fractional pitch shifts, exercising all 4 bilinear blend combinations.
+    let from = make_test_profile("pb-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("pb-to", "8A", 132.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        Some((130.0, 130.0)), // both pitched to 130
+    );
+
+    assert!(
+        scores.key.value > 0.5 && scores.key.value < 0.85,
+        "Bilinear blend with ~0.53 total shift should score moderately, got {}",
+        scores.key.value,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
+    let from = make_test_profile("pb-mt-from", "8A", 128.0, 0.5, "House");
+    let to = make_test_profile("pb-mt-to", "8A", 135.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        true, // master tempo ON
+        None,
+        &ctx,
+        Some((130.0, 130.0)),
+    );
+
+    assert_eq!(
+        scores.key.value, 1.0,
+        "Master tempo ON with play_bpms: same key should be perfect, got {}",
+        scores.key.value,
+    );
+}
+
+#[test]
+fn detuning_play_bpms_asymmetric_one_zero_shift() {
+    let from = make_test_profile("pb-asym-from", "8A", 130.0, 0.5, "House");
+    let to = make_test_profile("pb-asym-to", "8A", 132.0, 0.5, "House");
+    let ctx = ScoringContext::default();
+
+    let scores = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ctx,
+        Some((130.0, 130.0)), // from at native, to pitched down 2 BPM
+    );
+
+    assert!(
+        scores.key.value > 0.7 && scores.key.value < 0.9,
+        "One-sided ~0.26 semitone shift should score ~0.76, got {}",
+        scores.key.value,
+    );
+}
+
+fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) -> TrackProfile {
+    TrackProfile {
+        track: crate::types::Track {
+            id: id.to_string(),
+            title: id.to_string(),
+            artist: "Test".to_string(),
+            album: String::new(),
+            genre: genre.to_string(),
+            key: key.to_string(),
+            bpm,
+            rating: 0,
+            comments: String::new(),
+            color: String::new(),
+            color_code: 0,
+            label: String::new(),
+            remixer: String::new(),
+            year: 0,
+            length: 300,
+            file_path: format!("/tmp/{id}.flac"),
+            play_count: 0,
+            bit_rate: 1411,
+            sample_rate: 44100,
+            file_kind: crate::types::FileKind::Flac,
+            date_added: String::new(),
+            position: None,
+            played_at: None,
+        },
+        camelot_key: parse_camelot_key(key),
+        key_display: key.to_string(),
+        bpm,
+        energy,
+        brightness: None,
+        rhythm_regularity: None,
+        loudness_range: None,
+        canonical_genre: Some(genre.to_string()),
+        genre_family: genre_family_for(genre),
+        timbral: None,
+    }
+}
+
+#[test]
+fn harmonic_style_conservative_penalizes_poor_transitions() {
+    let from = make_test_profile("hs-from", "8A", 128.0, 0.7, "House");
+    let to = make_test_profile("hs-to", "9B", 128.0, 0.7, "House");
+
+    let conservative = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Conservative),
+        &ScoringContext::default(),
+        None,
+    );
+
+    let baseline = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+
+    assert!(
+        conservative.composite < baseline.composite,
+        "conservative should penalize key=0.55 at peak phase"
+    );
+    let expected = baseline.composite * 0.1;
+    assert!(
+        (conservative.composite - expected).abs() < 1e-9,
+        "conservative penalty should be 0.1x; got {} vs expected {}",
+        conservative.composite,
+        expected
+    );
+
+    let adventurous = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Adventurous),
+        &ScoringContext::default(),
+        None,
+    );
+    assert_eq!(
+        adventurous.composite, baseline.composite,
+        "adventurous should not penalize key=0.55 at peak phase"
+    );
+
+    // key=0.45 at exactly the Balanced build threshold (0.45) should not trigger penalty
+    let from2 = make_test_profile("hs-from2", "8A", 128.0, 0.5, "House");
+    let to2 = make_test_profile("hs-to2", "10A", 128.0, 0.6, "House");
+    let balanced_build = score_transition_profiles(
+        &from2,
+        &to2,
+        Some(EnergyPhase::Build),
+        Some(EnergyPhase::Build),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Balanced),
+        &ScoringContext::default(),
+        None,
+    );
+    let baseline_build = score_transition_profiles(
+        &from2,
+        &to2,
+        Some(EnergyPhase::Build),
+        Some(EnergyPhase::Build),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert_eq!(
+        balanced_build.composite, baseline_build.composite,
+        "balanced should not penalize key=0.45 at build phase (exactly at threshold)"
+    );
+}
+
+#[test]
+fn harmonic_style_adventurous_is_phase_dependent() {
+    let from = make_test_profile("adv-from", "8A", 128.0, 0.7, "House");
+    let to = make_test_profile("adv-to", "2A", 128.0, 0.7, "House");
+
+    let adv_peak = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Adventurous),
+        &ScoringContext::default(),
+        None,
+    );
+    let baseline_peak = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert_eq!(
+        adv_peak.composite, baseline_peak.composite,
+        "adventurous at peak should not penalize key=0.1 (threshold is 0.1)"
+    );
+
+    let adv_warmup = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Warmup),
+        Some(EnergyPhase::Warmup),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Adventurous),
+        &ScoringContext::default(),
+        None,
+    );
+    let baseline_warmup = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Warmup),
+        Some(EnergyPhase::Warmup),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert!(
+        adv_warmup.composite < baseline_warmup.composite,
+        "adventurous at warmup should penalize key=0.1 (threshold is 0.45)"
+    );
+    let expected = baseline_warmup.composite * 0.5;
+    assert!(
+        (adv_warmup.composite - expected).abs() < 1e-9,
+        "adventurous penalty should be 0.5x; got {} vs expected {}",
+        adv_warmup.composite,
+        expected
+    );
+
+    let cons_peak = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Conservative),
+        &ScoringContext::default(),
+        None,
+    );
+    let cons_warmup = score_transition_profiles(
+        &from,
+        &to,
+        Some(EnergyPhase::Warmup),
+        Some(EnergyPhase::Warmup),
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        Some(HarmonicMixingStyle::Conservative),
+        &ScoringContext::default(),
+        None,
+    );
+    assert!(cons_peak.composite < baseline_peak.composite);
+    assert!(cons_warmup.composite < baseline_warmup.composite);
+}
+
+#[test]
+fn composite_scoring_changes_by_priority_axis() {
+    let approx = |left: f64, right: f64| (left - right).abs() < 1e-9;
+
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.30
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Harmonic)
+        ),
+        0.48
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Energy)
+        ),
+        0.12
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Genre)
+        ),
+        0.18
+    ));
+
+    assert!(approx(
+        composite_score(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.17
+    ));
+    assert!(approx(
+        composite_score(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Genre)
+        ),
+        0.38
+    ));
+
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            None,
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.30 / 0.85
+    ));
+}
+
+#[test]
+fn score_genre_axis_treats_missing_genre_as_neutral() {
+    let unknown_source = score_genre_axis(
+        None,
+        Some("House"),
+        GenreFamily::Other,
+        GenreFamily::House,
+        0,
+    );
+    assert_eq!(unknown_source.value, 0.5);
+    assert_eq!(unknown_source.label, "Unknown genre");
+
+    let unknown_destination = score_genre_axis(
+        Some("House"),
+        None,
+        GenreFamily::House,
+        GenreFamily::Other,
+        0,
+    );
+    assert_eq!(unknown_destination.value, 0.5);
+    assert_eq!(unknown_destination.label, "Unknown genre");
+}
+
+#[test]
+fn genre_stickiness_bonus_and_penalty() {
+    let approx = |a: f64, b: f64| (a - b).abs() < 1e-9;
+
+    let bonus = score_genre_axis(
+        Some("Deep House"),
+        Some("Tech House"),
+        GenreFamily::House,
+        GenreFamily::House,
+        3,
+    );
+    assert!(
+        approx(bonus.value, 0.8),
+        "0.7 + 0.1 streak bonus; got {}",
+        bonus.value
+    );
+    assert!(bonus.label.contains("streak bonus"));
+
+    let no_bonus = score_genre_axis(
+        Some("Deep House"),
+        Some("Tech House"),
+        GenreFamily::House,
+        GenreFamily::House,
+        5,
+    );
+    assert_eq!(no_bonus.value, 0.7);
+    assert!(!no_bonus.label.contains("streak bonus"));
+
+    let penalty = score_genre_axis(
+        Some("House"),
+        Some("Drum & Bass"),
+        GenreFamily::House,
+        GenreFamily::Bass,
+        1,
+    );
+    assert!(
+        approx(penalty.value, 0.2),
+        "0.3 - 0.1 early switch penalty; got {}",
+        penalty.value
+    );
+    assert!(penalty.label.contains("early switch penalty"));
+
+    let no_penalty = score_genre_axis(
+        Some("House"),
+        Some("Drum & Bass"),
+        GenreFamily::House,
+        GenreFamily::Bass,
+        2,
+    );
+    assert_eq!(no_penalty.value, 0.3);
+    assert!(!no_penalty.label.contains("early switch penalty"));
+
+    let first = score_genre_axis(
+        Some("House"),
+        Some("Tech House"),
+        GenreFamily::House,
+        GenreFamily::House,
+        0,
+    );
+    assert_eq!(first.value, 0.7);
+    assert!(!first.label.contains("streak bonus"));
+}
+
+#[test]
+fn bpm_trajectory_drift_penalty() {
+    use std::collections::HashMap;
+
+    let start = make_test_profile("bpm-start", "8A", 128.0, 0.7, "House");
+    let close = make_test_profile("bpm-close", "8A", 130.0, 0.7, "House");
+    let far = make_test_profile("bpm-far", "8A", 145.0, 0.7, "House");
+
+    let mut profiles: HashMap<String, TrackProfile> = HashMap::new();
+    profiles.insert("bpm-start".to_string(), start);
+    profiles.insert("bpm-close".to_string(), close);
+    profiles.insert("bpm-far".to_string(), far);
+
+    let tight = build_candidate_plan(
+        &profiles,
+        "bpm-start",
+        3,
+        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+        &priority_weights(SequencingPriority::Harmonic),
+        0,
+        true,
+        None,
+        3.0,
+        None,
+    );
+    assert_eq!(tight.ordered_ids[1], "bpm-close");
+
+    let moderate = build_candidate_plan(
+        &profiles,
+        "bpm-start",
+        3,
+        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+        &priority_weights(SequencingPriority::Harmonic),
+        0,
+        true,
+        None,
+        6.0,
+        None,
+    );
+    assert_eq!(moderate.ordered_ids[1], "bpm-close");
+    assert!(moderate.ordered_ids.contains(&"bpm-far".to_string()));
+
+    let generous = build_candidate_plan(
+        &profiles,
+        "bpm-start",
+        3,
+        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
+        &priority_weights(SequencingPriority::Harmonic),
+        0,
+        true,
+        None,
+        50.0,
+        None,
+    );
+    assert_eq!(generous.ordered_ids[1], "bpm-close");
+    assert!(generous.ordered_ids.contains(&"bpm-far".to_string()));
+}
+
+#[test]
+fn bpm_proxy_energy_keeps_peak_phase_reachable_without_essentia() {
+    let from_energy = compute_track_energy(None, 126.0);
+    let to_energy = compute_track_energy(None, 130.0);
+    let peak = score_energy_axis(
+        from_energy,
+        to_energy,
+        Some(EnergyPhase::Peak),
+        Some(EnergyPhase::Peak),
+        None,
+    );
+
+    assert!(
+        to_energy >= 0.65,
+        "fallback energy should allow peak thresholds"
+    );
+    assert_eq!(peak.value, 1.0);
+    assert_eq!(peak.label, "High and stable (peak phase)");
+}
+
+#[tokio::test]
+async fn score_transition_returns_expected_axis_scores() {
+    let temp_audio_dir = tempfile::tempdir().expect("temp audio dir should create");
+    let from_path = temp_audio_dir.path().join("from-track.flac");
+    let to_path = temp_audio_dir.path().join("to-track.flac");
+    std::fs::write(&from_path, b"from-track-audio").expect("source track fixture should write");
+    std::fs::write(&to_path, b"to-track-audio").expect("target track fixture should write");
+    let from_path_str = from_path.to_string_lossy().to_string();
+    let to_path_str = to_path.to_string_lossy().to_string();
+    let from_metadata = std::fs::metadata(&from_path).expect("source track metadata should load");
+    let to_metadata = std::fs::metadata(&to_path).expect("target track metadata should load");
+    let from_file_size = from_metadata.len() as i64;
+    let to_file_size = to_metadata.len() as i64;
+    let from_file_mtime = from_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+    let to_file_mtime = to_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+
+    let db_conn = create_single_track_test_db("from-track", &from_path_str);
+    db_conn
+        .execute(
+            "INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Em')",
+            [],
+        )
+        .expect("second key should insert");
+    db_conn
+        .execute(
+            "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, 'Second Track', 'a1', 'al1', 'g1', 'k2', 'c1', 'l1', '',
+                    12350, 153, 'score transition test', 2025, 260, ?2, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+            params!["to-track", &to_path_str],
+        )
+        .expect("second track should insert");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &from_path_str,
+        "stratum-dsp",
+        from_file_size,
+        from_file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
+    )
+    .expect("source stratum cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &to_path_str,
+        "stratum-dsp",
+        to_file_size,
+        to_file_mtime,
+        crate::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":123.5,"key":"Em","key_camelot":"9A"}"#,
+    )
+    .expect("destination stratum cache should seed");
+
+    set_test_audio_analysis(
+        &store_conn,
+        &from_path_str,
+        "essentia",
+        from_file_size,
+        from_file_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":0.90,"loudness_integrated":-12.0,"onset_rate":3.0}"#,
+    )
+    .expect("source essentia cache should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &to_path_str,
+        "essentia",
+        to_file_size,
+        to_file_mtime,
+        crate::audio::ESSENTIA_SCHEMA_VERSION,
+        r#"{"danceability":1.80,"loudness_integrated":-8.0,"onset_rate":5.0}"#,
+    )
+    .expect("destination essentia cache should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .score_transition(Parameters(ScoreTransitionParams {
+            source_track_id: "from-track".to_string(),
+            target_track_id: "to-track".to_string(),
+            energy_phase: Some(EnergyPhase::Build),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            use_master_tempo: None,
+            harmonic_style: None,
+        }))
+        .await
+        .expect("score_transition should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["from"]["track_id"], "from-track");
+    assert_eq!(payload["from"]["key"], "8A");
+    assert_eq!(payload["to"]["track_id"], "to-track");
+    assert_eq!(payload["to"]["key"], "9A");
+
+    assert_eq!(payload["scores"]["key"]["value"], 0.9);
+    assert_eq!(payload["scores"]["bpm"]["value"], 0.791);
+    assert_eq!(payload["scores"]["energy"]["value"], 1.0);
+    assert_eq!(payload["scores"]["genre"]["value"], 1.0);
+    assert_eq!(payload["scores"]["brightness"]["value"], 0.5);
+    assert_eq!(payload["scores"]["rhythm"]["value"], 0.5);
+    assert_eq!(payload["scores"]["composite"], 0.915);
+
+    assert!(
+        payload["key_relation"].is_string(),
+        "key_relation should be present"
+    );
+    assert!(
+        payload["key_relation"]
+            .as_str()
+            .unwrap()
+            .contains("Camelot adjacent")
+    );
+    assert!(
+        payload["bpm_adjustment_pct"].is_number(),
+        "bpm_adjustment_pct should be present"
+    );
+    let bpm_pct = payload["bpm_adjustment_pct"].as_f64().unwrap();
+    assert!(
+        bpm_pct > 3.0 && bpm_pct < 4.0,
+        "128→123.5 is ~3.52%; got {bpm_pct}"
+    );
+}
+
+#[tokio::test]
+async fn score_transition_balanced_default_penalizes_clash() {
+    // harmonic_style: None defaults to Balanced, which applies 0.5x penalty on Clash
+    let db_conn = create_single_track_test_db("clash-from", "/tmp/clash-from.flac");
+    db_conn
+        .execute(
+            "INSERT INTO djmdKey (ID, ScaleName) VALUES ('k2', 'Bbm')",
+            [],
+        )
+        .expect("second key should insert");
+    db_conn
+        .execute(
+            "INSERT INTO djmdContent (
+                    ID, Title, ArtistID, AlbumID, GenreID, KeyID, ColorID, LabelID, RemixerID,
+                    BPM, Rating, Commnt, ReleaseYear, Length, FolderPath, DJPlayCount, BitRate,
+                    SampleRate, FileType, created_at, rb_local_deleted
+                ) VALUES (
+                    ?1, 'Clash Track', 'a1', 'al1', 'g1', 'k2', 'c1', 'l1', '',
+                    12200, 153, 'clash test', 2025, 260, ?2, '0', 1411,
+                    44100, 5, '2025-01-03', 0
+                )",
+            params!["clash-to", "/tmp/clash-to.flac"],
+        )
+        .expect("second track should insert");
+
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+
+    set_test_audio_analysis(
+        &store_conn,
+        "/tmp/clash-from.flac",
+        "stratum-dsp",
+        1,
+        1,
+        "stratum-dsp-1.0.0",
+        r#"{"bpm":122.0,"key":"Am","key_camelot":"8A"}"#,
+    )
+    .expect("from stratum should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        "/tmp/clash-to.flac",
+        "stratum-dsp",
+        1,
+        1,
+        "stratum-dsp-1.0.0",
+        r#"{"bpm":122.0,"key":"Bbm","key_camelot":"2A"}"#,
+    )
+    .expect("to stratum should seed");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let penalized = server
+        .score_transition(Parameters(ScoreTransitionParams {
+            source_track_id: "clash-from".to_string(),
+            target_track_id: "clash-to".to_string(),
+            energy_phase: Some(EnergyPhase::Build),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            use_master_tempo: None,
+            harmonic_style: None,
+        }))
+        .await
+        .expect("score_transition should succeed");
+    let penalized_payload = extract_json(&penalized);
+
+    let unpenalized = server
+        .score_transition(Parameters(ScoreTransitionParams {
+            source_track_id: "clash-from".to_string(),
+            target_track_id: "clash-to".to_string(),
+            energy_phase: Some(EnergyPhase::Build),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            use_master_tempo: None,
+            harmonic_style: Some(HarmonicMixingStyle::Adventurous),
+        }))
+        .await
+        .expect("score_transition should succeed");
+    let unpenalized_payload = extract_json(&unpenalized);
+
+    assert_eq!(penalized_payload["scores"]["key"]["value"], 0.1);
+    assert_eq!(unpenalized_payload["scores"]["key"]["value"], 0.1);
+
+    let penalized_composite = penalized_payload["scores"]["composite"].as_f64().unwrap();
+    let unpenalized_composite = unpenalized_payload["scores"]["composite"].as_f64().unwrap();
+    let expected = unpenalized_composite * 0.5;
+    assert!(
+        (penalized_composite - expected).abs() < 0.01,
+        "Balanced default should halve composite for Clash; got {penalized_composite} vs expected {expected}"
+    );
+}
+
+#[test]
+fn flatten_json_round_trip_search_tracks_params() {
+    let json = serde_json::json!({
+        "query": "burial",
+        "artist": "Burial",
+        "genre": "Dubstep",
+        "rating_min": 3,
+        "bpm_min": 130.0,
+        "bpm_max": 145.0,
+        "key": "Am",
+        "has_genre": true,
+        "label": "Hyperdub",
+        "path": "/Music",
+        "added_after": "2026-01-01",
+        "added_before": "2026-12-31",
+        "playlist": "p1",
+        "include_samples": true,
+        "limit": 50,
+        "offset": 10,
+    });
+    let p: SearchTracksParams = serde_json::from_value(json).expect("should deserialize");
+    assert_eq!(p.filters.query.as_deref(), Some("burial"));
+    assert_eq!(p.filters.artist.as_deref(), Some("Burial"));
+    assert_eq!(p.filters.genre.as_deref(), Some("Dubstep"));
+    assert_eq!(p.filters.rating_min, Some(3));
+    assert_eq!(p.filters.bpm_min, Some(130.0));
+    assert_eq!(p.filters.bpm_max, Some(145.0));
+    assert_eq!(p.filters.key.as_deref(), Some("Am"));
+    assert_eq!(p.filters.has_genre, Some(true));
+    assert_eq!(p.filters.label.as_deref(), Some("Hyperdub"));
+    assert_eq!(p.filters.path.as_deref(), Some("/Music"));
+    assert_eq!(p.filters.added_after.as_deref(), Some("2026-01-01"));
+    assert_eq!(p.filters.added_before.as_deref(), Some("2026-12-31"));
+    assert_eq!(p.playlist.as_deref(), Some("p1"));
+    assert_eq!(p.include_samples, Some(true));
+    assert_eq!(p.limit, Some(50));
+    assert_eq!(p.offset, Some(10));
+}
+
+#[test]
+fn flatten_json_round_trip_enrich_tracks_params() {
+    let json = serde_json::json!({
+        "genre": "Techno",
+        "bpm_min": 125.0,
+        "track_ids": ["t1", "t2"],
+        "playlist_id": "p1",
+        "max_tracks": 20,
+        "providers": ["discogs", "beatport"],
+        "skip_cached": false,
+        "force_refresh": true,
+    });
+    let p: EnrichTracksParams = serde_json::from_value(json).expect("should deserialize");
+    assert_eq!(p.filters.genre.as_deref(), Some("Techno"));
+    assert_eq!(p.filters.bpm_min, Some(125.0));
+    assert_eq!(p.filters.query, None);
+    assert_eq!(p.track_ids.as_ref().unwrap().len(), 2);
+    assert_eq!(p.playlist_id.as_deref(), Some("p1"));
+    assert_eq!(p.max_tracks, Some(20));
+    assert_eq!(p.skip_cached, Some(false));
+    assert_eq!(p.force_refresh, Some(true));
+}
+
+#[test]
+fn flatten_json_round_trip_analyze_audio_batch_params() {
+    let json = serde_json::json!({
+        "artist": "Aphex Twin",
+        "rating_min": 4,
+        "track_ids": ["t1"],
+        "max_tracks": 10,
+        "skip_cached": true,
+    });
+    let p: AnalyzeAudioBatchParams = serde_json::from_value(json).expect("should deserialize");
+    assert_eq!(p.filters.artist.as_deref(), Some("Aphex Twin"));
+    assert_eq!(p.filters.rating_min, Some(4));
+    assert_eq!(p.track_ids.as_ref().unwrap(), &["t1"]);
+    assert_eq!(p.max_tracks, Some(10));
+    assert_eq!(p.skip_cached, Some(true));
+}
+
+#[test]
+fn flatten_json_round_trip_resolve_tracks_data_params() {
+    let json = serde_json::json!({
+        "key": "Cm",
+        "has_genre": false,
+        "added_after": "2025-06-01",
+        "playlist_id": "p2",
+        "max_tracks": 100,
+    });
+    let p: ResolveTracksDataParams = serde_json::from_value(json).expect("should deserialize");
+    assert_eq!(p.filters.key.as_deref(), Some("Cm"));
+    assert_eq!(p.filters.has_genre, Some(false));
+    assert_eq!(p.filters.added_after.as_deref(), Some("2025-06-01"));
+    assert_eq!(p.playlist_id.as_deref(), Some("p2"));
+    assert_eq!(p.max_tracks, Some(100));
+}
+
+#[test]
+fn flatten_json_empty_payload_deserializes_to_all_none() {
+    let json = serde_json::json!({});
+    let p: SearchTracksParams = serde_json::from_value(json.clone()).expect("SearchTracksParams");
+    assert!(p.filters.query.is_none());
+    assert!(p.playlist.is_none());
+    assert!(p.limit.is_none());
+
+    let p: EnrichTracksParams = serde_json::from_value(json.clone()).expect("EnrichTracksParams");
+    assert!(p.filters.genre.is_none());
+    assert!(p.track_ids.is_none());
+
+    let p: AnalyzeAudioBatchParams =
+        serde_json::from_value(json.clone()).expect("AnalyzeAudioBatchParams");
+    assert!(p.filters.artist.is_none());
+    assert!(p.track_ids.is_none());
+
+    let p: ResolveTracksDataParams = serde_json::from_value(json).expect("ResolveTracksDataParams");
+    assert!(p.filters.key.is_none());
+    assert!(p.track_ids.is_none());
+}
+
+#[test]
+fn build_set_params_bpm_range_deserializes_from_json_array() {
+    let json = serde_json::json!({
+        "track_ids": ["a", "b"],
+        "target_tracks": 4,
+        "beam_width": 3,
+        "bpm_range": [124.0, 131.0],
+    });
+    let p: BuildSetParams =
+        serde_json::from_value(json).expect("bpm_range should deserialize from JSON array");
+    assert_eq!(p.bpm_range, Some((124.0, 131.0)));
+    assert_eq!(p.beam_width, Some(3));
+    assert!(p.candidates.is_none());
+}
+
+#[test]
+fn build_set_params_without_new_fields_deserializes() {
+    let json = serde_json::json!({
+        "track_ids": ["a"],
+        "target_tracks": 2,
+        "candidates": 2,
+    });
+    let p: BuildSetParams = serde_json::from_value(json).expect("legacy fields should still work");
+    assert_eq!(p.candidates, Some(2));
+    assert!(p.beam_width.is_none());
+    assert!(p.bpm_range.is_none());
+}
+
+#[test]
+fn query_transition_candidates_params_deserializes_from_json() {
+    let json = serde_json::json!({
+        "from_track_id": "t1",
+        "pool_track_ids": ["t2", "t3"],
+        "target_bpm": 130.0,
+        "limit": 5,
+    });
+    let p: QueryTransitionCandidatesParams =
+        serde_json::from_value(json).expect("QueryTransitionCandidatesParams should deserialize");
+    assert_eq!(p.source_track_id, "t1");
+    assert_eq!(p.candidate_track_ids.as_ref().unwrap().len(), 2);
+    assert_eq!(p.target_bpm, Some(130.0));
+    assert_eq!(p.limit, Some(5));
+    assert!(p.playlist_id.is_none());
+}
+
+/// MCP clients expect filter fields at schema top level, not nested under `filters`.
+#[test]
+fn flatten_schema_has_top_level_filter_properties() {
+    let filter_fields = [
+        "query",
+        "artist",
+        "genre",
+        "rating_min",
+        "bpm_min",
+        "bpm_max",
+        "key",
+        "has_genre",
+        "has_label",
+        "label",
+        "path",
+        "added_after",
+        "added_before",
+    ];
+
+    fn assert_schema_properties<T: JsonSchema>(
+        type_name: &str,
+        expected: &[&str],
+        forbidden: &[&str],
+    ) {
+        let schema = schemars::schema_for!(T);
+        let root = schema.as_value();
+        let props = root
+            .get("properties")
+            .unwrap_or_else(|| panic!("{type_name} schema should have properties"));
+        for field in expected {
+            assert!(
+                props.get(*field).is_some(),
+                "{type_name} schema missing top-level property '{field}'"
+            );
+        }
+        for field in forbidden {
+            assert!(
+                props.get(*field).is_none(),
+                "{type_name} schema should NOT have property '{field}'"
+            );
+        }
+    }
+
+    assert_schema_properties::<SearchTracksParams>(
+        "SearchTracksParams",
+        &[
+            &filter_fields[..],
+            &["playlist", "include_samples", "limit", "offset"],
+        ]
+        .concat(),
+        &["filters"],
+    );
+
+    assert_schema_properties::<EnrichTracksParams>(
+        "EnrichTracksParams",
+        &[
+            &filter_fields[..],
+            &[
+                "track_ids",
+                "playlist_id",
+                "max_tracks",
+                "providers",
+                "skip_cached",
+                "force_refresh",
+            ],
+        ]
+        .concat(),
+        &["filters"],
+    );
+
+    assert_schema_properties::<AnalyzeAudioBatchParams>(
+        "AnalyzeAudioBatchParams",
+        &[
+            &filter_fields[..],
+            &["track_ids", "playlist_id", "max_tracks", "skip_cached"],
+        ]
+        .concat(),
+        &["filters"],
+    );
+
+    assert_schema_properties::<ResolveTracksDataParams>(
+        "ResolveTracksDataParams",
+        &[
+            &filter_fields[..],
+            &["track_ids", "playlist_id", "max_tracks"],
+        ]
+        .concat(),
+        &["filters"],
+    );
+}
+
+#[test]
+fn bpm_trajectory_warmup_build_peak_release() {
+    let phases = vec![
+        EnergyPhase::Warmup,
+        EnergyPhase::Build,
+        EnergyPhase::Build,
+        EnergyPhase::Build,
+        EnergyPhase::Peak,
+        EnergyPhase::Peak,
+        EnergyPhase::Release,
+        EnergyPhase::Release,
+    ];
+    let trajectory = compute_bpm_trajectory(&phases, 124.0, 132.0);
+    assert_eq!(trajectory.len(), 8);
+    assert_eq!(trajectory[0], 124.0);
+    assert_eq!(trajectory[1], 124.0);
+    assert_eq!(trajectory[2], 128.0);
+    assert_eq!(trajectory[3], 132.0);
+    assert_eq!(trajectory[4], 132.0);
+    assert_eq!(trajectory[5], 132.0);
+    assert_eq!(trajectory[6], 132.0);
+    assert_eq!(trajectory[7], 124.0);
+}
+
+#[test]
+fn bpm_trajectory_flat_curve() {
+    let phases = vec![EnergyPhase::Peak; 5];
+    let trajectory = compute_bpm_trajectory(&phases, 126.0, 133.0);
+    assert_eq!(trajectory.len(), 5);
+    for bpm in &trajectory {
+        assert_eq!(*bpm, 133.0);
+    }
+}
+
+#[test]
+fn bpm_trajectory_single_position() {
+    let trajectory = compute_bpm_trajectory(&[EnergyPhase::Peak], 128.0, 132.0);
+    assert_eq!(trajectory.len(), 1);
+    assert_eq!(trajectory[0], 132.0);
+}
+
+#[test]
+fn bpm_trajectory_empty() {
+    let trajectory = compute_bpm_trajectory(&[], 128.0, 132.0);
+    assert!(trajectory.is_empty());
+}
+
+#[test]
+fn bpm_trajectory_single_build_single_release() {
+    let phases = vec![EnergyPhase::Build, EnergyPhase::Peak, EnergyPhase::Release];
+    let trajectory = compute_bpm_trajectory(&phases, 120.0, 130.0);
+    assert_eq!(trajectory[0], 125.0); // midpoint for single build
+    assert_eq!(trajectory[1], 130.0); // peak
+    assert_eq!(trajectory[2], 125.0); // midpoint for single release
+}
+
+#[test]
+fn play_bpms_none_preserves_existing_behavior() {
+    let from = make_test_profile("pb-from", "8A", 128.0, 0.6, "House");
+    let to = make_test_profile("pb-to", "9A", 130.0, 0.7, "House");
+
+    let without = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        None,
+    );
+    assert!(without.composite > 0.0);
+    assert!(without.effective_to_key.is_none());
+    assert_eq!(without.pitch_shift_semitones, 0);
+}
+
+#[test]
+fn play_bpms_affects_bpm_adjustment_pct() {
+    let from = make_test_profile("pbadj-from", "8A", 128.0, 0.6, "House");
+    let to = make_test_profile("pbadj-to", "9A", 126.0, 0.7, "House");
+
+    let with_play = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        true,
+        None,
+        &ScoringContext::default(),
+        Some((128.0, 130.0)),
+    );
+    assert!(
+        (with_play.bpm_adjustment_pct - 3.174).abs() < 0.1,
+        "bpm_adjustment_pct should reflect target vs native; got {}",
+        with_play.bpm_adjustment_pct
+    );
+}
+
+#[test]
+fn play_bpms_affects_key_transposition() {
+    let from = make_test_profile("pbkey-from", "8A", 128.0, 0.6, "House");
+    let to = make_test_profile("pbkey-to", "8A", 128.0, 0.7, "House");
+
+    let no_shift = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ScoringContext::default(),
+        Some((128.0, 128.0)),
+    );
+    assert_eq!(
+        no_shift.key.value, 1.0,
+        "same play BPM, same native key = perfect"
+    );
+
+    let big_shift = score_transition_profiles(
+        &from,
+        &to,
+        None,
+        None,
+        &priority_weights(SequencingPriority::Balanced),
+        false,
+        None,
+        &ScoringContext::default(),
+        Some((128.0, 136.0)),
+    );
+    assert_ne!(
+        big_shift.pitch_shift_semitones, 0,
+        "large BPM shift should transpose key"
+    );
+}
+
+fn make_beam_test_profiles() -> HashMap<String, TrackProfile> {
+    let tracks = vec![
+        make_test_profile("b1", "8A", 126.0, 0.4, "Deep House"),
+        make_test_profile("b2", "9A", 127.0, 0.5, "Deep House"),
+        make_test_profile("b3", "10A", 128.0, 0.6, "House"),
+        make_test_profile("b4", "11A", 129.0, 0.7, "House"),
+        make_test_profile("b5", "12A", 130.0, 0.8, "Tech House"),
+    ];
+    tracks
+        .into_iter()
+        .map(|p| (p.track.id.clone(), p))
+        .collect()
+}
+
+#[test]
+fn beam_search_width_1_matches_greedy() {
+    let profiles = make_beam_test_profiles();
+    let phases = resolve_energy_curve(None, 4).unwrap();
+
+    let greedy = build_candidate_plan(
+        &profiles,
+        "b1",
+        4,
+        &phases,
+        &priority_weights(SequencingPriority::Balanced),
+        0,
+        true,
+        Some(HarmonicMixingStyle::Balanced),
+        6.0,
+        None,
+    );
+    let beam_plans = build_candidate_plan_beam(
+        &profiles,
+        "b1",
+        4,
+        &phases,
+        &priority_weights(SequencingPriority::Balanced),
+        1,
+        true,
+        Some(HarmonicMixingStyle::Balanced),
+        6.0,
+        None,
+    );
+
+    assert_eq!(
+        beam_plans.len(),
+        1,
+        "beam width 1 should produce exactly 1 plan"
+    );
+    assert_eq!(
+        greedy.ordered_ids, beam_plans[0].ordered_ids,
+        "beam width 1 should match greedy ordering"
+    );
+}
+
+#[test]
+fn beam_search_wider_produces_multiple_plans() {
+    let profiles = make_beam_test_profiles();
+    let phases = resolve_energy_curve(None, 4).unwrap();
+
+    let plans = build_candidate_plan_beam(
+        &profiles,
+        "b1",
+        4,
+        &phases,
+        &priority_weights(SequencingPriority::Balanced),
+        4,
+        true,
+        Some(HarmonicMixingStyle::Balanced),
+        6.0,
+        None,
+    );
+
+    assert!(
+        plans.len() > 1,
+        "beam width 4 with 5-track pool should produce multiple plans; got {}",
+        plans.len()
+    );
+
+    for plan in &plans {
+        assert_eq!(plan.ordered_ids.len(), 4);
+        assert_eq!(plan.transitions.len(), 3);
+        assert_eq!(plan.ordered_ids[0], "b1", "all plans should start with b1");
+    }
+
+    let unique: HashSet<&Vec<String>> = plans.iter().map(|p| &p.ordered_ids).collect();
+    assert_eq!(unique.len(), plans.len(), "all plans should be distinct");
+}
+
+#[test]
+fn beam_search_empty_pool() {
+    let profiles: HashMap<String, TrackProfile> = HashMap::new();
+    let plans = build_candidate_plan_beam(
+        &profiles,
+        "missing",
+        4,
+        &[EnergyPhase::Peak; 4],
+        &priority_weights(SequencingPriority::Balanced),
+        3,
+        true,
+        None,
+        6.0,
+        None,
+    );
+    assert_eq!(plans.len(), 1, "empty pool should still produce one plan");
+    assert_eq!(plans[0].ordered_ids, vec!["missing"]);
+    assert!(plans[0].transitions.is_empty());
+}
+
+#[test]
+fn beam_search_width_exceeding_pool_size() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "only1".to_string(),
+        make_test_profile("only1", "8A", 128.0, 0.5, "House"),
+    );
+    profiles.insert(
+        "only2".to_string(),
+        make_test_profile("only2", "9A", 128.5, 0.6, "House"),
+    );
+
+    let plans = build_candidate_plan_beam(
+        &profiles,
+        "only1",
+        2,
+        &[EnergyPhase::Peak; 2],
+        &priority_weights(SequencingPriority::Balanced),
+        10,
+        true,
+        None,
+        6.0,
+        None,
+    );
+
+    assert_eq!(plans.len(), 1, "only one possible plan with 2-track pool");
+    assert_eq!(plans[0].ordered_ids.len(), 2);
+}
+
+#[test]
+fn beam_search_with_bpm_trajectory() {
+    let profiles = make_beam_test_profiles();
+    let phases = vec![
+        EnergyPhase::Warmup,
+        EnergyPhase::Build,
+        EnergyPhase::Peak,
+        EnergyPhase::Peak,
+    ];
+    let target_bpms = compute_bpm_trajectory(&phases, 126.0, 130.0);
+
+    let plans = build_candidate_plan_beam(
+        &profiles,
+        "b1",
+        4,
+        &phases,
+        &priority_weights(SequencingPriority::Balanced),
+        3,
+        true,
+        Some(HarmonicMixingStyle::Balanced),
+        6.0,
+        Some(&target_bpms),
+    );
+
+    assert!(
+        !plans.is_empty(),
+        "beam search with trajectory should produce plans"
+    );
+    for plan in &plans {
+        assert_eq!(plan.ordered_ids.len(), 4);
+        assert_eq!(plan.ordered_ids[0], "b1");
+    }
+}
+
+#[tokio::test]
+async fn query_transition_candidates_ranks_pool() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let from_id = track_ids[0].clone();
+    let pool_ids: Vec<String> = track_ids[1..].to_vec();
+
+    let result = server
+        .query_transition_candidates(Parameters(QueryTransitionCandidatesParams {
+            source_track_id: from_id.clone(),
+            candidate_track_ids: Some(pool_ids),
+            playlist_id: None,
+            target_bpm: None,
+            energy_phase: Some(EnergyPhase::Build),
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            use_master_tempo: None,
+            harmonic_style: None,
+            limit: None,
+        }))
+        .await
+        .expect("query_transition_candidates should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["from"]["track_id"], from_id);
+    assert!(payload["master_tempo"].as_bool().unwrap());
+
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates should be an array");
+    assert!(
+        !candidates.is_empty(),
+        "should return at least one candidate"
+    );
+
+    let composites: Vec<f64> = candidates
+        .iter()
+        .map(|c| c["scores"]["composite"].as_f64().unwrap())
+        .collect();
+    for window in composites.windows(2) {
+        assert!(
+            window[0] >= window[1],
+            "candidates should be sorted by composite descending"
+        );
+    }
+
+    for c in candidates {
+        assert!(c["track_id"].is_string());
+        assert!(c["native_bpm"].is_number());
+        assert!(c["native_key"].is_string());
+        assert!(c["bpm_difference_pct"].is_number());
+        assert!(c["key_relation"].is_string());
+        assert!(c["scores"]["composite"].is_number());
+        assert!(
+            c.get("play_at_bpm").is_none() || c["play_at_bpm"].is_null(),
+            "play_at_bpm should not be present without target_bpm"
+        );
+        assert!(
+            c.get("pitch_adjustment_pct").is_none() || c["pitch_adjustment_pct"].is_null(),
+            "pitch_adjustment_pct should not be present without target_bpm"
+        );
+    }
+}
+
+#[tokio::test]
+async fn query_transition_candidates_with_target_bpm() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let result = server
+        .query_transition_candidates(Parameters(QueryTransitionCandidatesParams {
+            source_track_id: track_ids[0].clone(),
+            candidate_track_ids: Some(track_ids[1..].to_vec()),
+            playlist_id: None,
+            target_bpm: Some(130.0),
+            energy_phase: None,
+            priority: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            limit: Some(3),
+        }))
+        .await
+        .expect("query_transition_candidates with target_bpm should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["reference_bpm"], 130.0);
+
+    let candidates = payload["candidates"].as_array().unwrap();
+    assert!(candidates.len() <= 3, "limit should be respected");
+
+    for c in candidates {
+        assert_eq!(
+            c["play_at_bpm"].as_f64().unwrap(),
+            130.0,
+            "play_at_bpm should equal target_bpm for all candidates"
+        );
+        assert!(
+            c["pitch_adjustment_pct"].as_f64().unwrap() >= 0.0,
+            "pitch_adjustment_pct should be non-negative"
+        );
+    }
+}
+
+#[tokio::test]
+async fn query_transition_candidates_master_tempo_off() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let result = server
+        .query_transition_candidates(Parameters(QueryTransitionCandidatesParams {
+            source_track_id: track_ids[0].clone(),
+            candidate_track_ids: Some(track_ids[1..].to_vec()),
+            playlist_id: None,
+            target_bpm: Some(135.0), // significant BPM shift to trigger key transposition
+            energy_phase: None,
+            priority: None,
+            use_master_tempo: Some(false),
+            harmonic_style: None,
+            limit: None,
+        }))
+        .await
+        .expect("query_transition_candidates with master_tempo off should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["master_tempo"], false);
+    let candidates = payload["candidates"].as_array().unwrap();
+    assert!(!candidates.is_empty());
+    let has_shift = candidates
+        .iter()
+        .any(|c| c.get("pitch_shift_semitones").is_some());
+    assert!(
+        has_shift,
+        "with master_tempo off and large BPM shift, some candidates should have pitch_shift_semitones"
+    );
+}
+
+#[tokio::test]
+async fn query_transition_candidates_rejects_missing_pool() {
+    let db_conn = create_single_track_test_db("orphan-track", "/tmp/orphan.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let err = server
+        .query_transition_candidates(Parameters(QueryTransitionCandidatesParams {
+            source_track_id: "orphan-track".to_string(),
+            candidate_track_ids: None,
+            playlist_id: None,
+            target_bpm: None,
+            energy_phase: None,
+            priority: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            limit: None,
+        }))
+        .await
+        .expect_err("should reject when neither pool_track_ids nor playlist_id is set");
+
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("pool_track_ids") || msg.contains("playlist_id"),
+        "error should mention required pool source; got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn build_set_beam_search_produces_multiple_candidates() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids,
+            target_tracks: 4,
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            energy_curve: None,
+            opening_track_id: None,
+            candidates: None,
+            beam_width: Some(5),
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set with beam_width=5 should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(payload["beam_width"], 5);
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates should be an array");
+    assert!(
+        candidates.len() > 1,
+        "beam_width=5 should produce multiple candidates; got {}",
+        candidates.len()
+    );
+
+    for candidate in candidates {
+        let tracks = candidate["tracks"].as_array().unwrap();
+        assert_eq!(tracks.len(), 4);
+        assert!(candidate["set_score"].is_number());
+    }
+}
+
+#[tokio::test]
+async fn build_set_with_bpm_range_includes_trajectory_fields() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids,
+            target_tracks: 4,
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            energy_curve: None,
+            opening_track_id: None,
+            candidates: None,
+            beam_width: Some(3),
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: Some((124.0, 131.0)),
+        }))
+        .await
+        .expect("build_set with bpm_range should succeed");
+
+    let payload = extract_json(&result);
+
+    let trajectory = payload["bpm_trajectory"]
+        .as_array()
+        .expect("bpm_trajectory should be present at set level");
+    assert_eq!(trajectory.len(), 4, "trajectory should match target_tracks");
+
+    let candidates = payload["candidates"].as_array().unwrap();
+    assert!(!candidates.is_empty());
+
+    for candidate in candidates {
+        let tracks = candidate["tracks"].as_array().unwrap();
+        for track in tracks {
+            assert!(
+                track["play_at_bpm"].is_number(),
+                "tracks should include play_at_bpm when bpm_range is set"
+            );
+            assert!(
+                track["pitch_adjustment_pct"].is_number(),
+                "tracks should include pitch_adjustment_pct when bpm_range is set"
+            );
+        }
+
+        let candidate_trajectory = candidate["bpm_trajectory"]
+            .as_array()
+            .expect("candidate should include bpm_trajectory");
+        assert_eq!(candidate_trajectory.len(), 4);
+    }
+}
+
+#[tokio::test]
+async fn build_set_beam_width_1_backward_compatible() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let result = server
+        .build_set(Parameters(BuildSetParams {
+            track_ids: track_ids.clone(),
+            target_tracks: 4,
+            priority: Some(TransitionWeightSpec::Named("balanced".into())),
+            energy_curve: None,
+            opening_track_id: None,
+            candidates: Some(1),
+            beam_width: None,
+            use_master_tempo: None,
+            harmonic_style: None,
+            bpm_drift_pct: None,
+            bpm_range: None,
+        }))
+        .await
+        .expect("build_set with candidates=1 should succeed");
+
+    let payload = extract_json(&result);
+    assert_eq!(
+        payload["beam_width"], 1,
+        "candidates=1 should route to greedy"
+    );
+    let candidates = payload["candidates"].as_array().unwrap();
+    assert!(!candidates.is_empty());
+
+    for candidate in candidates {
+        let tracks = candidate["tracks"].as_array().unwrap();
+        assert_eq!(tracks.len(), 4);
+    }
+}
+
+/// Tool schemas must be free of $ref/$defs and top-level oneOf/anyOf for Claude API compatibility.
+#[test]
+fn tool_schemas_are_claude_api_compatible() {
+    fn check<T: JsonSchema>(name: &str) {
+        let schema = schemars::schema_for!(T);
+        let json = serde_json::to_string(&schema).unwrap();
+
+        assert!(!json.contains(r#""$ref""#), "{name} schema contains $ref");
+        assert!(!json.contains(r#""$defs""#), "{name} schema contains $defs");
+
+        let root = schema.as_value();
+        assert!(
+            root.get("oneOf").is_none(),
+            "{name} schema has top-level oneOf"
+        );
+        assert!(
+            root.get("anyOf").is_none(),
+            "{name} schema has top-level anyOf"
+        );
+    }
+
+    check::<AuditOperation>("AuditOperation");
+    check::<BuildSetParams>("BuildSetParams");
+    check::<ScoreTransitionParams>("ScoreTransitionParams");
+    check::<QueryTransitionCandidatesParams>("QueryTransitionCandidatesParams");
+    check::<EnrichTracksParams>("EnrichTracksParams");
+    check::<WriteFileTagsParams>("WriteFileTagsParams");
+    check::<WriteXmlParams>("WriteXmlParams");
+    check::<UpdateTracksParams>("UpdateTracksParams");
+
+    check::<SearchTracksParams>("SearchTracksParams");
+    check::<GetTrackParams>("GetTrackParams");
+    check::<GetPlaylistTracksParams>("GetPlaylistTracksParams");
+    check::<PreviewChangesParams>("PreviewChangesParams");
+    check::<ClearChangesParams>("ClearChangesParams");
+    check::<SuggestNormalizationsParams>("SuggestNormalizationsParams");
+    check::<LookupDiscogsParams>("LookupDiscogsParams");
+    check::<LookupBeatportParams>("LookupBeatportParams");
+    check::<AnalyzeTrackAudioParams>("AnalyzeTrackAudioParams");
+    check::<AnalyzeAudioBatchParams>("AnalyzeAudioBatchParams");
+    check::<ResolveTrackDataParams>("ResolveTrackDataParams");
+    check::<ResolveTracksDataParams>("ResolveTracksDataParams");
+    check::<CacheCoverageParams>("CacheCoverageParams");
+    check::<ReadFileTagsParams>("ReadFileTagsParams");
+    check::<ExtractCoverArtParams>("ExtractCoverArtParams");
+    check::<EmbedCoverArtParams>("EmbedCoverArtParams");
+}
+
+// --- build_genre_distribution tests ---
+
+fn make_result(
+    genre: Option<&'static str>,
+    confidence: crate::classify::ClassificationConfidence,
+    action: crate::classify::ClassificationAction,
+    artist: &str,
+) -> crate::classify::ClassificationResult {
+    crate::classify::ClassificationResult {
+        track_id: String::new(),
+        artist: artist.to_string(),
+        title: String::new(),
+        current_genre: String::new(),
+        genre,
+        confidence,
+        action,
+        evidence: vec![],
+        candidates: vec![],
+        flags: vec![],
+        review_hint: None,
+    }
+}
+
+#[test]
+fn genre_distribution_empty_input() {
+    let dist = classification::build_genre_distribution(&[]);
+    assert_eq!(dist, serde_json::json!([]));
+}
+
+#[test]
+fn genre_distribution_excludes_confirm_and_genreless() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Confirm, "Artist A"),
+        make_result(None, C::Insufficient, A::Suggest, "Artist B"),
+        make_result(Some("House"), C::Medium, A::Suggest, "Artist C"),
+    ];
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only House should appear");
+    assert_eq!(arr[0]["genre"], "House");
+    assert_eq!(arr[0]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_groups_and_sorts_by_count() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let results = vec![
+        make_result(Some("Techno"), C::High, A::Suggest, "A"),
+        make_result(Some("Techno"), C::High, A::Suggest, "B"),
+        make_result(Some("Techno"), C::Medium, A::Suggest, "A"),
+        make_result(Some("House"), C::High, A::Suggest, "C"),
+    ];
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    // Techno (3) should be first, House (1) second
+    assert_eq!(arr[0]["genre"], "Techno");
+    assert_eq!(arr[0]["count"], 3);
+    assert_eq!(arr[0]["by_confidence"]["high"], 2);
+    assert_eq!(arr[0]["by_confidence"]["medium"], 1);
+    assert_eq!(arr[1]["genre"], "House");
+    assert_eq!(arr[1]["count"], 1);
+}
+
+#[test]
+fn genre_distribution_top_artists_capped_and_counted() {
+    use crate::classify::{ClassificationAction as A, ClassificationConfidence as C};
+
+    let mut results = Vec::new();
+    // 6 different artists -- top_artists should cap at 5
+    for i in 0..6 {
+        results.push(make_result(
+            Some("Techno"),
+            C::High,
+            A::Suggest,
+            &format!("Artist {i}"),
+        ));
+    }
+    // Artist 0 appears at two confidence levels -- should show "(2)"
+    results.push(make_result(
+        Some("Techno"),
+        C::Medium,
+        A::Suggest,
+        "Artist 0",
+    ));
+
+    let dist = classification::build_genre_distribution(&results);
+    let arr = dist.as_array().unwrap();
+    let top = arr[0]["top_artists"].as_array().unwrap();
+    assert_eq!(top.len(), 5, "top_artists capped at 5");
+    // First entry should be "Artist 0 (2)" since it has the highest count
+    assert_eq!(top[0].as_str().unwrap(), "Artist 0 (2)");
+}
