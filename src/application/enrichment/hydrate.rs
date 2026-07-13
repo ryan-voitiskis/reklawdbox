@@ -1,9 +1,10 @@
-//! Shared enrichment hydration cache-write workflow.
+//! Shared enrichment hydration workflow.
 
-use crate::adapters::state;
+use crate::adapters::{providers, state};
 use crate::application::analysis::batch::{CacheWriteRequest, send_cache_message};
 use crate::application::analysis::{job as analysis_job, model::AnalysisCacheWrite};
 
+use super::lookup::{self, LookupIdentity};
 use super::model::{EnrichmentProvider, HydrationStage};
 
 pub(crate) fn provider_stages(providers: &[EnrichmentProvider]) -> Vec<HydrationStage> {
@@ -12,6 +13,215 @@ pub(crate) fn provider_stages(providers: &[EnrichmentProvider]) -> Vec<Hydration
         .copied()
         .map(HydrationStage::Lookup)
         .collect()
+}
+
+/// Raw track identity plus the normalized cache keys used by all providers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HydrationTrackIdentity {
+    pub(crate) track_id: String,
+    pub(crate) artist: String,
+    pub(crate) title: String,
+    pub(crate) album: String,
+    pub(crate) norm_artist: String,
+    pub(crate) norm_title: String,
+    pub(crate) norm_album: Option<String>,
+}
+
+impl HydrationTrackIdentity {
+    pub(crate) fn new(track_id: String, artist: String, title: String, album: String) -> Self {
+        let norm_artist = crate::normalize::normalize_for_matching(&artist);
+        let norm_title = crate::normalize::normalize_for_matching(&title);
+        let norm_album = crate::normalize::normalize_for_matching(&album);
+        let norm_album = (!norm_album.is_empty()).then_some(norm_album);
+        Self {
+            track_id,
+            artist,
+            title,
+            album,
+            norm_artist,
+            norm_title,
+            norm_album,
+        }
+    }
+
+    fn cache_album(&self, provider: EnrichmentProvider) -> Option<&str> {
+        (provider == EnrichmentProvider::Discogs)
+            .then_some(self.norm_album.as_deref())
+            .flatten()
+    }
+
+    fn lookup_identity(&self) -> LookupIdentity {
+        LookupIdentity::new(
+            self.artist.clone(),
+            self.title.clone(),
+            (!self.album.is_empty()).then(|| self.album.clone()),
+        )
+    }
+}
+
+/// Resolve which tracks already have a terminal cache entry for every provider.
+pub(crate) fn enrichment_completion_flags(
+    store_conn: &rusqlite::Connection,
+    tracks: &[HydrationTrackIdentity],
+    providers: &[EnrichmentProvider],
+) -> Result<Vec<bool>, rusqlite::Error> {
+    let owned_keys: Vec<_> = tracks
+        .iter()
+        .flat_map(|track| {
+            providers.iter().map(move |provider| {
+                (
+                    provider.as_str().to_string(),
+                    track.norm_artist.clone(),
+                    track.norm_title.clone(),
+                    track.cache_album(*provider).unwrap_or_default().to_string(),
+                )
+            })
+        })
+        .collect();
+    let key_refs: Vec<_> = owned_keys
+        .iter()
+        .map(|(provider, artist, title, album)| {
+            (
+                provider.as_str(),
+                artist.as_str(),
+                title.as_str(),
+                album.as_str(),
+            )
+        })
+        .collect();
+    let cached = state::batch_get_enrichment(store_conn, &key_refs)?;
+
+    Ok(tracks
+        .iter()
+        .map(|track| {
+            providers.iter().all(|provider| {
+                cached.contains_key(&(
+                    provider.as_str().to_string(),
+                    track.norm_artist.clone(),
+                    track.norm_title.clone(),
+                    track.cache_album(*provider).unwrap_or_default().to_string(),
+                ))
+            })
+        })
+        .collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EnrichmentCachePolicy {
+    pub(crate) skip_cached: bool,
+    pub(crate) force_refresh: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum HydrationFailureKind {
+    AuthBatchFailed,
+    DiscogsAuth(providers::discogs::AuthRemediation),
+    Lookup(String),
+    Serialize(String),
+    SemaphoreClosed,
+    CacheWrite(String),
+}
+
+impl HydrationFailureKind {
+    pub(crate) fn stage(&self) -> &'static str {
+        match self {
+            Self::AuthBatchFailed | Self::DiscogsAuth(_) => "auth",
+            Self::Lookup(_) => "lookup",
+            Self::Serialize(_) => "serialize",
+            Self::SemaphoreClosed => "semaphore",
+            Self::CacheWrite(_) => "cache_write",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HydrationFailure {
+    pub(crate) identity: HydrationTrackIdentity,
+    pub(crate) provider: EnrichmentProvider,
+    pub(crate) kind: HydrationFailureKind,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct EnrichmentTrackOutcome {
+    pub(crate) enriched: usize,
+    pub(crate) cached: usize,
+    pub(crate) no_match: usize,
+    pub(crate) failures: Vec<HydrationFailure>,
+}
+
+impl EnrichmentTrackOutcome {
+    fn absorb(&mut self, other: Self) {
+        self.enriched += other.enriched;
+        self.cached += other.cached;
+        self.no_match += other.no_match;
+        self.failures.extend(other.failures);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ProviderStagePlan {
+    need_discogs: bool,
+    need_beatport: bool,
+    need_bandcamp: bool,
+    cached: usize,
+}
+
+fn provider_stage_plan(
+    store_path: &str,
+    identity: &HydrationTrackIdentity,
+    providers: &[EnrichmentProvider],
+    policy: EnrichmentCachePolicy,
+) -> ProviderStagePlan {
+    let stages = provider_stages(providers);
+    let wants = |provider| stages.contains(&HydrationStage::Lookup(provider));
+    let want_discogs = wants(EnrichmentProvider::Discogs);
+    let want_beatport = wants(EnrichmentProvider::Beatport);
+    let want_bandcamp = wants(EnrichmentProvider::Bandcamp);
+    if !policy.skip_cached || policy.force_refresh {
+        return ProviderStagePlan {
+            need_discogs: want_discogs,
+            need_beatport: want_beatport,
+            need_bandcamp: want_bandcamp,
+            cached: 0,
+        };
+    }
+
+    let connection = match state::open_read_only(store_path) {
+        Ok(connection) => connection,
+        Err(error) => {
+            tracing::warn!("track enrichment failed to open read-only store: {error}");
+            return ProviderStagePlan {
+                need_discogs: want_discogs,
+                need_beatport: want_beatport,
+                need_bandcamp: want_bandcamp,
+                cached: 0,
+            };
+        }
+    };
+    let is_cached = |provider: EnrichmentProvider| {
+        state::get_enrichment(
+            &connection,
+            provider.as_str(),
+            &identity.norm_artist,
+            &identity.norm_title,
+            identity.cache_album(provider),
+            false,
+        )
+        .ok()
+        .flatten()
+        .is_some()
+    };
+    let discogs_cached = want_discogs && is_cached(EnrichmentProvider::Discogs);
+    let beatport_cached = want_beatport && is_cached(EnrichmentProvider::Beatport);
+    let bandcamp_cached = want_bandcamp && is_cached(EnrichmentProvider::Bandcamp);
+    ProviderStagePlan {
+        need_discogs: want_discogs && !discogs_cached,
+        need_beatport: want_beatport && !beatport_cached,
+        need_bandcamp: want_bandcamp && !bandcamp_cached,
+        cached: usize::from(discogs_cached)
+            + usize::from(beatport_cached)
+            + usize::from(bandcamp_cached),
+    }
 }
 
 #[derive(Debug)]
@@ -238,6 +448,345 @@ pub(crate) async fn acknowledge_mcp_enrichment_cache_write(
     result
         .await
         .map_err(|_| "cache writer acknowledgement canceled".to_string())?
+}
+
+fn failed_stage(
+    identity: &HydrationTrackIdentity,
+    provider: EnrichmentProvider,
+    kind: HydrationFailureKind,
+) -> EnrichmentTrackOutcome {
+    EnrichmentTrackOutcome {
+        failures: vec![HydrationFailure {
+            identity: identity.clone(),
+            provider,
+            kind,
+        }],
+        ..EnrichmentTrackOutcome::default()
+    }
+}
+
+async fn persist_provider_outcome<T: serde::Serialize>(
+    identity: &HydrationTrackIdentity,
+    provider: EnrichmentProvider,
+    result: Option<T>,
+    quality: impl FnOnce(&T) -> &'static str,
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+) -> EnrichmentTrackOutcome {
+    let (match_quality, response_json, matched) = match result {
+        Some(result) => {
+            let match_quality = quality(&result).to_string();
+            let response_json = match serde_json::to_string(&result) {
+                Ok(response_json) => response_json,
+                Err(error) => {
+                    return failed_stage(
+                        identity,
+                        provider,
+                        HydrationFailureKind::Serialize(format!("Serialize error: {error}")),
+                    );
+                }
+            };
+            (match_quality, Some(response_json), true)
+        }
+        None => ("none".to_string(), None, false),
+    };
+    let write = EnrichmentCacheWrite {
+        provider,
+        norm_artist: identity.norm_artist.clone(),
+        norm_title: identity.norm_title.clone(),
+        norm_album: identity.cache_album(provider).map(str::to_string),
+        match_quality: Some(match_quality),
+        response_json,
+    };
+    if let Err(error) = acknowledge_mcp_enrichment_cache_write(cache_tx, write).await {
+        return failed_stage(identity, provider, HydrationFailureKind::CacheWrite(error));
+    }
+
+    EnrichmentTrackOutcome {
+        enriched: usize::from(matched),
+        no_match: usize::from(!matched),
+        ..EnrichmentTrackOutcome::default()
+    }
+}
+
+async fn run_discogs_stage<LookupFuture>(
+    need: bool,
+    identity: &HydrationTrackIdentity,
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+    auth_failed: &tokio::sync::watch::Receiver<bool>,
+    auth_fail_tx: &tokio::sync::watch::Sender<bool>,
+    lookup: LookupFuture,
+) -> EnrichmentTrackOutcome
+where
+    LookupFuture: std::future::Future<
+            Output = Result<
+                Option<providers::discogs::DiscogsResult>,
+                providers::discogs::LookupError,
+            >,
+        >,
+{
+    if !need {
+        return EnrichmentTrackOutcome::default();
+    }
+    if *auth_failed.borrow() {
+        return failed_stage(
+            identity,
+            EnrichmentProvider::Discogs,
+            HydrationFailureKind::AuthBatchFailed,
+        );
+    }
+
+    match lookup.await {
+        Ok(result) => {
+            persist_provider_outcome(
+                identity,
+                EnrichmentProvider::Discogs,
+                result,
+                |result| {
+                    if result.fuzzy_match { "fuzzy" } else { "exact" }
+                },
+                cache_tx,
+            )
+            .await
+        }
+        Err(error) => {
+            let kind = if let Some(remediation) = error.auth_remediation() {
+                let _ = auth_fail_tx.send(true);
+                HydrationFailureKind::DiscogsAuth(remediation.clone())
+            } else {
+                HydrationFailureKind::Lookup(error.to_string())
+            };
+            failed_stage(identity, EnrichmentProvider::Discogs, kind)
+        }
+    }
+}
+
+pub(crate) async fn run_beatport_stage<LookupFuture>(
+    need: bool,
+    identity: &HydrationTrackIdentity,
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+    lookup: LookupFuture,
+) -> EnrichmentTrackOutcome
+where
+    LookupFuture:
+        std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>,
+{
+    if !need {
+        return EnrichmentTrackOutcome::default();
+    }
+    let _permit = match gate.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return failed_stage(
+                identity,
+                EnrichmentProvider::Beatport,
+                HydrationFailureKind::SemaphoreClosed,
+            );
+        }
+    };
+    match lookup.await {
+        Ok(result) => {
+            persist_provider_outcome(
+                identity,
+                EnrichmentProvider::Beatport,
+                result,
+                |result| {
+                    if result.fuzzy_match { "fuzzy" } else { "exact" }
+                },
+                cache_tx,
+            )
+            .await
+        }
+        Err(error) => failed_stage(
+            identity,
+            EnrichmentProvider::Beatport,
+            HydrationFailureKind::Lookup(error),
+        ),
+    }
+}
+
+async fn run_bandcamp_stage(
+    need: bool,
+    identity: &HydrationTrackIdentity,
+    http: &reqwest::Client,
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+) -> EnrichmentTrackOutcome {
+    if !need {
+        return EnrichmentTrackOutcome::default();
+    }
+    let _permit = match gate.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return failed_stage(
+                identity,
+                EnrichmentProvider::Bandcamp,
+                HydrationFailureKind::SemaphoreClosed,
+            );
+        }
+    };
+    let lookup_identity = identity.lookup_identity();
+    match lookup::dispatch_bandcamp(http, &lookup_identity, None).await {
+        Ok(result) => {
+            persist_provider_outcome(
+                identity,
+                EnrichmentProvider::Bandcamp,
+                result,
+                |result| {
+                    if result.score == 100 {
+                        "exact"
+                    } else {
+                        "fuzzy"
+                    }
+                },
+                cache_tx,
+            )
+            .await
+        }
+        Err(error) => failed_stage(
+            identity,
+            EnrichmentProvider::Bandcamp,
+            HydrationFailureKind::Lookup(error.to_string()),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_track_enrichment<DiscogsFuture, BeatportFuture>(
+    identity: HydrationTrackIdentity,
+    providers: &[EnrichmentProvider],
+    policy: EnrichmentCachePolicy,
+    store_path: &str,
+    http: &reqwest::Client,
+    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+    beatport_gate: std::sync::Arc<tokio::sync::Semaphore>,
+    bandcamp_gate: std::sync::Arc<tokio::sync::Semaphore>,
+    auth_failed: &tokio::sync::watch::Receiver<bool>,
+    auth_fail_tx: &tokio::sync::watch::Sender<bool>,
+    discogs_lookup: DiscogsFuture,
+    beatport_lookup: BeatportFuture,
+) -> EnrichmentTrackOutcome
+where
+    DiscogsFuture: std::future::Future<
+            Output = Result<
+                Option<providers::discogs::DiscogsResult>,
+                providers::discogs::LookupError,
+            >,
+        >,
+    BeatportFuture:
+        std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>,
+{
+    let plan = provider_stage_plan(store_path, &identity, providers, policy);
+    let discogs = run_discogs_stage(
+        plan.need_discogs,
+        &identity,
+        cache_tx,
+        auth_failed,
+        auth_fail_tx,
+        discogs_lookup,
+    );
+    let beatport = run_beatport_stage(
+        plan.need_beatport,
+        &identity,
+        beatport_gate,
+        cache_tx,
+        beatport_lookup,
+    );
+    let bandcamp = run_bandcamp_stage(plan.need_bandcamp, &identity, http, bandcamp_gate, cache_tx);
+    let (discogs, beatport, bandcamp) = tokio::join!(discogs, beatport, bandcamp);
+
+    let mut outcome = EnrichmentTrackOutcome {
+        cached: plan.cached,
+        ..EnrichmentTrackOutcome::default()
+    };
+    outcome.absorb(discogs);
+    outcome.absorb(beatport);
+    outcome.absorb(bandcamp);
+    outcome
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct EnrichmentWorkerConfig {
+    pub(crate) providers: Vec<EnrichmentProvider>,
+    pub(crate) policy: EnrichmentCachePolicy,
+    pub(crate) store_path: String,
+    pub(crate) concurrency: usize,
+}
+
+/// Run all selected provider stages for a bounded set of tracks.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_enrichment_workers<
+    DiscogsLookup,
+    DiscogsFuture,
+    BeatportLookup,
+    BeatportFuture,
+>(
+    tracks: Vec<HydrationTrackIdentity>,
+    config: EnrichmentWorkerConfig,
+    http: reqwest::Client,
+    cache_tx: tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+    auth_failed: std::sync::Arc<tokio::sync::watch::Receiver<bool>>,
+    auth_fail_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    discogs_lookup: DiscogsLookup,
+    beatport_lookup: BeatportLookup,
+) -> HydrationWorkerReport<HydrationTrackIdentity, EnrichmentTrackOutcome>
+where
+    DiscogsLookup: Fn(HydrationTrackIdentity) -> DiscogsFuture + Clone + Send + 'static,
+    DiscogsFuture: std::future::Future<
+            Output = Result<
+                Option<providers::discogs::DiscogsResult>,
+                providers::discogs::LookupError,
+            >,
+        > + Send
+        + 'static,
+    BeatportLookup: Fn(HydrationTrackIdentity) -> BeatportFuture + Clone + Send + 'static,
+    BeatportFuture: std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>
+        + Send
+        + 'static,
+{
+    let concurrency = config.concurrency;
+    let beatport_gate = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+    let bandcamp_gate = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+    run_bounded_workers(
+        "enrich track worker task",
+        tracks,
+        concurrency,
+        tokio_util::sync::CancellationToken::new(),
+        Clone::clone,
+        move |identity| {
+            let providers = config.providers.clone();
+            let store_path = config.store_path.clone();
+            let http = http.clone();
+            let cache_tx = cache_tx.clone();
+            let beatport_gate = beatport_gate.clone();
+            let bandcamp_gate = bandcamp_gate.clone();
+            let auth_failed = auth_failed.clone();
+            let auth_fail_tx = auth_fail_tx.clone();
+            let discogs_lookup = discogs_lookup.clone();
+            let beatport_lookup = beatport_lookup.clone();
+            async move {
+                let discogs_future = discogs_lookup(identity.clone());
+                let beatport_future = beatport_lookup(identity.clone());
+                let outcome = run_track_enrichment(
+                    identity,
+                    &providers,
+                    config.policy,
+                    &store_path,
+                    &http,
+                    &cache_tx,
+                    beatport_gate,
+                    bandcamp_gate,
+                    &auth_failed,
+                    &auth_fail_tx,
+                    discogs_future,
+                    beatport_future,
+                )
+                .await;
+                HydrationWorkerCompletion::completed(outcome)
+            }
+        },
+    )
+    .await
 }
 
 pub(crate) fn persist_enrichment_cache_write(
