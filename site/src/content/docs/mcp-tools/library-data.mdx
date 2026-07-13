@@ -137,7 +137,10 @@ Return locally-cached data without external API calls or analysis.
 
 ### `resolve_track_data`
 
-Return all cached enrichment, audio analysis, and staged changes for one track.
+Return Rekordbox metadata, cached Discogs and Beatport enrichment, current
+Stratum and optional current Essentia analysis, staged changes, and genre
+taxonomy mappings for one track. It does not include cached Bandcamp or
+MusicBrainz payloads.
 
 {/* doc-contract:mcp tool=resolve_track_data schema=/ requiredness=global */}
 
@@ -151,7 +154,9 @@ Return all cached enrichment, audio analysis, and staged changes for one track.
 
 ### `resolve_tracks_data`
 
-Batch version of `resolve_track_data`. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to resolve.
+Batch version of `resolve_track_data`, with the same provider and freshness
+boundaries. Accepts [shared search filters](/mcp-tools/#shared-search-filters)
+to scope which tracks to resolve.
 
 {/* doc-contract:mcp tool=resolve_tracks_data schema=/ requiredness=global include=shared-search-filters */}
 
@@ -183,7 +188,6 @@ Report cache completeness for a track scope. Accepts [shared search filters](/mc
 | `track_ids` | string[] | | | Specific track IDs |
 | `playlist_id` | string | | | Check tracks in this playlist |
 | `max_tracks` | integer | | | Max tracks to check (default: unbounded) |
-| `format` | string | | `["full", "classification"]` | `"full"` (default) or `"classification"` |
 
 {/* /doc-contract:mcp */}
 

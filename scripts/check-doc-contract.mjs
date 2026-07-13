@@ -2240,6 +2240,206 @@ function fencedBlocks(source, label = '<source>') {
   return blocks
 }
 
+function boundedSourceContract(document, kind, expectedSource) {
+  const source = document.content.replaceAll('\r\n', '\n')
+  const openingPattern = new RegExp(
+    `^(?:<!--\\s*doc-contract:${kind}\\s+([^\\n]*?)\\s*-->|\\{\\/\\*\\s*doc-contract:${kind}\\s+([^\\n]*?)\\s*\\*\\/\\})$`,
+    'gm',
+  )
+  const closingPattern = new RegExp(
+    `^(?:<!--\\s*\\/doc-contract:${kind}\\s*-->|\\{\\/\\*\\s*\\/doc-contract:${kind}\\s*\\*\\/\\})$`,
+    'gm',
+  )
+  const openings = [...source.matchAll(openingPattern)]
+  const closings = [...source.matchAll(closingPattern)]
+  const tokens = source.match(new RegExp(`\\/?doc-contract:${kind}`, 'g'))
+    ?? []
+  if (openings.length !== 1 || closings.length !== 1 || tokens.length !== 2) {
+    throw new Error(
+      `${document.file}: ${kind} needs exactly one well-formed marker pair`,
+    )
+  }
+  const opening = openings[0]
+  const closing = closings[0]
+  const bodyStart = opening.index + opening[0].length
+  if (closing.index <= bodyStart) {
+    throw new Error(`${document.file}: ${kind} markers are unmatched`)
+  }
+  const marker = {
+    file: document.file,
+    line: lineNumberAt(source, opening.index),
+  }
+  const attributes = parseAttributes(opening[1] ?? opening[2] ?? '')
+  if (attributes.source !== expectedSource) {
+    throw markerError(
+      marker,
+      `${kind} must name canonical source=${expectedSource}`,
+    )
+  }
+  return {
+    ...marker,
+    attributes,
+    body: source.slice(bodyStart, closing.index),
+  }
+}
+
+function parseRustStringList(source, constant, file) {
+  const pattern = new RegExp(
+    `(?:pub(?:\\(crate\\))?\\s+)?const\\s+${constant}\\s*:[^=]+?=\\s*&\\[([\\s\\S]*?)\\];`,
+  )
+  const match = source.match(pattern)
+  if (!match) {
+    throw new Error(`${file}: canonical ${constant} constant not found`)
+  }
+  const values = [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1])
+  const remainder = match[1]
+    .replaceAll(/"[^"]+"/g, '')
+    .replaceAll(',', '')
+    .trim()
+  if (remainder || values.length === 0) {
+    throw new Error(`${file}: canonical ${constant} string list is malformed`)
+  }
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${file}: canonical ${constant} contains duplicate values`)
+  }
+  return values
+}
+
+function parseColorPairs(source) {
+  const match = source.match(
+    /pub const COLORS\s*:\s*&\[\(&str,\s*i32\)\]\s*=\s*&\[([\s\S]*?)\];/,
+  )
+  if (!match) {
+    throw new Error('src/color.rs: canonical COLORS constant not found')
+  }
+  const pairPattern = /\("([^"]+)",\s*0x([0-9A-Fa-f]{6})\)/g
+  const pairs = [...match[1].matchAll(pairPattern)].map((entry) => [
+    entry[1],
+    `0x${entry[2].toUpperCase()}`,
+  ])
+  const remainder = match[1]
+    .replaceAll(pairPattern, '')
+    .replaceAll(',', '')
+    .trim()
+  if (remainder || pairs.length === 0) {
+    throw new Error('src/color.rs: canonical COLORS entries are malformed')
+  }
+  const names = pairs.map(([name]) => name)
+  if (new Set(names).size !== names.length) {
+    throw new Error('src/color.rs: canonical COLORS contains duplicate names')
+  }
+  return new Map(pairs)
+}
+
+export function validateColorPaletteContract(document, colorSource) {
+  const marker = boundedSourceContract(
+    document,
+    'color-palette',
+    'src/color.rs',
+  )
+  const canonical = parseColorPairs(colorSource)
+  const boundedLines = marker.body.trim().split('\n')
+  if (
+    boundedLines.some((line) =>
+      line.trim() === '' || !line.trim().startsWith('|')
+    )
+  ) {
+    throw markerError(
+      marker,
+      'color palette marker may contain only its contiguous table; source=src/color.rs',
+    )
+  }
+  const table = parseMarkdownTable(marker.body, marker)
+  if (
+    !table.headers.includes('color name')
+    || !table.headers.includes('xml hex')
+  ) {
+    throw markerError(
+      marker,
+      'color palette needs Color name and XML hex columns',
+    )
+  }
+  const documented = new Map()
+  for (const row of table.rows) {
+    const name = stripMarkdown(row.columns['color name'])
+    const xmlHex = stripMarkdown(row.columns['xml hex']).toUpperCase()
+    if (documented.has(name)) {
+      throw markerError(
+        marker,
+        `duplicate color row ${name}; source=src/color.rs`,
+      )
+    }
+    if (!/^0X[0-9A-F]{6}$/.test(xmlHex)) {
+      throw markerError(
+        marker,
+        `${name} has invalid XML hex ${xmlHex}; source=src/color.rs`,
+      )
+    }
+    documented.set(name, xmlHex.replace(/^0X/, '0x'))
+  }
+  const missing = [...canonical.keys()].filter((name) => !documented.has(name))
+  const extra = [...documented.keys()].filter((name) => !canonical.has(name))
+  if (missing.length || extra.length) {
+    throw markerError(
+      marker,
+      `color palette differs from src/color.rs; missing: ${
+        missing.join(', ') || 'none'
+      }; extra: ${extra.join(', ') || 'none'}`,
+    )
+  }
+  for (const [name, expected] of canonical) {
+    if (documented.get(name) !== expected) {
+      throw markerError(
+        marker,
+        `${name} XML hex is ${
+          documented.get(name)
+        }, src/color.rs expects ${expected}`,
+      )
+    }
+  }
+}
+
+export function validateBatchAudioExtensionsContract(document, audioSource) {
+  const marker = boundedSourceContract(
+    document,
+    'batch-audio-extensions',
+    'src/audio.rs',
+  )
+  const canonical = parseRustStringList(
+    audioSource,
+    'AUDIO_EXTENSIONS',
+    'src/audio.rs',
+  )
+  const blocks = fencedBlocks(marker.body, `${document.file}:${marker.line}`)
+  if (blocks.length !== 1 || !['sh', 'bash'].includes(blocks[0]?.info)) {
+    throw markerError(
+      marker,
+      'batch audio extensions contract must contain exactly one shell block; source=src/audio.rs',
+    )
+  }
+  const extensions = [...blocks[0].body.matchAll(
+    /-iname\s+["']\*\.([a-z0-9]+)["']/gi,
+  )].map((entry) => entry[1].toLowerCase())
+  if (new Set(extensions).size !== extensions.length) {
+    throw markerError(
+      marker,
+      'batch audio extension block contains a duplicate extension; source=src/audio.rs',
+    )
+  }
+  const canonicalSet = new Set(canonical)
+  const documentedSet = new Set(extensions)
+  const missing = canonical.filter((value) => !documentedSet.has(value))
+  const extra = extensions.filter((value) => !canonicalSet.has(value))
+  if (missing.length || extra.length) {
+    throw markerError(
+      marker,
+      `batch audio extensions differ from src/audio.rs; missing: ${
+        missing.join(', ') || 'none'
+      }; extra: ${extra.join(', ') || 'none'}`,
+    )
+  }
+}
+
 /**
  * Validate the source-only shape of the bounded first-session prompt against
  * the live MCP tool inventory.
@@ -3006,6 +3206,9 @@ async function readExistingArtifacts(root, relativeFiles) {
 const REQUIRED_CI_DOC_PATHS = [
   'site/**',
   'src/tools/**',
+  'src/audio.rs',
+  'src/color.rs',
+  'src/genre.rs',
   'src/types.rs',
   'src/tags.rs',
   'src/cli/**',
@@ -3025,6 +3228,9 @@ const REQUIRED_CI_DOC_PATHS = [
 const REQUIRED_RELEASE_DOC_PATHS = [
   'site',
   'src/tools',
+  'src/audio.rs',
+  'src/color.rs',
+  'src/genre.rs',
   'src/types.rs',
   'src/tags.rs',
   'src/cli',
@@ -3319,6 +3525,25 @@ async function main() {
   )).map((file) => path.join('site/src/partials/sops', file))
   const sopDocuments = await readDocuments(root, sopFiles)
   check(() => validateSopContracts(sopDocuments, liveTools))
+  const batchImportDocument = sopDocuments.find(
+    (document) => document.file === 'site/src/partials/sops/batch-import.mdx',
+  )
+  const [xmlExportDocument] = await readDocuments(root, [
+    'site/src/content/docs/reference/xml-export.mdx',
+  ])
+  const [audioSource, colorSource] = await Promise.all([
+    fs.readFile(path.join(root, 'src/audio.rs'), 'utf8'),
+    fs.readFile(path.join(root, 'src/color.rs'), 'utf8'),
+  ])
+  check(() => {
+    if (!batchImportDocument) {
+      throw new Error(
+        'site/src/partials/sops/batch-import.mdx: missing canonical SOP',
+      )
+    }
+    validateBatchAudioExtensionsContract(batchImportDocument, audioSource)
+  })
+  check(() => validateColorPaletteContract(xmlExportDocument, colorSource))
 
   const cliDocument = await readDocuments(root, [
     'site/src/content/docs/cli/index.mdx',

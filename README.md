@@ -114,9 +114,14 @@ flowchart TB
   approvals to the tools and music paths the workflow needs.
 
 - **Two-tier audio analysis.** [stratum-dsp](https://github.com/ryan-voitiskis/stratum-dsp)
-  (Rust, always available) handles BPM and key detection. [Essentia](https://essentia.upf.edu/)
-  (Python, optional) adds energy, timbre, rhythm, and spectral features. All
-  scoring axes degrade gracefully when Essentia is absent.
+  (Rust, always available) returns BPM/key confidence, grid provenance,
+  decay, dub-stab and kick-pattern evidence, and structural sections when
+  available. [Essentia](https://essentia.upf.edu/) (Python, optional) adds
+  loudness, danceability, onset/rhythm, and timbral/spectral evidence. It does
+  not return an `energy` field: scoring derives a 0–1 value from danceability,
+  integrated loudness, and onset rate, with a BPM proxy when any input is
+  missing. Downstream consumers use specific subsets; see the
+  [audio evidence reference](https://reklawdbox.com/mcp-tools/enrichment-analysis/#returned-and-cached-evidence).
 
 - **Broker-mediated enrichment.** Discogs API access is proxied through a
   [Cloudflare Workers service](broker/) that handles OAuth, rate limiting, and

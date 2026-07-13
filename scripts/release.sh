@@ -53,6 +53,9 @@ docs_contract_changed() {
   changed_since_base \
     site \
     src/tools \
+    src/audio.rs \
+    src/color.rs \
+    src/genre.rs \
     src/types.rs \
     src/tags.rs \
     src/cli \

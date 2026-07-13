@@ -39,7 +39,15 @@ Probe behavior:
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
 
-stratum-dsp always runs regardless of Essentia availability. It provides BPM and key. Without Essentia, energy falls back to a BPM proxy. Essentia adds energy, danceability, brightness, and additional spectral features. Run `reklawdbox setup` to install Essentia to the default venv path — no env var needed.
+stratum-dsp always runs regardless of Essentia availability. It returns BPM/key
+with confidence, grid provenance and stability, decay, dub-stab and kick
+evidence, and structural sections when available. Essentia adds optional
+loudness, danceability, brightness, onset/rhythm, and other timbral features.
+It does not return an `energy` field: scoring derives energy only when
+danceability, integrated loudness, and onset rate are all present, otherwise it
+uses a BPM proxy. See the [audio evidence and consumers](/mcp-tools/enrichment-analysis/#returned-and-cached-evidence)
+reference for the complete grouped surface. Run `reklawdbox setup` to install
+Essentia to the default venv path — no env var needed.
 
 ## Backup
 
@@ -75,15 +83,15 @@ instead of resetting the whole store.
 
 ## Advanced
 
-| Variable                                 | Description                                           | Default                        |
-| ---------------------------------------- | ----------------------------------------------------- | ------------------------------ |
-| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`    | Minimum interval between Beatport requests (ms)       | `1000`                         |
-| `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`    | Minimum interval between Bandcamp requests (ms)       | `1500`                         |
-| `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS` | Minimum interval between MusicBrainz requests (ms)    | `1100`                         |
-| `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`     | Minimum interval between Discogs broker requests (ms) | `1100`                         |
-| `REKLAWDBOX_CORPUS_PATH`                 | Path to the Rekordbox knowledge corpus manifest       | `docs/rekordbox/manifest.yaml` |
+| Variable                                 | Description                                           | Default |
+| ---------------------------------------- | ----------------------------------------------------- | ------- |
+| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`    | Minimum interval between Beatport requests (ms)       | `1000`  |
+| `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`    | Minimum interval between Bandcamp requests (ms)       | `1500`  |
+| `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS` | Minimum interval between MusicBrainz requests (ms)    | `1100`  |
+| `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`     | Minimum interval between Discogs broker requests (ms) | `1100`  |
 
-These are internal tuning knobs. The rate-limit intervals control minimum time between requests to each service — lower values risk HTTP 429 errors. The corpus path points to the knowledge manifest used for contextual tool responses.
+These are internal tuning knobs. The rate-limit intervals control minimum time
+between requests to each service — lower values risk HTTP 429 errors.
 
 ## Example MCP config
 

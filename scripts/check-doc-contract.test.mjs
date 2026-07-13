@@ -19,8 +19,10 @@ import {
   parseRootCliHelp,
   parseRootCliOptions,
   runtimeHelpTopics,
+  validateBatchAudioExtensionsContract,
   validateBuiltLinkSet,
   validateCliContracts,
+  validateColorPaletteContract,
   validateDocsGatePathInventories,
   validateFirstSessionPage,
   validateMcpContracts,
@@ -2162,6 +2164,19 @@ test('docs gates preserve both manifests in push, pull request, and release inve
     }
   }
 
+  for (const sourcePath of ['src/audio.rs', 'src/color.rs', 'src/genre.rs']) {
+    for (const inventoryName of ['push', 'pullRequest', 'release']) {
+      const incomplete = structuredClone(inventories)
+      incomplete[inventoryName] = incomplete[inventoryName].filter(
+        (entry) => entry !== sourcePath,
+      )
+      assert.throws(
+        () => validateDocsGatePathInventories(incomplete),
+        new RegExp(sourcePath.replaceAll('/', '\\/').replace('.', '\\.')),
+      )
+    }
+  }
+
   const missingExistingCiPath = structuredClone(inventories)
   missingExistingCiPath.push = missingExistingCiPath.push.filter(
     (entry) => entry !== 'site/**',
@@ -2173,6 +2188,93 @@ test('docs gates preserve both manifests in push, pull request, and release inve
     .filter((entry) => entry !== 'site')
   assert.throws(() =>
     validateDocsGatePathInventories(missingExistingReleasePath)
+  )
+})
+
+test('color palette contract follows the canonical Rust name and XML pairs', () => {
+  const source = `
+pub const COLORS: &[(&str, i32)] = &[
+    ("Blue", 0x0000FF),
+    ("Green", 0x00FF00),
+    ("Lemon", 0xFFFF00),
+];
+`
+  const content = [
+    '{/* doc-contract:color-palette source=src/color.rs */}',
+    '',
+    '| Color name | XML hex |',
+    '| --- | --- |',
+    '| Blue | `0x0000FF` |',
+    '| Green | `0x00FF00` |',
+    '| Lemon | `0xFFFF00` |',
+    '',
+    '{/* /doc-contract:color-palette */}',
+  ].join('\n')
+  const file = 'site/src/content/docs/reference/xml-export.mdx'
+  assert.doesNotThrow(() =>
+    validateColorPaletteContract(document(content, file), source)
+  )
+
+  const missing = content.replace('| Lemon | `0xFFFF00` |\n', '')
+  assert.throws(
+    () => validateColorPaletteContract(document(missing, file), source),
+    /xml-export\.mdx:1: color palette differs from src\/color\.rs; missing: Lemon/,
+  )
+  const wrong = content.replace('`0x00FF00`', '`0x00AA00`')
+  assert.throws(
+    () => validateColorPaletteContract(document(wrong, file), source),
+    /xml-export\.mdx:1: Green XML hex is 0x00AA00, src\/color\.rs expects 0x00FF00/,
+  )
+  const duplicate = content.replace(
+    '| Lemon | `0xFFFF00` |',
+    '| Lemon | `0xFFFF00` |\n| Blue | `0x0000FF` |',
+  )
+  assert.throws(
+    () => validateColorPaletteContract(document(duplicate, file), source),
+    /xml-export\.mdx:1: duplicate color row Blue; source=src\/color\.rs/,
+  )
+})
+
+test('batch audio extension contract follows the canonical Rust set', () => {
+  const source =
+    'pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["flac", "wav", "mp3", "m4a", "aac", "aiff"];'
+  const content = [
+    '<!-- doc-contract:batch-audio-extensions source=src/audio.rs -->',
+    '',
+    '```sh',
+    'find "/batch" -maxdepth 1 -type f \\',
+    '  \\( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" -o -iname "*.m4a" -o -iname "*.aac" -o -iname "*.aiff" \\) \\',
+    '  -exec mv -n {} "/dest/" \\;',
+    '```',
+    '',
+    '<!-- /doc-contract:batch-audio-extensions -->',
+  ].join('\n')
+  const file = 'site/src/partials/sops/batch-import.mdx'
+  assert.doesNotThrow(() =>
+    validateBatchAudioExtensionsContract(document(content, file), source)
+  )
+
+  const missing = content.replace(' -o -iname "*.aac"', '')
+  assert.throws(
+    () => validateBatchAudioExtensionsContract(document(missing, file), source),
+    /batch-import\.mdx:1: batch audio extensions differ from src\/audio\.rs; missing: aac/,
+  )
+  const extra = content.replace(
+    ' -o -iname "*.aiff"',
+    ' -o -iname "*.aiff" -o -iname "*.ogg"',
+  )
+  assert.throws(
+    () => validateBatchAudioExtensionsContract(document(extra, file), source),
+    /batch-import\.mdx:1: batch audio extensions differ from src\/audio\.rs; missing: none; extra: ogg/,
+  )
+  const duplicate = content.replace(
+    ' -o -iname "*.aiff"',
+    ' -o -iname "*.aiff" -o -iname "*.flac"',
+  )
+  assert.throws(
+    () =>
+      validateBatchAudioExtensionsContract(document(duplicate, file), source),
+    /batch-import\.mdx:1: batch audio extension block contains a duplicate extension; source=src\/audio\.rs/,
   )
 })
 

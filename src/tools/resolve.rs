@@ -496,9 +496,14 @@ pub(super) fn resolve_tracks(
     }
 }
 
-pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String {
-    if let Some(track_ids) = &params.track_ids {
-        if let Some(max_tracks) = params.max_tracks {
+pub(super) fn describe_resolve_scope(
+    filters: &SearchFilterParams,
+    track_ids: Option<&[String]>,
+    playlist_id: Option<&str>,
+    max_tracks: Option<u32>,
+) -> String {
+    if let Some(track_ids) = track_ids {
+        if let Some(max_tracks) = max_tracks {
             return format!(
                 "track_ids ({}) [max_tracks = {max_tracks}]",
                 track_ids.len()
@@ -507,70 +512,70 @@ pub(super) fn describe_resolve_scope(params: &ResolveTracksDataParams) -> String
         return format!("track_ids ({})", track_ids.len());
     }
 
-    if let Some(playlist_id) = &params.playlist_id {
-        if let Some(max_tracks) = params.max_tracks {
+    if let Some(playlist_id) = playlist_id {
+        if let Some(max_tracks) = max_tracks {
             return format!("playlist_id = \"{playlist_id}\", max_tracks = {max_tracks}");
         }
         return format!("playlist_id = \"{playlist_id}\"");
     }
 
-    let mut filters: Vec<String> = Vec::new();
-    if let Some(query) = &params.filters.query {
-        filters.push(format!("query ~= \"{query}\""));
+    let mut scope_parts: Vec<String> = Vec::new();
+    if let Some(query) = &filters.query {
+        scope_parts.push(format!("query ~= \"{query}\""));
     }
-    if let Some(artist) = &params.filters.artist {
-        filters.push(format!("artist ~= \"{artist}\""));
+    if let Some(artist) = &filters.artist {
+        scope_parts.push(format!("artist ~= \"{artist}\""));
     }
-    if let Some(genre) = &params.filters.genre {
-        filters.push(format!("genre ~= \"{genre}\""));
+    if let Some(genre) = &filters.genre {
+        scope_parts.push(format!("genre ~= \"{genre}\""));
     }
-    if let Some(has_genre) = params.filters.has_genre {
-        filters.push(format!("has_genre = {has_genre}"));
+    if let Some(has_genre) = filters.has_genre {
+        scope_parts.push(format!("has_genre = {has_genre}"));
     }
-    if let Some(has_label) = params.filters.has_label {
-        filters.push(format!("has_label = {has_label}"));
+    if let Some(has_label) = filters.has_label {
+        scope_parts.push(format!("has_label = {has_label}"));
     }
-    if let Some(has_unknown_genre) = params.filters.has_unknown_genre {
-        filters.push(format!("has_unknown_genre = {has_unknown_genre}"));
+    if let Some(has_unknown_genre) = filters.has_unknown_genre {
+        scope_parts.push(format!("has_unknown_genre = {has_unknown_genre}"));
     }
-    if let Some(year_zero) = params.filters.year_zero {
-        filters.push(format!("year_zero = {year_zero}"));
+    if let Some(year_zero) = filters.year_zero {
+        scope_parts.push(format!("year_zero = {year_zero}"));
     }
-    if let Some(bpm_min) = params.filters.bpm_min {
-        filters.push(format!("bpm_min = {bpm_min}"));
+    if let Some(bpm_min) = filters.bpm_min {
+        scope_parts.push(format!("bpm_min = {bpm_min}"));
     }
-    if let Some(bpm_max) = params.filters.bpm_max {
-        filters.push(format!("bpm_max = {bpm_max}"));
+    if let Some(bpm_max) = filters.bpm_max {
+        scope_parts.push(format!("bpm_max = {bpm_max}"));
     }
-    if let Some(key) = &params.filters.key {
-        filters.push(format!("key = \"{key}\""));
+    if let Some(key) = &filters.key {
+        scope_parts.push(format!("key = \"{key}\""));
     }
-    if let Some(rating_min) = params.filters.rating_min {
-        filters.push(format!("rating_min = {rating_min}"));
+    if let Some(rating_min) = filters.rating_min {
+        scope_parts.push(format!("rating_min = {rating_min}"));
     }
-    if let Some(label) = &params.filters.label {
-        filters.push(format!("label ~= \"{label}\""));
+    if let Some(label) = &filters.label {
+        scope_parts.push(format!("label ~= \"{label}\""));
     }
-    if let Some(path) = &params.filters.path {
-        filters.push(format!("path ~= \"{path}\""));
+    if let Some(path) = &filters.path {
+        scope_parts.push(format!("path ~= \"{path}\""));
     }
-    if let Some(prefix) = &params.filters.path_prefix {
-        filters.push(format!("path_prefix = \"{prefix}\""));
+    if let Some(prefix) = &filters.path_prefix {
+        scope_parts.push(format!("path_prefix = \"{prefix}\""));
     }
-    if let Some(added_after) = &params.filters.added_after {
-        filters.push(format!("added_after = \"{added_after}\""));
+    if let Some(added_after) = &filters.added_after {
+        scope_parts.push(format!("added_after = \"{added_after}\""));
     }
-    if let Some(added_before) = &params.filters.added_before {
-        filters.push(format!("added_before = \"{added_before}\""));
+    if let Some(added_before) = &filters.added_before {
+        scope_parts.push(format!("added_before = \"{added_before}\""));
     }
-    if let Some(max_tracks) = params.max_tracks {
-        filters.push(format!("max_tracks = {max_tracks}"));
+    if let Some(max_tracks) = max_tracks {
+        scope_parts.push(format!("max_tracks = {max_tracks}"));
     }
 
-    if filters.is_empty() {
+    if scope_parts.is_empty() {
         "all tracks".to_string()
     } else {
-        filters.join(", ")
+        scope_parts.join(", ")
     }
 }
 

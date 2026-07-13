@@ -1,6 +1,6 @@
 ---
 title: DJ Prompts
-description: Conversational agent prompts for gig prep, collection analysis, practice, and music discovery.
+description: Conversational agent prompts for gig prep, collection analysis, practice, and concrete candidate evaluation.
 sidebar:
   order: 6
 ---
@@ -37,10 +37,16 @@ Help me prepare.
    - Time slot → energy arc shape (opening = slow build, peak = sustained high, closing = controlled descent, sunrise = floaty/euphoric)
    - "After an industrial DJ" → don't go harder, build tension differently
    - "Bar, 50 people" → lower energy ceiling, more variety, deeper cuts
-2. Use `search_tracks` to find tracks matching the derived constraints (BPM range, genre, energy range)
-3. Use `query_transition_candidates` to identify tracks that work well together within the pool
-4. Present a curated pool (not a fixed sequence) — the DJ picks the order live
-5. Optionally run `build_set` for a suggested sequence within the pool
+2. Use supported `search_tracks` filters such as BPM, genre, rating, key, date,
+   or playlist to build a local candidate set
+3. Use `score_transition` on representative local pairs when you need the
+   scoring profile's returned derived 0–1 energy values; `search_tracks` has no
+   energy filter, and `resolve_tracks_data` returns analyzer evidence rather
+   than the derived score
+4. Use `query_transition_candidates` to identify tracks that work well
+   together within the pool
+5. Present a curated pool (not a fixed sequence) — the DJ picks the order live
+6. Optionally run `build_set` for a suggested sequence within the pool
 
 The value is in the translation from natural language context to musical parameters — something a GUI tool can't do.
 
@@ -63,49 +69,63 @@ Analyze my collection for gaps and imbalances. I want to understand:
 **What the agent should do:**
 
 1. Use `read_library` for overall stats (genre distribution, key distribution, track count)
-2. Use `search_tracks` with various filters to map coverage:
+2. Use `search_tracks` with supported filters to map local coverage, then use
+   `resolve_tracks_data` when cached audio evidence is needed:
    - BPM buckets (< 120, 120-125, 125-130, 130-135, 135+) — where are you thin?
    - Key coverage across the Camelot wheel — any dead ends where you have 1 track and nothing compatible?
    - Genre coverage — are you a techno DJ with 3 house tracks, or evenly spread?
-   - Energy distribution — all bangers and no warmup material?
+   - Representative derived 0–1 energy from `score_transition` — all bangers
+     and no warmup material? Do not claim a full distribution without scoring
+     the local tracks being compared.
    - Rating distribution — are you only rating the tracks you already love?
 3. Identify specific gaps:
    - Keys with < 3 tracks (harmonic dead ends)
    - BPM ranges with < 5 tracks (can't sustain a set there)
-   - Labels you buy from heavily — use `lookup_discogs` to check for recent releases you might be missing
-4. Present findings as actionable insights, not just charts
+   - Labels represented heavily or thinly in the collection
+4. Present findings as actionable local-library insights, not just charts.
+   Open-ended catalog gap discovery is outside these tools; evaluate a concrete
+   user-supplied track or release only after the user provides one.
 
 ---
 
 ## Dig Session Partner
 
-A knowledgeable collaborator for music discovery, using your collection as context.
+A knowledgeable collaborator for finding directions in your own collection and
+evaluating concrete candidates you supply.
 
 **Paste into your agent:**
 
 ```
-I'm digging for new music today. Here's what I'm looking for:
-[describe what you want — genre, mood, tempo, reference tracks, or just "surprise me"]
+I'm digging for new music today. Here's the direction:
+[describe what you want — genre, mood, tempo, or reference tracks]
 
-Use my collection to understand my taste and suggest directions.
+Use my collection to understand my taste and suggest directions. If I give you
+a concrete track or release candidate, evaluate how it fits.
 ```
 
 **What the agent should do:**
 
-1. Analyze the user's collection for patterns:
-   - Most common labels → suggest sibling/adjacent labels
-   - Artist clusters → suggest related artists via Discogs credits (remixers, collaborators, label-mates)
-   - Genre/era concentrations → suggest unexplored adjacent territories
-2. Use `lookup_discogs` and `lookup_beatport` to research suggestions
-3. Cross-reference against what the user already owns — don't suggest what they have
-4. Notice purchasing patterns:
-   - "You've bought 6 tracks from this label but nothing from their last 2 years — worth checking"
-   - "3 of your recent purchases are from artists who all appear on [compilation] — the other artists on it might interest you"
-   - "Your collection is 80% post-2020 releases — want some classic material for contrast?"
-5. Suggest specific releases or tracks to check out, with reasoning
+1. Analyze the local collection for label, artist, genre, era, tempo, and key.
+   Use `resolve_tracks_data` for analyzer evidence, then call
+   `score_transition` on representative local pairs before describing any
+   derived-energy pattern. Resolve responses do not contain derived scoring
+   values.
+2. Suggest collection-grounded directions such as an underused genre, tempo
+   band, label already represented locally, or contrasting era. Do not claim
+   specific new tracks are available.
+3. Ask the user for a concrete track or release candidate before provider
+   lookup. `lookup_discogs` and `lookup_beatport` match that specific candidate;
+   they do not search credits or explore a label's catalog.
+4. For a user-supplied candidate, report only the returned match fields and
+   compare its genre, BPM, key, and label/date with the local collection. Audio
+   evidence is available only if the candidate is already a local track with a
+   current cache entry.
+5. Defer open-ended catalog and collaborator research. These tools do not
+   provide it, and this recipe does not add an external-search prerequisite.
 
 <Aside type="tip">
-  This works well as a conversation — tell the agent what you found, what you liked, what you passed on, and it refines its suggestions.
+  This works well as a conversation: bring back a concrete candidate, say what
+  you liked or passed on, and the agent can refine the next local direction.
 </Aside>
 
 ---
@@ -126,18 +146,21 @@ Debrief my last gig. Analyze the session from [date] and help me understand:
 **What the agent should do:**
 
 1. Use `get_sessions` to find the session, `get_session_tracks` for the tracklist
-2. Resolve full track data and analyze the arc:
-   - Energy curve — where were the peaks and valleys? Was the peak too early/late?
+2. Use `resolve_tracks_data` for each local track's analyzer evidence; this
+   response does not contain derived scoring values.
+3. Call `score_transition` on every consecutive local pair before analyzing
+   the arc:
+   - Derived 0–1 energy curve — where were the peaks and valleys? Was the peak too early/late?
    - BPM trajectory — did tempo drift up, stay flat, or follow a deliberate arc?
    - Harmonic movement — smooth Camelot steps or big jumps? Were the jumps intentional?
    - Genre flow — did you stay in one lane or move between styles?
-3. Cross-reference with play history:
+4. Cross-reference with play history:
    - Tracks appearing in 3+ recent sessions → heavy rotation (signature tracks or crutches?)
    - Tracks played for the first time → how did they fit?
    - Tracks from the prepped pool that weren't used → why not?
-4. Surface actionable observations:
+5. Surface actionable observations:
    - "Your first hour was all 6A/7A — harmonically safe but maybe too static"
-   - "You jumped from energy 4 to 8 at track 12 — was that intentional or did you panic?"
+   - "Your derived 0–1 energy value jumped sharply at track 12 — was that intentional?"
    - "You played 'Black Sun' at your last 4 sessions — maybe rest it?"
 
 
@@ -195,8 +218,10 @@ Duration: [e.g., 30 min, 1 hour]
    - **Weak key areas:** find tracks in keys the DJ rarely uses (from gap analysis), pair with comfortable keys to practice moving in and out
    - **Tempo range:** find tracks in the target BPM range, pair in sets of 3-4 for extended practice
 2. Use `score_transition` to find pairs that are:
-   - Achievable but not trivial (score 60-80 range — too easy doesn't build skill, too hard frustrates)
-   - Varied in challenge type (some harmonic, some tempo, some energy)
+   - Achievable but not trivial based on the 0–1 composite and, more
+     importantly, its per-axis breakdown
+   - Varied in challenge type (some harmonic, some tempo, some energy); select
+     qualitatively rather than inventing a rigid score band
 3. Present as ordered exercises:
    - "Mix 1: Track A → Track B (compatible keys, practice the 4 BPM gap)"
    - "Mix 2: Track C → Track D (key jump from 6A to 8A — try mixing during the breakdown)"

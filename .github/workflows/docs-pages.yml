@@ -6,6 +6,9 @@ on:
     paths:
       - "site/**"
       - "src/tools/**"
+      - "src/audio.rs"
+      - "src/color.rs"
+      - "src/genre.rs"
       - "src/types.rs"
       - "src/tags.rs"
       - "src/cli/**"
@@ -24,6 +27,9 @@ on:
     paths:
       - "site/**"
       - "src/tools/**"
+      - "src/audio.rs"
+      - "src/color.rs"
+      - "src/genre.rs"
       - "src/types.rs"
       - "src/tags.rs"
       - "src/cli/**"

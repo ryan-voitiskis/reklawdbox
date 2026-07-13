@@ -84,6 +84,28 @@ async function runSmoke() {
     throw new Error("help(topic='audit') did not mention Reload Tag")
   }
 
+  const albumHelp = await callTool('help', { topic: 'album' })
+  const albumHelpPayload = parseToolJson(albumHelp, "help(topic='album')")
+  if (albumHelpPayload.workflow !== 'Metadata Backfill') {
+    throw new Error("help(topic='album') did not return Metadata Backfill")
+  }
+  if (!albumHelpPayload.sop?.includes('Step 1c')) {
+    throw new Error(
+      "help(topic='album') did not include the Step 1c label checkpoint",
+    )
+  }
+
+  const taxonomy = await callTool('get_genre_taxonomy', {})
+  const taxonomyPayload = parseToolJson(taxonomy, 'get_genre_taxonomy')
+  if (
+    !Array.isArray(taxonomyPayload.genres)
+    || !taxonomyPayload.genres.includes('Italodance')
+  ) {
+    throw new Error(
+      'get_genre_taxonomy did not return the canonical genre list',
+    )
+  }
+
   const playlistImportHelp = []
   for (const topic of ['set', 'pool', 'chapter']) {
     const result = await callTool('help', { topic })
@@ -135,6 +157,13 @@ async function runSmoke() {
     auditHelp: {
       topic: 'audit',
       bytes: Buffer.byteLength(auditHelpText),
+    },
+    albumHelp: {
+      topic: 'album',
+      bytes: Buffer.byteLength(albumHelpPayload.sop ?? ''),
+    },
+    taxonomy: {
+      genreCount: taxonomyPayload.genres.length,
     },
     playlistImportHelp,
     protocolViolations,

@@ -95,18 +95,25 @@ Rekordbox maps stars to 0/51/102/153/204/255. reklawdbox converts automatically 
 
 ## Track colors
 
-Rekordbox supports eight track colors. Use these hex values in reklawdbox:
+Pass one of these eight canonical color **names** to `update_tracks` (matching
+is case-insensitive). reklawdbox validates and canonicalizes the name, then
+serializes the corresponding hex value into Rekordbox XML. Hex strings are XML
+output representations, not accepted tool inputs.
 
-| Color     | Hex        |
-| --------- | ---------- |
-| Rose      | `0xFF007F` |
-| Red       | `0xFF0000` |
-| Orange    | `0xFFA500` |
-| Lemon     | `0xFFFF00` |
-| Green     | `0x00FF00` |
-| Turquoise | `0x25FDE9` |
-| Blue      | `0x0000FF` |
-| Violet    | `0x660099` |
+{/* doc-contract:color-palette source=src/color.rs */}
+
+| Color name | XML hex    |
+| ---------- | ---------- |
+| Blue       | `0x0000FF` |
+| Green      | `0x00FF00` |
+| Lemon      | `0xFFFF00` |
+| Orange     | `0xFFA500` |
+| Red        | `0xFF0000` |
+| Rose       | `0xFF007F` |
+| Turquoise  | `0x25FDE9` |
+| Violet     | `0x660099` |
+
+{/* /doc-contract:color-palette */}
 
 ---
 

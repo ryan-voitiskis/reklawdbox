@@ -238,7 +238,7 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 })
             }
             None => serde_json::json!({
-                "error": format!("No workflow matching '{topic}'. Try: import, genre, genre audit, set, pool, chapter, audit, metadata, label, year, album, health."),
+                "error": format!("No workflow matching '{topic}'. Try: genre, genre audit, set, pool, chapter, audit, import, metadata, label, year, album, health."),
                 "workflows": WORKFLOWS.iter().map(|w| w.name).collect::<Vec<_>>(),
             }),
         }
@@ -260,12 +260,13 @@ pub(super) fn handle_help(params: HelpParams) -> Result<CallToolResult, McpError
                 "5. Set Building — build DJ sets from well-tagged tracks\n",
                 "6. Pool Building — discover compatible track pools for live improvisation\n",
                 "7. Chapter Set Planning — plan a full night from locked chapters (requires pools)\n",
-                "Prerequisite: run `reklawdbox hydrate` from the CLI first to populate enrichment and analysis caches.\n",
-                "Full guide: https://reklawdbox.com/workflows/library-cleanup/",
+                "Readiness is workflow-specific: local audit and file-health steps can start without hydration. For enrichment and classification, run a scoped cache_coverage check and populate only the missing required evidence; provider access is conditional.\n",
+                "Rekordbox handoffs happen at the SOP checkpoints: use Reload Tag after direct tag edits, and import metadata or playlist XML only after review and export.\n",
+                "Full workflow catalog: https://reklawdbox.com/workflows/",
             ),
             "getting_started": "https://reklawdbox.com/getting-started/",
             "reference": "https://reklawdbox.com/mcp-tools/",
-            "tip": "Call help(topic='genre'|'import'|'set'|'pool'|'chapter'|'audit'|'genre audit'|'metadata'|'label'|'year'|'health') for the full step-by-step SOP.",
+            "tip": "Call help(topic='genre'|'genre audit'|'set'|'pool'|'chapter'|'audit'|'import'|'metadata'|'label'|'year'|'album'|'health') for the full step-by-step SOP.",
         })
     };
 

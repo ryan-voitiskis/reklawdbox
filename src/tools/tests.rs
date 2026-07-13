@@ -362,8 +362,51 @@ fn help_public_contract() {
         "runtime help should link to the built MCP reference"
     );
     assert!(
-        !payload.to_string().contains("/reference/tools/"),
+        !payload
+            .to_string()
+            .contains(&["/reference", "tools/"].join("/")),
         "runtime help must not retain the retired tool-reference route"
+    );
+
+    let expected_topics = [
+        "genre",
+        "genre audit",
+        "set",
+        "pool",
+        "chapter",
+        "audit",
+        "import",
+        "metadata",
+        "label",
+        "year",
+        "album",
+        "health",
+    ];
+    let help_schema = schemars::schema_for!(HelpParams);
+    let topic_description = help_schema.as_value()["properties"]["topic"]["description"]
+        .as_str()
+        .expect("HelpParams.topic should advertise its public vocabulary");
+    let schema_topics = topic_description
+        .split('\'')
+        .enumerate()
+        .filter_map(|(index, value)| (index % 2 == 1).then_some(value))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        schema_topics, expected_topics,
+        "HelpParams should advertise exactly the twelve public topics"
+    );
+    let expected_tip = format!(
+        "Call help(topic={}) for the full step-by-step SOP.",
+        expected_topics
+            .iter()
+            .map(|topic| format!("'{topic}'"))
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    assert_eq!(
+        payload["tip"].as_str(),
+        Some(expected_tip.as_str()),
+        "the visible topic tip should match the schema vocabulary and order"
     );
 
     let recommended = payload["recommended_order"]
@@ -384,18 +427,239 @@ fn help_public_contract() {
             "recommended sequence should be consecutively numbered"
         );
     }
-
-    let topic = handle_help(HelpParams {
-        topic: Some("genre audit".to_owned()),
-    })
-    .expect("DB-free topic help should succeed");
-    let topic_payload = extract_json(&topic);
-    assert_eq!(topic_payload["workflow"], "Genre Audit");
-    assert!(topic_payload["key_tools"].is_array());
     assert!(
-        topic_payload["sop"]
+        recommended.contains("workflow-specific")
+            && recommended.contains("scoped cache_coverage")
+            && recommended.contains("provider access is conditional"),
+        "help should explain scoped, conditional readiness"
+    );
+    assert!(
+        !recommended.contains("run `reklawdbox hydrate`"),
+        "help must not impose universal hydration"
+    );
+    assert!(
+        recommended.contains("Reload Tag") && recommended.contains("metadata or playlist XML"),
+        "help should expose the real Rekordbox checkpoints"
+    );
+
+    let topic_routes = [
+        ("genre", "Genre Classification"),
+        ("genre audit", "Genre Audit"),
+        ("set", "Set Building"),
+        ("pool", "Pool Building"),
+        ("chapter", "Chapter Set Planning"),
+        ("audit", "Collection Audit"),
+        ("import", "Batch Import"),
+        ("metadata", "Metadata Backfill"),
+        ("label", "Metadata Backfill"),
+        ("year", "Metadata Backfill"),
+        ("album", "Metadata Backfill"),
+        ("health", "Library Health"),
+    ];
+    for (topic, expected_workflow) in topic_routes {
+        let response = handle_help(HelpParams {
+            topic: Some(topic.to_owned()),
+        })
+        .unwrap_or_else(|error| panic!("DB-free help topic {topic:?} failed: {error:?}"));
+        let topic_payload = extract_json(&response);
+        assert_eq!(
+            topic_payload["workflow"], expected_workflow,
+            "topic {topic}"
+        );
+        assert!(topic_payload["key_tools"].is_array(), "topic {topic}");
+        assert!(
+            topic_payload["sop"]
+                .as_str()
+                .is_some_and(|sop| !sop.is_empty()),
+            "topic {topic}"
+        );
+        if topic == "audit" {
+            assert!(
+                topic_payload["sop"]
+                    .as_str()
+                    .is_some_and(|sop| sop.contains("Reload Tag")),
+                "collection audit should retain its Reload Tag checkpoint"
+            );
+        }
+        if topic == "album" {
+            assert!(
+                topic_payload["sop"]
+                    .as_str()
+                    .is_some_and(|sop| sop.contains("Step 1c")),
+                "metadata help should retain its label-research checkpoint"
+            );
+        }
+    }
+    let unknown = extract_json(
+        &handle_help(HelpParams {
+            topic: Some("not-a-public-topic".to_owned()),
+        })
+        .expect("unknown topic should return a DB-free guidance payload"),
+    );
+    assert_eq!(
+        unknown["error"],
+        format!(
+            "No workflow matching 'not-a-public-topic'. Try: {}.",
+            expected_topics.join(", ")
+        )
+    );
+}
+
+#[test]
+fn cache_coverage_public_schema() {
+    let router = ReklawdboxServer::tool_router();
+    let tool_schema = |tool_name: &str| {
+        let tool = router
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} should be registered"));
+        serde_json::to_value(tool).expect("tool metadata should serialize")
+    };
+    let resolve_schema = tool_schema("resolve_tracks_data");
+    let coverage_schema = tool_schema("cache_coverage");
+    let properties = |tool_name: &str, schema: &serde_json::Value| {
+        schema["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{tool_name} should expose input properties"))
+            .clone()
+    };
+
+    let resolve_properties = properties("resolve_tracks_data", &resolve_schema);
+    let coverage_properties = properties("cache_coverage", &coverage_schema);
+
+    let resolve_names = resolve_properties.keys().cloned().collect::<HashSet<_>>();
+    let coverage_names = coverage_properties.keys().cloned().collect::<HashSet<_>>();
+
+    assert_eq!(resolve_names.len(), 20);
+    assert_eq!(coverage_names.len(), 19);
+    for (name, schema) in [
+        ("resolve_tracks_data", &resolve_schema),
+        ("cache_coverage", &coverage_schema),
+    ] {
+        assert!(
+            schema["inputSchema"]["required"]
+                .as_array()
+                .is_none_or(Vec::is_empty),
+            "{name} selectors should all remain optional"
+        );
+    }
+
+    assert!(
+        !coverage_names.contains("format"),
+        "cache_coverage must not advertise the ignored format parameter"
+    );
+    assert_eq!(
+        resolve_names
+            .difference(&coverage_names)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from(["format".to_owned()]),
+        "resolve_tracks_data should differ from cache_coverage only by format"
+    );
+    assert!(
+        coverage_names.is_subset(&resolve_names),
+        "cache_coverage should retain every shared selector and filter"
+    );
+    for (name, mut coverage_schema) in coverage_properties {
+        let mut resolve_schema = resolve_properties
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| panic!("resolve_tracks_data should retain shared property {name}"));
+        coverage_schema
+            .as_object_mut()
+            .expect("property schemas should be objects")
+            .remove("description");
+        resolve_schema
+            .as_object_mut()
+            .expect("property schemas should be objects")
+            .remove("description");
+        assert_eq!(
+            resolve_schema, coverage_schema,
+            "shared property {name} should have the same public type contract"
+        );
+    }
+    assert!(
+        coverage_schema["inputSchema"]["properties"]["track_ids"]["description"]
             .as_str()
-            .is_some_and(|sop| !sop.is_empty())
+            .is_some_and(
+                |description| description.contains("check") && !description.contains("resolve")
+            )
+    );
+    assert!(
+        coverage_schema["inputSchema"]["properties"]["max_tracks"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("unbounded"))
+    );
+}
+
+#[test]
+fn color_input_public_contract() {
+    let changes = ChangeManager::new();
+    handle_update_tracks(
+        &changes,
+        UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "color-name".to_owned(),
+                genre: None,
+                comments: None,
+                rating: None,
+                color: Some("turquoise".to_owned()),
+                label: None,
+                year: None,
+                album: None,
+            }],
+        },
+    )
+    .expect("a canonical color name should validate without a database");
+    assert_eq!(
+        changes
+            .get("color-name")
+            .expect("accepted color should be staged")
+            .color
+            .as_deref(),
+        Some("Turquoise"),
+        "accepted color names should be canonicalized"
+    );
+
+    let error = handle_update_tracks(
+        &ChangeManager::new(),
+        UpdateTracksParams {
+            changes: vec![TrackChangeInput {
+                track_id: "color-hex".to_owned(),
+                genre: None,
+                comments: None,
+                rating: None,
+                color: Some("0x25FDE9".to_owned()),
+                label: None,
+                year: None,
+                album: None,
+            }],
+        },
+    )
+    .expect_err("serialized XML hex must not be accepted as a tool input");
+    let message = format!("{error:?}");
+    for name in [
+        "Blue",
+        "Green",
+        "Lemon",
+        "Orange",
+        "Red",
+        "Rose",
+        "Turquoise",
+        "Violet",
+    ] {
+        assert!(
+            message.contains(name),
+            "invalid color guidance should include {name}: {message}"
+        );
+    }
+
+    let mut track = make_test_track("color-xml", "House", 124.0, "8A");
+    track.color_code = crate::color::color_name_to_code("Turquoise")
+        .expect("canonical color should have an XML code");
+    let xml = crate::xml::generate_xml(&[track]);
+    assert!(
+        xml.contains("Colour=\"0x25FDE9\""),
+        "canonical color integers should serialize as uppercase 0xRRGGBB"
     );
 }
 
@@ -7480,7 +7744,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         .expect("essentia probe cache should be set exactly once");
 
     let result = server
-        .cache_coverage(Parameters(ResolveTracksDataParams {
+        .cache_coverage(Parameters(CacheCoverageParams {
             filters: SearchFilterParams {
                 has_genre: Some(false),
                 ..Default::default()
@@ -7488,7 +7752,6 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
             track_ids: None,
             playlist_id: None,
             max_tracks: None,
-            format: None,
         }))
         .await
         .expect("cache_coverage should succeed");
@@ -7573,7 +7836,7 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
 
     let id_scope = server
-        .cache_coverage(Parameters(ResolveTracksDataParams {
+        .cache_coverage(Parameters(CacheCoverageParams {
             filters: SearchFilterParams::default(),
             track_ids: Some(vec![
                 "coverage-nonsample".to_string(),
@@ -7581,7 +7844,6 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
             ]),
             playlist_id: None,
             max_tracks: None,
-            format: None,
         }))
         .await
         .expect("cache_coverage track_ids scope should succeed");
@@ -7591,12 +7853,11 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
     assert_eq!(id_payload["gaps"]["no_data_at_all"], 1);
 
     let playlist_scope = server
-        .cache_coverage(Parameters(ResolveTracksDataParams {
+        .cache_coverage(Parameters(CacheCoverageParams {
             filters: SearchFilterParams::default(),
             track_ids: None,
             playlist_id: Some("pl-cache".to_string()),
             max_tracks: None,
-            format: None,
         }))
         .await
         .expect("cache_coverage playlist scope should succeed");
@@ -11012,6 +11273,7 @@ fn tool_schemas_are_claude_api_compatible() {
     check::<AnalyzeAudioBatchParams>("AnalyzeAudioBatchParams");
     check::<ResolveTrackDataParams>("ResolveTrackDataParams");
     check::<ResolveTracksDataParams>("ResolveTracksDataParams");
+    check::<CacheCoverageParams>("CacheCoverageParams");
     check::<ReadFileTagsParams>("ReadFileTagsParams");
     check::<ExtractCoverArtParams>("ExtractCoverArtParams");
     check::<EmbedCoverArtParams>("EmbedCoverArtParams");

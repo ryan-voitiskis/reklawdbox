@@ -23,7 +23,7 @@ reklawdbox
   ├── Local cache ──────────── enrichment, audio analysis, sessions
   ├── Discogs broker ───────── OAuth proxy for metadata lookups
   ├── Beatport ─────────────── metadata extraction (no API key needed)
-  ├── Audio analysis ───────── BPM, key, energy, danceability, spectral features
+  ├── Audio analysis ───────── tempo/key, rhythm/structure, dynamics, timbre
   └── XML output ───────────── Rekordbox-compatible export files
 ```
 
@@ -58,13 +58,27 @@ The broker is open-source and self-hostable if you prefer. See [Environment Vari
 
 ## Audio analysis
 
-Two analysis backends, both cached per track so they only run once:
+Two analysis backends are cached per track and reused while their schema,
+audio-file identity, and analyzer-specific inputs remain current. An audio-file
+identity change invalidates both backends. A Stratum schema change invalidates
+only Stratum, and an Essentia schema change invalidates only Essentia. A
+Rekordbox grid change also invalidates only Stratum.
 
-**Built-in (stratum-dsp)** — BPM and key detection in Rust. Always available, no setup needed.
+**Built-in (stratum-dsp)** — BPM/key confidence, grid provenance and stability,
+decay, dub-stab and kick-pattern evidence, and structural sections in Rust.
+Always available, no setup needed.
 
-**Essentia (optional)** — adds danceability, rhythm regularity, brightness (spectral centroid), loudness, onset rate, and dynamic complexity via a Python subprocess. These features are combined to produce energy scores and improve genre classification, set building, and pool discovery significantly. Installed automatically by `reklawdbox setup`.
+**Essentia (optional)** — adds integrated loudness, danceability, rhythm and
+onset evidence, brightness, and other spectral/timbral features via a Python
+subprocess. It has no returned `energy` field. Transition and pool scoring
+derive energy from danceability, integrated loudness, and onset rate only when
+all three are present. Installed by `reklawdbox setup`.
 
-Without Essentia, energy scoring falls back to a BPM-based estimate and brightness/rhythm axes are dropped from transition scoring.
+Without complete Essentia energy inputs, scoring falls back to a BPM-based
+estimate; unavailable brightness/rhythm axes are excluded from the transition
+composite. Classification, transition scoring, pool scoring, audit,
+calibration, and audio-profile summaries each use only a subset of the returned
+evidence. See the canonical [audio evidence and consumers table](/mcp-tools/enrichment-analysis/#returned-and-cached-evidence).
 
 ## CLI
 

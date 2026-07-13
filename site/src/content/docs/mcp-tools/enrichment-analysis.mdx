@@ -26,7 +26,8 @@ The batch surfaces are deliberately narrower:
 
 ### `lookup_discogs`
 
-Look up a single track on Discogs. Returns genre, style, label, year, catalog number, and release metadata.
+Match one specific track or release on Discogs. This is not a general catalog,
+credits, collaborator, or release-discovery browser.
 
 {/* doc-contract:mcp tool=lookup_discogs schema=/ requiredness=global */}
 
@@ -40,6 +41,13 @@ Look up a single track on Discogs. Returns genre, style, label, year, catalog nu
 
 {/* /doc-contract:mcp */}
 
+| Returned field | Meaning |
+|----------------|---------|
+| `title`, `year`, `label` | Matched release identity and basic metadata |
+| `genres`, `styles` | Discogs genre and style arrays |
+| `url`, `cover_image` | Matched release and artwork URLs |
+| `fuzzy_match` | Whether the selected result was a fuzzy rather than exact title match |
+
 <Aside type="note">
   If the session has expired, the response includes an `auth_url` — open it in a browser, approve access, and call again.
 </Aside>
@@ -48,7 +56,8 @@ Look up a single track on Discogs. Returns genre, style, label, year, catalog nu
 
 ### `lookup_beatport`
 
-Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and label.
+Match one specific track on Beatport. The result contains one genre value, not
+a separate sub-genre.
 
 {/* doc-contract:mcp tool=lookup_beatport schema=/ requiredness=global */}
 
@@ -60,6 +69,13 @@ Look up a single track on Beatport. Returns genre, sub-genre, BPM, key, and labe
 | `force_refresh` | boolean | | Bypass cache (default: `false`) |
 
 {/* /doc-contract:mcp */}
+
+| Returned field | Meaning |
+|----------------|---------|
+| `genre`, `bpm`, `key` | Beatport's genre, tempo, and key for the matched track |
+| `track_name`, `artists` | Matched title and artist list |
+| `release_date`, `label` | Optional release date and label |
+| `fuzzy_match` | Whether the selected result was a fuzzy rather than exact title match |
 
 ---
 
@@ -184,13 +200,67 @@ provider context, and is never also reported as enriched or skipped.
 
 ## Audio analysis tools
 
-**stratum-dsp** (compiled in): BPM, key, rhythm regularity. **Essentia** (optional): danceability, spectral centroid, loudness, onset rate, dynamic complexity. Results cached per track per backend.
+The two backends return separate evidence and are cached independently.
+Stratum is compiled in; Essentia is optional. Neither backend returns a field
+named `energy`: scoring derives energy from three Essentia fields when all are
+present, otherwise it uses a BPM proxy.
+
+### Returned and cached evidence
+
+The tables below group every public field family. In a fresh analyzer result,
+optional detector values serialize as `null` when a detector cannot run or a
+beat grid is unavailable. Cache freshness rejects results from older schemas;
+the live `analyze_track_audio` response remains the field-level schema
+authority.
+
+| Stratum family | Returned fields | Notes |
+|-----------------|-----------------|-------|
+| Tempo and key | `bpm`, `bpm_confidence`, `key`, `key_camelot`, `key_confidence`, `key_clarity` | Confidence and clarity are evidence, not guarantees that every downstream consumer uses them. |
+| Grid provenance | `grid_stability`, `grid_source` | `grid_source` distinguishes a supplied Rekordbox grid from the HMM fallback. The cache also records a versioned grid/no-grid input fingerprint. |
+| Analysis metadata | `duration_seconds`, `processing_time_ms`, `analyzer_version`, `flags`, `warnings` | Cache freshness additionally requires the current Stratum schema version and current audio-file identity. |
+| Modulation and decay | `mod_centroid`, `harmonic_proportion`, `decay_mid_tau`, `decay_mid_r2`, `decay_high_tau`, `decay_high_r2` | Optional modulation-centroid, harmonic-proportion, and fitted decay evidence. |
+| Dub-stab timing | `dub_stab_onset_count`, `dub_stab_onset_rate`, `dub_stab_rate_basis`, `dub_stab_histogram`, `dub_stab_template`, `dub_stab_template_score` | Optional onset, 32-bin histogram, rate-basis, and template evidence. |
+| Kick pattern | `kick_pattern`, `kick_pattern_confidence`, `kick_kicks_per_bar`, `kick_onset_count`, `kick_rate_basis`, `kick_histogram` | Optional pattern label, confidence, counts, basis, and flattened 4×16 histogram. |
+| Structure | `sections` | Optional ordered Intro/MainGroove/Breakdown/Outro sections with start/end time, kick-band RMS, and broadband RMS. |
+
+| Essentia family | Returned fields | Notes |
+|-----------------|-----------------|-------|
+| Analysis metadata | `analyzer_version` | Cache freshness also requires the current Essentia schema version and audio-file identity; grid changes do not invalidate Essentia. |
+| Dynamics and loudness | `danceability`, `loudness_integrated`, `loudness_range`, `dynamic_complexity`, `average_loudness` | Optional descriptors. There is no returned `energy` field. |
+| Tempo and rhythm | `bpm_essentia`, `onset_rate`, `rhythm_regularity` | Optional independent tempo and onset evidence. |
+| Brightness, dissonance, and intensity | `spectral_centroid_mean`, `dissonance_mean`, `intensity_mean`, `intensity_var` | Optional scalar spectral/timbral evidence. |
+| Detailed timbre and spectrum | `mfcc_mean`, `mfcc_std`, `spectral_centroid_cv`, `spectral_flux_mean`, `spectral_flux_iqr`, `spectral_contrast_mean` | Optional vectors and summary statistics used selectively by calibration and pool scoring. |
+
+### Which evidence is consumed
+
+Returned evidence is broader than the current scoring inputs. In particular,
+dub-stab, modulation/harmonic, structure, and most kick-pattern fields are
+available for inspection but do not directly alter transition or pool scores.
+
+| Consumer | Current audio inputs |
+|----------|----------------------|
+| Genre classification/audit rule-based summary (`classify.rs::AudioProfile`) | Rekordbox/Stratum BPM agreement; detector-consensus fallback is considered only when finite Essentia danceability is at least 1.5 (the Dancefloor or HighEnergy buckets). In that case, when the Stratum and Essentia BPM detectors agree with each other but disagree with Rekordbox (and are not a near double-time match), their mean replaces the Rekordbox BPM. Lower or missing danceability retains the Rekordbox BPM. Other inputs are Stratum duration, `key_confidence`, and `decay_mid_tau`; plus Essentia danceability, dynamic complexity, rhythm regularity, spectral centroid mean, and `loudness_range`. Extracted kick evidence is returned for review but is not a direct current decision input. |
+| Calibrated genre-affinity profiles (`audio_profile.rs`), calibration, and affinity scoring | Rekordbox BPM; Stratum `decay_mid_tau`, `decay_high_tau`, and key clarity; Essentia danceability, onset rate, rhythm regularity, centroid mean/CV, dynamic complexity, integrated loudness, spectral flux mean, dissonance mean, MFCC mean/std, and spectral contrast mean. Missing optional families reduce coverage rather than becoming zeroes. |
+| Transition scoring and `build_set` | Stratum key (preferred) and BPM (fallback); derived energy; Essentia brightness, rhythm regularity, and loudness range. Only `build_set` adds sequence-context modifiers. |
+| Pool scoring and discovery | Key, BPM, derived energy, canonical genre/family, Essentia brightness, and rhythm regularity. When every required timbral family is available, an optional distance axis uses MFCC mean/std, spectral contrast mean, spectral centroid variability, and dissonance. Pool scoring does not consume `loudness_range`. |
+| Cache/audit coverage | Analyzer freshness and presence counts; coverage does not imply that every returned field is consumed. |
+
+**Derived energy** is calculated only when Essentia has `danceability`,
+`loudness_integrated`, and `onset_rate`: the normalized inputs are weighted
+0.4/0.3/0.3 and clamped to 0–1. If any one is missing—or Essentia is
+unavailable—the entire value falls back to the BPM proxy; it is not a partial
+Essentia score.
 
 ---
 
 ### `analyze_track_audio`
 
-Analyze one track. Returns BPM, key, and (with Essentia) energy descriptors.
+Analyze one track. Returns the Stratum evidence families above. The response
+always includes an `essentia` key plus `essentia_available`,
+`essentia_cache_hit`, and `essentia_error` context. `essentia` contains the
+separate result when analysis succeeds and is `null` when Essentia is
+unavailable or its analysis fails; optional fields inside a fresh result also
+serialize as `null` when unavailable.
 
 {/* doc-contract:mcp tool=analyze_track_audio schema=/ requiredness=global */}
 

@@ -118,7 +118,7 @@ pub(super) struct ServerState {
     pub(super) http: reqwest::Client,
     /// Set by backfill_labels when unlabeled tracks remain. Stores the count.
     /// write_xml checks this and refuses to export unless the agent explicitly
-    /// acknowledges that label research is complete (skip_label_gate=true).
+    /// acknowledges that Step 1c label research is complete (skip_label_gate=true).
     pub(super) label_research_gate: std::sync::atomic::AtomicU32,
 }
 
@@ -368,7 +368,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Write staged changes and optional playlists to a Rekordbox-compatible XML file. Runs backup first. If backfill_labels was run and found unlabeled tracks, this tool will refuse to export until label research is complete (step 3 of metadata backfill SOP). Pass skip_label_gate=true only after completing label research."
+        description = "Write staged changes and optional playlists to a Rekordbox-compatible XML file. Runs backup first. If backfill_labels was run and found unlabeled tracks, this tool will refuse to export until label research is complete (Step 1c of the metadata backfill SOP). Pass skip_label_gate=true only after completing label research."
     )]
     async fn write_xml(
         &self,
@@ -604,7 +604,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Get all available data for a track in one call: Rekordbox metadata, cached audio analysis, cached enrichment, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
+        description = "Get Rekordbox metadata plus cached Discogs and Beatport enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings for one track. Cache-only — never triggers external calls."
     )]
     async fn resolve_track_data(
         &self,
@@ -614,7 +614,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Get all available data for multiple tracks. Same as resolve_track_data but batched. Cache-only — never triggers external calls."
+        description = "Batch Rekordbox metadata plus cached Discogs and Beatport enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
     )]
     async fn resolve_tracks_data(
         &self,
@@ -628,7 +628,7 @@ impl ReklawdboxServer {
     )]
     async fn cache_coverage(
         &self,
-        params: Parameters<ResolveTracksDataParams>,
+        params: Parameters<CacheCoverageParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_cache_coverage(self, params.0)
     }

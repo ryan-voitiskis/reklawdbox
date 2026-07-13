@@ -9,7 +9,11 @@ sidebar:
 
 Transitions between tracks are scored on six independent axes, each producing a value between 0 and 1. A weighted composite combines all available scores based on the chosen priority mode.
 
-Both `score_transition` and `build_set` use this scoring system. `score_transition` returns the full breakdown for a single A-to-B pair. `build_set` uses it internally to evaluate thousands of candidate transitions during greedy sequencing.
+Both `score_transition` and `build_set` use this scoring system.
+`score_transition` returns the standalone breakdown for one A-to-B pair.
+`build_set` uses beam search with a default `beam_width` of 3; `beam_width=1`
+is the greedy specialization. Sequence-context modifiers described below apply
+only while `build_set` grows a path.
 
 The six axes are:
 
@@ -46,7 +50,9 @@ The +1/-1 moves are the bread and butter of harmonic mixing. Same-number A/B shi
 
 ## BPM compatibility
 
-BPM compatibility uses an exponential decay based on the percentage delta between two tracks:
+For standalone `score_transition` and `build_set` without a `bpm_range`, BPM
+compatibility compares the tracks at their native tempos using exponential
+decay:
 
 ```
 score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
@@ -60,7 +66,16 @@ score = exp(-0.019 * pct^2)     where pct = |from_bpm - to_bpm| / from_bpm * 100
 | 6-9%    | ~0.3  | Creative transition needed |
 | ≥9%     | <0.2  | Jarring                    |
 
-BPM is taken from Rekordbox metadata — it's the value the DJ sees, works with, and can manually correct. stratum-dsp's estimate is used as a fallback only when Rekordbox BPM is zero (unanalyzed tracks).
+BPM is taken from Rekordbox metadata when it is at least 30 — it is the value
+the DJ sees, works with, and can manually correct. Below that plausibility
+floor, stratum-dsp's estimate is used as the fallback.
+
+When `build_set` has a `bpm_range`, it plans a play BPM for each position. The
+BPM axis compares the destination track's planned play BPM with that same
+track's native BPM, measuring the speed adjustment required rather than the
+gap between adjacent planned tempos. Key scoring also applies each track's
+planned-versus-native speed shift when Master Tempo is off; with Master Tempo
+on, those speed changes do not transpose the keys.
 
 ---
 
@@ -80,7 +95,9 @@ energy = (0.4 * normalized_dance)
        + (0.3 * onset_rate_norm)
 ```
 
-When Essentia data is not available, a BPM-based proxy is used:
+When any one of `danceability`, `loudness_integrated`, or `onset_rate` is
+missing—including when Essentia is unavailable—the whole derived value falls
+back to a BPM-based proxy:
 
 ```
 energy_proxy = clamp((bpm - 95) / 50, 0, 1)
@@ -118,14 +135,14 @@ Genres are grouped into families. Compatibility depends on whether two genres sh
 
 ### Genre families
 
-| Family    | Genres                                                                                                                                        |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco, Italo Disco, 2-Step Garage, UK Funky |
-| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, EBM, Electro, Trance, Psytrance                    |
-| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, Footwork, Future Garage, Grime, Bassline, Broken Beat                                                |
-| Hardcore  | Hardstyle, Happy Hardcore, Hard Trance, Hardcore, Gabber                                                                                      |
-| Downtempo | Ambient, Downtempo, Trip-Hop, Dub, Dub Reggae, IDM, Experimental                                                                              |
-| Other     | Hip Hop, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                                                                         |
+| Family    | Genres                                                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco, Italo Disco, Italodance, 2-Step Garage, UK Funky |
+| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, EBM, Electro, Trance, Psytrance                                |
+| Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, Footwork, Future Garage, Grime, Bassline, Broken Beat                                                            |
+| Hardcore  | Hardstyle, Happy Hardcore, Hard Trance, Hardcore, Gabber                                                                                                  |
+| Downtempo | Ambient, Downtempo, Trip-Hop, Dub, Dub Reggae, IDM, Experimental                                                                                          |
+| Other     | Hip Hop, Pop, R&B, Reggae, Dancehall, Rock, Synth-pop, Highlife, Jazz                                                                                     |
 
 Genres within the "Other" family do **not** receive the 0.7 related-genre bonus with each other. They score 0.3 against all other genres, including other "Other" entries.
 
@@ -138,7 +155,10 @@ Genre scoring adjusts based on recent sequencing context:
 
 These modifiers only apply during `build_set` sequencing, where the algorithm tracks the genre run length across the evolving set. They do not apply to standalone `score_transition` calls.
 
-Genre matching uses the canonical genre assigned by reklawdbox's classification system, not the raw genre string from Rekordbox metadata. If a track hasn't been classified yet, the raw metadata genre is normalized to the closest canonical genre.
+Genre matching resolves the raw Rekordbox genre only when it is an exact,
+case-insensitive canonical name or an explicit alias. If neither lookup
+matches, scoring treats the track's family as Other; it does not choose a
+"closest" canonical genre.
 
 ---
 
@@ -218,10 +238,13 @@ These ranges are guidelines. A 0.65 score with a perfect key match and a genre c
 
 The scoring system degrades gracefully based on available data:
 
-| Data available          | Axes used                                                            |
-| ----------------------- | -------------------------------------------------------------------- |
-| Rekordbox metadata only | Key, BPM, energy (proxy), genre                                      |
-| + stratum-dsp analysis  | Key (improved), BPM (fallback for unanalyzed), energy (proxy), genre |
-| + Essentia analysis     | All six axes                                                         |
+| Data available                      | Axes used                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| Rekordbox metadata only             | Key, BPM, energy (proxy), genre                                                            |
+| + stratum-dsp analysis              | Key (preferred), BPM (fallback below the 30-BPM plausibility floor), energy (proxy), genre |
+| + complete relevant Essentia fields | All six axes                                                                               |
 
-Run `analyze_audio_batch` on your tracks before building sets for the best scoring accuracy. Without Essentia, brightness and rhythm are excluded entirely, and energy falls back to the BPM-based proxy.
+Run `analyze_audio_batch` on your tracks before building sets for the best
+scoring accuracy. When the relevant Essentia fields are unavailable,
+brightness and rhythm are excluded and derived energy falls back wholly to the
+BPM proxy.

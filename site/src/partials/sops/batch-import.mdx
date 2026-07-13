@@ -255,32 +255,44 @@ Only fall back to "note for user to source manually" when neither Bandcamp nor D
 
 Use the album directory convention established in Phase 1 Step 1. Determine clean directory name (strip tech specs, add year, clean special chars).
 
+{/* doc-contract:batch-audio-extensions source=src/audio.rs */}
+
 ```sh
 # Single Artist — use the confirmed album directory
-mkdir -p "/path/to/albums-dir/Artist Name/Album Name (Year)"
+target_dir="/path/to/albums-dir/Artist Name/Album Name (Year)"
 
-# Or VA
-mkdir -p "/path/to/albums-dir/Various Artists/Label Name/Album Name (Year)"
+# Or VA, use this target instead
+# target_dir="/path/to/albums-dir/Various Artists/Label Name/Album Name (Year)"
+
+mkdir -p "$target_dir"
 
 # Move audio + cover art
 find "/path/to/batch/Old Dir" -maxdepth 1 -type f \
-     \( -iname "*.wav" -o -iname "*.flac" -o -iname "*.mp3" \) \
-     -exec mv -n {} "/path/to/dest/Artist Name/Album Name (Year)/" \;
+     \( -iname "*.flac" -o -iname "*.wav" -o -iname "*.mp3" \
+        -o -iname "*.m4a" -o -iname "*.aac" -o -iname "*.aiff" \) \
+     -exec mv -n {} "$target_dir/" \;
 find "/path/to/batch/Old Dir" -maxdepth 1 -type f -iname "cover.*" \
-     -exec mv -n {} "/path/to/dest/Artist Name/Album Name (Year)/" \;
+     -exec mv -n {} "$target_dir/" \;
 
 # Remove old empty directory
 rmdir "/path/to/batch/Old Dir"
 ```
 
+{/* /doc-contract:batch-audio-extensions */}
+
 ### Step 10: Verify final state
 
+Keep using the `target_dir` selected in Step 9. The shell expands that variable:
+
 ```sh
-ls -la "/path/to/dest/Artist Name/Album Name (Year)/"
+ls -la "$target_dir/"
 ```
 
+For the MCP call, substitute that same selected directory's literal path;
+MCP arguments do not expand shell variables:
+
 ```
-read_file_tags(directory="/path/to/dest/Artist Name/Album Name (Year)/")
+read_file_tags(directory="/path/to/the-selected-target-directory/")
 ```
 
 Confirm: files in correct location, `NN Artist - Title.ext` format, all tags present, VA has label subdirectory, cover art embedded.

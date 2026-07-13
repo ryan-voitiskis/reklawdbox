@@ -216,9 +216,14 @@ pub(super) fn handle_resolve_tracks_data(
 
 pub(super) fn handle_cache_coverage(
     server: &ReklawdboxServer,
-    params: ResolveTracksDataParams,
+    params: CacheCoverageParams,
 ) -> Result<CallToolResult, McpError> {
-    let filter_description = describe_resolve_scope(&params);
+    let filter_description = describe_resolve_scope(
+        &params.filters,
+        params.track_ids.as_deref(),
+        params.playlist_id.as_deref(),
+        params.max_tracks,
+    );
 
     let (total_tracks, tracks) = {
         let conn = server.rekordbox_conn()?;

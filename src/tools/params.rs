@@ -167,7 +167,7 @@ pub struct WriteXmlParams {
     )]
     pub playlists: Option<Vec<WriteXmlPlaylistInput>>,
     #[schemars(
-        description = "Set to true to acknowledge that label research is complete and bypass the label gate. Required when backfill_labels reported unlabeled tracks. Only set this after completing step 3 (label research) of the metadata backfill SOP."
+        description = "Set to true to acknowledge that label research is complete and bypass the label gate. Required when backfill_labels reported unlabeled tracks. Only set this after completing Step 1c (label research) of the metadata backfill SOP."
     )]
     pub skip_label_gate: Option<bool>,
 }
@@ -344,6 +344,18 @@ pub struct ResolveTracksDataParams {
         description = "Response format: 'full' (default) or 'classification' (compact, only decision-tree fields)"
     )]
     pub format: Option<ResolveFormat>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CacheCoverageParams {
+    #[serde(flatten)]
+    pub filters: SearchFilterParams,
+    #[schemars(description = "Specific track IDs to check (highest priority selector)")]
+    pub track_ids: Option<Vec<String>>,
+    #[schemars(description = "Check tracks in this playlist")]
+    pub playlist_id: Option<String>,
+    #[schemars(description = "Max tracks to check (default unbounded)")]
+    pub max_tracks: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

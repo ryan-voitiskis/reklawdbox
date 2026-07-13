@@ -292,7 +292,7 @@ pub(super) async fn handle_write_xml(
     if gate_count > 0 && !params.skip_label_gate.unwrap_or(false) {
         return Err(mcp_internal_error(format!(
             "Label research gate: backfill_labels found {gate_count} unlabeled tracks that need research. \
-             Complete step 3 of the metadata backfill SOP (research remaining label gaps) before \
+             Complete Step 1c of the metadata backfill SOP (research remaining label gaps) before \
              exporting. Use search_tracks(has_label=false) to find them, then research labels \
              via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp.\n\n\
              Once label research is complete and remaining gaps are genuinely unresolvable, \
