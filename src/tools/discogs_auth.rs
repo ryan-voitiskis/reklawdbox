@@ -1,20 +1,13 @@
 use super::*;
+use crate::application::enrichment::discogs_auth::{
+    AuthResolution, DiscogsAuthGateway, DiscogsSessionPersistence, PersistedDiscogsSession,
+    conditional_clear_rejected_token,
+    resolve_auth_transition_locked as resolve_application_auth_transition,
+};
 use crate::bandcamp;
 use crate::beatport;
 use crate::discogs;
 use crate::store;
-
-#[derive(Clone)]
-struct PersistedDiscogsSession {
-    session_token: String,
-    expires_at: i64,
-}
-
-trait DiscogsSessionPersistence: Send + Sync {
-    fn load(&self, broker_url: &str) -> Result<Option<PersistedDiscogsSession>, String>;
-    fn store(&self, broker_url: &str, session_token: &str, expires_at: i64) -> Result<(), String>;
-    fn clear(&self, broker_url: &str) -> Result<(), String>;
-}
 
 struct StoreDiscogsSessionPersistence<'a> {
     server: &'a ReklawdboxServer,
@@ -250,66 +243,6 @@ async fn wait_for_discogs_auth_test_entry(
     Ok(())
 }
 
-enum SessionState {
-    /// A persisted session token that hasn't expired yet.
-    Valid(String),
-    /// The persisted session has expired and should be cleared.
-    Expired,
-    /// No persisted session exists.
-    None,
-}
-
-enum PendingState {
-    /// User has authorized in-browser; ready to finalize.
-    Authorized(discogs::PendingDeviceSession),
-    /// Still waiting for browser authorization.
-    Waiting(discogs::PendingDeviceSession),
-    /// The pending flow has expired.
-    Expired,
-    /// No pending flow exists.
-    None,
-}
-
-/// Pure: no I/O or mutation.
-fn resolve_session_state(persisted: Option<&PersistedDiscogsSession>, now: i64) -> SessionState {
-    match persisted {
-        Some(session) if session.expires_at > now => {
-            SessionState::Valid(session.session_token.clone())
-        }
-        Some(_) => SessionState::Expired,
-        None => SessionState::None,
-    }
-}
-
-/// Pure: no I/O or mutation.
-fn resolve_pending_state(
-    pending: Option<&discogs::PendingDeviceSession>,
-    status: Option<&str>,
-    now: i64,
-) -> PendingState {
-    match pending {
-        Some(p) if p.expires_at > now => match status {
-            Some("authorized" | "finalized") => PendingState::Authorized(p.clone()),
-            Some("pending") => PendingState::Waiting(p.clone()),
-            _ => PendingState::Expired,
-        },
-        Some(_) => PendingState::Expired,
-        None => PendingState::None,
-    }
-}
-
-enum AuthResolution {
-    ReadyToken(String),
-    AuthRequired(discogs::AuthRemediation),
-}
-
-const DISCOGS_AUTH_START_FAILED: &str =
-    "Discogs authentication start failed. Retry the lookup to start authorization.";
-const DISCOGS_AUTH_STATUS_FAILED: &str =
-    "Discogs authentication status check failed. Retry the lookup to continue authorization.";
-const DISCOGS_AUTH_FINALIZE_FAILED: &str =
-    "Discogs authentication finalization failed. Retry the lookup to complete authorization.";
-
 fn pending_session(
     server: &ReklawdboxServer,
 ) -> Result<Option<discogs::PendingDeviceSession>, discogs::LookupError> {
@@ -334,68 +267,58 @@ fn replace_pending_session(
     Ok(())
 }
 
+struct ServerDiscogsAuthGateway<'a> {
+    server: &'a ReklawdboxServer,
+}
+
+impl DiscogsAuthGateway for ServerDiscogsAuthGateway<'_> {
+    fn pending_session(
+        &self,
+    ) -> Result<Option<discogs::PendingDeviceSession>, discogs::LookupError> {
+        pending_session(self.server)
+    }
+
+    fn replace_pending_session(
+        &self,
+        pending: Option<discogs::PendingDeviceSession>,
+    ) -> Result<(), discogs::LookupError> {
+        replace_pending_session(self.server, pending)
+    }
+
+    async fn pending_status(
+        &self,
+        cfg: &discogs::BrokerConfig,
+        pending: &discogs::PendingDeviceSession,
+    ) -> Result<String, String> {
+        discogs::device_session_status(&self.server.state.http, cfg, pending)
+            .await
+            .map(|status| status.status)
+    }
+
+    async fn finalize_pending(
+        &self,
+        cfg: &discogs::BrokerConfig,
+        pending: &discogs::PendingDeviceSession,
+    ) -> Result<discogs::FinalizedDeviceSession, String> {
+        discogs::device_session_finalize(&self.server.state.http, cfg, pending).await
+    }
+
+    async fn start_pending(
+        &self,
+        cfg: &discogs::BrokerConfig,
+    ) -> Result<discogs::PendingDeviceSession, String> {
+        discogs::device_session_start(&self.server.state.http, cfg).await
+    }
+}
+
 async fn resolve_auth_transition_locked(
     server: &ReklawdboxServer,
     cfg: &discogs::BrokerConfig,
     now: i64,
     persistence: &dyn DiscogsSessionPersistence,
 ) -> Result<AuthResolution, discogs::LookupError> {
-    let persisted = persistence
-        .load(&cfg.base_url)
-        .map_err(discogs::LookupError::message)?;
-    match resolve_session_state(persisted.as_ref(), now) {
-        SessionState::Valid(token) => return Ok(AuthResolution::ReadyToken(token)),
-        SessionState::Expired => persistence
-            .clear(&cfg.base_url)
-            .map_err(discogs::LookupError::message)?,
-        SessionState::None => {}
-    }
-
-    let pending = pending_session(server)?;
-    let pending_state = if let Some(ref pending) = pending {
-        if pending.expires_at > now {
-            let status = discogs::device_session_status(&server.state.http, cfg, pending)
-                .await
-                .map_err(|_| discogs::LookupError::message(DISCOGS_AUTH_STATUS_FAILED))?;
-            resolve_pending_state(Some(pending), Some(&status.status), now)
-        } else {
-            PendingState::Expired
-        }
-    } else {
-        PendingState::None
-    };
-
-    match pending_state {
-        PendingState::Authorized(pending) => {
-            let finalized = discogs::device_session_finalize(&server.state.http, cfg, &pending)
-                .await
-                .map_err(|_| discogs::LookupError::message(DISCOGS_AUTH_FINALIZE_FAILED))?;
-            persistence
-                .store(
-                    &cfg.base_url,
-                    &finalized.session_token,
-                    finalized.expires_at,
-                )
-                .map_err(discogs::LookupError::message)?;
-            replace_pending_session(server, None)?;
-            Ok(AuthResolution::ReadyToken(finalized.session_token))
-        }
-        PendingState::Waiting(pending) => Ok(AuthResolution::AuthRequired(
-            discogs::pending_auth_remediation(&pending),
-        )),
-        PendingState::Expired | PendingState::None => {
-            if matches!(pending_state, PendingState::Expired) {
-                replace_pending_session(server, None)?;
-            }
-            let started = discogs::device_session_start(&server.state.http, cfg)
-                .await
-                .map_err(|_| discogs::LookupError::message(DISCOGS_AUTH_START_FAILED))?;
-            replace_pending_session(server, Some(started.clone()))?;
-            Ok(AuthResolution::AuthRequired(
-                discogs::pending_auth_remediation(&started),
-            ))
-        }
-    }
+    let gateway = ServerDiscogsAuthGateway { server };
+    resolve_application_auth_transition(&gateway, cfg, now, persistence).await
 }
 
 async fn resolve_auth_transition(
@@ -406,25 +329,6 @@ async fn resolve_auth_transition(
 ) -> Result<AuthResolution, discogs::LookupError> {
     let _transition = server.state.discogs_auth_lock.lock().await;
     resolve_auth_transition_locked(server, cfg, now, persistence).await
-}
-
-fn conditional_clear_rejected_token(
-    cfg: &discogs::BrokerConfig,
-    persistence: &dyn DiscogsSessionPersistence,
-    rejected_token: &str,
-) -> Result<(), discogs::LookupError> {
-    let current = persistence
-        .load(&cfg.base_url)
-        .map_err(discogs::LookupError::message)?;
-    if current
-        .as_ref()
-        .is_some_and(|session| session.session_token == rejected_token)
-    {
-        persistence
-            .clear(&cfg.base_url)
-            .map_err(discogs::LookupError::message)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -561,104 +465,4 @@ pub(super) async fn lookup_bandcamp_remote(
     bandcamp::lookup(&server.state.http, artist, title)
         .await
         .map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_session(token: &str, expires_at: i64) -> PersistedDiscogsSession {
-        PersistedDiscogsSession {
-            session_token: token.to_string(),
-            expires_at,
-        }
-    }
-
-    fn make_pending(expires_at: i64) -> discogs::PendingDeviceSession {
-        discogs::PendingDeviceSession {
-            device_id: "dev-123".to_string(),
-            pending_token: "pend-456".to_string(),
-            auth_url: "https://broker.example.com/auth".to_string(),
-            poll_interval_seconds: 5,
-            expires_at,
-        }
-    }
-
-    #[test]
-    fn resolve_session_valid() {
-        let session = make_session("tok-abc", 2000);
-        let state = resolve_session_state(Some(&session), 1000);
-        assert!(matches!(state, SessionState::Valid(t) if t == "tok-abc"));
-    }
-
-    #[test]
-    fn resolve_session_expired() {
-        let session = make_session("tok-abc", 500);
-        let state = resolve_session_state(Some(&session), 1000);
-        assert!(matches!(state, SessionState::Expired));
-    }
-
-    #[test]
-    fn resolve_session_none() {
-        let state = resolve_session_state(None, 1000);
-        assert!(matches!(state, SessionState::None));
-    }
-
-    #[test]
-    fn resolve_pending_authorized() {
-        let pending = make_pending(2000);
-        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
-        assert!(matches!(state, PendingState::Authorized(_)));
-
-        // "finalized" also counts as authorized
-        let state = resolve_pending_state(Some(&pending), Some("finalized"), 1000);
-        assert!(matches!(state, PendingState::Authorized(_)));
-    }
-
-    #[test]
-    fn resolve_pending_waiting() {
-        let pending = make_pending(2000);
-        let state = resolve_pending_state(Some(&pending), Some("pending"), 1000);
-        assert!(matches!(state, PendingState::Waiting(_)));
-    }
-
-    #[test]
-    fn resolve_pending_expired_by_time() {
-        let pending = make_pending(500);
-        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
-        assert!(matches!(state, PendingState::Expired));
-    }
-
-    #[test]
-    fn resolve_pending_expired_by_unknown_status() {
-        let pending = make_pending(2000);
-        let state = resolve_pending_state(Some(&pending), Some("unknown"), 1000);
-        assert!(matches!(state, PendingState::Expired));
-
-        // None status on a non-expired pending also maps to Expired
-        let state = resolve_pending_state(Some(&pending), None, 1000);
-        assert!(matches!(state, PendingState::Expired));
-    }
-
-    #[test]
-    fn resolve_session_expired_at_boundary() {
-        // expires_at == now is expired (strict greater-than check)
-        let session = make_session("tok-abc", 1000);
-        let state = resolve_session_state(Some(&session), 1000);
-        assert!(matches!(state, SessionState::Expired));
-    }
-
-    #[test]
-    fn resolve_pending_expired_at_boundary() {
-        // expires_at == now is expired (strict greater-than check)
-        let pending = make_pending(1000);
-        let state = resolve_pending_state(Some(&pending), Some("authorized"), 1000);
-        assert!(matches!(state, PendingState::Expired));
-    }
-
-    #[test]
-    fn resolve_pending_none() {
-        let state = resolve_pending_state(None, None, 1000);
-        assert!(matches!(state, PendingState::None));
-    }
 }

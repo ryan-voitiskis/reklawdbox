@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub(super) use crate::application::enrichment::lookup::lookup_output_with_cache_metadata;
 use crate::discogs;
 
 #[cfg(test)]
@@ -82,31 +84,6 @@ pub(super) fn take_test_beatport_lookup_override(
     map.lock()
         .ok()?
         .remove(&(artist.to_string(), title.to_string()))
-}
-
-pub(super) fn lookup_output_with_cache_metadata(
-    payload: serde_json::Value,
-    cache_hit: bool,
-    cached_at: Option<&str>,
-) -> serde_json::Value {
-    match payload {
-        serde_json::Value::Object(mut map) => {
-            map.insert("cache_hit".to_string(), serde_json::json!(cache_hit));
-            if let Some(cached_at) = cached_at {
-                map.insert("cached_at".to_string(), serde_json::json!(cached_at));
-            }
-            serde_json::Value::Object(map)
-        }
-        other => {
-            let mut map = serde_json::Map::new();
-            map.insert("result".to_string(), other);
-            map.insert("cache_hit".to_string(), serde_json::json!(cache_hit));
-            if let Some(cached_at) = cached_at {
-                map.insert("cached_at".to_string(), serde_json::json!(cached_at));
-            }
-            serde_json::Value::Object(map)
-        }
-    }
 }
 
 pub(super) fn auth_remediation_message(remediation: &discogs::AuthRemediation) -> String {

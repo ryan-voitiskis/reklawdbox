@@ -8,53 +8,32 @@ use tokio_util::sync::CancellationToken;
 use console::style;
 
 use crate::adapters::audio as audio_adapter;
+use crate::application::enrichment::hydrate::{
+    EnrichmentCacheWrite, HydrationWorkerCompletion, acknowledge_enrichment_cache_write,
+    persist_enrichment_cache_write, run_analysis_stage, run_bounded_workers,
+};
+use crate::application::enrichment::model::{EnrichmentProvider, HydrationStage, HydrationStages};
 #[cfg(test)]
 use crate::audio;
 use crate::{beatport, db, discogs, normalize, store};
 
+#[cfg(test)]
+use super::send_cache_message;
 use super::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
-    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, send_cache_message,
-    serialize_cache_payload, task_join_error_summary,
+    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, serialize_cache_payload,
+    task_join_error_summary,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-enum Provider {
-    Discogs,
-    Beatport,
-    Analysis,
-}
-
-#[derive(Clone, Debug)]
-struct Providers(Vec<Provider>);
-
-impl Providers {
-    fn contains(&self, p: &Provider) -> bool {
-        self.0.contains(p)
-    }
-}
-
-fn parse_providers(s: &str) -> Result<Providers, String> {
-    let mut out = Vec::new();
-    for part in s.split(',') {
-        match part.trim().to_ascii_lowercase().as_str() {
-            "discogs" => out.push(Provider::Discogs),
-            "beatport" => out.push(Provider::Beatport),
-            "analysis" => out.push(Provider::Analysis),
-            other => return Err(format!("unknown provider: {other}")),
-        }
-    }
-    if out.is_empty() {
-        return Err("no providers specified".into());
-    }
-    Ok(Providers(out))
+fn parse_providers(s: &str) -> Result<HydrationStages, String> {
+    HydrationStages::parse_csv(s)
 }
 
 #[derive(clap::Args)]
 pub(crate) struct HydrateArgs {
     /// Providers to run (comma-separated: discogs,beatport,analysis)
     #[arg(long, default_value = "discogs,beatport,analysis", value_parser = parse_providers)]
-    providers: Providers,
+    providers: HydrationStages,
     /// Filter by playlist ID
     #[arg(long)]
     playlist: Option<String>,
@@ -130,26 +109,19 @@ impl ProviderCounters {
 }
 
 enum HydrateCacheMsg {
-    Enrichment {
-        provider: String,
-        norm_artist: String,
-        norm_title: String,
-        norm_album: Option<String>,
-        match_quality: Option<String>,
-        response_json: Option<String>,
-    },
+    Enrichment(EnrichmentCacheWrite),
     AudioAnalysis(CliCacheWriteMsg),
 }
 
-#[derive(Debug, Default)]
-struct HydrateAnalysisOutcome {
-    operation_failed: bool,
-    cache_write_failed: bool,
+impl From<EnrichmentCacheWrite> for HydrateCacheMsg {
+    fn from(write: EnrichmentCacheWrite) -> Self {
+        Self::Enrichment(write)
+    }
 }
 
-impl HydrateAnalysisOutcome {
-    fn succeeded(&self) -> bool {
-        !self.operation_failed && !self.cache_write_failed
+impl From<CliCacheWriteMsg> for HydrateCacheMsg {
+    fn from(write: CliCacheWriteMsg) -> Self {
+        Self::AudioAnalysis(write)
     }
 }
 
@@ -174,22 +146,28 @@ impl ProviderTaskReport {
     }
 }
 
-fn record_provider_worker_join(
-    provider: &'static str,
-    result: Result<bool, tokio::task::JoinError>,
+fn provider_task_report_from_workers<I, T>(
+    worker_report: crate::application::enrichment::hydrate::HydrationWorkerReport<I, T>,
     counters: &ProviderCounters,
-    report: &mut ProviderTaskReport,
-) {
-    match result {
-        Ok(true) => report.terminal_workers += 1,
-        Ok(false) => {}
-        Err(error) => {
-            counters.errors.fetch_add(1, Ordering::Relaxed);
-            report.join_failures += 1;
-            let summary = task_join_error_summary(&format!("{provider} worker task"), &error);
-            tracing::error!("{summary}: {error}");
-            report.error_summaries.push(summary);
-        }
+) -> ProviderTaskReport {
+    debug_assert!(worker_report.scheduled <= worker_report.selected);
+    debug_assert_eq!(
+        worker_report.incomplete(),
+        worker_report
+            .selected
+            .saturating_sub(worker_report.terminal_workers)
+    );
+    let mut error_summaries = Vec::with_capacity(worker_report.join_failures.len());
+    for failure in worker_report.join_failures {
+        counters.errors.fetch_add(1, Ordering::Relaxed);
+        tracing::error!("{}: {}", failure.summary, failure.error);
+        error_summaries.push(failure.summary);
+    }
+    ProviderTaskReport {
+        selected: worker_report.selected,
+        terminal_workers: worker_report.terminal_workers,
+        join_failures: error_summaries.len() as u32,
+        error_summaries,
     }
 }
 
@@ -247,24 +225,9 @@ fn run_hydrate_cache_writer(
 
         let message = request.payload;
         let (write_result, label) = match &message {
-            HydrateCacheMsg::Enrichment {
-                provider,
-                norm_artist,
-                norm_title,
-                norm_album,
-                match_quality,
-                response_json,
-            } => (
-                store::set_enrichment(
-                    &conn,
-                    provider,
-                    norm_artist,
-                    norm_title,
-                    norm_album.as_deref(),
-                    match_quality.as_deref(),
-                    response_json.as_deref(),
-                ),
-                format!("{provider} enrichment"),
+            HydrateCacheMsg::Enrichment(write) => (
+                persist_enrichment_cache_write(&conn, write),
+                format!("{} enrichment", write.provider),
             ),
             HydrateCacheMsg::AudioAnalysis(analysis) => (
                 super::persist_cli_cache_message(&conn, analysis),
@@ -332,9 +295,13 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let analysis_concurrency = super::analysis_concurrency_for_preset(cpu_preset);
     let analysis_budget_mb = super::memory_budget_mb(cpu_preset);
 
-    let want_discogs = args.providers.contains(&Provider::Discogs);
-    let want_beatport = args.providers.contains(&Provider::Beatport);
-    let want_analysis = args.providers.contains(&Provider::Analysis);
+    let want_discogs = args
+        .providers
+        .contains(HydrationStage::Lookup(EnrichmentProvider::Discogs));
+    let want_beatport = args
+        .providers
+        .contains(HydrationStage::Lookup(EnrichmentProvider::Beatport));
+    let want_analysis = args.providers.contains(HydrationStage::Analysis);
 
     // 1. Bootstrap
     let db_path = db::resolve_db_path().ok_or(
@@ -689,7 +656,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = discogs_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
-            let mut report = ProviderTaskReport::new(discogs_selected);
+            let report = ProviderTaskReport::new(discogs_selected);
             if discogs_pending.is_empty() {
                 return report;
             }
@@ -697,138 +664,131 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                 Some(m) => m,
                 None => return report,
             };
-            let sem = Arc::new(tokio::sync::Semaphore::new(enrich_concurrency));
-            let mut handles = tokio::task::JoinSet::new();
+            let worker_counters = counters.clone();
+            let workers = run_bounded_workers(
+                "discogs worker task",
+                discogs_pending,
+                enrich_concurrency,
+                cancel.clone(),
+                |track| track.id.clone(),
+                move |track: crate::types::Track| {
+                    let client = client.clone();
+                    let cache_tx = cache_tx.clone();
+                    let counters = worker_counters.clone();
+                    let pb = pb.clone();
+                    let cfg = broker_cfg.clone();
+                    let token = session_token.clone();
+                    let cancel = cancel.clone();
+                    async move {
+                        if cancel.is_cancelled() {
+                            return HydrationWorkerCompletion::cancelled(());
+                        }
 
-            for track in discogs_pending {
-                if cancel.is_cancelled() {
-                    break;
-                }
-                let permit = match sem.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
-                let client = client.clone();
-                let cache_tx = cache_tx.clone();
-                let counters = counters.clone();
-                let pb = pb.clone();
-                let cfg = broker_cfg.clone();
-                let token = session_token.clone();
-                let cancel = cancel.clone();
+                        let norm_artist = normalize::normalize_for_matching(&track.artist);
+                        let norm_title = normalize::normalize_for_matching(&track.title);
+                        let norm_album = normalize::normalize_for_matching(&track.album);
+                        let norm_album = (!norm_album.is_empty()).then_some(norm_album);
 
-                handles.spawn(async move {
-                    if cancel.is_cancelled() {
-                        drop(permit);
-                        return false;
-                    }
+                        let result = cli_discogs_lookup_with_retry(
+                            &client,
+                            &cfg,
+                            &token,
+                            &track.artist,
+                            &track.title,
+                            Some(&track.album),
+                        )
+                        .await
+                        .map_err(|e| e.to_string());
 
-                    let norm_artist = normalize::normalize_for_matching(&track.artist);
-                    let norm_title = normalize::normalize_for_matching(&track.title);
-                    let norm_album = normalize::normalize_for_matching(&track.album);
-                    let norm_album = (!norm_album.is_empty()).then_some(norm_album);
-
-                    let result = cli_discogs_lookup_with_retry(
-                        &client,
-                        &cfg,
-                        &token,
-                        &track.artist,
-                        &track.title,
-                        Some(&track.album),
-                    )
-                    .await
-                    .map_err(|e| e.to_string());
-
-                    match result {
-                        Ok(Some(ref r)) => {
-                            let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
-                            match serialize_cache_payload(r, "discogs enrichment") {
-                                Ok(response_json) => {
-                                    if let Err(e) = send_cache_message(
-                                        &cache_tx,
-                                        HydrateCacheMsg::Enrichment {
-                                            provider: "discogs".to_string(),
-                                            norm_artist,
-                                            norm_title,
-                                            norm_album,
-                                            match_quality: Some(quality.to_string()),
-                                            response_json: Some(response_json),
-                                        },
-                                        "discogs enrichment",
-                                    )
-                                    .await
-                                    {
+                        match result {
+                            Ok(Some(ref r)) => {
+                                let quality = if r.fuzzy_match { "fuzzy" } else { "exact" };
+                                match serialize_cache_payload(r, "discogs enrichment") {
+                                    Ok(response_json) => {
+                                        if let Err(e) = acknowledge_enrichment_cache_write(
+                                            &cache_tx,
+                                            EnrichmentCacheWrite {
+                                                provider: EnrichmentProvider::Discogs,
+                                                norm_artist,
+                                                norm_title,
+                                                norm_album,
+                                                match_quality: Some(quality.to_string()),
+                                                response_json: Some(response_json),
+                                            },
+                                            "discogs enrichment",
+                                        )
+                                        .await
+                                        {
+                                            tracing::error!("{e}");
+                                            counters.errors.fetch_add(1, Ordering::Relaxed);
+                                        } else {
+                                            counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    Err(e) => {
                                         tracing::error!("{e}");
                                         counters.errors.fetch_add(1, Ordering::Relaxed);
-                                    } else {
-                                        counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                        counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                                     }
                                 }
-                                Err(e) => {
+                            }
+                            Ok(None) => {
+                                if let Err(e) = acknowledge_enrichment_cache_write(
+                                    &cache_tx,
+                                    EnrichmentCacheWrite {
+                                        provider: EnrichmentProvider::Discogs,
+                                        norm_artist,
+                                        norm_title,
+                                        norm_album,
+                                        match_quality: Some("none".to_string()),
+                                        response_json: None,
+                                    },
+                                    "discogs enrichment",
+                                )
+                                .await
+                                {
                                     tracing::error!("{e}");
                                     counters.errors.fetch_add(1, Ordering::Relaxed);
-                                    counters.operation_errors.fetch_add(1, Ordering::Relaxed);
+                                } else {
+                                    counters.no_match.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
-                        }
-                        Ok(None) => {
-                            if let Err(e) = send_cache_message(
-                                &cache_tx,
-                                HydrateCacheMsg::Enrichment {
-                                    provider: "discogs".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    norm_album,
-                                    match_quality: Some("none".to_string()),
-                                    response_json: None,
-                                },
-                                "discogs enrichment",
-                            )
-                            .await
-                            {
-                                tracing::error!("{e}");
+                            Err(err) => {
+                                tracing::error!(
+                                    "Discogs hydrate lookup failed for {} - {}: {err}",
+                                    track.artist,
+                                    track.title
+                                );
+                                if let Err(error) = acknowledge_enrichment_cache_write(
+                                    &cache_tx,
+                                    EnrichmentCacheWrite {
+                                        provider: EnrichmentProvider::Discogs,
+                                        norm_artist,
+                                        norm_title,
+                                        norm_album,
+                                        match_quality: Some("error".to_string()),
+                                        response_json: None,
+                                    },
+                                    "discogs error",
+                                )
+                                .await
+                                {
+                                    tracing::error!("{error}");
+                                }
                                 counters.errors.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                counters.no_match.fetch_add(1, Ordering::Relaxed);
+                                counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        Err(err) => {
-                            tracing::error!(
-                                "Discogs hydrate lookup failed for {} - {}: {err}",
-                                track.artist,
-                                track.title
-                            );
-                            if let Err(error) = send_cache_message(
-                                &cache_tx,
-                                HydrateCacheMsg::Enrichment {
-                                    provider: "discogs".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    norm_album,
-                                    match_quality: Some("error".to_string()),
-                                    response_json: None,
-                                },
-                                "discogs error",
-                            )
-                            .await
-                            {
-                                tracing::error!("{error}");
-                            }
-                            counters.errors.fetch_add(1, Ordering::Relaxed);
-                            counters.operation_errors.fetch_add(1, Ordering::Relaxed);
-                        }
+
+                        counters.terminal.fetch_add(1, Ordering::Relaxed);
+                        pb.inc(1);
+                        HydrationWorkerCompletion::completed(())
                     }
+                },
+            )
+            .await;
 
-                    counters.terminal.fetch_add(1, Ordering::Relaxed);
-                    pb.inc(1);
-                    drop(permit);
-                    true
-                });
-            }
-
-            while let Some(result) = handles.join_next().await {
-                record_provider_worker_join("discogs", result, &counters, &mut report);
-            }
-            report
+            provider_task_report_from_workers(workers, &counters)
         })
     };
 
@@ -840,132 +800,126 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = beatport_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
-            let mut report = ProviderTaskReport::new(beatport_selected);
+            let report = ProviderTaskReport::new(beatport_selected);
             if beatport_pending.is_empty() {
                 return report;
             }
-            let sem = Arc::new(tokio::sync::Semaphore::new(1));
-            let mut handles = tokio::task::JoinSet::new();
+            let worker_counters = counters.clone();
+            let workers = run_bounded_workers(
+                "beatport worker task",
+                beatport_pending,
+                1,
+                cancel.clone(),
+                |track| track.id.clone(),
+                move |track: crate::types::Track| {
+                    let client = client.clone();
+                    let cache_tx = cache_tx.clone();
+                    let counters = worker_counters.clone();
+                    let pb = pb.clone();
+                    let cancel = cancel.clone();
+                    async move {
+                        if cancel.is_cancelled() {
+                            return HydrationWorkerCompletion::cancelled(());
+                        }
 
-            for track in beatport_pending {
-                if cancel.is_cancelled() {
-                    break;
-                }
-                let permit = match sem.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
-                let client = client.clone();
-                let cache_tx = cache_tx.clone();
-                let counters = counters.clone();
-                let pb = pb.clone();
-                let cancel = cancel.clone();
+                        let norm_artist = normalize::normalize_for_matching(&track.artist);
+                        let norm_title = normalize::normalize_for_matching(&track.title);
 
-                handles.spawn(async move {
-                    if cancel.is_cancelled() {
-                        drop(permit);
-                        return false;
-                    }
+                        let result =
+                            cli_beatport_lookup_with_retry(&client, &track.artist, &track.title)
+                                .await;
 
-                    let norm_artist = normalize::normalize_for_matching(&track.artist);
-                    let norm_title = normalize::normalize_for_matching(&track.title);
-
-                    let result =
-                        cli_beatport_lookup_with_retry(&client, &track.artist, &track.title).await;
-
-                    match result {
-                        Ok(Some(ref r)) => {
-                            match serialize_cache_payload(r, "beatport enrichment") {
-                                Ok(response_json) => {
-                                    if let Err(e) = send_cache_message(
-                                        &cache_tx,
-                                        HydrateCacheMsg::Enrichment {
-                                            provider: "beatport".to_string(),
-                                            norm_artist,
-                                            norm_title,
-                                            norm_album: None,
-                                            match_quality: Some(
-                                                if r.fuzzy_match { "fuzzy" } else { "exact" }
-                                                    .to_string(),
-                                            ),
-                                            response_json: Some(response_json),
-                                        },
-                                        "beatport enrichment",
-                                    )
-                                    .await
-                                    {
+                        match result {
+                            Ok(Some(ref r)) => {
+                                match serialize_cache_payload(r, "beatport enrichment") {
+                                    Ok(response_json) => {
+                                        if let Err(e) = acknowledge_enrichment_cache_write(
+                                            &cache_tx,
+                                            EnrichmentCacheWrite {
+                                                provider: EnrichmentProvider::Beatport,
+                                                norm_artist,
+                                                norm_title,
+                                                norm_album: None,
+                                                match_quality: Some(
+                                                    if r.fuzzy_match { "fuzzy" } else { "exact" }
+                                                        .to_string(),
+                                                ),
+                                                response_json: Some(response_json),
+                                            },
+                                            "beatport enrichment",
+                                        )
+                                        .await
+                                        {
+                                            tracing::error!("{e}");
+                                            counters.errors.fetch_add(1, Ordering::Relaxed);
+                                        } else {
+                                            counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    Err(e) => {
                                         tracing::error!("{e}");
                                         counters.errors.fetch_add(1, Ordering::Relaxed);
-                                    } else {
-                                        counters.enriched.fetch_add(1, Ordering::Relaxed);
+                                        counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                                     }
                                 }
-                                Err(e) => {
+                            }
+                            Ok(None) => {
+                                if let Err(e) = acknowledge_enrichment_cache_write(
+                                    &cache_tx,
+                                    EnrichmentCacheWrite {
+                                        provider: EnrichmentProvider::Beatport,
+                                        norm_artist,
+                                        norm_title,
+                                        norm_album: None,
+                                        match_quality: Some("none".to_string()),
+                                        response_json: None,
+                                    },
+                                    "beatport enrichment",
+                                )
+                                .await
+                                {
                                     tracing::error!("{e}");
                                     counters.errors.fetch_add(1, Ordering::Relaxed);
-                                    counters.operation_errors.fetch_add(1, Ordering::Relaxed);
+                                } else {
+                                    counters.no_match.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
-                        }
-                        Ok(None) => {
-                            if let Err(e) = send_cache_message(
-                                &cache_tx,
-                                HydrateCacheMsg::Enrichment {
-                                    provider: "beatport".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    norm_album: None,
-                                    match_quality: Some("none".to_string()),
-                                    response_json: None,
-                                },
-                                "beatport enrichment",
-                            )
-                            .await
-                            {
-                                tracing::error!("{e}");
+                            Err(err) => {
+                                tracing::error!(
+                                    "Beatport hydrate lookup failed for {} - {}: {err}",
+                                    track.artist,
+                                    track.title
+                                );
+                                if let Err(error) = acknowledge_enrichment_cache_write(
+                                    &cache_tx,
+                                    EnrichmentCacheWrite {
+                                        provider: EnrichmentProvider::Beatport,
+                                        norm_artist,
+                                        norm_title,
+                                        norm_album: None,
+                                        match_quality: Some("error".to_string()),
+                                        response_json: None,
+                                    },
+                                    "beatport error",
+                                )
+                                .await
+                                {
+                                    tracing::error!("{error}");
+                                }
                                 counters.errors.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                counters.no_match.fetch_add(1, Ordering::Relaxed);
+                                counters.operation_errors.fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        Err(err) => {
-                            tracing::error!(
-                                "Beatport hydrate lookup failed for {} - {}: {err}",
-                                track.artist,
-                                track.title
-                            );
-                            if let Err(error) = send_cache_message(
-                                &cache_tx,
-                                HydrateCacheMsg::Enrichment {
-                                    provider: "beatport".to_string(),
-                                    norm_artist,
-                                    norm_title,
-                                    norm_album: None,
-                                    match_quality: Some("error".to_string()),
-                                    response_json: None,
-                                },
-                                "beatport error",
-                            )
-                            .await
-                            {
-                                tracing::error!("{error}");
-                            }
-                            counters.errors.fetch_add(1, Ordering::Relaxed);
-                            counters.operation_errors.fetch_add(1, Ordering::Relaxed);
-                        }
+
+                        counters.terminal.fetch_add(1, Ordering::Relaxed);
+                        pb.inc(1);
+                        HydrationWorkerCompletion::completed(())
                     }
+                },
+            )
+            .await;
 
-                    counters.terminal.fetch_add(1, Ordering::Relaxed);
-                    pb.inc(1);
-                    drop(permit);
-                    true
-                });
-            }
-
-            while let Some(result) = handles.join_next().await {
-                record_provider_worker_join("beatport", result, &counters, &mut report);
-            }
-            report
+            provider_task_report_from_workers(workers, &counters)
         })
     };
 
@@ -975,50 +929,40 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         let counters = analysis_counters.clone();
         let pb = pb.clone();
         tokio::spawn(async move {
-            let mut report = ProviderTaskReport::new(analysis_selected);
+            let report = ProviderTaskReport::new(analysis_selected);
             if analysis_pending.is_empty() {
                 return report;
             }
-            let cpu_sem = Arc::new(tokio::sync::Semaphore::new(analysis_concurrency));
             let mem_sem = Arc::new(tokio::sync::Semaphore::new(analysis_budget_mb as usize));
-            let mut handles = tokio::task::JoinSet::new();
-
-            for (track, needs_stratum, needs_essentia) in analysis_pending {
-                if cancel.is_cancelled() {
-                    break;
-                }
-                let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
-                let cpu_permit = tokio::select! {
-                    result = cpu_sem.clone().acquire_owned() => match result {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    },
-                    _ = cancel.cancelled() => break,
-                };
-                let mem_permit = tokio::select! {
-                    result = mem_sem.clone().acquire_many_owned(cost_mb) => match result {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    },
-                    _ = cancel.cancelled() => {
-                        drop(cpu_permit);
-                        break;
-                    },
-                };
-                let essentia_python = essentia_python.clone();
-                let cache_tx = cache_tx.clone();
-                let counters = counters.clone();
-                let pb = pb.clone();
-                let cancel = cancel.clone();
-
-                handles.spawn(async move {
+            let worker_counters = counters.clone();
+            let workers = run_bounded_workers(
+                "analysis worker task",
+                analysis_pending,
+                analysis_concurrency,
+                cancel.clone(),
+                |(track, _, _)| track.id.clone(),
+                move |(track, needs_stratum, needs_essentia): (crate::types::Track, bool, bool)| {
+                    let essentia_python = essentia_python.clone();
+                    let cache_tx = cache_tx.clone();
+                    let counters = worker_counters.clone();
+                    let pb = pb.clone();
+                    let cancel = cancel.clone();
+                    let mem_sem = mem_sem.clone();
+                    async move {
                     if cancel.is_cancelled() {
-                        drop(cpu_permit);
-                        drop(mem_permit);
-                        return false;
+                        return HydrationWorkerCompletion::cancelled(());
                     }
 
-                    let outcome = cli_analyze_for_hydrate(
+                    let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+                    let mem_permit = tokio::select! {
+                        result = mem_sem.acquire_many_owned(cost_mb) => match result {
+                            Ok(permit) => permit,
+                            Err(_) => return HydrationWorkerCompletion::cancelled(()),
+                        },
+                        _ = cancel.cancelled() => return HydrationWorkerCompletion::cancelled(()),
+                    };
+
+                    let outcome = run_analysis_stage(
                         &track.file_path,
                         needs_stratum,
                         needs_essentia,
@@ -1038,16 +982,14 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
                     counters.terminal.fetch_add(1, Ordering::Relaxed);
                     pb.inc(1);
-                    drop(cpu_permit);
                     drop(mem_permit);
-                    true
-                });
-            }
+                    HydrationWorkerCompletion::completed(())
+                    }
+                },
+            )
+            .await;
 
-            while let Some(result) = handles.join_next().await {
-                record_provider_worker_join("analysis", result, &counters, &mut report);
-            }
-            report
+            provider_task_report_from_workers(workers, &counters)
         })
     };
 
@@ -1384,81 +1326,41 @@ async fn cli_beatport_lookup_with_retry(
     unreachable!("loop always exits via return")
 }
 
-async fn cli_analyze_for_hydrate(
-    raw_file_path: &str,
-    needs_stratum: bool,
-    needs_essentia: bool,
-    essentia_python: Option<&str>,
-    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<HydrateCacheMsg>>,
-) -> HydrateAnalysisOutcome {
-    let mut outcome = HydrateAnalysisOutcome::default();
-    let report = match super::analysis_job::run(
-        raw_file_path,
-        needs_stratum,
-        needs_essentia,
-        essentia_python,
-        true,
-    )
-    .await
-    {
-        Ok(report) => report,
-        Err(error) => {
-            tracing::error!("Analysis job failed for {raw_file_path}: {error}");
-            outcome.operation_failed = true;
-            return outcome;
-        }
-    };
-
-    if let Some(Err(error)) = report.stratum {
-        tracing::error!("stratum-dsp analysis failed for {raw_file_path}: {error}");
-        outcome.operation_failed = true;
-    }
-    if let Some(Err(error)) = report.essentia {
-        tracing::error!("Essentia analysis failed for {raw_file_path}: {error}");
-        outcome.operation_failed = true;
-    }
-    for message in report.cache_messages {
-        let analyzer = message.analyzer.clone();
-        if let Err(error) = send_cache_message(
-            cache_tx,
-            HydrateCacheMsg::AudioAnalysis(message),
-            &format!("{analyzer} analysis"),
-        )
-        .await
-        {
-            tracing::error!("{error}");
-            outcome.cache_write_failed = true;
-        }
-    }
-
-    outcome
-}
-
 #[cfg(test)]
 mod batch_tests {
     use super::*;
     use crate::cli::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
 
+    fn test_provider(provider: &str) -> EnrichmentProvider {
+        match provider {
+            "discogs" => EnrichmentProvider::Discogs,
+            "beatport" => EnrichmentProvider::Beatport,
+            "bandcamp" => EnrichmentProvider::Bandcamp,
+            "fail" | "ok" => EnrichmentProvider::Beatport,
+            other => panic!("unsupported test provider: {other}"),
+        }
+    }
+
     fn enrichment_message(provider: &str, id: u32) -> HydrateCacheMsg {
-        HydrateCacheMsg::Enrichment {
-            provider: provider.to_string(),
+        HydrateCacheMsg::Enrichment(EnrichmentCacheWrite {
+            provider: test_provider(provider),
             norm_artist: format!("artist-{id}"),
             norm_title: format!("title-{id}"),
             norm_album: None,
             match_quality: Some("exact".to_string()),
             response_json: Some("{}".to_string()),
-        }
+        })
     }
 
     fn no_match_message(provider: &str, id: u32) -> HydrateCacheMsg {
-        HydrateCacheMsg::Enrichment {
-            provider: provider.to_string(),
+        HydrateCacheMsg::Enrichment(EnrichmentCacheWrite {
+            provider: test_provider(provider),
             norm_artist: format!("artist-{id}"),
             norm_title: format!("title-{id}"),
             norm_album: None,
             match_quality: Some("none".to_string()),
             response_json: None,
-        }
+        })
     }
 
     fn analysis_message(analyzer: &str, id: u32) -> HydrateCacheMsg {
@@ -1491,7 +1393,7 @@ mod batch_tests {
         conn.execute_batch(
             "CREATE TRIGGER reject_failed_enrichment
              BEFORE INSERT ON enrichment_cache
-             WHEN NEW.provider = 'fail'
+             WHEN NEW.provider = 'beatport'
              BEGIN
                SELECT RAISE(FAIL, 'injected enrichment write failure');
              END;
@@ -1662,7 +1564,7 @@ mod batch_tests {
             drop(result);
             let send_result = bounded(
                 tx.send(CacheWriteRequest {
-                    payload: enrichment_message("ok", 1),
+                    payload: enrichment_message("beatport", 1),
                     acknowledgement,
                 }),
                 "hydrate dropped-ack queue send",
@@ -1686,15 +1588,20 @@ mod batch_tests {
     async fn hydrate_provider_inner_and_outer_join_failures_are_incomplete() {
         tokio::time::timeout(TEST_WATCHDOG, async {
             let counters = ProviderCounters::new();
-            let mut inner_report = ProviderTaskReport::new(1);
-            let inner = TaskGuard::new(tokio::spawn(async {
-                panic!("injected inner provider panic")
-            }));
-            let inner_result = inner
-                .join_raw("injected inner provider join")
-                .await
-                .expect("bounded inner join");
-            record_provider_worker_join("discogs", inner_result, &counters, &mut inner_report);
+            let workers = run_bounded_workers(
+                "discogs worker task",
+                vec![()],
+                1,
+                CancellationToken::new(),
+                |_| "injected".to_string(),
+                |_| async {
+                    panic!("injected inner provider panic");
+                    #[allow(unreachable_code)]
+                    HydrationWorkerCompletion::completed(())
+                },
+            )
+            .await;
+            let inner_report = provider_task_report_from_workers(workers, &counters);
             assert_eq!(inner_report.join_failures, 1);
             assert_eq!(inner_report.incomplete(), 1);
             assert_eq!(

@@ -2,3 +2,4 @@
 
 pub(crate) mod analysis;
 pub(crate) mod classification;
+pub(crate) mod enrichment;

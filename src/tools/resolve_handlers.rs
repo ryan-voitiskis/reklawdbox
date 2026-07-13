@@ -2,6 +2,7 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use super::*;
+use crate::application::enrichment::resolve::resolve_provider_data;
 use crate::audio;
 use crate::db;
 use crate::genre;
@@ -535,6 +536,8 @@ pub(crate) fn resolve_single_track(
 
     let discogs_val = parse_enrichment_cache(discogs_cache);
     let beatport_val = parse_enrichment_cache(beatport_cache);
+    let provider_resolution =
+        resolve_provider_data(&track.label, discogs_val.as_ref(), beatport_val.as_ref());
 
     let staged_val = staged.map(|s| {
         serde_json::json!({
@@ -567,49 +570,29 @@ pub(crate) fn resolve_single_track(
         serde_json::Value::Null
     };
 
-    let discogs_style_mappings: Vec<serde_json::Value> = discogs_val
-        .as_ref()
-        .and_then(|v| v.get("styles"))
-        .and_then(|v| v.as_array())
-        .map(|styles| {
-            styles
-                .iter()
-                .filter_map(|s| s.as_str())
-                .map(|style| {
-                    let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-                    serde_json::json!({
-                        "style": style,
-                        "maps_to": maps_to,
-                        "mapping_type": mapping_type,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let beatport_genre_mapping = beatport_val
-        .as_ref()
-        .and_then(|v| v.get("genre"))
-        .and_then(|v| v.as_str())
-        .filter(|g| !g.is_empty())
-        .map(|bp_genre| {
-            let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);
+    let discogs_style_mappings: Vec<serde_json::Value> = provider_resolution
+        .discogs_styles
+        .iter()
+        .map(|style| {
+            let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
             serde_json::json!({
-                "genre": bp_genre,
+                "style": style,
                 "maps_to": maps_to,
                 "mapping_type": mapping_type,
             })
-        });
+        })
+        .collect();
 
-    let effective_label = if !track.label.is_empty() {
-        Some(track.label.as_str())
-    } else {
-        discogs_val
-            .as_ref()
-            .and_then(|v| v.get("label"))
-            .and_then(|v| v.as_str())
-            .filter(|l| !l.is_empty())
-    };
+    let beatport_genre_mapping = provider_resolution.beatport_genre.map(|bp_genre| {
+        let (maps_to, mapping_type) = map_genre_through_taxonomy(bp_genre);
+        serde_json::json!({
+            "genre": bp_genre,
+            "maps_to": maps_to,
+            "mapping_type": mapping_type,
+        })
+    });
+
+    let effective_label = provider_resolution.effective_label;
     let label_inferred_genre = effective_label.and_then(genre::label_genre);
 
     let genre_taxonomy = serde_json::json!({
@@ -659,33 +642,22 @@ fn resolve_single_track_compact(
 
     // Effective label: prefer Rekordbox, fall back to Discogs enrichment
     let discogs_val = parse_enrichment_cache(discogs_cache);
-    let effective_label = if !track.label.is_empty() {
-        Some(track.label.as_str())
-    } else {
-        discogs_val
-            .as_ref()
-            .and_then(|v| v.get("label"))
-            .and_then(|v| v.as_str())
-            .filter(|l| !l.is_empty())
-    };
+    let beatport_val = parse_enrichment_cache(beatport_cache);
+    let provider_resolution =
+        resolve_provider_data(&track.label, discogs_val.as_ref(), beatport_val.as_ref());
+    let effective_label = provider_resolution.effective_label;
     let label_inferred_genre = effective_label.and_then(genre::label_genre);
 
     // Group Discogs styles by canonical genre, keeping only exact/alias matches
     let discogs_mapped_genres: serde_json::Value = {
         let mut genre_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        if let Some(styles) = discogs_val
-            .as_ref()
-            .and_then(|v| v.get("styles"))
-            .and_then(|v| v.as_array())
-        {
-            for style in styles.iter().filter_map(|s| s.as_str()) {
-                let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
-                if mapping_type != "unknown"
-                    && let Some(genre_name) = maps_to
-                {
-                    *genre_counts.entry(genre_name).or_insert(0) += 1;
-                }
+        for style in &provider_resolution.discogs_styles {
+            let (maps_to, mapping_type) = map_genre_through_taxonomy(style);
+            if mapping_type != "unknown"
+                && let Some(genre_name) = maps_to
+            {
+                *genre_counts.entry(genre_name).or_insert(0) += 1;
             }
         }
         if genre_counts.is_empty() {
@@ -709,12 +681,7 @@ fn resolve_single_track_compact(
         }
     };
 
-    let beatport_val = parse_enrichment_cache(beatport_cache);
-    let bp_raw_str = beatport_val
-        .as_ref()
-        .and_then(|v| v.get("genre"))
-        .and_then(|v| v.as_str())
-        .filter(|g| !g.is_empty());
+    let bp_raw_str = provider_resolution.beatport_genre;
 
     let beatport_genre_raw = bp_raw_str.map_or(serde_json::Value::Null, |s| serde_json::json!(s));
 

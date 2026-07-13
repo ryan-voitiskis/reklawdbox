@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use rmcp::ErrorData as McpError;
 
 use super::*;
+use crate::application::enrichment::resolve::{TrackScope, track_scope};
 use crate::db;
 use crate::genre;
 use crate::types::Track;
@@ -202,62 +203,64 @@ fn visit_ordered_track_chunks(
     }
     let has_unknown_genre = filters.has_unknown_genre == Some(true);
 
-    if let Some(ids) = track_ids {
-        let mut seen = std::collections::HashSet::new();
-        let mut unique_chunk = Vec::with_capacity(BATCH_SELECTOR_CHUNK);
-        for id in ids {
-            if !seen.insert(id.as_str()) {
-                continue;
+    match track_scope(track_ids, playlist_id) {
+        TrackScope::TrackIds(ids) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut unique_chunk = Vec::with_capacity(BATCH_SELECTOR_CHUNK);
+            for id in ids {
+                if !seen.insert(id.as_str()) {
+                    continue;
+                }
+                unique_chunk.push(id.clone());
+                if unique_chunk.len() == BATCH_SELECTOR_CHUNK {
+                    let tracks = db::get_tracks_by_ids(conn, &unique_chunk).map_err(db_error)?;
+                    visit(filter_logical_tracks(
+                        tracks,
+                        has_unknown_genre,
+                        exclude_samplers,
+                    ))?;
+                    unique_chunk.clear();
+                }
             }
-            unique_chunk.push(id.clone());
-            if unique_chunk.len() == BATCH_SELECTOR_CHUNK {
+            if !unique_chunk.is_empty() {
                 let tracks = db::get_tracks_by_ids(conn, &unique_chunk).map_err(db_error)?;
                 visit(filter_logical_tracks(
                     tracks,
                     has_unknown_genre,
                     exclude_samplers,
                 ))?;
-                unique_chunk.clear();
             }
+            return Ok(());
         }
-        if !unique_chunk.is_empty() {
-            let tracks = db::get_tracks_by_ids(conn, &unique_chunk).map_err(db_error)?;
-            visit(filter_logical_tracks(
-                tracks,
-                has_unknown_genre,
-                exclude_samplers,
-            ))?;
-        }
-        return Ok(());
-    }
-
-    if let Some(playlist_id) = playlist_id {
-        let mut raw_offset = 0u32;
-        loop {
-            let tracks = db::get_playlist_tracks_unbounded_page(
-                conn,
-                playlist_id,
-                Some(BATCH_SELECTOR_CHUNK as u32),
-                Some(raw_offset),
-            )
-            .map_err(db_error)?;
-            let raw_count = tracks.len();
-            if raw_count == 0 {
-                break;
+        TrackScope::Playlist(playlist_id) => {
+            let mut raw_offset = 0u32;
+            loop {
+                let tracks = db::get_playlist_tracks_unbounded_page(
+                    conn,
+                    playlist_id,
+                    Some(BATCH_SELECTOR_CHUNK as u32),
+                    Some(raw_offset),
+                )
+                .map_err(db_error)?;
+                let raw_count = tracks.len();
+                if raw_count == 0 {
+                    break;
+                }
+                visit(filter_logical_tracks(
+                    tracks,
+                    has_unknown_genre,
+                    exclude_samplers,
+                ))?;
+                if raw_count < BATCH_SELECTOR_CHUNK {
+                    break;
+                }
+                raw_offset = raw_offset
+                    .checked_add(BATCH_SELECTOR_CHUNK as u32)
+                    .ok_or_else(|| mcp_internal_error("playlist selector offset exceeds u32"))?;
             }
-            visit(filter_logical_tracks(
-                tracks,
-                has_unknown_genre,
-                exclude_samplers,
-            ))?;
-            if raw_count < BATCH_SELECTOR_CHUNK {
-                break;
-            }
-            raw_offset = raw_offset
-                .checked_add(BATCH_SELECTOR_CHUNK as u32)
-                .ok_or_else(|| mcp_internal_error("playlist selector offset exceeds u32"))?;
+            return Ok(());
         }
-        return Ok(());
+        TrackScope::Search => {}
     }
 
     let mut search = filters
@@ -428,48 +431,51 @@ pub(super) fn resolve_tracks(
     // Selector priority is IDs > playlist > search. Pagination is applied in
     // SQL only when every logical filter is also in SQL; otherwise the full
     // ordered candidate set is post-filtered and paginated locally.
-    let (tracks, pagination_applied_in_db) = if let Some(ids) = track_ids {
-        (db::get_tracks_by_ids(conn, ids).map_err(db_error)?, false)
-    } else if let Some(pid) = playlist_id {
-        let playlist_requires_post_filter =
-            has_unknown_genre == Some(true) || opts.exclude_samplers;
-        if playlist_requires_post_filter {
-            (
-                db::get_playlist_tracks_unbounded(conn, pid, None).map_err(db_error)?,
-                false,
-            )
-        } else if bounded {
-            (
-                db::get_playlist_tracks_page(conn, pid, effective_max, offset).map_err(db_error)?,
-                true,
-            )
-        } else {
-            (
-                db::get_playlist_tracks_unbounded_page(conn, pid, effective_max, offset)
-                    .map_err(db_error)?,
-                true,
-            )
-        }
-    } else {
-        if has_unknown_genre == Some(true) {
-            let search = filters
-                .into_search_params(true, None, None)
-                .map_err(|e| McpError::invalid_params(e, None))?;
-            (
-                db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
-                false,
-            )
-        } else {
-            let search = filters
-                .into_search_params(true, effective_max, offset)
-                .map_err(|e| McpError::invalid_params(e, None))?;
-            if bounded {
-                (db::search_tracks(conn, &search).map_err(db_error)?, true)
-            } else {
+    let (tracks, pagination_applied_in_db) = match track_scope(track_ids, playlist_id) {
+        TrackScope::TrackIds(ids) => (db::get_tracks_by_ids(conn, ids).map_err(db_error)?, false),
+        TrackScope::Playlist(pid) => {
+            let playlist_requires_post_filter =
+                has_unknown_genre == Some(true) || opts.exclude_samplers;
+            if playlist_requires_post_filter {
                 (
-                    db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
+                    db::get_playlist_tracks_unbounded(conn, pid, None).map_err(db_error)?,
+                    false,
+                )
+            } else if bounded {
+                (
+                    db::get_playlist_tracks_page(conn, pid, effective_max, offset)
+                        .map_err(db_error)?,
                     true,
                 )
+            } else {
+                (
+                    db::get_playlist_tracks_unbounded_page(conn, pid, effective_max, offset)
+                        .map_err(db_error)?,
+                    true,
+                )
+            }
+        }
+        TrackScope::Search => {
+            if has_unknown_genre == Some(true) {
+                let search = filters
+                    .into_search_params(true, None, None)
+                    .map_err(|e| McpError::invalid_params(e, None))?;
+                (
+                    db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
+                    false,
+                )
+            } else {
+                let search = filters
+                    .into_search_params(true, effective_max, offset)
+                    .map_err(|e| McpError::invalid_params(e, None))?;
+                if bounded {
+                    (db::search_tracks(conn, &search).map_err(db_error)?, true)
+                } else {
+                    (
+                        db::search_tracks_unbounded(conn, &search).map_err(db_error)?,
+                        true,
+                    )
+                }
             }
         }
     };
