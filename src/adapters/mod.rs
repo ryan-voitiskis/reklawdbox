@@ -1,4 +1,5 @@
-//! Persistence adapters at Reklawdbox's two SQLite trust boundaries.
+//! External-system adapters used by Reklawdbox application workflows.
 
+pub(crate) mod audio;
 pub(crate) mod rekordbox;
 pub(crate) mod state;

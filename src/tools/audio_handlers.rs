@@ -4,17 +4,10 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use super::*;
+use crate::application::analysis::{batch as analysis_batch, job as analysis_job};
 use crate::audio;
 use crate::db;
 use crate::store;
-
-fn file_mtime_secs(metadata: &std::fs::Metadata) -> i64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs() as i64)
-}
 
 pub(super) async fn handle_analyze_track_audio(
     server: &ReklawdboxServer,
@@ -51,28 +44,18 @@ pub(super) async fn handle_analyze_track_audio(
             .map_err(|e| mcp_internal_error(format!("Cache parse error: {e}")))?;
         (val, true)
     } else {
-        let analysis = analyze_stratum(&file_path)
+        let report = analysis_job::run(&file_path, true, false, None, false)
             .await
             .map_err(mcp_internal_error)?;
-        let val = serde_json::to_value(&analysis.result)
-            .map_err(|e| mcp_internal_error(e.to_string()))?;
-        let features_json =
-            serde_json::to_string(&val).map_err(|e| mcp_internal_error(e.to_string()))?;
-        let metadata = tokio::fs::metadata(&file_path)
-            .await
-            .map_err(|e| mcp_internal_error(format!("Cannot stat file '{file_path}': {e}")))?;
-        let store = server.cache_store_conn()?;
-        store::set_audio_analysis_with_fingerprint(
-            &store,
-            &file_path,
-            audio::ANALYZER_STRATUM,
-            metadata.len() as i64,
-            file_mtime_secs(&metadata),
-            audio::STRATUM_SCHEMA_VERSION,
-            &analysis.input_fingerprint,
-            &features_json,
-        )
-        .map_err(cache_error)?;
+        let analysis = report
+            .stratum
+            .ok_or_else(|| mcp_internal_error("Stratum analysis did not run"))?
+            .map_err(mcp_internal_error)?;
+        let val = serde_json::to_value(&analysis).map_err(|e| mcp_internal_error(e.to_string()))?;
+        for message in report.cache_messages {
+            let store = server.cache_store_conn()?;
+            analysis_batch::persist_analysis_cache_write(&store, &message).map_err(cache_error)?;
+        }
         (val, false)
     };
 
@@ -103,34 +86,26 @@ pub(super) async fn handle_analyze_track_audio(
             );
             essentia_cache_hit = Some(true);
         } else {
-            match audio::run_essentia(python_path, &file_path)
+            let report = analysis_job::run(&file_path, false, true, Some(python_path), false)
                 .await
-                .map_err(|e| e.to_string())
-            {
+                .map_err(mcp_internal_error)?;
+            match report.essentia.expect("requested Essentia result") {
                 Ok(features) => {
                     let val = serde_json::to_value(&features)
                         .map_err(|e| mcp_internal_error(e.to_string()))?;
-                    let features_json = serde_json::to_string(&val)
-                        .map_err(|e| mcp_internal_error(e.to_string()))?;
-                    let metadata = tokio::fs::metadata(&file_path)
-                        .await
-                        .map_err(|e| mcp_internal_error(format!("Cannot stat file: {e}")))?;
-                    let store = server.cache_store_conn()?;
-                    store::set_audio_analysis_with_fingerprint(
-                        &store,
-                        &file_path,
-                        audio::ANALYZER_ESSENTIA,
-                        metadata.len() as i64,
-                        file_mtime_secs(&metadata),
-                        audio::ESSENTIA_SCHEMA_VERSION,
-                        "",
-                        &features_json,
-                    )
-                    .map_err(cache_error)?;
+                    for message in report.cache_messages {
+                        let store = server.cache_store_conn()?;
+                        analysis_batch::persist_analysis_cache_write(&store, &message)
+                            .map_err(cache_error)?;
+                    }
                     essentia = Some(val);
                     essentia_cache_hit = Some(false);
                 }
-                Err(e) => essentia_error = Some(e),
+                Err(error) => {
+                    let prefix = format!("Essentia error for {file_path}: ");
+                    essentia_error =
+                        Some(error.strip_prefix(&prefix).unwrap_or(&error).to_string());
+                }
             }
         }
     }
@@ -156,11 +131,14 @@ pub(super) struct BatchTrackAnalysis {
     pub(super) track_id: String,
     pub(super) title: String,
     pub(super) artist: String,
-    pub(super) stratum_dsp: serde_json::Value,
+    pub(super) stratum_dsp: Option<serde_json::Value>,
     pub(super) stratum_cache_hit: bool,
+    pub(super) stratum_error: Option<String>,
+    pub(super) stratum_cache_write_error: Option<String>,
     pub(super) essentia: Option<serde_json::Value>,
     pub(super) essentia_cache_hit: Option<bool>,
     pub(super) essentia_error: Option<String>,
+    pub(super) essentia_cache_write_error: Option<String>,
 }
 
 fn audio_completion_flags(
@@ -283,77 +261,8 @@ fn audio_join_failures(
         .collect()
 }
 
-enum CacheWriteMsg {
-    Audio {
-        track_id: String,
-        artist: String,
-        title: String,
-        file_path: String,
-        analyzer: &'static str,
-        file_size: i64,
-        file_mtime: i64,
-        analyzer_version: String,
-        input_fingerprint: String,
-        features_json: String,
-    },
-}
-
-fn run_audio_cache_writer(
-    store_path: &str,
-    mut cache_rx: tokio::sync::mpsc::Receiver<CacheWriteMsg>,
-) -> Vec<serde_json::Value> {
-    let conn = store::open(store_path)
-        .map_err(|error| format!("Cache writer failed to open store: {error}"));
-    if let Err(error) = &conn {
-        tracing::error!("{error}");
-    }
-    let mut write_failures = Vec::new();
-    while let Some(msg) = cache_rx.blocking_recv() {
-        match msg {
-            CacheWriteMsg::Audio {
-                track_id,
-                artist,
-                title,
-                file_path,
-                analyzer,
-                file_size,
-                file_mtime,
-                analyzer_version,
-                input_fingerprint,
-                features_json,
-            } => {
-                let write = match &conn {
-                    Ok(conn) => store::set_audio_analysis_with_fingerprint(
-                        conn,
-                        &file_path,
-                        analyzer,
-                        file_size,
-                        file_mtime,
-                        &analyzer_version,
-                        &input_fingerprint,
-                        &features_json,
-                    )
-                    .map_err(|error| format!("Cache write failed: {error}")),
-                    Err(error) => Err(error.clone()),
-                };
-                if let Err(error) = write {
-                    tracing::error!(
-                        "Cache writer: failed to write {analyzer} for {file_path}: {error}"
-                    );
-                    write_failures.push(serde_json::json!({
-                        "track_id": track_id,
-                        "artist": artist,
-                        "title": title,
-                        "analyzer": analyzer,
-                        "stage": if conn.is_ok() { "cache_write" } else { "cache_writer_open" },
-                        "error": error,
-                    }));
-                }
-            }
-        }
-    }
-    write_failures
-}
+type CacheWriteMsg = crate::application::analysis::model::AnalysisCacheWrite;
+type AudioCacheWriteRequest = analysis_batch::CacheWriteRequest<CacheWriteMsg>;
 
 #[allow(clippy::too_many_arguments)]
 async fn analyze_single_track(
@@ -364,23 +273,23 @@ async fn analyze_single_track(
     skip_cached: bool,
     essentia_python: Option<String>,
     store_path: String,
-    cache_tx: tokio::sync::mpsc::Sender<CacheWriteMsg>,
+    cache_tx: tokio::sync::mpsc::Sender<AudioCacheWriteRequest>,
 ) -> Result<BatchTrackAnalysis, serde_json::Value> {
-    let file_path = audio::resolve_audio_path(&raw_file_path).map_err(|e| {
+    let file_path = audio::resolve_audio_path(&raw_file_path).map_err(|error| {
         serde_json::json!({
             "track_id": &track_id, "artist": &artist, "title": &title,
             "analyzer": audio::ANALYZER_STRATUM,
             "stage": "resolve_file",
-            "error": format!("File path error: {e}"),
+            "error": format!("File path error: {error}"),
         })
     })?;
 
-    let cache_conn = store::open_read_only(&store_path).map_err(|e| {
+    let cache_conn = store::open_read_only(&store_path).map_err(|error| {
         serde_json::json!({
             "track_id": &track_id, "artist": &artist, "title": &title,
             "analyzer": audio::ANALYZER_STRATUM,
             "stage": "cache_read",
-            "error": format!("Cache open error: {e}"),
+            "error": format!("Cache open error: {error}"),
         })
     })?;
 
@@ -396,7 +305,6 @@ async fn analyze_single_track(
     } else {
         None
     };
-
     let essentia_cached = if skip_cached && essentia_python.is_some() {
         check_analysis_cache(
             &cache_conn,
@@ -409,106 +317,90 @@ async fn analyze_single_track(
     } else {
         None
     };
-
-    // Drop read connection before running analysis (avoids holding it across awaits)
     drop(cache_conn);
 
-    // Run stratum and essentia in parallel
-    let stratum_fut = async {
-        if let Some(json_str) = &stratum_cached {
-            let val: serde_json::Value =
-                serde_json::from_str(json_str).map_err(|e| format!("Cache parse error: {e}"))?;
-            return Ok::<(serde_json::Value, bool), String>((val, true));
-        }
-        let analysis = analyze_stratum(&file_path).await?;
-        let val =
-            serde_json::to_value(&analysis.result).map_err(|e| format!("Serialize error: {e}"))?;
-        let features_json =
-            serde_json::to_string(&val).map_err(|e| format!("Serialize error: {e}"))?;
-        let metadata = tokio::fs::metadata(&file_path)
-            .await
-            .map_err(|e| format!("Cannot stat file: {e}"))?;
-        cache_tx
-            .send(CacheWriteMsg::Audio {
-                track_id: track_id.clone(),
-                artist: artist.clone(),
-                title: title.clone(),
-                file_path: file_path.clone(),
-                analyzer: audio::ANALYZER_STRATUM,
-                file_size: metadata.len() as i64,
-                file_mtime: file_mtime_secs(&metadata),
-                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
-                input_fingerprint: analysis.input_fingerprint,
-                features_json,
+    let needs_stratum = stratum_cached.is_none();
+    let needs_essentia = essentia_python.is_some() && essentia_cached.is_none();
+    let mut report = if needs_stratum || needs_essentia {
+        analysis_job::run(
+            &file_path,
+            needs_stratum,
+            needs_essentia,
+            essentia_python.as_deref(),
+            true,
+        )
+        .await
+        .map_err(|error| {
+            serde_json::json!({
+                "track_id": &track_id, "artist": &artist, "title": &title,
+                "analyzer": audio::ANALYZER_STRATUM,
+                "stage": "analysis",
+                "error": error,
             })
-            .await
-            .map_err(|e| format!("Cache write queue error: {e}"))?;
-        Ok((val, false))
+        })?
+    } else {
+        analysis_job::AnalysisJobReport {
+            stratum: None,
+            essentia: None,
+            cache_messages: Vec::new(),
+            elapsed_seconds: 0.0,
+        }
     };
 
-    let essentia_python_clone = essentia_python.clone();
-    let file_path_clone = file_path.clone();
-    let cache_tx_clone = cache_tx.clone();
-    let essentia_fut = async {
-        let python_path = match &essentia_python_clone {
-            Some(p) => p,
-            None => return (None, None, None), // essentia not available
-        };
-        if let Some(json_str) = &essentia_cached {
-            match serde_json::from_str(json_str) {
-                Ok(val) => return (Some(val), Some(true), None),
-                Err(e) => return (None, None, Some(format!("Cache parse error: {e}"))),
-            }
-        }
-        match audio::run_essentia(python_path, &file_path_clone)
-            .await
-            .map_err(|e| e.to_string())
+    let mut stratum_cache_write_error = None;
+    let mut essentia_cache_write_error = None;
+    for message in report.cache_messages.drain(..) {
+        let analyzer = message.analyzer.clone();
+        if let Err(error) =
+            analysis_batch::send_cache_message(&cache_tx, message, &format!("{analyzer} analysis"))
+                .await
         {
-            Ok(features) => {
-                let val = match serde_json::to_value(&features) {
-                    Ok(v) => v,
-                    Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
-                };
-                let features_json = match serde_json::to_string(&val) {
-                    Ok(j) => j,
-                    Err(e) => return (None, None, Some(format!("Serialize error: {e}"))),
-                };
-                let metadata = match tokio::fs::metadata(&file_path_clone).await {
-                    Ok(m) => m,
-                    Err(e) => return (None, None, Some(format!("Cannot stat file: {e}"))),
-                };
-                if let Err(e) = cache_tx_clone
-                    .send(CacheWriteMsg::Audio {
-                        track_id: track_id.clone(),
-                        artist: artist.clone(),
-                        title: title.clone(),
-                        file_path: file_path_clone.clone(),
-                        analyzer: audio::ANALYZER_ESSENTIA,
-                        file_size: metadata.len() as i64,
-                        file_mtime: file_mtime_secs(&metadata),
-                        analyzer_version: audio::ESSENTIA_SCHEMA_VERSION.to_string(),
-                        input_fingerprint: String::new(),
-                        features_json,
-                    })
-                    .await
-                {
-                    return (None, None, Some(format!("Cache write queue error: {e}")));
-                }
-                (Some(val), Some(false), None)
+            if analyzer == audio::ANALYZER_STRATUM {
+                stratum_cache_write_error = Some(error);
+            } else {
+                essentia_cache_write_error = Some(error);
             }
-            Err(e) => (None, None, Some(e)),
+        }
+    }
+
+    let (stratum_dsp, stratum_cache_hit, stratum_error) = if let Some(json) = stratum_cached {
+        match serde_json::from_str(&json) {
+            Ok(value) => (Some(value), true, None),
+            Err(error) => (None, true, Some(format!("Cache parse error: {error}"))),
+        }
+    } else {
+        match report.stratum.take().expect("requested Stratum result") {
+            Ok(result) => match serde_json::to_value(result) {
+                Ok(value) => (Some(value), false, None),
+                Err(error) => (None, false, Some(format!("Serialize error: {error}"))),
+            },
+            Err(error) => (None, false, Some(error)),
         }
     };
 
-    let (stratum_result, (essentia_val, essentia_cache_hit, essentia_error)) =
-        tokio::join!(stratum_fut, essentia_fut);
-
-    let (stratum_dsp, stratum_cache_hit) = stratum_result.map_err(|e| {
-        serde_json::json!({
-            "track_id": &track_id, "artist": &artist, "title": &title,
-            "analyzer": audio::ANALYZER_STRATUM, "stage": "analysis", "error": e,
-        })
-    })?;
+    let (essentia, essentia_cache_hit, essentia_error) = if let Some(json) = essentia_cached {
+        match serde_json::from_str(&json) {
+            Ok(value) => (Some(value), Some(true), None),
+            Err(error) => (None, None, Some(format!("Cache parse error: {error}"))),
+        }
+    } else if needs_essentia {
+        match report.essentia.take().expect("requested Essentia result") {
+            Ok(result) => {
+                let value = serde_json::to_value(result).map_err(|error| {
+                    serde_json::json!({
+                        "track_id": &track_id, "artist": &artist, "title": &title,
+                        "analyzer": audio::ANALYZER_ESSENTIA,
+                        "stage": "analysis",
+                        "error": format!("Serialize error: {error}"),
+                    })
+                })?;
+                (Some(value), Some(false), None)
+            }
+            Err(error) => (None, None, Some(error)),
+        }
+    } else {
+        (None, None, None)
+    };
 
     Ok(BatchTrackAnalysis {
         track_id,
@@ -516,9 +408,12 @@ async fn analyze_single_track(
         artist,
         stratum_dsp,
         stratum_cache_hit,
-        essentia: essentia_val,
+        stratum_error,
+        stratum_cache_write_error,
+        essentia,
         essentia_cache_hit,
         essentia_error,
+        essentia_cache_write_error,
     })
 }
 
@@ -589,10 +484,13 @@ pub(super) async fn handle_analyze_audio_batch(
         }
     } as usize;
 
-    let (cache_tx, cache_rx) = tokio::sync::mpsc::channel::<CacheWriteMsg>(concurrency * 4);
+    let (cache_tx, cache_rx) =
+        tokio::sync::mpsc::channel::<AudioCacheWriteRequest>(concurrency * 4);
     let writer_store_path = store_path.clone();
-    let writer_handle =
-        tokio::task::spawn_blocking(move || run_audio_cache_writer(&writer_store_path, cache_rx));
+    let writer_cancel = tokio_util::sync::CancellationToken::new();
+    let writer_handle = tokio::task::spawn_blocking(move || {
+        analysis_batch::run_analysis_cache_writer(writer_store_path, cache_rx, writer_cancel)
+    });
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(selected_tracks);
@@ -641,10 +539,31 @@ pub(super) async fn handle_analyze_audio_batch(
     for (track_id, artist, title, handle) in handles {
         match handle.await {
             Ok(Ok(row)) => {
-                if row.stratum_cache_hit {
-                    progress.cached += 1;
-                } else {
-                    progress.processed += 1;
+                if row.stratum_dsp.is_some() {
+                    if row.stratum_cache_hit {
+                        progress.cached += 1;
+                    } else {
+                        progress.processed += 1;
+                    }
+                }
+                if let Some(ref error) = row.stratum_error {
+                    progress.failures.push(serde_json::json!({
+                        "track_id": &row.track_id, "artist": &row.artist,
+                        "title": &row.title, "analyzer": audio::ANALYZER_STRATUM,
+                        "stage": "analysis", "error": error,
+                    }));
+                }
+                if let Some(ref error) = row.stratum_cache_write_error {
+                    progress.failures.push(serde_json::json!({
+                        "track_id": &row.track_id, "artist": &row.artist,
+                        "title": &row.title, "analyzer": audio::ANALYZER_STRATUM,
+                        "stage": if error.contains("store open failed") {
+                            "cache_writer_open"
+                        } else {
+                            "cache_write"
+                        },
+                        "error": error,
+                    }));
                 }
                 match row.essentia_cache_hit {
                     Some(true) => essentia_cached += 1,
@@ -660,7 +579,21 @@ pub(super) async fn handle_analyze_audio_batch(
                         "error": err,
                     }));
                 }
-                rows.push(row);
+                if let Some(ref error) = row.essentia_cache_write_error {
+                    progress.failures.push(serde_json::json!({
+                        "track_id": &row.track_id, "artist": &row.artist,
+                        "title": &row.title, "analyzer": audio::ANALYZER_ESSENTIA,
+                        "stage": if error.contains("store open failed") {
+                            "cache_writer_open"
+                        } else {
+                            "cache_write"
+                        },
+                        "error": error,
+                    }));
+                }
+                if row.stratum_dsp.is_some() {
+                    rows.push(row);
+                }
             }
             Ok(Err(failure)) => {
                 progress.failures.push(failure);
@@ -680,7 +613,7 @@ pub(super) async fn handle_analyze_audio_batch(
 
     drop(cache_tx);
     match writer_handle.await {
-        Ok(failures) => progress.failures.extend(failures),
+        Ok(_report) => {}
         Err(err) => {
             for track in &tracks {
                 progress.failures.extend(audio_join_failures(
@@ -701,7 +634,9 @@ pub(super) async fn handle_analyze_audio_batch(
             track_id: row.track_id,
             title: row.title,
             artist: row.artist,
-            stratum_dsp: row.stratum_dsp,
+            stratum_dsp: row
+                .stratum_dsp
+                .expect("successful rows contain Stratum output"),
             stratum_cache_hit: row.stratum_cache_hit,
             essentia: row.essentia,
             essentia_cache_hit: row.essentia_cache_hit,
@@ -923,37 +858,33 @@ mod pending_page_tests {
         );
     }
 
-    #[test]
-    fn analyze_audio_batch_pending_page_writer_failure_retains_retry_identity() {
+    #[tokio::test]
+    async fn analyze_audio_batch_pending_page_writer_failure_retains_retry_identity() {
         let directory = tempfile::tempdir().expect("temporary directory should create");
         let (cache_tx, cache_rx) = tokio::sync::mpsc::channel(1);
-        cache_tx
-            .blocking_send(CacheWriteMsg::Audio {
-                track_id: "retry-track".to_string(),
-                artist: "Retry Artist".to_string(),
-                title: "Retry Title".to_string(),
-                file_path: "/tmp/retry.wav".to_string(),
-                analyzer: audio::ANALYZER_STRATUM,
-                file_size: 1,
-                file_mtime: 2,
-                analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
-                input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
-                features_json: "{}".to_string(),
-            })
-            .expect("cache write fixture should queue");
+        let message = CacheWriteMsg {
+            file_path: "/tmp/retry.wav".to_string(),
+            analyzer: audio::ANALYZER_STRATUM.to_string(),
+            file_size: 1,
+            file_mtime: 2,
+            analyzer_version: audio::STRATUM_SCHEMA_VERSION.to_string(),
+            input_fingerprint: audio::STRATUM_HMM_INPUT_FINGERPRINT.to_string(),
+            features_json: "{}".to_string(),
+        };
+        let retry_path = message.file_path.clone();
+        let writer_path = directory.path().to_string_lossy().to_string();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let writer = tokio::task::spawn_blocking(move || {
+            analysis_batch::run_analysis_cache_writer(writer_path, cache_rx, cancel)
+        });
+        let error = analysis_batch::send_cache_message(&cache_tx, message, "stratum-dsp analysis")
+            .await
+            .expect_err("directory path cannot be opened as a cache database");
         drop(cache_tx);
-
-        let failures = run_audio_cache_writer(
-            directory
-                .path()
-                .to_str()
-                .expect("directory path should be UTF-8"),
-            cache_rx,
-        );
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0]["track_id"], "retry-track");
-        assert_eq!(failures[0]["analyzer"], audio::ANALYZER_STRATUM);
-        assert_eq!(failures[0]["stage"], "cache_writer_open");
+        let report = writer.await.expect("cache writer task should join");
+        assert_eq!(retry_path, "/tmp/retry.wav");
+        assert!(error.contains("cache store open failed"));
+        assert_eq!(report.failed, 1);
     }
 
     #[test]

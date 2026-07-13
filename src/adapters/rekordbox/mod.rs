@@ -1,7 +1,8 @@
 //! Read-only access to the encrypted Rekordbox library database.
 //!
-//! The audio-grid `AnalysisDataPath` query remains in `audio.rs` until Plan 039.
+//! ANLZ beat-grid parsing and the `AnalysisDataPath` lookup live in [`anlz`].
 
+pub(crate) mod anlz;
 mod connection;
 mod health;
 mod history;

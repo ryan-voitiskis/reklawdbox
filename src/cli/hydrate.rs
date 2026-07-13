@@ -7,9 +7,10 @@ use tokio_util::sync::CancellationToken;
 
 use console::style;
 
+use crate::adapters::audio as audio_adapter;
 #[cfg(test)]
 use crate::audio;
-use crate::{beatport, db, discogs, normalize, store, tools};
+use crate::{beatport, db, discogs, normalize, store};
 
 use super::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
@@ -354,7 +355,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         .expect("failed to build HTTP client");
 
     let essentia_python = if want_analysis {
-        tools::probe_essentia_python_path()
+        audio_adapter::probe_essentia_python_path()
     } else {
         None
     };

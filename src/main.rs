@@ -1,5 +1,6 @@
 mod adapters;
 mod anlz;
+mod application;
 mod audio;
 mod audio_profile;
 mod audit;

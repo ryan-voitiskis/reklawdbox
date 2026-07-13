@@ -14,7 +14,7 @@ use clap::Parser;
 use indicatif::MultiProgress;
 use tokio_util::sync::CancellationToken;
 
-use crate::{audio, store};
+use crate::store;
 
 /// Spawn signal handlers for graceful shutdown (Ctrl+C) and terminal resize
 /// (SIGWINCH). The SIGWINCH handler forces indicatif to clear-and-redraw so its
@@ -135,9 +135,6 @@ const OVERNIGHT_MEMORY_FRACTION: f64 = 0.75;
 
 /// Fraction of system RAM available for background analysis.
 const BACKGROUND_MEMORY_FRACTION: f64 = 0.30;
-
-/// Abort the pipeline after this many consecutive cache write failures.
-pub(crate) const MAX_CONSECUTIVE_CACHE_WRITE_FAILURES: u32 = 3;
 
 /// Falls back to 16 GB if sysctl fails.
 fn system_total_memory_mb() -> u32 {
@@ -263,268 +260,20 @@ fn store_path_as_utf8(path: &Path) -> Result<&str, std::io::Error> {
     })
 }
 
-fn file_mtime_unix(metadata: &std::fs::Metadata) -> i64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs() as i64)
-}
-
-fn is_cache_fresh(
-    cached: Option<&store::CachedAudioAnalysis>,
-    schema_version: &str,
-    file_size: i64,
-    file_mtime: i64,
-    input_fingerprint: &str,
-) -> bool {
-    store::is_audio_analysis_fresh(
-        cached,
-        schema_version,
-        file_size,
-        file_mtime,
-        input_fingerprint,
-    )
-}
-
-struct CacheProbe {
-    cache_key: String,
-    file_size: i64,
-    file_mtime: i64,
-    stratum_input_fingerprint: String,
-}
-
-impl CacheProbe {
-    fn input_fingerprint_for_analyzer(&self, analyzer: &str) -> &str {
-        if analyzer == audio::ANALYZER_STRATUM {
-            &self.stratum_input_fingerprint
-        } else {
-            ""
-        }
-    }
-}
-
-fn cache_probe_for_path(file_path: &str, skip_cached: bool) -> Option<CacheProbe> {
-    if !skip_cached {
-        return None;
-    }
-    let cache_key = audio::resolve_audio_path(file_path).ok()?;
-    let metadata = std::fs::metadata(&cache_key).ok()?;
-    let stratum_input_fingerprint =
-        audio::load_rekordbox_grid_input_for_path(&cache_key).fingerprint;
-    Some(CacheProbe {
-        cache_key,
-        file_size: metadata.len() as i64,
-        file_mtime: file_mtime_unix(&metadata),
-        stratum_input_fingerprint,
-    })
-}
-
-fn has_fresh_cache_entry(
-    store_conn: &rusqlite::Connection,
-    cache_probe: Option<&CacheProbe>,
-    analyzer: &str,
-    schema_version: &str,
-) -> Result<bool, rusqlite::Error> {
-    if let Some(cache_probe) = cache_probe {
-        let cached = store::get_audio_analysis(store_conn, &cache_probe.cache_key, analyzer)?;
-        Ok(is_cache_fresh(
-            cached.as_ref(),
-            schema_version,
-            cache_probe.file_size,
-            cache_probe.file_mtime,
-            cache_probe.input_fingerprint_for_analyzer(analyzer),
-        ))
-    } else {
-        Ok(false)
-    }
-}
-
-fn cache_status_for_track(
-    store_conn: &rusqlite::Connection,
-    cache_probe: Option<&CacheProbe>,
-    skip_cached: bool,
-    essentia_available: bool,
-) -> Result<(bool, bool), rusqlite::Error> {
-    let has_stratum = if skip_cached {
-        has_fresh_cache_entry(
-            store_conn,
-            cache_probe,
-            audio::ANALYZER_STRATUM,
-            audio::STRATUM_SCHEMA_VERSION,
-        )?
-    } else {
-        false
-    };
-
-    let has_essentia = if !essentia_available {
-        true
-    } else if skip_cached {
-        has_fresh_cache_entry(
-            store_conn,
-            cache_probe,
-            audio::ANALYZER_ESSENTIA,
-            audio::ESSENTIA_SCHEMA_VERSION,
-        )?
-    } else {
-        false
-    };
-
-    Ok((has_stratum, has_essentia))
-}
-
-#[derive(Debug)]
-pub(crate) struct CliCacheWriteMsg {
-    pub file_path: String,
-    pub analyzer: String,
-    pub file_size: i64,
-    pub file_mtime: i64,
-    pub analyzer_version: String,
-    pub input_fingerprint: String,
-    pub features_json: String,
-}
-
-pub(crate) fn persist_cli_cache_message(
-    conn: &rusqlite::Connection,
-    message: &CliCacheWriteMsg,
-) -> Result<(), rusqlite::Error> {
-    store::set_audio_analysis_with_fingerprint(
-        conn,
-        &message.file_path,
-        &message.analyzer,
-        message.file_size,
-        message.file_mtime,
-        &message.analyzer_version,
-        &message.input_fingerprint,
-        &message.features_json,
-    )
-}
-
-pub(crate) struct CacheWriteRequest<T> {
-    pub payload: T,
-    pub acknowledgement: tokio::sync::oneshot::Sender<Result<(), String>>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct CacheWriterReport {
-    pub attempted: u32,
-    pub succeeded: u32,
-    pub failed: u32,
-    pub threshold_cancelled: bool,
-    pub error_summaries: Vec<String>,
-}
-
-impl CacheWriterReport {
-    pub(crate) fn record_success(&mut self) {
-        self.attempted += 1;
-        self.succeeded += 1;
-    }
-
-    pub(crate) fn record_failure(&mut self, summary: String) {
-        self.attempted += 1;
-        self.failed += 1;
-        if self.error_summaries.len() < 10 && !self.error_summaries.contains(&summary) {
-            self.error_summaries.push(summary);
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CliBatchFailure {
-    pub command: &'static str,
-    pub track_or_provider_failures: u32,
-    pub worker_join_failures: u32,
-    pub writer_failures: u32,
-    pub incomplete: usize,
-    pub user_cancelled: bool,
-    pub error_summaries: Vec<String>,
-}
-
-impl std::fmt::Display for CliBatchFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} batch failed: {} track/provider failures, {} task join failures, {} cache write failures, {} incomplete",
-            self.command,
-            self.track_or_provider_failures,
-            self.worker_join_failures,
-            self.writer_failures,
-            self.incomplete,
-        )?;
-        if self.user_cancelled {
-            write!(f, ", cancelled by user")?;
-        }
-        if !self.error_summaries.is_empty() {
-            write!(f, ": {}", self.error_summaries.join("; "))?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for CliBatchFailure {}
-
-pub(crate) fn cli_batch_outcome(
-    command: &'static str,
-    track_or_provider_failures: u32,
-    worker_join_failures: u32,
-    writer_failures: u32,
-    incomplete: usize,
-    user_cancelled: bool,
-    error_summaries: Vec<String>,
-) -> Result<(), CliBatchFailure> {
-    if track_or_provider_failures == 0
-        && worker_join_failures == 0
-        && writer_failures == 0
-        && incomplete == 0
-        && !user_cancelled
-    {
-        Ok(())
-    } else {
-        Err(CliBatchFailure {
-            command,
-            track_or_provider_failures,
-            worker_join_failures,
-            writer_failures,
-            incomplete,
-            user_cancelled,
-            error_summaries,
-        })
-    }
-}
-
-pub(crate) fn task_join_error_summary(task: &str, error: &tokio::task::JoinError) -> String {
-    if error.is_cancelled() {
-        format!("{task} was cancelled")
-    } else if error.is_panic() {
-        format!("{task} panicked")
-    } else {
-        format!("{task} failed")
-    }
-}
-
-pub(crate) fn serialize_cache_payload<T: serde::Serialize>(
-    value: &T,
-    context: &str,
-) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|e| format!("{context} cache serialization failed: {e}"))
-}
-
-pub(crate) async fn send_cache_message<T>(
-    tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<T>>,
-    message: T,
-    context: &str,
-) -> Result<(), String> {
-    let (acknowledgement, result) = tokio::sync::oneshot::channel();
-    tx.send(CacheWriteRequest {
-        payload: message,
-        acknowledgement,
-    })
-    .await
-    .map_err(|e| format!("{context} cache queue send failed: {e}"))?;
-    result
-        .await
-        .map_err(|_| format!("{context} cache acknowledgement canceled"))?
-}
+pub(crate) use crate::application::analysis::batch::{
+    BatchFailure as CliBatchFailure, CacheWriteRequest, CacheWriterReport,
+    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES, batch_outcome as cli_batch_outcome,
+    persist_analysis_cache_write as persist_cli_cache_message, send_cache_message,
+    serialize_cache_payload, task_join_error_summary,
+};
+#[cfg(test)]
+pub(crate) use crate::application::analysis::identity::{
+    CacheProbe, file_mtime_unix, is_cache_fresh,
+};
+pub(crate) use crate::application::analysis::identity::{
+    cache_probe_for_path, cache_status_for_track,
+};
+pub(crate) use crate::application::analysis::model::AnalysisCacheWrite as CliCacheWriteMsg;
 
 fn is_audio_file(path: &Path) -> bool {
     path.extension()

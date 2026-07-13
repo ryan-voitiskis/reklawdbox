@@ -1,10 +1,10 @@
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
+use crate::adapters::audio::{essentia_venv_dir, validate_essentia_python};
 use crate::config;
 use crate::db;
 use crate::discogs;
-use crate::tools::essentia::{essentia_venv_dir, validate_essentia_python};
 
 const PYTHON_CANDIDATES: &[&str] = &[
     "python3.13",

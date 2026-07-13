@@ -3,7 +3,7 @@
 //! This is the only writable SQLite adapter boundary. Read-only state
 //! connections never run migrations.
 
-mod analysis;
+pub(crate) mod analysis;
 mod audit;
 mod broker;
 mod connection;

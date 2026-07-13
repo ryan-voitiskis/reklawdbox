@@ -5,9 +5,10 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio_util::sync::CancellationToken;
 
+use crate::adapters::audio as audio_adapter;
 #[cfg(test)]
 use crate::audio;
-use crate::{db, store, tools};
+use crate::{db, store};
 
 use super::{
     CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
@@ -72,68 +73,10 @@ pub(crate) struct AnalyzeArgs {
 
 fn run_analyze_cache_writer(
     store_path: String,
-    mut cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<CliCacheWriteMsg>>,
+    cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<CliCacheWriteMsg>>,
     cancel: CancellationToken,
 ) -> CacheWriterReport {
-    let mut report = CacheWriterReport::default();
-    let conn = match store::open(&store_path) {
-        Ok(conn) => conn,
-        Err(error) => {
-            let summary = format!("cache store open failed: {error}");
-            tracing::error!("Cache writer: {summary} — rejecting queued writes");
-            report.error_summaries.push(summary.clone());
-            cancel.cancel();
-            while let Some(request) = cache_rx.blocking_recv() {
-                report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary.clone())).ok();
-            }
-            return report;
-        }
-    };
-
-    let mut consecutive_failures: u32 = 0;
-    let mut fatal_error: Option<String> = None;
-    while let Some(request) = cache_rx.blocking_recv() {
-        if let Some(summary) = &fatal_error {
-            report.record_failure(summary.clone());
-            request.acknowledgement.send(Err(summary.clone())).ok();
-            continue;
-        }
-
-        let message = request.payload;
-        match super::persist_cli_cache_message(&conn, &message) {
-            Ok(()) => {
-                consecutive_failures = 0;
-                report.record_success();
-                request.acknowledgement.send(Ok(())).ok();
-            }
-            Err(error) => {
-                consecutive_failures += 1;
-                let summary = format!("{} cache write failed: {error}", message.analyzer);
-                tracing::error!(
-                    "Cache writer: {summary} ({consecutive_failures}/{})",
-                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
-                );
-                report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary)).ok();
-                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
-                    let fatal = format!(
-                        "cache writer stopped after {} consecutive failures",
-                        super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
-                    );
-                    tracing::error!("Cache writer: {fatal} — draining queued writes");
-                    report.threshold_cancelled = true;
-                    if report.error_summaries.len() < 10 && !report.error_summaries.contains(&fatal)
-                    {
-                        report.error_summaries.push(fatal.clone());
-                    }
-                    fatal_error = Some(fatal);
-                    cancel.cancel();
-                }
-            }
-        }
-    }
-    report
+    crate::application::analysis::batch::run_analysis_cache_writer(store_path, cache_rx, cancel)
 }
 
 fn analyze_batch_outcome(
@@ -186,7 +129,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let essentia_python = if args.stratum_only {
         None
     } else {
-        tools::probe_essentia_python_path()
+        audio_adapter::probe_essentia_python_path()
     };
 
     tracing::info!(
