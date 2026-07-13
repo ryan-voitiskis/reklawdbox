@@ -223,6 +223,23 @@ where
     send_cache_message(tx, T::from(write), context).await
 }
 
+/// Queue an MCP enrichment write while preserving its original public errors.
+pub(crate) async fn acknowledge_mcp_enrichment_cache_write(
+    tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
+    write: EnrichmentCacheWrite,
+) -> Result<(), String> {
+    let (acknowledgement, result) = tokio::sync::oneshot::channel();
+    tx.send(CacheWriteRequest {
+        payload: write,
+        acknowledgement,
+    })
+    .await
+    .map_err(|_| "cache write queue closed".to_string())?;
+    result
+        .await
+        .map_err(|_| "cache writer acknowledgement canceled".to_string())?
+}
+
 pub(crate) fn persist_enrichment_cache_write(
     conn: &rusqlite::Connection,
     write: &EnrichmentCacheWrite,

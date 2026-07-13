@@ -4,6 +4,7 @@ use crate::application::enrichment::discogs_auth::{
     conditional_clear_rejected_token,
     resolve_auth_transition_locked as resolve_application_auth_transition,
 };
+use crate::application::enrichment::lookup::{self as enrichment_lookup, LookupIdentity};
 use crate::bandcamp;
 use crate::beatport;
 use crate::discogs;
@@ -452,7 +453,8 @@ pub(super) async fn lookup_beatport_remote(
         return result;
     }
 
-    beatport::lookup(&server.state.http, artist, title)
+    let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
+    enrichment_lookup::dispatch_beatport(&server.state.http, &identity)
         .await
         .map_err(|e| e.to_string())
 }
@@ -462,7 +464,8 @@ pub(super) async fn lookup_bandcamp_remote(
     artist: &str,
     title: &str,
 ) -> Result<Option<bandcamp::BandcampResult>, String> {
-    bandcamp::lookup(&server.state.http, artist, title)
+    let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
+    enrichment_lookup::dispatch_bandcamp(&server.state.http, &identity, None)
         .await
         .map_err(|e| e.to_string())
 }

@@ -1,27 +1,69 @@
-//! Cache-first provider lookup workflow shared by MCP lookup tools.
-
-use std::future::Future;
+//! Cache-first provider lookup policy shared by MCP lookup tools.
 
 use serde::Serialize;
 
+use crate::adapters::{providers, state};
+
 use super::model::{CacheLookupOutcome, ProviderLookupOutcome};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LookupProvider {
+    Discogs,
+    Beatport,
+    Bandcamp,
+    MusicBrainz,
+}
+
+impl LookupProvider {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Discogs => "discogs",
+            Self::Beatport => "beatport",
+            Self::Bandcamp => "bandcamp",
+            Self::MusicBrainz => "musicbrainz",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LookupIdentity {
+    pub(crate) artist: String,
+    pub(crate) title: String,
+    pub(crate) album: Option<String>,
+    pub(crate) norm_artist: String,
+    pub(crate) norm_title: String,
+    pub(crate) norm_album: Option<String>,
+}
+
+impl LookupIdentity {
+    pub(crate) fn new(artist: String, title: String, album: Option<String>) -> Self {
+        let norm_artist = crate::normalize::normalize_for_matching(&artist);
+        let norm_title = crate::normalize::normalize_for_matching(&title);
+        let norm_album = album
+            .as_deref()
+            .map(crate::normalize::normalize_for_matching)
+            .filter(|album| !album.is_empty());
+        Self {
+            artist,
+            title,
+            album,
+            norm_artist,
+            norm_title,
+            norm_album,
+        }
+    }
+
+    fn cache_album(&self, provider: LookupProvider) -> Option<&str> {
+        (provider == LookupProvider::Discogs)
+            .then_some(self.norm_album.as_deref())
+            .flatten()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LookupPolicy {
     pub(crate) force_refresh: bool,
     pub(crate) cache_read_enabled: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CachedLookup {
-    pub(crate) response_json: Option<String>,
-    pub(crate) created_at: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LookupCacheWrite {
-    pub(crate) match_quality: String,
-    pub(crate) response_json: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,87 +79,189 @@ impl LookupResult {
     }
 }
 
+pub(crate) fn read_lookup_cache(
+    conn: &rusqlite::Connection,
+    provider: LookupProvider,
+    identity: &LookupIdentity,
+    policy: LookupPolicy,
+) -> Result<CacheLookupOutcome<LookupResult>, rusqlite::Error> {
+    if policy.force_refresh || !policy.cache_read_enabled {
+        return Ok(CacheLookupOutcome::Miss);
+    }
+
+    let cached = state::get_enrichment(
+        conn,
+        provider.as_str(),
+        &identity.norm_artist,
+        &identity.norm_title,
+        identity.cache_album(provider),
+        false,
+    )?;
+    Ok(match cached {
+        Some(cached) => {
+            let payload = cached
+                .response_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or(serde_json::Value::Null);
+            CacheLookupOutcome::Hit(LookupResult {
+                payload,
+                cache_hit: true,
+                cached_at: Some(cached.created_at),
+            })
+        }
+        None => CacheLookupOutcome::Miss,
+    })
+}
+
 #[derive(Debug)]
-pub(crate) enum LookupWorkflowError<C, L> {
-    Cache(C),
-    Lookup(L),
+pub(crate) enum PersistLookupError {
+    Cache(rusqlite::Error),
     Serialize(serde_json::Error),
 }
 
-pub(crate) async fn lookup_with_cache<T, C, L, ReadCache, WriteCache, LookupFuture, Quality>(
-    policy: LookupPolicy,
-    read_cache: ReadCache,
-    write_cache: WriteCache,
-    lookup: LookupFuture,
-    quality: Quality,
-) -> Result<LookupResult, LookupWorkflowError<C, L>>
-where
-    T: Serialize,
-    ReadCache: FnOnce() -> Result<Option<CachedLookup>, C>,
-    WriteCache: FnOnce(LookupCacheWrite) -> Result<(), C>,
-    LookupFuture: Future<Output = Result<Option<T>, L>>,
-    Quality: FnOnce(&T) -> &'static str,
-{
-    let cache = if policy.cache_read_enabled && !policy.force_refresh {
-        match read_cache().map_err(LookupWorkflowError::Cache)? {
-            Some(cached) => CacheLookupOutcome::Hit(cached),
-            None => CacheLookupOutcome::Miss,
-        }
-    } else {
-        CacheLookupOutcome::Miss
-    };
-
-    if let CacheLookupOutcome::Hit(cached) = cache {
-        let payload = cached
-            .response_json
-            .as_deref()
-            .and_then(|json| serde_json::from_str(json).ok())
-            .unwrap_or(serde_json::Value::Null);
-        return Ok(LookupResult {
-            payload,
-            cache_hit: true,
-            cached_at: Some(cached.created_at),
-        });
-    }
-
-    let outcome = match lookup.await {
-        Ok(Some(result)) => ProviderLookupOutcome::Match(result),
-        Ok(None) => ProviderLookupOutcome::NoMatch,
-        Err(error) => ProviderLookupOutcome::Error(error),
-    };
-
-    let (payload, cache_write) = match outcome {
+fn persist_provider_result<T: Serialize>(
+    conn: &rusqlite::Connection,
+    provider: LookupProvider,
+    identity: &LookupIdentity,
+    outcome: ProviderLookupOutcome<T>,
+    match_quality: impl FnOnce(&T) -> &'static str,
+) -> Result<LookupResult, PersistLookupError> {
+    let (payload, quality, response_json) = match outcome {
         ProviderLookupOutcome::Match(result) => {
-            let match_quality = quality(&result).to_string();
+            let quality = match_quality(&result).to_string();
             let response_json =
-                serde_json::to_string(&result).map_err(LookupWorkflowError::Serialize)?;
-            let payload = serde_json::to_value(result).map_err(LookupWorkflowError::Serialize)?;
-            (
-                payload,
-                LookupCacheWrite {
-                    match_quality,
-                    response_json: Some(response_json),
-                },
-            )
+                serde_json::to_string(&result).map_err(PersistLookupError::Serialize)?;
+            let payload = serde_json::to_value(result).map_err(PersistLookupError::Serialize)?;
+            (payload, quality, Some(response_json))
         }
-        ProviderLookupOutcome::NoMatch => (
-            serde_json::Value::Null,
-            LookupCacheWrite {
-                match_quality: "none".to_string(),
-                response_json: None,
-            },
-        ),
-        ProviderLookupOutcome::Error(error) => {
-            return Err(LookupWorkflowError::Lookup(error));
-        }
+        ProviderLookupOutcome::NoMatch => (serde_json::Value::Null, "none".to_string(), None),
     };
 
-    write_cache(cache_write).map_err(LookupWorkflowError::Cache)?;
+    state::set_enrichment(
+        conn,
+        provider.as_str(),
+        &identity.norm_artist,
+        &identity.norm_title,
+        identity.cache_album(provider),
+        Some(&quality),
+        response_json.as_deref(),
+    )
+    .map_err(PersistLookupError::Cache)?;
     Ok(LookupResult {
         payload,
         cache_hit: false,
         cached_at: None,
     })
+}
+
+fn provider_outcome<T>(result: Option<T>) -> ProviderLookupOutcome<T> {
+    match result {
+        Some(result) => ProviderLookupOutcome::Match(result),
+        None => ProviderLookupOutcome::NoMatch,
+    }
+}
+
+pub(crate) fn persist_discogs_result(
+    conn: &rusqlite::Connection,
+    identity: &LookupIdentity,
+    result: Option<providers::discogs::DiscogsResult>,
+) -> Result<LookupResult, PersistLookupError> {
+    persist_provider_result(
+        conn,
+        LookupProvider::Discogs,
+        identity,
+        provider_outcome(result),
+        |result| {
+            if result.fuzzy_match { "fuzzy" } else { "exact" }
+        },
+    )
+}
+
+pub(crate) async fn dispatch_beatport(
+    http: &reqwest::Client,
+    identity: &LookupIdentity,
+) -> Result<Option<providers::beatport::BeatportResult>, providers::beatport::BeatportError> {
+    providers::beatport::lookup(http, &identity.artist, &identity.title).await
+}
+
+pub(crate) fn persist_beatport_result(
+    conn: &rusqlite::Connection,
+    identity: &LookupIdentity,
+    result: Option<providers::beatport::BeatportResult>,
+) -> Result<LookupResult, PersistLookupError> {
+    persist_provider_result(
+        conn,
+        LookupProvider::Beatport,
+        identity,
+        provider_outcome(result),
+        |result| {
+            if result.fuzzy_match { "fuzzy" } else { "exact" }
+        },
+    )
+}
+
+pub(crate) async fn dispatch_bandcamp(
+    http: &reqwest::Client,
+    identity: &LookupIdentity,
+    url: Option<&str>,
+) -> Result<Option<providers::bandcamp::BandcampResult>, providers::bandcamp::BandcampError> {
+    match url {
+        Some(url) => {
+            providers::bandcamp::lookup_url(http, url, &identity.artist, &identity.title).await
+        }
+        None => providers::bandcamp::lookup(http, &identity.artist, &identity.title).await,
+    }
+}
+
+pub(crate) fn persist_bandcamp_result(
+    conn: &rusqlite::Connection,
+    identity: &LookupIdentity,
+    result: Option<providers::bandcamp::BandcampResult>,
+) -> Result<LookupResult, PersistLookupError> {
+    persist_provider_result(
+        conn,
+        LookupProvider::Bandcamp,
+        identity,
+        provider_outcome(result),
+        |result| {
+            if result.score == 100 {
+                "exact"
+            } else {
+                "fuzzy"
+            }
+        },
+    )
+}
+
+pub(crate) async fn dispatch_musicbrainz(
+    http: &reqwest::Client,
+    identity: &LookupIdentity,
+) -> Result<
+    Option<providers::musicbrainz::MusicBrainzResult>,
+    providers::musicbrainz::MusicBrainzError,
+> {
+    providers::musicbrainz::lookup(http, &identity.artist, &identity.title).await
+}
+
+pub(crate) fn persist_musicbrainz_result(
+    conn: &rusqlite::Connection,
+    identity: &LookupIdentity,
+    result: Option<providers::musicbrainz::MusicBrainzResult>,
+) -> Result<LookupResult, PersistLookupError> {
+    persist_provider_result(
+        conn,
+        LookupProvider::MusicBrainz,
+        identity,
+        provider_outcome(result),
+        |result| {
+            if result.score >= 100 {
+                "exact"
+            } else {
+                "fuzzy"
+            }
+        },
+    )
 }
 
 pub(crate) fn lookup_output_with_cache_metadata(
@@ -147,43 +291,57 @@ pub(crate) fn lookup_output_with_cache_metadata(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
-    #[tokio::test]
-    async fn enrichment_lookup_preserves_negative_cache_policy() {
-        let remote_calls = AtomicUsize::new(0);
-        let cache_writes = AtomicUsize::new(0);
+    #[test]
+    fn enrichment_lookup_preserves_negative_cache_policy() {
+        let store_dir = tempfile::tempdir().expect("lookup store directory should create");
+        let store_path = store_dir.path().join("internal.sqlite3");
+        let conn = state::open(&store_path.to_string_lossy()).expect("lookup store should open");
+        let identity = LookupIdentity::new(
+            "Shared Artist".to_string(),
+            "Shared Title".to_string(),
+            None,
+        );
+        state::set_enrichment(
+            &conn,
+            "beatport",
+            &identity.norm_artist,
+            &identity.norm_title,
+            None,
+            Some("none"),
+            None,
+        )
+        .expect("negative lookup should persist");
 
-        let result = lookup_with_cache::<serde_json::Value, String, String, _, _, _, _>(
+        let outcome = read_lookup_cache(
+            &conn,
+            LookupProvider::Beatport,
+            &identity,
             LookupPolicy {
                 force_refresh: false,
                 cache_read_enabled: true,
             },
-            || {
-                Ok(Some(CachedLookup {
-                    response_json: None,
-                    created_at: "2026-07-14T00:00:00Z".to_string(),
-                }))
-            },
-            |_| {
-                cache_writes.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            },
-            async {
-                remote_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(None)
-            },
-            |_| "exact",
         )
-        .await
-        .unwrap();
-
-        assert_eq!(remote_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(cache_writes.load(Ordering::SeqCst), 0);
+        .expect("negative lookup should read");
+        let CacheLookupOutcome::Hit(result) = outcome else {
+            panic!("durable negative lookup must be a cache hit");
+        };
         assert_eq!(result.payload, serde_json::Value::Null);
         assert!(result.cache_hit);
-        assert_eq!(result.cached_at.as_deref(), Some("2026-07-14T00:00:00Z"));
+
+        assert!(matches!(
+            read_lookup_cache(
+                &conn,
+                LookupProvider::Beatport,
+                &identity,
+                LookupPolicy {
+                    force_refresh: true,
+                    cache_read_enabled: true,
+                },
+            )
+            .expect("forced lookup policy should resolve"),
+            CacheLookupOutcome::Miss
+        ));
     }
 }

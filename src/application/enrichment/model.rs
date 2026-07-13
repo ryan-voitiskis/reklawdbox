@@ -74,10 +74,9 @@ pub(crate) enum CacheLookupOutcome<T> {
 
 /// Provider lookup outcome before transport-specific rendering.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ProviderLookupOutcome<T, E> {
+pub(crate) enum ProviderLookupOutcome<T> {
     Match(T),
     NoMatch,
-    Error(E),
 }
 
 #[cfg(test)]

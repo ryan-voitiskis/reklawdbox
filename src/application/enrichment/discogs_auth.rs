@@ -198,6 +198,101 @@ mod tests {
     }
 
     #[test]
+    fn resolve_session_valid() {
+        let session = make_session("tok-abc", 2000);
+        assert!(
+            matches!(resolve_session_state(Some(&session), 1000), SessionState::Valid(token) if token == "tok-abc")
+        );
+    }
+
+    #[test]
+    fn resolve_session_expired() {
+        let session = make_session("tok-abc", 500);
+        assert!(matches!(
+            resolve_session_state(Some(&session), 1000),
+            SessionState::Expired
+        ));
+    }
+
+    #[test]
+    fn resolve_session_none() {
+        assert!(matches!(
+            resolve_session_state(None, 1000),
+            SessionState::None
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_authorized() {
+        let pending = make_pending(2000);
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("authorized"), 1000),
+            PendingState::Authorized(_)
+        ));
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("finalized"), 1000),
+            PendingState::Authorized(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_waiting() {
+        let pending = make_pending(2000);
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("pending"), 1000),
+            PendingState::Waiting(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_expired_by_time() {
+        let pending = make_pending(500);
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("authorized"), 1000),
+            PendingState::Expired
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_expired_by_unknown_status() {
+        let pending = make_pending(2000);
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("unknown"), 1000),
+            PendingState::Expired
+        ));
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), None, 1000),
+            PendingState::Expired
+        ));
+    }
+
+    #[test]
+    fn resolve_session_expired_at_boundary() {
+        let session = make_session("tok-abc", 1000);
+        assert!(matches!(
+            resolve_session_state(Some(&session), 1000),
+            SessionState::Expired
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_expired_at_boundary() {
+        let pending = make_pending(1000);
+        assert!(matches!(
+            resolve_pending_state(Some(&pending), Some("authorized"), 1000),
+            PendingState::Expired
+        ));
+    }
+
+    #[test]
+    fn resolve_pending_none() {
+        assert!(matches!(
+            resolve_pending_state(None, None, 1000),
+            PendingState::None
+        ));
+    }
+
+    #[test]
     fn resolve_session_valid_expired_and_none() {
         let valid = make_session("tok-abc", 2000);
         assert!(

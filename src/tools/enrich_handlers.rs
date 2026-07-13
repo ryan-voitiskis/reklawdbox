@@ -5,12 +5,13 @@ use super::*;
 use crate::application::analysis::batch::CacheWriteRequest;
 use crate::application::enrichment::hydrate::{
     EnrichmentCacheWrite, EnrichmentCacheWriterReport, HydrationWorkerCompletion,
-    acknowledge_enrichment_cache_write, provider_stages, run_bounded_workers,
+    acknowledge_mcp_enrichment_cache_write, provider_stages, run_bounded_workers,
     run_enrichment_cache_writer,
 };
 use crate::application::enrichment::lookup::{
-    CachedLookup, LookupCacheWrite, LookupPolicy, LookupWorkflowError, lookup_with_cache,
+    self as enrichment_lookup, LookupIdentity, LookupPolicy, LookupProvider, PersistLookupError,
 };
+use crate::application::enrichment::model::CacheLookupOutcome;
 use crate::bandcamp;
 use crate::db;
 use crate::musicbrainz;
@@ -22,50 +23,30 @@ fn normalize_discogs_album_for_cache(album: Option<&str>) -> Option<String> {
         .filter(|album| !album.is_empty())
 }
 
-fn read_lookup_cache(
+fn cached_lookup(
     server: &ReklawdboxServer,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    norm_album: Option<&str>,
-) -> Result<Option<CachedLookup>, McpError> {
+    provider: LookupProvider,
+    identity: &LookupIdentity,
+    policy: LookupPolicy,
+) -> Result<Option<enrichment_lookup::LookupResult>, McpError> {
     let store_conn = server.cache_store_conn()?;
-    store::get_enrichment(
-        &store_conn,
-        provider,
-        norm_artist,
-        norm_title,
-        norm_album,
-        false,
-    )
-    .map(|cached| {
-        cached.map(|cached| CachedLookup {
-            response_json: cached.response_json,
-            created_at: cached.created_at,
-        })
-    })
-    .map_err(cache_error)
+    match enrichment_lookup::read_lookup_cache(&store_conn, provider, identity, policy)
+        .map_err(cache_error)?
+    {
+        CacheLookupOutcome::Hit(result) => Ok(Some(result)),
+        CacheLookupOutcome::Miss => Ok(None),
+    }
 }
 
-fn write_lookup_cache(
+fn persist_lookup_result<T>(
     server: &ReklawdboxServer,
-    provider: &str,
-    norm_artist: &str,
-    norm_title: &str,
-    norm_album: Option<&str>,
-    write: LookupCacheWrite,
-) -> Result<(), McpError> {
+    persist: impl FnOnce(&rusqlite::Connection) -> Result<T, PersistLookupError>,
+) -> Result<T, McpError> {
     let store_conn = server.cache_store_conn()?;
-    store::set_enrichment(
-        &store_conn,
-        provider,
-        norm_artist,
-        norm_title,
-        norm_album,
-        Some(&write.match_quality),
-        write.response_json.as_deref(),
-    )
-    .map_err(cache_error)
+    persist(&store_conn).map_err(|error| match error {
+        PersistLookupError::Cache(error) => cache_error(error),
+        PersistLookupError::Serialize(error) => mcp_internal_error(error.to_string()),
+    })
 }
 
 /// Resolve track identity from either track_id (DB lookup) or explicit artist/title.
@@ -114,47 +95,28 @@ pub(super) async fn handle_lookup_discogs(
         params.album,
     )?;
 
-    let norm_artist = crate::normalize::normalize_for_matching(&artist);
-    let norm_title = crate::normalize::normalize_for_matching(&title);
-    let norm_album = normalize_discogs_album_for_cache(album.as_deref());
+    let identity = LookupIdentity::new(artist, title, album);
+    let policy = LookupPolicy {
+        force_refresh,
+        cache_read_enabled: true,
+    };
+    if let Some(cached) = cached_lookup(server, LookupProvider::Discogs, &identity, policy)? {
+        return ok_json(&cached.into_output());
+    }
 
-    let result = lookup_with_cache(
-        LookupPolicy {
-            force_refresh,
-            cache_read_enabled: true,
-        },
-        || {
-            read_lookup_cache(
-                server,
-                "discogs",
-                &norm_artist,
-                &norm_title,
-                norm_album.as_deref(),
-            )
-        },
-        |write| {
-            write_lookup_cache(
-                server,
-                "discogs",
-                &norm_artist,
-                &norm_title,
-                norm_album.as_deref(),
-                write,
-            )
-        },
-        lookup_discogs_remote(server, &artist, &title, album.as_deref()),
-        |result| {
-            if result.fuzzy_match { "fuzzy" } else { "exact" }
-        },
+    let result = lookup_discogs_remote(
+        server,
+        &identity.artist,
+        &identity.title,
+        identity.album.as_deref(),
     )
     .await
-    .map_err(|error| match error {
-        LookupWorkflowError::Cache(error) => error,
-        LookupWorkflowError::Lookup(error) => match error.auth_remediation() {
-            Some(remediation) => mcp_internal_error(auth_remediation_message(remediation)),
-            None => mcp_internal_error(format!("Discogs error: {error}")),
-        },
-        LookupWorkflowError::Serialize(error) => mcp_internal_error(error.to_string()),
+    .map_err(|error| match error.auth_remediation() {
+        Some(remediation) => mcp_internal_error(auth_remediation_message(remediation)),
+        None => mcp_internal_error(format!("Discogs error: {error}")),
+    })?;
+    let result = persist_lookup_result(server, |conn| {
+        enrichment_lookup::persist_discogs_result(conn, &identity, result)
     })?;
 
     ok_json(&result.into_output())
@@ -174,28 +136,20 @@ pub(super) async fn handle_lookup_beatport(
         None,
     )?;
 
-    let norm_artist = crate::normalize::normalize_for_matching(&artist);
-    let norm_title = crate::normalize::normalize_for_matching(&title);
+    let identity = LookupIdentity::new(artist, title, None);
+    let policy = LookupPolicy {
+        force_refresh,
+        cache_read_enabled: true,
+    };
+    if let Some(cached) = cached_lookup(server, LookupProvider::Beatport, &identity, policy)? {
+        return ok_json(&cached.into_output());
+    }
 
-    let result = lookup_with_cache(
-        LookupPolicy {
-            force_refresh,
-            cache_read_enabled: true,
-        },
-        || read_lookup_cache(server, "beatport", &norm_artist, &norm_title, None),
-        |write| write_lookup_cache(server, "beatport", &norm_artist, &norm_title, None, write),
-        lookup_beatport_remote(server, &artist, &title),
-        |result| {
-            if result.fuzzy_match { "fuzzy" } else { "exact" }
-        },
-    )
-    .await
-    .map_err(|error| match error {
-        LookupWorkflowError::Cache(error) => error,
-        LookupWorkflowError::Lookup(error) => {
-            mcp_internal_error(format!("Beatport error: {error}"))
-        }
-        LookupWorkflowError::Serialize(error) => mcp_internal_error(error.to_string()),
+    let result = lookup_beatport_remote(server, &identity.artist, &identity.title)
+        .await
+        .map_err(|error| mcp_internal_error(format!("Beatport error: {error}")))?;
+    let result = persist_lookup_result(server, |conn| {
+        enrichment_lookup::persist_beatport_result(conn, &identity, result)
     })?;
 
     ok_json(&result.into_output())
@@ -215,41 +169,20 @@ pub(super) async fn handle_lookup_musicbrainz(
         None,
     )?;
 
-    let norm_artist = crate::normalize::normalize_for_matching(&artist);
-    let norm_title = crate::normalize::normalize_for_matching(&title);
+    let identity = LookupIdentity::new(artist, title, None);
+    let policy = LookupPolicy {
+        force_refresh,
+        cache_read_enabled: true,
+    };
+    if let Some(cached) = cached_lookup(server, LookupProvider::MusicBrainz, &identity, policy)? {
+        return ok_json(&cached.into_output());
+    }
 
-    let result = lookup_with_cache(
-        LookupPolicy {
-            force_refresh,
-            cache_read_enabled: true,
-        },
-        || read_lookup_cache(server, "musicbrainz", &norm_artist, &norm_title, None),
-        |write| {
-            write_lookup_cache(
-                server,
-                "musicbrainz",
-                &norm_artist,
-                &norm_title,
-                None,
-                write,
-            )
-        },
-        lookup_musicbrainz_remote(server, &artist, &title),
-        |result| {
-            if result.score >= 100 {
-                "exact"
-            } else {
-                "fuzzy"
-            }
-        },
-    )
-    .await
-    .map_err(|error| match error {
-        LookupWorkflowError::Cache(error) => error,
-        LookupWorkflowError::Lookup(error) => {
-            mcp_internal_error(format!("MusicBrainz error: {error}"))
-        }
-        LookupWorkflowError::Serialize(error) => mcp_internal_error(error.to_string()),
+    let result = enrichment_lookup::dispatch_musicbrainz(&server.state.http, &identity)
+        .await
+        .map_err(|error| mcp_internal_error(format!("MusicBrainz error: {error}")))?;
+    let result = persist_lookup_result(server, |conn| {
+        enrichment_lookup::persist_musicbrainz_result(conn, &identity, result)
     })?;
 
     ok_json(&result.into_output())
@@ -270,42 +203,21 @@ pub(super) async fn handle_lookup_bandcamp(
         None,
     )?;
 
-    let norm_artist = crate::normalize::normalize_for_matching(&artist);
-    let norm_title = crate::normalize::normalize_for_matching(&title);
-
-    let cache_read_enabled = url.is_none();
-    let lookup = async {
-        if let Some(url) = url {
-            bandcamp::lookup_url(&server.state.http, &url, &artist, &title)
-                .await
-                .map_err(|error| error.to_string())
-        } else {
-            lookup_bandcamp_remote(server, &artist, &title).await
-        }
+    let identity = LookupIdentity::new(artist, title, None);
+    let policy = LookupPolicy {
+        force_refresh,
+        cache_read_enabled: url.is_none(),
     };
-    let result = lookup_with_cache(
-        LookupPolicy {
-            force_refresh,
-            cache_read_enabled,
-        },
-        || read_lookup_cache(server, "bandcamp", &norm_artist, &norm_title, None),
-        |write| write_lookup_cache(server, "bandcamp", &norm_artist, &norm_title, None, write),
-        lookup,
-        |result| {
-            if result.score == 100 {
-                "exact"
-            } else {
-                "fuzzy"
-            }
-        },
-    )
-    .await
-    .map_err(|error| match error {
-        LookupWorkflowError::Cache(error) => error,
-        LookupWorkflowError::Lookup(error) => {
-            mcp_internal_error(format!("Bandcamp error: {error}"))
-        }
-        LookupWorkflowError::Serialize(error) => mcp_internal_error(error.to_string()),
+    if let Some(cached) = cached_lookup(server, LookupProvider::Bandcamp, &identity, policy)? {
+        return ok_json(&cached.into_output());
+    }
+
+    let result =
+        enrichment_lookup::dispatch_bandcamp(&server.state.http, &identity, url.as_deref())
+            .await
+            .map_err(|error| mcp_internal_error(format!("Bandcamp error: {error}")))?;
+    let result = persist_lookup_result(server, |conn| {
+        enrichment_lookup::persist_bandcamp_result(conn, &identity, result)
     })?;
 
     ok_json(&result.into_output())
@@ -316,9 +228,10 @@ pub(super) async fn lookup_musicbrainz_remote(
     artist: &str,
     title: &str,
 ) -> Result<Option<musicbrainz::MusicBrainzResult>, String> {
-    musicbrainz::lookup(&server.state.http, artist, title)
+    let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
+    enrichment_lookup::dispatch_musicbrainz(&server.state.http, &identity)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 fn cache_write_failure(
@@ -401,7 +314,7 @@ where
                     );
                 }
             };
-            match acknowledge_enrichment_cache_write(
+            match acknowledge_mcp_enrichment_cache_write(
                 cache_tx,
                 EnrichmentCacheWrite {
                     provider: match provider {
@@ -415,7 +328,6 @@ where
                     match_quality: Some(quality.to_string()),
                     response_json: Some(json_str),
                 },
-                provider,
             )
             .await
             {
@@ -430,7 +342,7 @@ where
             }
         }
         Ok(None) => {
-            match acknowledge_enrichment_cache_write(
+            match acknowledge_mcp_enrichment_cache_write(
                 cache_tx,
                 EnrichmentCacheWrite {
                     provider: match provider {
@@ -444,7 +356,6 @@ where
                     match_quality: Some("none".to_string()),
                     response_json: None,
                 },
-                provider,
             )
             .await
             {
@@ -769,7 +680,7 @@ async fn enrich_single_track(
                             );
                         }
                     };
-                    match acknowledge_enrichment_cache_write(
+                    match acknowledge_mcp_enrichment_cache_write(
                         &cache_tx,
                         EnrichmentCacheWrite {
                             provider: crate::types::Provider::Discogs,
@@ -779,7 +690,6 @@ async fn enrich_single_track(
                             match_quality: Some(quality),
                             response_json: Some(json_str),
                         },
-                        "discogs enrichment",
                     )
                     .await
                     {
@@ -795,7 +705,7 @@ async fn enrich_single_track(
                     }
                 }
                 Ok(None) => {
-                    match acknowledge_enrichment_cache_write(
+                    match acknowledge_mcp_enrichment_cache_write(
                         &cache_tx,
                         EnrichmentCacheWrite {
                             provider: crate::types::Provider::Discogs,
@@ -805,7 +715,6 @@ async fn enrich_single_track(
                             match_quality: Some("none".to_string()),
                             response_json: None,
                         },
-                        "discogs enrichment",
                     )
                     .await
                     {
@@ -1409,7 +1318,7 @@ mod cache_write_tests {
         sender: &tokio::sync::mpsc::Sender<EnrichCacheWriteMsg>,
         write: EnrichCacheWrite,
     ) -> Result<(), String> {
-        acknowledge_enrichment_cache_write(sender, write, "enrichment").await
+        acknowledge_mcp_enrichment_cache_write(sender, write).await
     }
 
     fn run_enrich_cache_writer(
@@ -1530,11 +1439,7 @@ mod cache_write_tests {
         .await
         .expect("closed queue scenario should finish within five seconds")
         .expect("closed queue bounded wait should finish");
-        assert!(
-            result
-                .expect_err("closed queue should fail")
-                .starts_with("enrichment cache queue send failed:")
-        );
+        assert_eq!(result, Err("cache write queue closed".to_string()));
     }
 
     #[tokio::test]
@@ -1545,7 +1450,7 @@ mod cache_write_tests {
             .expect("ack cancellation harness should finish cleanly");
         assert_eq!(
             result,
-            Err("enrichment cache acknowledgement canceled".to_string())
+            Err("cache writer acknowledgement canceled".to_string())
         );
     }
 
