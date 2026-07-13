@@ -26,6 +26,7 @@ import {
   deriveAgentPairs,
   extractSopCalls,
   FIRST_SESSION_PROMPT,
+  LIBRARY_HEALTH_PROMPTS,
   parseApplicationCliHelp,
   parseDocsGatePathInventories,
   parseRootCliHelp,
@@ -37,6 +38,7 @@ import {
   validateColorPaletteContract,
   validateDocsGatePathInventories,
   validateFirstSessionPage,
+  validateLibraryHealthContract,
   validateMcpContracts,
   validateMcpOutputContracts,
   validateOnboardingSources,
@@ -3116,6 +3118,202 @@ test('batch audio extension contract follows the canonical Rust set', () => {
     () =>
       validateBatchAudioExtensionsContract(document(duplicate, file), source),
     /batch-import\.mdx:1: batch audio extension block contains a duplicate extension; source=src\/audio\.rs/,
+  )
+})
+
+test('library-health prompts and SOP preserve scoped safety tiers', () => {
+  const page = document(
+    readFileSync(
+      new URL(
+        '../site/src/content/docs/workflows/library-health.mdx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    'site/src/content/docs/workflows/library-health.mdx',
+  )
+  const sop = document(
+    readFileSync(
+      new URL(
+        '../site/src/partials/sops/library-health.mdx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    'site/src/partials/sops/library-health.mdx',
+  )
+  const tools = [
+    tool('read_library'),
+    tool('scan_broken_links', {
+      limit: { type: 'integer' },
+      offset: { type: 'integer' },
+      path_prefix: { type: 'string' },
+      suggest_relocations: { type: 'boolean' },
+    }),
+    tool('scan_orphan_files', {
+      limit: { type: 'integer' },
+      path_prefix: { type: 'string' },
+    }),
+    tool('scan_playlist_coverage', {
+      limit: { type: 'integer' },
+      offset: { type: 'integer' },
+      path_prefix: { type: 'string' },
+    }),
+    tool('scan_duplicates', {
+      detection_level: {
+        oneOf: [{ const: 'metadata' }, { const: 'exact' }],
+      },
+      limit: { type: 'integer' },
+      offset: { type: 'integer' },
+      path_prefix: { type: 'string' },
+    }),
+  ]
+  const validate = ({
+    pageContent = page.content,
+    sopContent = sop.content,
+    liveTools = tools,
+    runtimeSop = sopContent,
+  } = {}) =>
+    validateLibraryHealthContract({
+      pageDocument: document(pageContent, page.file),
+      sopDocument: document(sopContent, sop.file),
+      liveTools,
+      runtimeSop,
+    })
+
+  assert.doesNotThrow(() => validate())
+  assert.equal(
+    LIBRARY_HEALTH_PROMPTS.quick.startsWith(
+      'Check my library for common problems.',
+    ),
+    true,
+  )
+
+  const pageMutations = [
+    [
+      page.content.replace(
+        '<!-- doc-contract:library-health-prompt mode=quick start -->',
+        '',
+      ),
+      /exactly three well-formed marker pairs/,
+    ],
+    [
+      page.content.replace('mode=quick end', 'mode=exact end'),
+      /quick prompt needs one matching start\/end marker pair/,
+    ],
+    [
+      page.content.replace('all of them or one folder', 'whatever seems best'),
+      /all-roots-or-one-root choice/,
+    ],
+    [
+      page.content.replace('- missing files\n', ''),
+      /missing-file checks/,
+    ],
+    [
+      page.content.replace(
+        'summary with counts and a few useful examples',
+        'summary',
+      ),
+      /counts and examples/,
+    ],
+    [
+      page.content.replace(
+        'Do not run the slower exact duplicate check',
+        'Run the slower exact duplicate check',
+      ),
+      /no-exact-hashing boundary/,
+    ],
+    [
+      page.content.replace('change or delete anything', 'change anything'),
+      /no-change-or-delete boundary/,
+    ],
+    [
+      page.content.replace('use online services', 'contact online services'),
+      /no-online-services boundary/,
+    ],
+    [
+      page.content.replace(
+        'Ask before any follow-up action.',
+        'Continue with follow-up actions.',
+      ),
+      /follow-up approval boundary/,
+    ],
+    [
+      page.content.replace(
+        'byte-identical duplicate audio files',
+        'duplicate audio files',
+      ),
+      /byte-identical matching/,
+    ],
+    [
+      page.content.replace('This can take a while.', 'This is instant.'),
+      /time warning/,
+    ],
+    [
+      page.content.replace(
+        'do not move or delete anything.',
+        'you may move or delete files.',
+      ),
+      /no-move-or-delete boundary/,
+    ],
+    [
+      page.content.replace(
+        'then ask before running the slower exact duplicate check',
+        'then run the slower exact duplicate check',
+      ),
+      /approval before exact hashing/,
+    ],
+  ]
+  pageMutations.forEach(([pageContent, expected]) => {
+    assert.throws(() => validate({ pageContent }), expected)
+  })
+
+  const sopMutations = [
+    [
+      sop.content.replace('## Quick check (default)', '## Quick check'),
+      /Quick default/,
+    ],
+    [
+      sop.content.replace(
+        'For a generic health-check request, use Quick check.',
+        'For a generic health-check request, use Exact duplicate check.',
+      ),
+      /generic health requests defaulting to Quick check/,
+    ],
+    [
+      sop.content.replace('Receive explicit approval', 'Proceed'),
+      /explicit approval immediately before exact hashing/,
+    ],
+    [
+      sop.content.replace(
+        'No files are modified, moved, or deleted',
+        'Files may be modified, moved, or deleted',
+      ),
+      /no-file-mutation boundary/,
+    ],
+    [
+      sop.content.replace('Do not stage', 'You may stage'),
+      /no-staging boundary/,
+    ],
+    [
+      sop.content.replace('Do not use online services', 'Use online services'),
+      /offline boundary/,
+    ],
+  ]
+  sopMutations.forEach(([sopContent, expected]) => {
+    assert.throws(() => validate({ sopContent }), expected)
+  })
+
+  const missingPathPrefix = structuredClone(tools)
+  delete missingPathPrefix.find((entry) => entry.name === 'scan_duplicates')
+    .inputSchema.properties.path_prefix
+  assert.throws(
+    () => validate({ liveTools: missingPathPrefix }),
+    /live scan_duplicates schema is missing path_prefix/,
+  )
+  assert.throws(
+    () => validate({ runtimeSop: `${sop.content}\nRuntime drift` }),
+    /release-binary Library Health help does not embed the current SOP/,
   )
 })
 

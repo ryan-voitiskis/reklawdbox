@@ -997,7 +997,8 @@ export const workflows = [
     resumability:
       'Results are point-in-time snapshots rather than saved workflow state. Duplicate groups traverse page.next_offset while page.has_more; exact mode rehashes each request. Restart at offset zero, and re-run affected scans, after any Rekordbox scope or filesystem change.',
     approval: [
-      'No approval is needed for the read-only scan.',
+      'Quick checks need no approval after the user confirms all discovered content roots or selects one root.',
+      'Ask for explicit approval immediately before starting exact duplicate hashing.',
       'Review every recommendation before taking the separate manual action in Rekordbox or on disk.',
     ],
     recovery: [

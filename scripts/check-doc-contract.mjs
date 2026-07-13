@@ -25,6 +25,22 @@ const MCP_OUTPUT_CONTRACT_TOOLS = new Set([
 const REQUIRED_XML_BACKUP_SUCCESS_CONDITION =
   'XML export proceeds only after the built-in backup succeeds or the configured custom script exits zero'
 
+export const LIBRARY_HEALTH_PROMPTS = Object.freeze({
+  quick: `Check my library for common problems.
+
+First show me the music folders you found and ask whether I want to check all of them or one folder. Then check for:
+- missing files
+- audio files that are not in Rekordbox
+- tracks that are not in any playlist
+- likely duplicates based on artist and title
+
+Give me a short summary with counts and a few useful examples. Do not run the slower exact duplicate check, change or delete anything, or use online services. Ask before any follow-up action.`,
+  exact:
+    'Look for byte-identical duplicate audio files in [folder or all music folders]. This can take a while. Show me the duplicate groups and which copy looks safest to keep, but do not move or delete anything.',
+  complete:
+    'Run a complete library health check for [folder or all music folders]. Start with the quick checks. Show me that summary, then ask before running the slower exact duplicate check. Do not change, move, or delete anything.',
+})
+
 export function compareToolMappings(liveTools, references) {
   const liveNames = [...new Set(liveTools.map((tool) => tool.name))].sort()
   const mappedNames = [...new Set(references.map((tool) => tool.name))].sort()
@@ -3034,6 +3050,397 @@ export function validateBatchAudioExtensionsContract(document, audioSource) {
   }
 }
 
+const LIBRARY_HEALTH_PROMPT_MODES = ['quick', 'exact', 'complete']
+
+function libraryHealthPromptBlocks(document) {
+  const source = document.content.replaceAll('\r\n', '\n')
+  const markerPattern =
+    /^(?:<!-- doc-contract:library-health-prompt mode=(quick|exact|complete) (start|end) -->|\{\/\* <!-- doc-contract:library-health-prompt mode=(quick|exact|complete) (start|end) --> \*\/\})$/gm
+  const markers = [...source.matchAll(markerPattern)].map((marker) => ({
+    full: marker[0],
+    index: marker.index,
+    mode: marker[1] ?? marker[3],
+    phase: marker[2] ?? marker[4],
+  }))
+  const tokens = source.match(/doc-contract:library-health-prompt/g) ?? []
+  if (markers.length !== 6 || tokens.length !== 6) {
+    throw new Error(
+      `${document.file}: library-health prompts need exactly three well-formed marker pairs`,
+    )
+  }
+
+  const blocks = new Map()
+  let previousEnd = -1
+  for (const mode of LIBRARY_HEALTH_PROMPT_MODES) {
+    const starts = markers.filter((marker) =>
+      marker.mode === mode && marker.phase === 'start'
+    )
+    const ends = markers.filter((marker) =>
+      marker.mode === mode && marker.phase === 'end'
+    )
+    if (starts.length !== 1 || ends.length !== 1) {
+      throw new Error(
+        `${document.file}: library-health ${mode} prompt needs one matching start/end marker pair`,
+      )
+    }
+    const start = starts[0]
+    const end = ends[0]
+    const bodyStart = start.index + start.full.length
+    if (start.index <= previousEnd || end.index <= bodyStart) {
+      throw new Error(
+        `${document.file}: library-health ${mode} prompt markers are unmatched or out of order`,
+      )
+    }
+    const body = source.slice(bodyStart, end.index)
+    const fences = fencedBlocks(body, `${document.file}:${mode}`)
+    if (fences.length !== 1 || fences[0].info !== 'text wrap') {
+      throw new Error(
+        `${document.file}: library-health ${mode} marker must contain exactly one wrapped text fence`,
+      )
+    }
+    const fence = fences[0]
+    if (
+      fence.openingIndent !== 0
+      || fence.closingIndent !== 0
+      || fence.openingFence !== '```'
+      || fence.closingFence !== '```'
+    ) {
+      throw new Error(
+        `${document.file}: library-health ${mode} prompt must use an unindented triple-backtick text fence`,
+      )
+    }
+    if (
+      `${body.slice(0, fence.index)}${
+        body.slice(fence.index + fence.full.length)
+      }`.trim()
+    ) {
+      throw new Error(
+        `${document.file}: library-health ${mode} marker may contain only its text fence`,
+      )
+    }
+    blocks.set(mode, {
+      start: start.index,
+      end: end.index + end.full.length,
+      prompt: fence.body.replace(/\n$/, ''),
+    })
+    previousEnd = end.index
+  }
+  return blocks
+}
+
+function requireLibraryHealthMeaning(document, mode, prompt, label, pattern) {
+  if (!pattern.test(prompt)) {
+    throw new Error(
+      `${document.file}: library-health ${mode} prompt is missing ${label}`,
+    )
+  }
+}
+
+function validateLibraryHealthPromptMeaning(document, blocks) {
+  const quick = blocks.get('quick').prompt
+  const exact = blocks.get('exact').prompt
+  const complete = blocks.get('complete').prompt
+
+  for (
+    const [label, pattern] of [
+      [
+        'the all-roots-or-one-root choice',
+        /music folders[\s\S]*all of them or one folder/i,
+      ],
+      ['missing-file checks', /missing files/i],
+      ['untracked-audio checks', /audio files that are not in Rekordbox/i],
+      ['playlist-coverage checks', /tracks that are not in any playlist/i],
+      [
+        'artist-and-title duplicate clues',
+        /likely duplicates based on artist and title/i,
+      ],
+      ['counts and examples', /summary with counts and a few useful examples/i],
+      [
+        'the no-exact-hashing boundary',
+        /do not run the slower exact duplicate check/i,
+      ],
+      [
+        'the no-change-or-delete boundary',
+        /do not[\s\S]*change or delete anything/i,
+      ],
+      ['the no-online-services boundary', /do not[\s\S]*use online services/i],
+      ['the follow-up approval boundary', /ask before any follow-up action/i],
+    ]
+  ) {
+    requireLibraryHealthMeaning(document, 'quick', quick, label, pattern)
+  }
+  for (
+    const [label, pattern] of [
+      ['byte-identical matching', /byte-identical duplicate audio files/i],
+      [
+        'the explicit folder scope placeholder',
+        /\[folder or all music folders\]/,
+      ],
+      ['the time warning', /can take a while/i],
+      ['the no-move-or-delete boundary', /do not move or delete anything/i],
+    ]
+  ) {
+    requireLibraryHealthMeaning(document, 'exact', exact, label, pattern)
+  }
+  for (
+    const [label, pattern] of [
+      [
+        'the explicit folder scope placeholder',
+        /\[folder or all music folders\]/,
+      ],
+      ['quick checks first', /start with the quick checks/i],
+      ['the displayed quick summary', /show me that summary/i],
+      [
+        'approval before exact hashing',
+        /ask before running the slower exact duplicate check/i,
+      ],
+      [
+        'the no-change-move-or-delete boundary',
+        /do not change, move, or delete anything/i,
+      ],
+    ]
+  ) {
+    requireLibraryHealthMeaning(document, 'complete', complete, label, pattern)
+  }
+
+  for (const mode of LIBRARY_HEALTH_PROMPT_MODES) {
+    if (blocks.get(mode).prompt !== LIBRARY_HEALTH_PROMPTS[mode]) {
+      throw new Error(
+        `${document.file}: library-health ${mode} prompt must match the canonical text exactly`,
+      )
+    }
+  }
+}
+
+function requireLibraryHealthSop(sopDocument, label, pattern, source) {
+  if (!pattern.test(source)) {
+    throw new Error(
+      `${sopDocument.file}: Library Health SOP is missing ${label}`,
+    )
+  }
+}
+
+function validateLibraryHealthToolSurface(sopDocument, liveTools) {
+  const liveByName = new Map(liveTools.map((tool) => [tool.name, tool]))
+  const expected = new Map([
+    ['read_library', []],
+    ['scan_broken_links', [
+      'limit',
+      'offset',
+      'path_prefix',
+      'suggest_relocations',
+    ]],
+    ['scan_orphan_files', ['limit', 'path_prefix']],
+    ['scan_playlist_coverage', ['limit', 'offset', 'path_prefix']],
+    ['scan_duplicates', ['detection_level', 'limit', 'offset', 'path_prefix']],
+  ])
+  for (const [name, parameters] of expected) {
+    const tool = liveByName.get(name)
+    if (!tool) {
+      throw new Error(
+        `${sopDocument.file}: live Library Health tool is missing: ${name}`,
+      )
+    }
+    const properties = schemaProperties(tool.inputSchema ?? {}, '/').properties
+    for (const parameter of parameters) {
+      if (!Object.hasOwn(properties, parameter)) {
+        throw new Error(
+          `${sopDocument.file}: live ${name} schema is missing ${parameter}`,
+        )
+      }
+    }
+  }
+  const duplicateSchema = JSON.stringify(
+    liveByName.get('scan_duplicates').inputSchema ?? {},
+  )
+  for (const level of ['metadata', 'exact']) {
+    if (!duplicateSchema.includes(`\"${level}\"`)) {
+      throw new Error(
+        `${sopDocument.file}: live scan_duplicates schema is missing ${level} mode`,
+      )
+    }
+  }
+}
+
+/** Validate Library Health's scoped human prompts and tiered Agent SOP. */
+export function validateLibraryHealthContract({
+  pageDocument,
+  sopDocument,
+  liveTools,
+  runtimeSop = null,
+}) {
+  const blocks = libraryHealthPromptBlocks(pageDocument)
+  validateLibraryHealthPromptMeaning(pageDocument, blocks)
+
+  const page = pageDocument.content.replaceAll('\r\n', '\n')
+  const startHere = page.indexOf('## Start here')
+  const recommended = page.indexOf('**Recommended**', startHere)
+  const safety = page.indexOf(
+    '**Read-only · No network · Nothing is changed**',
+    startHere,
+  )
+  const whatYouGet = page.indexOf("## What you'll get")
+  const deeper = page.indexOf('## Choose a deeper check')
+  const whatHappens = page.indexOf('## What happens next')
+  const technical = page.indexOf('## Technical details')
+  if (
+    [startHere, recommended, safety, whatYouGet, deeper, whatHappens, technical]
+      .some((index) => index < 0)
+    || !(startHere < recommended && recommended < safety
+      && safety < blocks.get('quick').start
+      && blocks.get('quick').end < whatYouGet
+      && whatYouGet < deeper
+      && deeper < blocks.get('exact').start
+      && blocks.get('exact').end < blocks.get('complete').start
+      && blocks.get('complete').end < whatHappens
+      && whatHappens < technical)
+  ) {
+    throw new Error(
+      `${pageDocument.file}: Library Health source hierarchy must put the safe quick action before optional deeper checks and technical detail`,
+    )
+  }
+  const outcomeBullets = page.slice(whatYouGet, deeper).match(/^\s*-\s+/gm)
+    ?? []
+  if (outcomeBullets.length !== 4) {
+    throw new Error(
+      `${pageDocument.file}: What you'll get must contain exactly four compact bullets`,
+    )
+  }
+  if ((fencedBlocks(page, pageDocument.file)).length !== 3) {
+    throw new Error(
+      `${pageDocument.file}: Library Health must expose exactly three runnable prompts`,
+    )
+  }
+  if (/Run a full health scan on my library\./.test(page)) {
+    throw new Error(
+      `${pageDocument.file}: ambiguous full-health-scan prompt must be absent`,
+    )
+  }
+  if (
+    !page.includes('[Agent SOP: Library Health](/agent/library-health/)')
+    || !page.includes('<WorkflowQuickStart id="library-health" />')
+    || !page.includes('<WorkflowContract id="library-health" />')
+  ) {
+    throw new Error(
+      `${pageDocument.file}: Library Health must retain quick-start, technical-contract, and Agent SOP access`,
+    )
+  }
+
+  validateLibraryHealthToolSurface(sopDocument, liveTools)
+  validateSopContracts([sopDocument], liveTools)
+  const sop = sopDocument.content.replaceAll('\r\n', '\n')
+  const quickHeading = sop.indexOf('## Quick check (default)')
+  const exactHeading = sop.indexOf('## Exact duplicate check (optional)')
+  const completeHeading = sop.indexOf('## Complete guided check (optional)')
+  if (
+    quickHeading < 0 || exactHeading < 0 || completeHeading < 0
+    || !(quickHeading < exactHeading && exactHeading < completeHeading)
+  ) {
+    throw new Error(
+      `${sopDocument.file}: Library Health SOP must order Quick default, Exact optional, and Complete optional tiers`,
+    )
+  }
+  const quick = sop.slice(quickHeading, exactHeading)
+  const exact = sop.slice(exactHeading, completeHeading)
+  const complete = sop.slice(completeHeading)
+  for (
+    const [label, pattern] of [
+      [
+        'generic health requests defaulting to Quick check',
+        /For a generic health-check request, use Quick check\./i,
+      ],
+      [
+        'read_library before scans',
+        /read_library[\s\S]*scan_broken_links[\s\S]*scan_orphan_files[\s\S]*scan_playlist_coverage[\s\S]*scan_duplicates\(detection_level="metadata"/,
+      ],
+      [
+        'the discovered-root all-or-one approval question',
+        /content_roots[\s\S]*ask[\s\S]*all[\s\S]*one/i,
+      ],
+      [
+        'metadata duplicate mode',
+        /scan_duplicates\(detection_level="metadata"/,
+      ],
+      ['counts first', /counts first/i],
+      ['representative examples', /representative examples/i],
+      ['limitations', /limitations/i],
+      ['duplicate pagination', /offset=page\.next_offset[\s\S]*page\.has_more/],
+    ]
+  ) {
+    requireLibraryHealthSop(sopDocument, label, pattern, quick)
+  }
+  if (/detection_level="exact"/.test(quick)) {
+    throw new Error(
+      `${sopDocument.file}: Quick check must not run exact duplicate hashing`,
+    )
+  }
+  for (
+    const [label, pattern] of [
+      ['confirmed folder scope', /confirm[\s\S]*folder scope/i],
+      [
+        'explicit approval immediately before exact hashing',
+        /explicit approval[\s\S]{0,450}scan_duplicates\(detection_level="exact"/i,
+      ],
+      [
+        'the exact scoped call',
+        /scan_duplicates\(detection_level="exact", path_prefix="\/confirmed\/scope", limit=50\)/,
+      ],
+      ['exact pagination', /offset=page\.next_offset[\s\S]*page\.has_more/],
+      ['the repeated rehash warning', /rehashes on every request/i],
+      ['the restart-at-zero warning', /restart at offset zero/i],
+      ['the zero-limit terminal warning', /zero limit is a terminal no-op/i],
+    ]
+  ) {
+    requireLibraryHealthSop(sopDocument, label, pattern, exact)
+  }
+  for (
+    const [label, pattern] of [
+      ['Quick check first', /run Quick check first/i],
+      ['the displayed quick summary', /display[\s\S]*summary/i],
+      [
+        'the explicit exact-hash question',
+        /ask[\s\S]*whether[\s\S]*Exact duplicate check/i,
+      ],
+    ]
+  ) {
+    requireLibraryHealthSop(sopDocument, label, pattern, complete)
+  }
+  for (
+    const [label, pattern] of [
+      ['the read-only boundary', /read-only/i],
+      ['the no-staging boundary', /do not stage/i],
+      ['the no-export boundary', /do not export/i],
+      [
+        'the no-file-mutation boundary',
+        /no files are modified, moved, or deleted/i,
+      ],
+      ['the offline boundary', /do not use online services/i],
+      [
+        'manual Rekordbox relocation guidance',
+        /Database Management > Relocate/,
+      ],
+      ['manual orphan follow-up', /drag-and-drop/i],
+      ['manual playlist follow-up', /assign[\s\S]*playlist/i],
+      ['manual duplicate decisions', /user decides[\s\S]*no deletion occurs/i],
+      [
+        'metadata-versus-byte-identical limits',
+        /metadata matches are clues[\s\S]*identical bytes[\s\S]*(?:does not authorize|neither result authorizes) deletion/i,
+      ],
+    ]
+  ) {
+    requireLibraryHealthSop(sopDocument, label, pattern, sop)
+  }
+
+  if (
+    runtimeSop !== null
+    && runtimeSop.replaceAll('\r\n', '\n').trim() !== sop.trim()
+  ) {
+    throw new Error(
+      `${sopDocument.file}: release-binary Library Health help does not embed the current SOP`,
+    )
+  }
+}
+
 /**
  * Validate the source-only shape of the bounded first-session prompt against
  * the live MCP tool inventory.
@@ -4326,6 +4733,28 @@ async function main() {
       `site/src/content/docs${workflow.route.replace(/\/$/, '')}.mdx`
     ),
   )
+  const libraryHealthPage = workflowSourceDocuments.find((document) =>
+    document.file.endsWith('/workflows/library-health.mdx')
+  )
+  const libraryHealthSop = sopDocuments.find(
+    (document) => document.file === 'site/src/partials/sops/library-health.mdx',
+  )
+  const libraryHealthHelp = topicPayloads.find(
+    ({ payload }) => payload.workflow === 'Library Health',
+  )?.payload
+  check(() => {
+    if (!libraryHealthPage || !libraryHealthSop || !libraryHealthHelp) {
+      throw new Error(
+        'Library Health page, SOP, or runtime help payload is missing',
+      )
+    }
+    validateLibraryHealthContract({
+      pageDocument: libraryHealthPage,
+      sopDocument: libraryHealthSop,
+      liveTools,
+      runtimeSop: libraryHealthHelp.sop ?? '',
+    })
+  })
   check(() => validateBuiltLinkSet(htmlDocuments, builtPaths))
   const builtWorkflowCatalog =
     htmlDocuments.find((document) =>

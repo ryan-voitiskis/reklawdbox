@@ -1,82 +1,102 @@
 ## Constraints
 
 - **Read-only scanning.** No files are modified, moved, or deleted by these tools.
+- **No staging or export.** Do not stage metadata, do not export XML, and do not create workflow state.
+- **Offline.** Do not use online services for any Library Health tier.
 - **Results are point-in-time snapshots.** Run scans after any Rekordbox import/export or file system changes.
 - **Samplers excluded.** All scans ignore Rekordbox factory sampler files.
+- **Manual decisions.** Metadata matches are clues; exact hashes establish identical bytes. Neither result authorizes deletion. The user decides every follow-up, and no deletion occurs in this workflow.
 
 ## Prerequisites
 
 - reklawdbox MCP server connected
-- No external tools required — all scanning is built-in
+- Read access to every music folder the user wants to inspect
+- No external tools required — all scanning is built in
 
-## Steps
+## Quick check (default)
 
-### 0. Start with read_library
+For a generic health-check request, use Quick check. Do not include exact duplicate hashing unless the user explicitly chooses a deeper tier.
+
+### 1. Load the library and confirm scope
 
 ```
 read_library
 ```
 
-Review `content_roots` and `total_tracks` to understand the library scope.
+Show the discovered `content_roots` and `total_tracks`. Ask whether the user wants to check all discovered roots or one root, and wait for the answer before any filesystem scan. If a discovered music folder is missing, ask the user to correct or narrow the scope.
 
-### 1. Scan for broken links
+For all confirmed roots, omit `path_prefix`. For one confirmed root, pass that folder as `path_prefix` in every scoped call below.
 
-```
-scan_broken_links(path_prefix="/path/to/scope", limit=200)
-```
-
-Checks every track in the database for missing files on disk. Use `path_prefix` to scope to a specific directory. `suggest_relocations` (default true) reports suggested relocations when a file with the same name exists elsewhere in the content roots.
-
-**If broken links found:** Review suggested relocations. File moves must be done manually in Rekordbox (Preferences > Advanced > Database Management > Relocate) or by correcting the directory structure.
-
-### 2. Scan for orphan files
+### 2. Scan for broken links
 
 ```
-scan_orphan_files(path_prefix="/path/to/scope", limit=200)
+scan_broken_links(path_prefix="/confirmed/scope", limit=200)
 ```
 
-Finds audio files on disk that are not imported into Rekordbox. Groups results by directory. Use `path_prefix` to scope to a specific directory instead of scanning all content roots.
+Checks database tracks for files missing on disk. `suggest_relocations` defaults to true and reports suggestions when a matching filename exists elsewhere in the content roots.
 
-**If orphans found:** These files can be imported into Rekordbox via drag-and-drop, or deleted if no longer wanted.
+**If broken links are found:** Review suggested relocations. File moves must be done manually in Rekordbox (Preferences > Advanced > Database Management > Relocate) or by correcting the directory structure.
 
-### 3. Check playlist coverage
-
-```
-scan_playlist_coverage(limit=200)
-```
-
-Finds tracks not assigned to any playlist. Accepts the shared search filters (`genre`, `artist`, `bpm_min`, `bpm_max`, `path_prefix`, `has_label`, etc.) for scoping to specific subsets of the library.
-
-**If uncovered tracks found:** Review and assign to playlists, or accept that some tracks are intentionally unplaylisted.
-
-### 4. Find duplicates
+### 3. Scan for orphan files
 
 ```
-scan_duplicates(detection_level="metadata", limit=50)
+scan_orphan_files(path_prefix="/confirmed/scope", limit=200)
 ```
 
-Groups tracks by matching artist + title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating). Use `path_prefix` to scope to a specific directory.
+Finds audio files on disk that are not imported into Rekordbox and groups results by directory.
 
-Record this page, then continue with
-`offset=page.next_offset` while `page.has_more` is true. `group_count` and
-`total_duplicate_tracks` describe the returned page; `page.total` is the full
-group count for the selected scope.
+**If orphans are found:** Review them. The user can later import wanted files into Rekordbox via drag-and-drop, or decide manually whether an unwanted file should be deleted outside this workflow.
 
-For higher confidence, run exact-level detection:
+### 4. Check playlist coverage
 
 ```
-scan_duplicates(detection_level="exact", limit=50)
+scan_playlist_coverage(path_prefix="/confirmed/scope", limit=200)
 ```
 
-This hashes actual audio files and only reports byte-identical duplicates.
+Finds tracks not assigned to any playlist. It also accepts the shared search filters (`genre`, `artist`, `bpm_min`, `bpm_max`, `has_label`, and others) when the user asks for a narrower subset.
 
-Traverse exact results with the same `page.next_offset` loop. Exact mode
-rehashes on every request, so do not modify files or the Rekordbox scope during
-the traversal. If either changes, restart at offset zero. A zero limit is a
-terminal no-op, not a traversal cursor.
+**If uncovered tracks are found:** Review and assign wanted tracks to playlists, or accept that some tracks are intentionally unplaylisted.
 
-**If duplicates found:** Remove duplicates manually in Rekordbox. The `suggested_keep` field indicates which copy to retain.
+### 5. Find likely metadata duplicates
 
-### 5. Summary
+```
+scan_duplicates(detection_level="metadata", path_prefix="/confirmed/scope", limit=50)
+```
 
-Report findings across all four scans: broken link count, orphan count, playlist coverage percentage, and duplicate group count. Suggest next steps based on which issues were found.
+Groups tracks by matching artist and title. Each group includes a `suggested_keep` recommendation based on audio quality (bitrate > sample rate > play count > rating), but this is only a review clue.
+
+Record the page, then continue with `offset=page.next_offset` while `page.has_more` is true. `group_count` and `total_duplicate_tracks` describe the returned page; `page.total` is the full group count for the selected scope.
+
+### 6. Summarize
+
+Report counts first: broken links, orphan files, tracks outside playlists, and likely metadata-duplicate groups. Follow with a small number of representative examples, the confirmed scope, and relevant limitations such as unreadable folders, capped result pages, or sampler exclusions. Suggest next questions, but ask before any follow-up action.
+
+Do not run exact duplicate hashing during Quick check, even when the user asked for a “health check” without further qualification.
+
+## Exact duplicate check (optional)
+
+This follow-up hashes audio files and reports only byte-identical groups. It can take materially longer than Quick check.
+
+Confirm the folder scope again. Explain that exact mode rehashes on every request, so a large scope can take a while. Receive explicit approval immediately before this call:
+
+```
+scan_duplicates(detection_level="exact", path_prefix="/confirmed/scope", limit=50)
+```
+
+For all confirmed music folders, omit `path_prefix`; for one folder, use the exact confirmed root. Do not guess or broaden the scope.
+
+Traverse results with `offset=page.next_offset` while `page.has_more` is true. Exact mode rehashes on every request, so do not modify files or the Rekordbox scope during traversal. If either changes, restart at offset zero. A zero limit is a terminal no-op, not a traversal cursor.
+
+Show duplicate groups and explain why `suggested_keep` appears safer, while making clear that identical bytes do not prove which path the user wants to retain. The user decides, and no deletion occurs in this workflow.
+
+## Complete guided check (optional)
+
+Run Quick check first. Display its count summary, representative examples, confirmed scope, and limitations. Then ask the user explicitly whether to run Exact duplicate check for that scope. Start exact hashing only after the user says yes; otherwise stop after the quick summary.
+
+## Manual follow-up and recovery
+
+- Broken links: use Rekordbox's relocation flow or correct the directory structure manually.
+- Orphan files: import wanted files by drag-and-drop, or decide outside this workflow whether unwanted files should be removed.
+- Playlist gaps: assign tracks to playlists or leave intentionally unplaylisted tracks alone.
+- Duplicate groups: use metadata and exact results as evidence, review `suggested_keep`, and make the final keep/remove decision manually in Rekordbox or the filesystem.
+- After any import, move, deletion, scope change, or access fix, rerun the affected scans before trusting the new totals.

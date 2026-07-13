@@ -8,53 +8,75 @@ sidebar:
 import WorkflowContract from '../../../components/WorkflowContract.astro'
 import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
-Get a point-in-time, read-only report of broken links, orphan files, playlist
-gaps, and duplicate groups, with suggested manual follow-up and no collection
-changes.
+The first-session prompt proved the connection and summarized Rekordbox.
+Library Health compares that collection with the files and playlists around it.
 
 ## Start here
 
 <WorkflowQuickStart id="library-health" />
 
+**Recommended**
+
+**Read-only · No network · Nothing is changed**
+
+{/* <!-- doc-contract:library-health-prompt mode=quick start --> */}
+
+```text wrap
+Check my library for common problems.
+
+First show me the music folders you found and ask whether I want to check all of them or one folder. Then check for:
+- missing files
+- audio files that are not in Rekordbox
+- tracks that are not in any playlist
+- likely duplicates based on artist and title
+
+Give me a short summary with counts and a few useful examples. Do not run the slower exact duplicate check, change or delete anything, or use online services. Ask before any follow-up action.
 ```
-Run a full health scan on my library.
+
+{/* <!-- doc-contract:library-health-prompt mode=quick end --> */}
+
+## What you'll get
+
+- A short count summary across the four common checks.
+- A few useful examples, rather than an overwhelming dump of every result.
+- The confirmed folder scope so you know what was and was not checked.
+- Suggested next questions while every follow-up action remains your choice.
+
+## Choose a deeper check
+
+### Exact duplicate check
+
+**Optional · Slower:** this reads and hashes every audio file in the confirmed
+scope, so it can take a while. Choose the folder scope before you copy it.
+
+{/* <!-- doc-contract:library-health-prompt mode=exact start --> */}
+
+```text wrap
+Look for byte-identical duplicate audio files in [folder or all music folders]. This can take a while. Show me the duplicate groups and which copy looks safest to keep, but do not move or delete anything.
 ```
+
+{/* <!-- doc-contract:library-health-prompt mode=exact end --> */}
+
+### Complete guided check
+
+**Optional · Pauses for approval:** this runs the quick checks first, shows you
+their summary, and waits before the slower exact duplicate pass.
+
+{/* <!-- doc-contract:library-health-prompt mode=complete start --> */}
+
+```text wrap
+Run a complete library health check for [folder or all music folders]. Start with the quick checks. Show me that summary, then ask before running the slower exact duplicate check. Do not change, move, or delete anything.
+```
+
+{/* <!-- doc-contract:library-health-prompt mode=complete end --> */}
 
 ## What happens next
 
-1. **Confirm access.** Connect to the intended Rekordbox library and make sure
-   every content root you want checked is readable.
-2. **Scan structure.** Check broken links, files on disk but absent from
-   Rekordbox, tracks missing from playlists, and metadata or exact-file
-   duplicate groups.
-3. **Review the evidence.** Separate credible relocation suggestions and true
-   duplicates from intentional copies, archives, or unassigned tracks.
-4. **Act outside the scan.** Make only the manual Rekordbox or filesystem
-   changes you approve, then rerun the affected scans.
-
-## Decisions and approval checkpoints
-
-- Run this before [Library Cleanup](/workflows/library-cleanup/), after moving
-  files or importing a large batch, or as periodic maintenance.
-- The scan needs no enrichment, cache coverage, network access, or approval.
-- Review every recommendation before relocating, importing, assigning, or
-  deleting anything. Similar artist/title text is not proof that two tracks are
-  interchangeable.
-
-## What changes and how to recover
-
-The health workflow writes no metadata, files, caches, or workflow state. Its
-results reflect the library and filesystem at scan time. After changing the
-scope, moving files, or making a manual fix, rerun the affected checks before
-trusting the new totals. If a root is unreadable, correct access or narrow the
-scope first.
-
-## Finish in Rekordbox
-
-Relocate confirmed broken links, import or remove confirmed orphans, assign
-tracks you intend to keep, and review duplicate removal in Rekordbox. The scan
-does not perform those actions for you. Rerun the relevant check and compare
-counts before declaring the issue resolved.
+The quick path returns its summary and stops. An exact check starts only after
+you choose its scope and approve the slower pass. Likely artist-and-title
+matches are clues; exact hashes establish identical bytes. Neither result proves
+which copy should be deleted or authorizes deletion, and Library Health changes
+nothing.
 
 ## Technical details
 
@@ -62,6 +84,6 @@ counts before declaring the issue resolved.
 
 ## Next steps
 
-- [Collection Audit](/workflows/collection-audit/) — fix naming and tagging issues
-- [Library Cleanup](/workflows/library-cleanup/) — the full five-session cleanup guide
 - [Agent SOP: Library Health](/agent/library-health/) — advanced, model-facing operational instructions
+- [Collection Audit](/workflows/collection-audit/) — inspect naming and tagging only if the health report suggests it
+- [Library Cleanup](/workflows/library-cleanup/) — choose a broader cleanup only when that is your goal
