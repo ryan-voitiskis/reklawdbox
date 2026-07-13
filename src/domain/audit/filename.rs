@@ -387,3 +387,502 @@ pub(crate) fn parse_loose_filename(stem: &str) -> ParsedFilename {
 // ---------------------------------------------------------------------------
 // Detected issue
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_album_track_with_year() {
+        let p = Path::new("/music/Artist/Album Name (2024)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_album_track_with_tech_specs_and_year() {
+        let p = Path::new("/music/Artist/Album [FLAC] (2024)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_loose_track_in_unnamed_dir() {
+        let p = Path::new("/music/play/Artist - Track.wav");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::LooseTrack
+        );
+    }
+
+    #[test]
+    fn classify_loose_track_no_year() {
+        let p = Path::new("/music/Artist/SomeDir/Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::LooseTrack
+        );
+    }
+
+    #[test]
+    fn classify_disc_subdir() {
+        let p = Path::new("/music/Artist/Album (2020)/CD1/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- has_year_suffix --
+
+    #[test]
+    fn year_suffix_present() {
+        assert!(has_year_suffix("Album Name (2024)"));
+        assert!(has_year_suffix("Album (1999)"));
+    }
+
+    #[test]
+    fn year_suffix_absent() {
+        assert!(!has_year_suffix("Album Name"));
+        assert!(!has_year_suffix("Album (Deluxe)"));
+        assert!(!has_year_suffix("(20)"));
+    }
+
+    #[test]
+    fn year_suffix_unicode_boundaries_are_safe() {
+        assert!(!has_year_suffix("Album (日本2024)"));
+        assert!(!has_year_suffix("Album (🎵2024)"));
+        assert!(has_year_suffix("日本語のアルバム (2024)"));
+        assert!(has_year_suffix("Album (2024 日本盤)"));
+    }
+
+    // -- has_year_range --
+
+    #[test]
+    fn year_range_present() {
+        assert!(has_year_range("The Studio Album Collection 1977-1992"));
+        assert!(has_year_range("Live 1992-2014"));
+        assert!(has_year_range("Anthology 2000\u{2013}2020")); // en-dash
+    }
+
+    #[test]
+    fn year_range_absent() {
+        assert!(!has_year_range("Album Name"));
+        assert!(!has_year_range("CCCP Edits 4"));
+        assert!(!has_year_range("Album 123-456")); // not valid years
+        assert!(!has_year_range("Album 1899-2100")); // out of range
+    }
+
+    // -- has_bare_year --
+
+    #[test]
+    fn bare_year_present() {
+        assert!(has_bare_year(
+            "Live at Alexandra Palace - London 8th and 9th May 2019"
+        ));
+        assert!(has_bare_year("FM Broadcast August 1996"));
+        assert!(has_bare_year("Live in Tokyo - 1st December 2013"));
+    }
+
+    #[test]
+    fn bare_year_absent() {
+        assert!(!has_bare_year("Album Name"));
+        assert!(!has_bare_year("CCCP Edits 4"));
+        assert!(!has_bare_year("Return to Nothing"));
+        assert!(!has_bare_year("Fever (Limited Edition)"));
+    }
+
+    // -- parse_filename --
+
+    #[test]
+    fn parse_album_canonical() {
+        let p = Path::new("/music/Artist/Album (2024)/01 Some Artist - Track Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Some Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track Title"));
+    }
+
+    #[test]
+    fn parse_album_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/08. Tune Out.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("08"));
+        assert_eq!(parsed.artist, None);
+        assert_eq!(parsed.title.as_deref(), Some("Tune Out"));
+    }
+
+    #[test]
+    fn parse_loose_canonical() {
+        let p = Path::new("/music/play/Burial - Archangel.wav");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.track_num, None);
+        assert_eq!(parsed.artist.as_deref(), Some("Burial"));
+        assert_eq!(parsed.title.as_deref(), Some("Archangel"));
+    }
+
+    #[test]
+    fn parse_loose_no_separator() {
+        let p = Path::new("/music/play/JustATitle.wav");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.artist, None);
+        assert_eq!(parsed.title.as_deref(), Some("JustATitle"));
+    }
+
+    #[test]
+    fn parse_title_with_hyphen() {
+        let p = Path::new("/music/play/Artist - Title - Subtitle.flac");
+        let parsed = parse_filename(p, &AuditContext::LooseTrack);
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Title - Subtitle"));
+    }
+
+    // -- check_tags --
+
+    #[test]
+    fn normalize_strips_tech_specs() {
+        // Existing cases
+        assert_eq!(normalize_dir_name("Album [FLAC] (2024)"), "Album (2024)");
+        assert_eq!(normalize_dir_name("Album [WAV] 24-96"), "Album");
+        // Issue #15: fractional kHz suffix left `.1` fragment
+        assert_eq!(
+            normalize_dir_name("Good Lies(Electronic) [2023] 24-44.1"),
+            "Good Lies(Electronic) [2023]"
+        );
+        // Issue #15: bare format + units left `(-44.1kHz)` fragment
+        assert_eq!(normalize_dir_name("FLAC (16bit-44.1kHz)"), "");
+        // Bare format name without brackets
+        assert_eq!(normalize_dir_name("Album FLAC"), "Album");
+        // Standalone bit-depth with space
+        assert_eq!(normalize_dir_name("Album 24 bit"), "Album");
+        // Sample rate with kHz unit
+        assert_eq!(normalize_dir_name("Album 16-48kHz"), "Album");
+    }
+
+    #[test]
+    fn normalize_no_false_positives() {
+        // Years in parens must NOT be stripped
+        assert_eq!(normalize_dir_name("Album Name (2024)"), "Album Name (2024)");
+        assert_eq!(normalize_dir_name("Album (2016)"), "Album (2016)");
+        // Non-tech-spec parenthesized text must NOT be stripped
+        assert_eq!(normalize_dir_name("Album (Deluxe)"), "Album (Deluxe)");
+        // Bare number that happens to be 16/24/32 but not followed by bit/- pattern
+        assert_eq!(normalize_dir_name("Track 24"), "Track 24");
+        assert_eq!(normalize_dir_name("Studio 32"), "Studio 32");
+        // Two-digit numbers that are NOT 16/24/32 followed by dash should not match
+        assert_eq!(normalize_dir_name("Album 20-20"), "Album 20-20");
+        // "24" embedded in longer number should not match
+        assert_eq!(normalize_dir_name("Track 2400"), "Track 2400");
+        assert_eq!(normalize_dir_name("Track 124"), "Track 124");
+        // Artist/album name containing "wav" as substring should NOT match
+        assert_eq!(
+            normalize_dir_name("Brainwave Sessions"),
+            "Brainwave Sessions"
+        );
+        assert_eq!(
+            normalize_dir_name("New Wave Compilation"),
+            "New Wave Compilation"
+        );
+    }
+
+    // -- IssueType round-trip --
+
+    #[test]
+    fn parse_album_multibyte_utf8_no_panic() {
+        // 3-byte char at start: should not panic
+        let p = Path::new("/music/Artist/Album (2024)/€1 Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should return something (possibly no track_num) but must NOT panic
+        assert!(parsed.title.is_some());
+    }
+
+    // Finding 3: ARTIST_IN_TITLE new_title is correct with unicode
+
+    #[test]
+    fn parse_album_nn_dash_title() {
+        let p = Path::new("/music/Artist/Album (2024)/05 - Invisible Dance.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("05"));
+        assert_eq!(parsed.title.as_deref(), Some("Invisible Dance"));
+        assert_eq!(parsed.artist, None);
+    }
+
+    // Finding 10: Missing-space format is bad filename
+
+    #[test]
+    fn parse_album_missing_space_is_bad() {
+        let p = Path::new("/music/Artist/Album (2024)/01Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Should NOT extract track number (no valid separator)
+        assert_eq!(parsed.track_num, None);
+    }
+
+    // Finding 6: Directory checks use album dir for disc subdirs
+
+    #[test]
+    fn year_suffix_compound_years() {
+        assert!(has_year_suffix("Album (1969, 2004)"));
+        assert!(has_year_suffix("Album (2017, Label - Cat)"));
+        assert!(has_year_suffix("Album (2020 Remaster)"));
+    }
+
+    #[test]
+    fn year_suffix_range_validation() {
+        assert!(has_year_suffix("Album (1900)"));
+        assert!(has_year_suffix("Album (2099)"));
+        assert!(!has_year_suffix("Album (1899)"));
+        assert!(!has_year_suffix("Album (2100)"));
+        assert!(!has_year_suffix("Album (0001)"));
+    }
+
+    #[test]
+    fn classify_album_with_catalog_suffix() {
+        let p = Path::new("/music/Artist/Album (2017, Label - Cat)/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &HashSet::new()),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- detect_album_dirs --
+
+    #[test]
+    fn detect_album_dirs_two_numbered() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/01 Track.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/02 Track.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(dirs.contains(Path::new("/music/Artist/Mix")));
+    }
+
+    #[test]
+    fn detect_album_dirs_one_numbered_not_detected() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/01 Track.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/Intro.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(!dirs.contains(Path::new("/music/Artist/Mix")));
+    }
+
+    #[test]
+    fn detect_album_dirs_zero_numbered() {
+        let paths = vec![
+            std::path::PathBuf::from("/music/Artist/Mix/Intro.flac"),
+            std::path::PathBuf::from("/music/Artist/Mix/Outro.flac"),
+        ];
+        let dirs = detect_album_dirs(&paths);
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn classify_with_album_dirs_no_year() {
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Giegling Mix")].into();
+        let p = Path::new("/music/Artist/Giegling Mix/01 Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    #[test]
+    fn classify_disc_subdir_with_album_dirs() {
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Mix")].into();
+        let p = Path::new("/music/Artist/Mix/CD1/01 Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- TECH_SPEC_RE: hi-res --
+
+    #[test]
+    fn normalize_strips_hi_res() {
+        assert_eq!(normalize_dir_name("Album [Hi-Res] (2024)"), "Album (2024)");
+        assert_eq!(normalize_dir_name("Album [HiRes]"), "Album");
+    }
+
+    // -- D.NN disc-dot parsing --
+
+    #[test]
+    fn parse_album_disc_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/1.01 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("1.01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    // -- 3-digit track numbers --
+
+    #[test]
+    fn parse_album_three_digit_track() {
+        let p = Path::new("/music/Artist/Album (2024)/100 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_two_digit_no_regression() {
+        let p = Path::new("/music/Artist/Album (2024)/01 Artist - Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Artist"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_three_digit_dot_format() {
+        let p = Path::new("/music/Artist/Album (2024)/100. Track Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.title.as_deref(), Some("Track Title"));
+    }
+
+    // -- Drift normalization --
+
+    #[test]
+    fn parse_album_nn_dash_no_space() {
+        let p = Path::new("/music/Artist/Album (2024)/01-Dreamin.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.title.as_deref(), Some("Dreamin"));
+    }
+
+    #[test]
+    fn parse_album_nn_dash_no_space_with_artist() {
+        let p = Path::new("/music/Artist/Album (2024)/08-Snoop Doggy Dogg - Gold Rush.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("08"));
+        assert_eq!(parsed.artist.as_deref(), Some("Snoop Doggy Dogg"));
+        assert_eq!(parsed.title.as_deref(), Some("Gold Rush"));
+    }
+
+    #[test]
+    fn parse_album_three_digit_dash_no_space() {
+        let p = Path::new("/music/Artist/Album (2024)/100-Track.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("100"));
+        assert_eq!(parsed.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn parse_album_nn_dash_digit_not_parsed_as_track() {
+        // "01-02" — dash followed by digit should NOT be parsed as NN-Title
+        let p = Path::new("/music/Artist/Album (2024)/01-02 Artist - Title.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        // Neither disc-track (bytes[1] is '1' not '-') nor NN-Title (digit after dash)
+        assert_eq!(parsed.track_num, None);
+    }
+
+    // -- Disc subdir with album_dirs pre-pass --
+
+    #[test]
+    fn classify_disc_subdir_detected_by_prepass() {
+        // CD1 is in album_dirs (pre-pass detected it), grandparent has no year suffix
+        let album_dirs: HashSet<std::path::PathBuf> =
+            [std::path::PathBuf::from("/music/Artist/Live 1992-2014/CD1")].into();
+        let p = Path::new("/music/Artist/Live 1992-2014/CD1/01 Artist - Track.flac");
+        assert_eq!(
+            classify_track_context(p, &album_dirs),
+            AuditContext::AlbumTrack
+        );
+    }
+
+    // -- Dot-space prefix stripping --
+
+    #[test]
+    fn parse_album_dot_format_with_artist() {
+        // "01. Artist - Title" — the ". " prefix must not leak into artist
+        let p = Path::new("/music/Artist/Album (2024)/01. Roza Terenzi - Loose.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("01"));
+        assert_eq!(parsed.artist.as_deref(), Some("Roza Terenzi"));
+        assert_eq!(parsed.title.as_deref(), Some("Loose"));
+    }
+
+    #[test]
+    fn parse_album_feat_dot_no_false_split() {
+        // "feat." interior dot must not split the title
+        let p = Path::new("/music/Artist/Album (2024)/03 Artist feat. Someone.flac");
+        let parsed = parse_filename(p, &AuditContext::AlbumTrack);
+        assert_eq!(parsed.track_num.as_deref(), Some("03"));
+        assert_eq!(parsed.title.as_deref(), Some("Artist feat. Someone"));
+    }
+
+    // -- Original Mix symmetric stripping --
+
+    #[test]
+    fn disc_subdir_rejects_false_positives() {
+        assert!(!is_disc_subdir("Disco Dreams Unlimited (2018)"));
+        assert!(!is_disc_subdir("Discovering Infinity"));
+        assert!(!is_disc_subdir("CD"));
+        assert!(!is_disc_subdir("Disc"));
+        assert!(!is_disc_subdir("Disconnected"));
+    }
+
+    #[test]
+    fn disc_subdir_accepts_real_disc_dirs() {
+        assert!(is_disc_subdir("CD1"));
+        assert!(is_disc_subdir("CD 2"));
+        assert!(is_disc_subdir("CD10"));
+        assert!(is_disc_subdir("Disc 1"));
+        assert!(is_disc_subdir("disc2"));
+        assert!(is_disc_subdir("Disk 3"));
+    }
+
+    // -- ancestor_has_year --
+
+    #[test]
+    fn ancestor_year_suppresses_nested_subdir() {
+        let p = Path::new("/music/Artist/Album (2021)/bonus-tracks/01 track.flac");
+        assert!(ancestor_has_year(p));
+    }
+
+    #[test]
+    fn ancestor_year_absent_when_no_year_above() {
+        let p = Path::new("/music/Artist/SomeDir/nested/01 track.flac");
+        assert!(!ancestor_has_year(p));
+    }
+
+    // -- leaf-dir filter in detect_album_dirs --
+
+    #[test]
+    fn leaf_dir_filter_excludes_parent_of_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            // parent dir has loose numbered files
+            PathBuf::from("/music/lossy/01 Track A.flac"),
+            PathBuf::from("/music/lossy/02 Track B.flac"),
+            // child subdir also has numbered files
+            PathBuf::from("/music/lossy/Artist/01 Track X.flac"),
+            PathBuf::from("/music/lossy/Artist/02 Track Y.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        // /music/lossy/Artist is a leaf → included
+        assert!(album_dirs.contains(&PathBuf::from("/music/lossy/Artist")));
+        // /music/lossy is parent of a child album dir → excluded
+        assert!(!album_dirs.contains(&PathBuf::from("/music/lossy")));
+    }
+
+    #[test]
+    fn leaf_dir_filter_keeps_standalone_album_dir() {
+        use std::path::PathBuf;
+        let paths = vec![
+            PathBuf::from("/music/Artist/Album/01 Track.flac"),
+            PathBuf::from("/music/Artist/Album/02 Track.flac"),
+        ];
+        let album_dirs = detect_album_dirs(&paths);
+        assert!(album_dirs.contains(&PathBuf::from("/music/Artist/Album")));
+    }
+}

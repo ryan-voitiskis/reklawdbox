@@ -153,3 +153,292 @@ pub fn get_summary(conn: &Connection, scope: &str) -> Result<SummaryReport, Stri
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::audit::scan::{audit_freshness_key, is_successful_audit_freshness_key};
+    use crate::domain::audit::AuditContext;
+
+    #[test]
+    fn audit_workflow_preserves_freshness_and_resolution() {
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123);
+        let album_key = audit_freshness_key(Some(modified), AuditContext::AlbumTrack).unwrap();
+        let loose_key = audit_freshness_key(Some(modified), AuditContext::LooseTrack).unwrap();
+        assert_ne!(album_key, loose_key);
+        assert!(is_successful_audit_freshness_key(&album_key));
+
+        let (_directory, store) = seed_query_resolve_db();
+        let open = query_issues(&store, "/music/a", Some("open"), None, 100, 0).unwrap();
+        let issue_id = open[0].id;
+        assert_eq!(
+            resolve_issues(&store, &[issue_id], "deferred", Some("later")).unwrap(),
+            1
+        );
+        let deferred = query_issues(&store, "/music/a", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].note.as_deref(), Some("later"));
+    }
+
+    // -- query_issues & resolve_issues --
+
+    fn seed_query_resolve_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite3");
+        let conn = state::open(db_path.to_str().unwrap()).unwrap();
+
+        state::upsert_audit_file(&conn, "/music/a/track1.flac", "t1", "m1", 100).unwrap();
+        state::upsert_audit_file(&conn, "/music/b/track2.wav", "t1", "m1", 200).unwrap();
+
+        // Issues for track1 (two open, one accepted)
+        state::upsert_audit_issue(
+            &conn,
+            "/music/a/track1.flac",
+            "EMPTY_ARTIST",
+            None,
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        state::upsert_audit_issue(
+            &conn,
+            "/music/a/track1.flac",
+            "GENRE_SET",
+            None,
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        // Accept the GENRE_SET issue (id=2)
+        state::resolve_audit_issues(
+            &conn,
+            &[2],
+            Resolution::AcceptedAsIs,
+            Some("intended"),
+            "2026-01-02T00:00:00Z",
+        )
+        .unwrap();
+
+        // Issues for track2 (one open WAV_TAG3_MISSING)
+        state::upsert_audit_issue(
+            &conn,
+            "/music/b/track2.wav",
+            "WAV_TAG3_MISSING",
+            Some(r#"{"fields":["artist"]}"#),
+            "open",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        (dir, conn)
+    }
+
+    #[test]
+    fn query_issues_all_in_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 3);
+    }
+
+    #[test]
+    fn query_issues_narrow_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/a/", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+        assert!(issues.iter().all(|i| i.path.starts_with("/music/a/")));
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_open() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+        assert!(issues.iter().all(|i| i.status == "open"));
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_accepted() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", Some("accepted"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].issue_type, "GENRE_SET");
+        assert_eq!(issues[0].status, "accepted");
+    }
+
+    #[test]
+    fn query_issues_filter_by_issue_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "/music/b/track2.wav");
+    }
+
+    #[test]
+    fn query_issues_filter_by_status_and_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/", Some("open"), Some("EMPTY_ARTIST"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "/music/a/track1.flac");
+        assert_eq!(issues[0].issue_type, "EMPTY_ARTIST");
+    }
+
+    #[test]
+    fn query_issues_empty_result_for_non_existent_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/other/", None, None, 100, 0).unwrap();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn query_issues_empty_result_for_non_matching_type() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues = query_issues(&conn, "/music/", None, Some("BAD_FILENAME"), 100, 0).unwrap();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn query_issues_rejects_root_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = query_issues(&conn, "/", None, None, 100, 0).unwrap_err();
+        assert!(err.contains("root"));
+    }
+
+    #[test]
+    fn query_issues_rejects_empty_scope() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Empty scope normalizes to "/" via enforce_trailing_slash
+        let err = query_issues(&conn, "", None, None, 100, 0).unwrap_err();
+        assert!(err.contains("root"));
+    }
+
+    #[test]
+    fn query_issues_limit_and_offset() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let first = query_issues(&conn, "/music/", None, None, 1, 0).unwrap();
+        assert_eq!(first.len(), 1);
+
+        let second = query_issues(&conn, "/music/", None, None, 1, 1).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0].id, second[0].id);
+
+        let beyond = query_issues(&conn, "/music/", None, None, 100, 100).unwrap();
+        assert!(beyond.is_empty());
+    }
+
+    #[test]
+    fn query_issues_detail_parsed_as_json() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let issues =
+            query_issues(&conn, "/music/b/", None, Some("WAV_TAG3_MISSING"), 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        let detail = issues[0].detail.as_ref().expect("detail should be parsed");
+        assert_eq!(detail["fields"][0], "artist");
+    }
+
+    #[test]
+    fn query_issues_adds_trailing_slash() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Scope without trailing slash should still work
+        let issues = query_issues(&conn, "/music/a", None, None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 2);
+    }
+
+    // -- resolve_issues tests --
+
+    #[test]
+    fn resolve_issues_accepted_as_is() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // Issue id=1 is open EMPTY_ARTIST
+        let count = resolve_issues(&conn, &[1], "accepted_as_is", Some("ok")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("accepted"), None, 100, 0).unwrap();
+        // id=1 (EMPTY_ARTIST) + id=2 (GENRE_SET) are both accepted now
+        assert_eq!(issues.len(), 2);
+
+        let resolved = issues.iter().find(|i| i.id == 1).unwrap();
+        assert_eq!(resolved.status, "accepted");
+        assert_eq!(resolved.resolution.as_deref(), Some("accepted_as_is"));
+        assert_eq!(resolved.note.as_deref(), Some("ok"));
+        assert!(resolved.resolved_at.is_some());
+    }
+
+    #[test]
+    fn resolve_issues_wont_fix() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[1], "wont_fix", None).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("accepted"), None, 100, 0).unwrap();
+        let resolved = issues.iter().find(|i| i.id == 1).unwrap();
+        assert_eq!(resolved.resolution.as_deref(), Some("wont_fix"));
+    }
+
+    #[test]
+    fn resolve_issues_deferred() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[1], "deferred", Some("later")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, 1);
+        assert_eq!(issues[0].status, "deferred");
+        assert_eq!(issues[0].resolution.as_deref(), Some("deferred"));
+        assert_eq!(issues[0].note.as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn resolve_issues_rejects_fixed_resolution() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = resolve_issues(&conn, &[1], "fixed", None).unwrap_err();
+        assert!(err.contains("Invalid resolution"));
+    }
+
+    #[test]
+    fn resolve_issues_rejects_unknown_resolution() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let err = resolve_issues(&conn, &[1], "banana", None).unwrap_err();
+        assert!(err.contains("Invalid resolution"));
+    }
+
+    #[test]
+    fn resolve_issues_multiple_ids() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // ids 1 (EMPTY_ARTIST, open) and 3 (WAV_TAG3_MISSING, open)
+        let count = resolve_issues(&conn, &[1, 3], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 2);
+
+        let open = query_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
+        assert!(open.is_empty());
+    }
+
+    #[test]
+    fn resolve_issues_non_existent_id_returns_zero() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[999], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn resolve_issues_empty_ids_returns_zero() {
+        let (_dir, conn) = seed_query_resolve_db();
+        let count = resolve_issues(&conn, &[], "accepted_as_is", None).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn resolve_issues_already_resolved_can_be_re_resolved() {
+        let (_dir, conn) = seed_query_resolve_db();
+        // id=2 is already accepted — re-resolving with deferred should work
+        let count = resolve_issues(&conn, &[2], "deferred", Some("revisit")).unwrap();
+        assert_eq!(count, 1);
+
+        let issues = query_issues(&conn, "/music/a/", Some("deferred"), None, 100, 0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, 2);
+        assert_eq!(issues[0].note.as_deref(), Some("revisit"));
+    }
+}

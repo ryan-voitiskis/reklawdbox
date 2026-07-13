@@ -187,3 +187,46 @@ mod tests {
         assert_eq!(Resolution::from_str("accepted-as-is"), None);
     }
 }
+
+#[cfg(test)]
+mod issue_tests {
+    use super::*;
+
+    #[test]
+    fn issue_type_str_round_trip() {
+        use strum::IntoEnumIterator;
+        for it in IssueType::iter() {
+            let s = it.as_str();
+            let back: IssueType = s
+                .parse()
+                .unwrap_or_else(|_| panic!("No IssueType for \"{s}\""));
+            assert_eq!(it, back);
+        }
+    }
+
+    // -- safety_tier --
+
+    #[test]
+    fn safety_tiers() {
+        use strum::IntoEnumIterator;
+        // Every variant has a tier — new variants cause a compile error in safety_tier()
+        for it in IssueType::iter() {
+            let _ = it.safety_tier();
+        }
+        assert_eq!(IssueType::ArtistInTitle.safety_tier(), SafetyTier::Safe);
+        assert_eq!(IssueType::WavTag3Missing.safety_tier(), SafetyTier::Safe);
+        assert_eq!(IssueType::WavTagDrift.safety_tier(), SafetyTier::Safe);
+        assert_eq!(
+            IssueType::OriginalMixSuffix.safety_tier(),
+            SafetyTier::RenameSafe
+        );
+        assert_eq!(
+            IssueType::TechSpecsInDir.safety_tier(),
+            SafetyTier::RenameSafe
+        );
+        assert_eq!(IssueType::EmptyArtist.safety_tier(), SafetyTier::Review);
+        assert_eq!(IssueType::GenreSet.safety_tier(), SafetyTier::Review);
+    }
+
+    // -- Bug-fix regression tests --
+}

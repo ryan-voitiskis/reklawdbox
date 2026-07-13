@@ -368,3 +368,659 @@ pub fn check_filename(
 
     issues
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn make_single(fields: &[(&str, &str)]) -> TagSnapshot {
+        let mut tags = HashMap::new();
+        for &f in AUDIT_FIELDS {
+            tags.insert(f.to_string(), None);
+        }
+        for &(k, v) in fields {
+            tags.insert(k.to_string(), Some(v.to_string()));
+        }
+        TagSnapshot::Single { tags }
+    }
+
+    fn make_wav(
+        id3v2_fields: &[(&str, &str)],
+        riff_fields: &[(&str, &str)],
+        tag3_missing: Vec<String>,
+    ) -> TagSnapshot {
+        let mut id3v2 = HashMap::new();
+        let mut riff_info = HashMap::new();
+        for &f in AUDIT_FIELDS {
+            id3v2.insert(f.to_string(), None);
+            riff_info.insert(f.to_string(), None);
+        }
+        for &(k, v) in id3v2_fields {
+            id3v2.insert(k.to_string(), Some(v.to_string()));
+        }
+        for &(k, v) in riff_fields {
+            riff_info.insert(k.to_string(), Some(v.to_string()));
+        }
+        TagSnapshot::Wav {
+            id3v2,
+            riff_info,
+            tag3_missing,
+        }
+    }
+
+    #[test]
+    fn check_tags_empty_artist() {
+        let result = make_single(&[("title", "Track")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
+    }
+
+    #[test]
+    fn check_tags_empty_title() {
+        let result = make_single(&[("artist", "Artist")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::EmptyTitle));
+    }
+
+    #[test]
+    fn check_tags_album_missing_fields() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingTrackNum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingAlbum)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
+    }
+
+    #[test]
+    fn check_tags_album_all_present() {
+        let result = make_single(&[
+            ("artist", "A"),
+            ("title", "T"),
+            ("track", "1"),
+            ("album", "Al"),
+            ("year", "2024"),
+        ]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn check_tags_artist_in_title() {
+        let result = make_single(&[("artist", "Burial"), ("title", "Burial - Archangel")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect artist in title");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "Archangel");
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_case_insensitive() {
+        let result = make_single(&[("artist", "burial"), ("title", "Burial - Archangel")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
+    }
+
+    #[test]
+    fn check_tags_wav_tag3_missing() {
+        let result = make_wav(
+            &[("artist", "A"), ("title", "T")],
+            &[("title", "T")],
+            vec!["artist".to_string()],
+        );
+        let issues = check_tags(
+            Path::new("/test/track.wav"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTag3Missing)
+        );
+    }
+
+    #[test]
+    fn check_tags_wav_tag_drift() {
+        let result = make_wav(&[("artist", "Correct")], &[("artist", "Wrong")], vec![]);
+        let issues = check_tags(
+            Path::new("/test/track.wav"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::WavTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_tags_genre_set() {
+        let result = make_single(&[("artist", "A"), ("title", "T"), ("genre", "House")]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::GenreSet));
+    }
+
+    #[test]
+    fn check_tags_no_tags() {
+        let result = make_single(&[]);
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(issues.iter().any(|i| i.issue_type == IssueType::NoTags));
+        // Should NOT also report EMPTY_ARTIST etc when NO_TAGS fires
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::EmptyArtist)
+        );
+    }
+
+    #[test]
+    fn check_tags_skip_genre() {
+        let result = make_single(&[("artist", "A"), ("title", "T"), ("genre", "House")]);
+        let skip: HashSet<IssueType> = [IssueType::GenreSet].into();
+        let issues = check_tags(
+            Path::new("/test/track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &skip,
+        );
+        assert!(!issues.iter().any(|i| i.issue_type == IssueType::GenreSet));
+    }
+
+    // -- check_filename --
+
+    #[test]
+    fn check_filename_original_mix() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Mix).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix)
+        );
+    }
+
+    #[test]
+    fn check_filename_original_mix_case_insensitive() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        for variant in [
+            "A - Track (original mix).flac",
+            "A - Track (ORIGINAL MIX).flac",
+            "A - Track (Original mix).flac",
+        ] {
+            let issues = check_filename(
+                Path::new(&format!("/test/{variant}")),
+                &result,
+                &AuditContext::LooseTrack,
+                &HashSet::new(),
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+                "should detect Original Mix in: {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_filename_original_bare() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect bare (Original)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_version() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Version).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should detect (Original Version)"
+        );
+    }
+
+    #[test]
+    fn check_filename_original_club_mix_not_detected() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/A - Track (Original Club Mix).flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::OriginalMixSuffix),
+            "should NOT detect (Original Club Mix)"
+        );
+    }
+
+    #[test]
+    fn check_filename_tech_specs() {
+        let result = make_single(&[("artist", "A"), ("title", "T")]);
+        let issues = check_filename(
+            Path::new("/test/Album [FLAC]/01 A - T.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::TechSpecsInDir)
+        );
+    }
+
+    #[test]
+    fn check_filename_tag_drift() {
+        let result = make_single(&[("artist", "RealArtist"), ("title", "RealTitle")]);
+        let issues = check_filename(
+            Path::new("/music/play/WrongArtist - WrongTitle.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_when_matching() {
+        let result = make_single(&[("artist", "Burial"), ("title", "Archangel")]);
+        let issues = check_filename(
+            Path::new("/music/play/Burial - Archangel.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_artist() {
+        let result = make_single(&[("artist", "SS"), ("title", "Track")]);
+        let issues = check_filename(
+            Path::new("/music/play/ß - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_unicode_casefold_title() {
+        let result = make_single(&[("artist", "Artist"), ("title", "STRASSE")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Straße.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift)
+        );
+    }
+
+    // -- normalize_dir_name --
+
+    fn make_tags(fields: &[(&str, &str)]) -> HashMap<String, Option<String>> {
+        let mut tags = HashMap::new();
+        for &f in AUDIT_FIELDS {
+            tags.insert(f.to_string(), None);
+        }
+        for &(k, v) in fields {
+            tags.insert(k.to_string(), Some(v.to_string()));
+        }
+        tags
+    }
+
+    // M21: MISSING_YEAR fires when "year" is empty, regardless of "date"
+    // ("date" is not in tags::ALL_FIELDS and was a no-op check)
+
+    #[test]
+    fn check_tags_missing_year_ignores_date_field() {
+        // Even if "date" is set, missing "year" should flag MISSING_YEAR
+        let tags = make_tags(&[
+            ("artist", "A"),
+            ("title", "T"),
+            ("album", "Alb"),
+            ("track", "1"),
+            ("date", "2024"),
+        ]);
+        let result = TagSnapshot::Single { tags };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::AlbumTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYear)
+        );
+    }
+
+    // Finding 2: Multi-byte UTF-8 in filename doesn't panic
+
+    #[test]
+    fn check_tags_artist_in_title_new_title_correct() {
+        let tags = make_tags(&[("artist", "DJ Test"), ("title", "DJ Test - The Track")]);
+        let result = TagSnapshot::Single { tags };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "The Track");
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_uses_unicode_casefold() {
+        let tags = make_tags(&[("artist", "ß"), ("title", "SS - Track")]);
+        let result = TagSnapshot::Single { tags };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::ArtistInTitle)
+        );
+    }
+
+    #[test]
+    fn check_tags_artist_in_title_artist_contains_separator() {
+        let tags = make_tags(&[("artist", "AC - DC"), ("title", "AC - DC - Thunderstruck")]);
+        let result = TagSnapshot::Single { tags };
+        let issues = check_tags(
+            Path::new("/x"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        let ait = issues
+            .iter()
+            .find(|i| i.issue_type == IssueType::ArtistInTitle)
+            .expect("should detect artist in title");
+        let detail: serde_json::Value = serde_json::from_str(ait.detail.as_ref().unwrap()).unwrap();
+        assert_eq!(detail["new_title"], "Thunderstruck");
+    }
+
+    // Regression: empty scope normalizes to "/" via enforce_trailing_slash.
+
+    #[test]
+    fn check_filename_disc_subdir_uses_album_dir() {
+        // File in CD1 subdir under album dir with year — should NOT flag MISSING_YEAR_IN_DIR
+        let p = Path::new("/music/Artist/Album (2020)/CD1/01 Artist - Track.flac");
+        let tags = make_tags(&[("artist", "Artist"), ("title", "Track")]);
+        let result = TagSnapshot::Single { tags };
+        let issues = check_filename(p, &result, &AuditContext::AlbumTrack, &HashSet::new());
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::MissingYearInDir),
+            "Should not flag MISSING_YEAR_IN_DIR when album dir has year suffix"
+        );
+    }
+
+    #[test]
+    fn drift_normalize_slash_to_dash() {
+        assert_eq!(normalize_for_drift("AC/DC"), "AC-DC");
+    }
+
+    #[test]
+    fn drift_normalize_preserves_colon() {
+        assert_eq!(normalize_for_drift("Title: Subtitle"), "Title: Subtitle");
+    }
+
+    #[test]
+    fn drift_normalize_preserves_special_chars() {
+        assert_eq!(normalize_for_drift("F*ck"), "F*ck");
+        assert_eq!(normalize_for_drift("Why?"), "Why?");
+        assert_eq!(normalize_for_drift("S.E.X."), "S.E.X.");
+        assert_eq!(normalize_for_drift("KAS:ST"), "KAS:ST");
+    }
+
+    #[test]
+    fn check_filename_no_drift_with_slash_in_tag() {
+        // `/` is the only macOS-forbidden char — normalized to `-` on both sides
+        let result = make_single(&[("artist", "AC/DC"), ("title", "Thunderstruck")]);
+        let issues = check_filename(
+            Path::new("/music/play/AC-DC - Thunderstruck.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Slash in tag should match dash in filename after normalization"
+        );
+    }
+
+    #[test]
+    fn check_filename_drift_with_colon_in_tag() {
+        // `:` is valid on macOS — filename should use it, so drift is real
+        let result = make_single(&[("artist", "Artist"), ("title", "Part 1: The Beginning")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Part 1- The Beginning.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Colon in tag vs dash in filename is real drift — file can be renamed"
+        );
+    }
+
+    // -- NN-Title (no space after dash) parsing --
+
+    #[test]
+    fn drift_original_mix_in_tag_only() {
+        // Tag has (Original Mix) but filename doesn't — should not drift
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original Mix)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original Mix) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_mix_case_insensitive() {
+        // Tag has lowercase "(original mix)" but filename doesn't — should not drift
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (original mix)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "case-insensitive (original mix) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_bare_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original) in tag only should not trigger drift"
+        );
+    }
+
+    #[test]
+    fn drift_original_version_in_tag_only() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Track (Original Version)")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Track.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "(Original Version) in tag only should not trigger drift"
+        );
+    }
+
+    // -- Symmetric drift normalization --
+
+    #[test]
+    fn check_filename_no_drift_with_question_mark_both_sides() {
+        let result = make_single(&[("artist", "Artist"), ("title", "Why?")]);
+        let issues = check_filename(
+            Path::new("/music/play/Artist - Why?.flac"),
+            &result,
+            &AuditContext::LooseTrack,
+            &HashSet::new(),
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.issue_type == IssueType::FilenameTagDrift),
+            "Question mark in both filename and tag should not trigger drift"
+        );
+    }
+
+    // -- is_disc_subdir regression --
+}
