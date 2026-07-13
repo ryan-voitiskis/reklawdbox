@@ -10,11 +10,15 @@ use crate::adapters::audio as audio_adapter;
 use crate::audio;
 use crate::{db, store};
 
-use super::{
-    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
-    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, send_cache_message,
-    task_join_error_summary,
+use super::runtime::cache_writer::{
+    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, cache_probe_for_path,
+    cache_status_for_track, cli_batch_outcome, send_cache_message, task_join_error_summary,
 };
+use super::runtime::resources::{
+    CpuPreset, analysis_concurrency_for_preset, apply_cpu_niceness, cpu_preset_summary,
+    memory_budget_mb, memory_preset_summary, track_memory_cost_mb,
+};
+use super::runtime::signals::{CliCancellationState, spawn_signal_handlers};
 
 #[derive(clap::Args)]
 pub(crate) struct AnalyzeArgs {
@@ -64,8 +68,8 @@ pub(crate) struct AnalyzeArgs {
     #[arg(long)]
     stratum_only: bool,
     /// CPU scheduling preset
-    #[arg(long, value_enum, default_value_t = super::CpuPreset::Background)]
-    cpu: super::CpuPreset,
+    #[arg(long, value_enum, default_value_t = CpuPreset::Background)]
+    cpu: CpuPreset,
     /// Override analysis concurrency (overrides --cpu preset, min 1, max 16)
     #[arg(long, short = 'j')]
     concurrency: Option<u32>,
@@ -206,15 +210,15 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let pending = to_analyze.len();
 
     let cpu_preset = args.cpu;
-    super::apply_cpu_niceness(cpu_preset);
+    apply_cpu_niceness(cpu_preset);
     let concurrency = match args.concurrency {
         Some(n) => n.clamp(1, 16) as usize,
-        None => super::analysis_concurrency_for_preset(cpu_preset),
+        None => analysis_concurrency_for_preset(cpu_preset),
     };
-    let analysis_budget_mb = super::memory_budget_mb(cpu_preset);
+    let analysis_budget_mb = memory_budget_mb(cpu_preset);
 
-    tracing::info!("{}", super::cpu_preset_summary(cpu_preset, concurrency));
-    tracing::info!("{}", super::memory_preset_summary(analysis_budget_mb));
+    tracing::info!("{}", cpu_preset_summary(cpu_preset, concurrency));
+    tracing::info!("{}", memory_preset_summary(analysis_budget_mb));
     tracing::info!(
         "Scanning {total} tracks ({cached_count} cached, {pending} to analyze, concurrency={concurrency})"
     );
@@ -240,7 +244,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let cancel = CancellationToken::new();
     let cancellation_state = CliCancellationState::default();
 
-    super::spawn_signal_handlers(&mp, &cancel, &cancellation_state);
+    spawn_signal_handlers(&mp, &cancel, &cancellation_state);
 
     let batch_start = Instant::now();
     let analyzed = Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -265,7 +269,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
             break;
         }
         // Memory cost clamped to budget so a single huge track can still run (solo)
-        let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+        let cost_mb = track_memory_cost_mb(track.length).min(analysis_budget_mb);
         let cpu_permit = tokio::select! {
             result = cpu_sem.clone().acquire_owned() => match result {
                 Ok(p) => p,
@@ -615,7 +619,7 @@ pub(super) fn mark_track_outcome(analyzed: &mut u32, failed: &mut u32, success: 
 #[cfg(test)]
 mod batch_tests {
     use super::*;
-    use crate::cli::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
+    use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard, bounded};
 
     fn cache_message(analyzer: &str, id: u32) -> CliCacheWriteMsg {
         CliCacheWriteMsg {
@@ -859,5 +863,121 @@ mod batch_tests {
             analyze_batch_outcome(0, 0, 0, 3, true, vec![]).expect_err("cancelled batch");
         assert_eq!(cancelled.incomplete, 3);
         assert!(cancelled.user_cancelled);
+    }
+}
+#[cfg(test)]
+mod task_tests {
+    use super::{handle_analysis_result, handle_decode_result, mark_track_outcome};
+    use crate::audio::{AudioError, StratumResult};
+    use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard};
+    use std::time::Duration;
+
+    fn sample_stratum_result() -> StratumResult {
+        StratumResult {
+            bpm: 120.0,
+            bpm_confidence: 0.9,
+            key: "Am".to_string(),
+            key_camelot: "8A".to_string(),
+            key_confidence: 0.8,
+            key_clarity: 0.7,
+            grid_stability: 0.95,
+            grid_source: "hmm".to_string(),
+            duration_seconds: 180.0,
+            processing_time_ms: 42.0,
+            analyzer_version: "1.0.0".to_string(),
+            mod_centroid: Some(12.5),
+            harmonic_proportion: Some(0.65),
+            decay_mid_tau: Some(180.0),
+            decay_mid_r2: Some(0.92),
+            decay_high_tau: Some(95.0),
+            decay_high_r2: Some(0.88),
+            dub_stab_onset_count: None,
+            dub_stab_onset_rate: None,
+            dub_stab_rate_basis: None,
+            dub_stab_histogram: None,
+            dub_stab_template: None,
+            dub_stab_template_score: None,
+            kick_pattern: None,
+            kick_pattern_confidence: None,
+            kick_kicks_per_bar: None,
+            kick_onset_count: None,
+            kick_rate_basis: None,
+            kick_histogram: None,
+            sections: None,
+            flags: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn decode_join_error_marks_failed_and_allows_next_track() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let handle = TaskGuard::new(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok::<(Vec<f32>, u32), AudioError>((vec![0.0], 44_100))
+            }));
+            handle.abort();
+            let join_err = handle
+                .join_raw("aborted decode task join")
+                .await
+                .expect("bounded decode join")
+                .expect_err("aborted task should produce JoinError");
+
+            let mut failed = 0;
+            assert!(handle_decode_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
+            assert_eq!(failed, 1);
+
+            let next =
+                handle_decode_result(Ok(Ok((vec![0.0], 44_100))), 2, 2, "c - d", &mut failed);
+            assert!(
+                next.is_some(),
+                "next track should continue after prior join error"
+            );
+            assert_eq!(failed, 1);
+        })
+        .await
+        .expect("decode-join test watchdog expired");
+    }
+
+    #[tokio::test]
+    async fn analysis_join_error_marks_failed_and_allows_next_track() {
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            let handle = TaskGuard::new(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok::<StratumResult, AudioError>(sample_stratum_result())
+            }));
+            handle.abort();
+            let join_err = handle
+                .join_raw("aborted analysis task join")
+                .await
+                .expect("bounded analysis join")
+                .expect_err("aborted task should produce JoinError");
+
+            let mut failed = 0;
+            assert!(handle_analysis_result(Err(join_err), 1, 2, "a - b", &mut failed).is_none());
+            assert_eq!(failed, 1);
+
+            let next =
+                handle_analysis_result(Ok(Ok(sample_stratum_result())), 2, 2, "c - d", &mut failed);
+            assert!(
+                next.is_some(),
+                "next track should continue after prior analysis join error"
+            );
+            assert_eq!(failed, 1);
+        })
+        .await
+        .expect("analysis-join test watchdog expired");
+    }
+
+    #[test]
+    fn mark_track_outcome_counts_success_and_failure_consistently() {
+        let mut analyzed = 0;
+        let mut failed = 0;
+
+        mark_track_outcome(&mut analyzed, &mut failed, true);
+        mark_track_outcome(&mut analyzed, &mut failed, false);
+
+        assert_eq!(analyzed, 1);
+        assert_eq!(failed, 1);
     }
 }

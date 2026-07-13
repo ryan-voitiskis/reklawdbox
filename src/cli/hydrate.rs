@@ -18,12 +18,17 @@ use crate::audio;
 use crate::{beatport, db, discogs, normalize, store};
 
 #[cfg(test)]
-use super::send_cache_message;
-use super::{
-    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, CliCancellationState,
-    cache_probe_for_path, cache_status_for_track, cli_batch_outcome, serialize_cache_payload,
-    task_join_error_summary,
+use super::runtime::cache_writer::send_cache_message;
+use super::runtime::cache_writer::{
+    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg,
+    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES, cache_probe_for_path, cache_status_for_track,
+    cli_batch_outcome, persist_cli_cache_message, serialize_cache_payload, task_join_error_summary,
 };
+use super::runtime::resources::{
+    CpuPreset, analysis_concurrency_for_preset, apply_cpu_niceness, cpu_preset_summary,
+    memory_budget_mb, memory_preset_summary, track_memory_cost_mb,
+};
+use super::runtime::signals::{CliCancellationState, spawn_signal_handlers};
 
 fn parse_providers(s: &str) -> Result<HydrationStages, String> {
     HydrationStages::parse_csv(s)
@@ -77,8 +82,8 @@ pub(crate) struct HydrateArgs {
     #[arg(long)]
     no_retry_errors: bool,
     /// CPU scheduling preset for audio analysis
-    #[arg(long, value_enum, default_value_t = super::CpuPreset::Background)]
-    cpu: super::CpuPreset,
+    #[arg(long, value_enum, default_value_t = CpuPreset::Background)]
+    cpu: CpuPreset,
     /// Enrichment concurrency (default: 4)
     #[arg(long, short = 'j')]
     concurrency: Option<u32>,
@@ -230,7 +235,7 @@ fn run_hydrate_cache_writer(
                 format!("{} enrichment", write.provider),
             ),
             HydrateCacheMsg::AudioAnalysis(analysis) => (
-                super::persist_cli_cache_message(&conn, analysis),
+                persist_cli_cache_message(&conn, analysis),
                 format!("{} analysis", analysis.analyzer),
             ),
         };
@@ -246,14 +251,14 @@ fn run_hydrate_cache_writer(
                 let summary = format!("{label} cache write failed: {error}");
                 tracing::error!(
                     "Cache writer: {summary} ({consecutive_failures}/{})",
-                    super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
+                    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
                 );
                 report.record_failure(summary.clone());
                 request.acknowledgement.send(Err(summary)).ok();
-                if consecutive_failures >= super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
+                if consecutive_failures >= MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
                     let fatal = format!(
                         "cache writer stopped after {} consecutive failures",
-                        super::MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
+                        MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
                     );
                     tracing::error!("Cache writer: {fatal} — draining queued writes");
                     report.threshold_cancelled = true;
@@ -291,9 +296,9 @@ fn hydrate_batch_outcome(
 
 pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cpu_preset = args.cpu;
-    super::apply_cpu_niceness(cpu_preset);
-    let analysis_concurrency = super::analysis_concurrency_for_preset(cpu_preset);
-    let analysis_budget_mb = super::memory_budget_mb(cpu_preset);
+    apply_cpu_niceness(cpu_preset);
+    let analysis_concurrency = analysis_concurrency_for_preset(cpu_preset);
+    let analysis_budget_mb = memory_budget_mb(cpu_preset);
 
     let want_discogs = args
         .providers
@@ -465,12 +470,9 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
     // 4. Startup summary
     println!("Found {total_tracks} tracks matching filters.");
-    println!(
-        "  {}",
-        super::cpu_preset_summary(cpu_preset, analysis_concurrency)
-    );
+    println!("  {}", cpu_preset_summary(cpu_preset, analysis_concurrency));
     if want_analysis {
-        println!("  {}", super::memory_preset_summary(analysis_budget_mb));
+        println!("  {}", memory_preset_summary(analysis_budget_mb));
     }
     if want_discogs {
         let retry_note = if discogs_errors > 0 && retry_errors {
@@ -527,9 +529,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     } else {
         let avg_cost_mb = analysis_pending
             .iter()
-            .map(|(track, _, _)| {
-                super::track_memory_cost_mb(track.length).min(analysis_budget_mb) as u64
-            })
+            .map(|(track, _, _)| track_memory_cost_mb(track.length).min(analysis_budget_mb) as u64)
             .sum::<u64>()
             / analysis_pending.len() as u64;
         let mem_concurrency = (analysis_budget_mb as u64 / avg_cost_mb.max(1)) as usize;
@@ -587,7 +587,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     status_pb.enable_steady_tick(Duration::from_secs(1));
 
     let cancellation_state = CliCancellationState::default();
-    super::spawn_signal_handlers(&mp, &cancel, &cancellation_state);
+    spawn_signal_handlers(&mp, &cancel, &cancellation_state);
 
     let discogs_counters = Arc::new(ProviderCounters::new());
     let beatport_counters = Arc::new(ProviderCounters::new());
@@ -953,7 +953,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                         return HydrationWorkerCompletion::cancelled(());
                     }
 
-                    let cost_mb = super::track_memory_cost_mb(track.length).min(analysis_budget_mb);
+                    let cost_mb = track_memory_cost_mb(track.length).min(analysis_budget_mb);
                     let mem_permit = tokio::select! {
                         result = mem_sem.acquire_many_owned(cost_mb) => match result {
                             Ok(permit) => permit,
@@ -1329,7 +1329,7 @@ async fn cli_beatport_lookup_with_retry(
 #[cfg(test)]
 mod batch_tests {
     use super::*;
-    use crate::cli::async_test_support::{TEST_WATCHDOG, TaskGuard, bounded};
+    use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard, bounded};
 
     fn test_provider(provider: &str) -> EnrichmentProvider {
         match provider {
