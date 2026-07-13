@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::db::escape_like;
+use crate::domain::audit::Resolution;
 
 /// (id, path, issue_type, detail)
 pub type AuditIssueRow = (i64, String, String, Option<String>);
@@ -1312,7 +1313,7 @@ pub fn get_audit_issue_by_id(
 pub fn resolve_audit_issues(
     conn: &Connection,
     ids: &[i64],
-    resolution: crate::audit::Resolution,
+    resolution: Resolution,
     note: Option<&str>,
     resolved_at: &str,
 ) -> Result<usize, rusqlite::Error> {
@@ -2247,14 +2248,7 @@ mod tests {
         upsert_audit_file(&conn, "/music/track.flac", "t", "m", 100).unwrap();
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t1").unwrap();
 
-        resolve_audit_issues(
-            &conn,
-            &[1],
-            crate::audit::Resolution::AcceptedAsIs,
-            None,
-            "t2",
-        )
-        .unwrap();
+        resolve_audit_issues(&conn, &[1], Resolution::AcceptedAsIs, None, "t2").unwrap();
 
         upsert_audit_issue(&conn, "/music/track.flac", "GENRE_SET", None, "open", "t3").unwrap();
 
@@ -2277,14 +2271,7 @@ mod tests {
         )
         .unwrap();
 
-        resolve_audit_issues(
-            &conn,
-            &[1],
-            crate::audit::Resolution::Fixed,
-            Some("fixed upstream"),
-            "t2",
-        )
-        .unwrap();
+        resolve_audit_issues(&conn, &[1], Resolution::Fixed, Some("fixed upstream"), "t2").unwrap();
 
         let issue = get_audit_issue_by_id(&conn, 1).unwrap().unwrap();
         assert_eq!(issue.status, "resolved");
@@ -2404,7 +2391,7 @@ mod tests {
         let count = resolve_audit_issues(
             &conn,
             &[1],
-            crate::audit::Resolution::AcceptedAsIs,
+            Resolution::AcceptedAsIs,
             Some("intentional"),
             "t2",
         )
@@ -2436,14 +2423,7 @@ mod tests {
             "t1",
         )
         .unwrap();
-        resolve_audit_issues(
-            &conn,
-            &[1],
-            crate::audit::Resolution::AcceptedAsIs,
-            None,
-            "t2",
-        )
-        .unwrap();
+        resolve_audit_issues(&conn, &[1], Resolution::AcceptedAsIs, None, "t2").unwrap();
 
         let open = get_audit_issues(&conn, "/music/", Some("open"), None, 100, 0).unwrap();
         assert_eq!(open.len(), 1);

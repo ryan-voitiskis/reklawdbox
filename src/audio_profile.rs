@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::classify::AudioFeatures;
+use crate::domain::classification::AudioFeatures;
 
 // ---------------------------------------------------------------------------
 // Constants
