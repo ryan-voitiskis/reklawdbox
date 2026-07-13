@@ -195,13 +195,7 @@ fn verify_rekordbox_db() {
     };
     match db::open(&path) {
         Ok(conn) => {
-            let count: i32 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM djmdContent WHERE rb_local_deleted = 0",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
+            let count = db::active_track_count(&conn).unwrap_or(0);
             println!("Rekordbox database: {count} tracks ({path})");
         }
         Err(e) => {

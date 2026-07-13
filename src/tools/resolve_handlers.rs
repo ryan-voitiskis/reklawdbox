@@ -227,17 +227,7 @@ pub(super) fn handle_cache_coverage(
 
     let (total_tracks, tracks) = {
         let conn = server.rekordbox_conn()?;
-        let sample_prefix = format!("%{}%", db::escape_like(db::SAMPLER_PATH_FRAGMENT));
-        let total_tracks: usize = conn
-            .query_row(
-                "SELECT COUNT(*) FROM djmdContent
-                 WHERE rb_local_deleted = 0
-                   AND FolderPath NOT LIKE ?1 ESCAPE '\\'",
-                rusqlite::params![sample_prefix],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(db_error)?
-            .max(0) as usize;
+        let total_tracks = db::non_sampler_track_count(&conn).map_err(db_error)?.max(0) as usize;
 
         let tracks = resolve_tracks(
             &conn,

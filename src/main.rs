@@ -1,3 +1,4 @@
+mod adapters;
 mod anlz;
 mod audio;
 mod audio_profile;

@@ -1,0 +1,99 @@
+use rusqlite::{Connection, OpenFlags};
+
+/// The universal Rekordbox 6/7 SQLCipher key (publicly known, same for all installations).
+pub(crate) const REKORDBOX_SQLCIPHER_KEY: &str =
+    "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497";
+
+pub fn open(path: &str) -> Result<Connection, rusqlite::Error> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // Key is passed as a passphrase — SQLCipher derives the encryption key via PBKDF2.
+    conn.execute_batch(&format!("PRAGMA key = '{REKORDBOX_SQLCIPHER_KEY}'"))?;
+    conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+    Ok(conn)
+}
+
+#[cfg(test)]
+pub fn open_test() -> Connection {
+    Connection::open_in_memory().unwrap()
+}
+
+pub fn default_db_path() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{home}/Library/Pioneer/rekordbox/master.db");
+    if std::path::Path::new(&path).exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+pub fn resolve_db_path() -> Option<String> {
+    resolve_db_path_from(std::env::var_os("REKORDBOX_DB_PATH"), default_db_path)
+}
+
+pub(crate) fn resolve_db_path_from(
+    configured: Option<std::ffi::OsString>,
+    default: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(path) = configured {
+        let path = std::path::PathBuf::from(path);
+        return path.is_file().then(|| path.to_string_lossy().into_owned());
+    }
+    default()
+}
+
+#[cfg(test)]
+pub(crate) fn open_real_db() -> Option<Connection> {
+    use std::path::Path;
+    use std::process::Command;
+    use std::sync::OnceLock;
+
+    static EXTRACTED: OnceLock<bool> = OnceLock::new();
+
+    let tarball = std::env::var("REKORDBOX_TEST_BACKUP").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap();
+        format!("{home}/Library/Pioneer/rekordbox-backups/db_20260215_233936.tar.gz")
+    });
+
+    if !Path::new(&tarball).exists() {
+        return None;
+    }
+
+    let dest = "/tmp/reklawdbox-test";
+    let db_path = format!("{dest}/master.db");
+
+    let ok = EXTRACTED.get_or_init(|| {
+        if Path::new(&db_path).exists() {
+            return true;
+        }
+        std::fs::create_dir_all(dest).ok();
+        let status = Command::new("tar")
+            .args([
+                "xzf",
+                &tarball,
+                "-C",
+                dest,
+                "master.db",
+                "master.db-shm",
+                "master.db-wal",
+            ])
+            .status();
+        match status {
+            Ok(s) => s.success(),
+            Err(_) => false,
+        }
+    });
+
+    if !ok {
+        return None;
+    }
+
+    let conn =
+        Connection::open(&db_path).unwrap_or_else(|e| panic!("failed to open {db_path}: {e}"));
+    conn.execute_batch(&format!("PRAGMA key = '{REKORDBOX_SQLCIPHER_KEY}'"))
+        .unwrap_or_else(|e| panic!("failed to set key: {e}"));
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
+        .unwrap_or_else(|e| panic!("key verification failed: {e}"));
+    Some(conn)
+}
