@@ -26,27 +26,29 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
         data-goal-type="direct"
         data-workflow-choice
       >
-        <div class="choice-copy">
-          <h3>{goal.title}</h3>
-          <p>{goal.summary}</p>
+        <h3>{goal.title}</h3>
+
+        <div class="choice-actions">
+          <p class:list={['safety-line', `safety-${goal.workflows[0].safety.tone}`]}>
+            {goal.workflows[0].safety.label}
+          </p>
+
+          <a
+            class="workflow-link"
+            href={goal.workflows[0].route}
+            aria-label={`Start ${goal.workflows[0].title}`}
+          >
+            Start <span aria-hidden="true">→</span>
+          </a>
         </div>
-
-        <p class:list={['safety-line', `safety-${goal.workflows[0].safety.tone}`]}>
-          {goal.workflows[0].safety.label}
-        </p>
-
-        <a class="workflow-link" href={goal.workflows[0].route}>
-          Open {goal.workflows[0].title} <span aria-hidden="true">→</span>
-        </a>
       </article>
     ) : (
       <details class="goal-options" data-goal-choice data-goal-type="disclosure">
         <summary>
-          <span class="summary-copy">
+          <span class="summary-content">
             <strong class="goal-title">{goal.title}</strong>
-            <span class="goal-summary">{goal.summary}</span>
+            <span class="option-count">{goal.workflows.length} choices</span>
           </span>
-          <span class="option-count">Compare {goal.workflows.length} options</span>
         </summary>
 
         <ul class="workflow-options">
@@ -62,8 +64,12 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
                   {workflow.safety.label}
                 </p>
 
-                <a class="workflow-link" href={workflow.route}>
-                  Open {workflow.title} <span aria-hidden="true">→</span>
+                <a
+                  class="workflow-link"
+                  href={workflow.route}
+                  aria-label={`Open ${workflow.title}`}
+                >
+                  Open <span aria-hidden="true">→</span>
                 </a>
               </article>
             </li>
@@ -75,10 +81,10 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
 
   <nav class="reference-links" aria-label="More ways to explore">
     <a class="browse-link" href="/workflows/">
-      Browse all workflows <span aria-hidden="true">→</span>
+      All workflows <span aria-hidden="true">→</span>
     </a>
-    <a class="reference-link" href="/reference/">
-      Reference overview <span aria-hidden="true">→</span>
+    <a class="reference-link" href="/concepts/">
+      How it works <span aria-hidden="true">→</span>
     </a>
   </nav>
 </div>
@@ -92,7 +98,7 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
 
   .goal-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
     align-items: start;
     gap: 0.9rem;
   }
@@ -108,32 +114,48 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
 
   .direct-choice {
     display: grid;
-    gap: 0.85rem;
+    align-content: start;
+    gap: 0.7rem;
     padding: clamp(1rem, 3vw, 1.2rem);
   }
 
-  .choice-copy h3,
+  .choice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem 1rem;
+  }
+
+  .direct-choice h3,
   .choice-copy p,
   .safety-line {
     margin: 0;
   }
 
+  .direct-choice h3,
   .choice-copy h3 {
-    margin-bottom: 0.3rem;
     font-size: var(--sl-text-lg);
   }
 
-  .choice-copy p,
-  .goal-summary {
+  .choice-copy p {
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
   }
 
   .goal-options summary {
-    display: grid;
-    gap: 0.7rem;
+    display: list-item;
     padding: clamp(1rem, 3vw, 1.2rem);
     cursor: pointer;
+  }
+
+  .summary-content {
+    display: inline-flex;
+    width: calc(100% - 0.75rem);
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem 1rem;
+    vertical-align: middle;
   }
 
   .goal-options summary::marker {
@@ -148,17 +170,14 @@ if (groups.some((goal) => goal.workflows.length === 0)) {
     border-radius: 0.25rem;
   }
 
-  .summary-copy {
-    display: grid;
-    gap: 0.3rem;
-  }
-
   .goal-title {
+    min-width: 0;
     color: var(--sl-color-white);
     font-size: var(--sl-text-lg);
   }
 
   .option-count {
+    flex: none;
     color: var(--sl-color-accent-high);
     font-size: var(--sl-text-sm);
     font-weight: 700;

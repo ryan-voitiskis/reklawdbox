@@ -1846,32 +1846,32 @@ test('goal definitions and workflow memberships are exact and exhaustive', () =>
       [
         'inspect-health',
         'Check my library for problems',
-        'Find missing files, untracked music, playlist gaps, and duplicates.',
+        'Find missing files, playlist gaps, and duplicates.',
       ],
       [
         'clean-library',
         'Fix missing or messy track information',
-        'Choose a full cleanup, fix file tags, or fill missing Rekordbox fields.',
+        'Choose a guided clean-up or fix one thing.',
       ],
       [
         'prepare-downloads',
         'Prepare new downloads',
-        'Tag and organise new music before importing it into Rekordbox.',
+        'Get new music ready for Rekordbox.',
       ],
       [
         'classify-genres',
         'Improve genre tags',
-        'Add missing genres or check whether existing tags still fit.',
+        'Add missing genres or check current tags.',
       ],
       [
         'build-for-mixing',
         'Build a set or crate',
-        'Order a set, grow a flexible crate, or connect several chapters.',
+        'Build a set, crate, or full-night plan.',
       ],
       [
         'explore-dj-ideas',
         'Plan a DJ session',
-        'Get help preparing a gig, digging, practising, or reviewing a set.',
+        'Get help with a gig, dig, or practice session.',
       ],
     ],
   )
@@ -1997,48 +1997,48 @@ test('compact workflow safety is derived from canonical impact facts', () => {
   const cases = [
     [
       'library-health',
-      { tone: 'safe', label: 'Read-only · No network' },
+      { tone: 'safe', label: 'Read only' },
     ],
     [
       'set-building',
       {
         tone: 'review',
-        label: 'Read-only while planning · Optional XML export',
+        label: 'Read only until export',
       },
     ],
     [
       'dj-prompts',
       {
         tone: 'review',
-        label: 'Read-only · Some options may use online lookups',
+        label: 'Read only',
       },
     ],
     [
       'metadata-backfill',
       {
         tone: 'review',
-        label: 'Review first · Changes require XML import',
+        label: 'Review before export',
       },
     ],
     [
       'collection-audit',
       {
         tone: 'write',
-        label: 'Can change audio files · Approval required',
+        label: 'Can change files · asks first',
       },
     ],
     [
       'batch-import',
       {
         tone: 'write',
-        label: 'Can tag, rename, or move files · Approval required',
+        label: 'Can change files · asks first',
       },
     ],
     [
       'library-cleanup',
       {
         tone: 'write',
-        label: 'Can change files and prepare XML · Approval required',
+        label: 'Can change files · asks first',
       },
     ],
   ]
@@ -2052,7 +2052,7 @@ test('compact workflow safety is derived from canonical impact facts', () => {
   exportAwareClone.sideEffects.stagedMetadata.flushesExistingOnExport = true
   assert.deepEqual(compactSafety(exportAwareClone), {
     tone: 'review',
-    label: 'Read-only while planning · Optional XML export',
+    label: 'Read only until export',
   })
 })
 
@@ -2891,14 +2891,14 @@ test('onboarding sources preserve the six-goal journey and version sentinel', ()
     },
     {
       firstSession: sources.firstSession.replaceAll(
-        'factory sampler',
-        'built-in sample',
+        'Rekordbox factory',
+        'Rekordbox built-in',
       ),
     },
     {
       firstSession: sources.firstSession.replace(
-        'contains only factory sampler\ncontent',
-        'contains only built-in sample\ncontent',
+        'Seeing 0 tracks?',
+        'Seeing no results?',
       ),
     },
     {
@@ -2909,13 +2909,13 @@ test('onboarding sources preserve the six-goal journey and version sentinel', ()
     },
     {
       firstSession: sources.firstSession.replace(
-        'no changes were made',
+        /no changes were made/i,
         'the result came back',
       ),
     },
     {
       firstSession: sources.firstSession.replace(
-        'you can stop here',
+        /you can stop here/i,
         'continue to the next section',
       ),
     },
@@ -2974,8 +2974,12 @@ test('onboarding sources preserve the six-goal journey and version sentinel', ()
     { homepage: `${sources.homepage}\nv0.30.0 — duplicate` },
     { builtPaths: new Set() },
   ]
-  invalid.forEach((changes) => {
-    assert.throws(() => validateOnboardingSources({ ...sources, ...changes }))
+  invalid.forEach((changes, index) => {
+    assert.throws(
+      () => validateOnboardingSources({ ...sources, ...changes }),
+      undefined,
+      `invalid onboarding fixture ${index}`,
+    )
   })
 })
 

@@ -3605,13 +3605,14 @@ export function validateOnboardingSources({
     'First 10 minutes must say that the user can stop after success',
   )
   sourceAssertion(
-    /exclude\s+Rekordbox factory sampler content/i.test(firstSession),
+    /Rekordbox factory\s+sampler content/i.test(firstSession),
     'First 10 minutes must disclose factory sampler exclusion',
   )
   sourceAssertion(
-    /zero-track[\s\S]{0,300}contains only factory sampler\s+content/i.test(
-      firstSession,
-    ),
+    /Seeing 0 tracks\?[\s\S]{0,300}only Rekordbox factory\s+sampler content/i
+      .test(
+        firstSession,
+      ),
     'First 10 minutes zero-track guidance must cover a samples-only library',
   )
   sourceAssertion(
@@ -3656,7 +3657,7 @@ export function validateOnboardingSources({
     ['disclosure goal choices', /data-goal-type="disclosure"/],
     ['workflow choice markers', /data-workflow-choice/],
     ['all workflows link', /href="\/workflows\/"/],
-    ['reference overview link', /href="\/reference\/"/],
+    ['technical overview link', /href="\/concepts\/"/],
   ]
   chooserRequirements.forEach(([label, pattern]) => {
     sourceAssertion(

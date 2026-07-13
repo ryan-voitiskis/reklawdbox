@@ -138,28 +138,28 @@ export function compactSafety(workflow) {
   if (workflow.libraryImpact === 'staged-metadata') {
     return {
       tone: 'review',
-      label: 'Review first · Changes require XML import',
+      label: 'Review before export',
     }
   }
 
   if (workflow.libraryImpact === 'direct-audio-files') {
     return {
       tone: 'write',
-      label: 'Can change audio files · Approval required',
+      label: 'Can change files · asks first',
     }
   }
 
   if (workflow.libraryImpact === 'direct-library-files') {
     return {
       tone: 'write',
-      label: 'Can tag, rename, or move files · Approval required',
+      label: 'Can change files · asks first',
     }
   }
 
   if (workflow.libraryImpact === 'mixed') {
     return {
       tone: 'write',
-      label: 'Can change files and prepare XML · Approval required',
+      label: 'Can change files · asks first',
     }
   }
 
@@ -173,7 +173,7 @@ export function compactSafety(workflow) {
   if (hasPlaylistXml || flushesStagedMetadata) {
     return {
       tone: 'review',
-      label: 'Read-only while planning · Optional XML export',
+      label: 'Read only until export',
     }
   }
 
@@ -183,12 +183,12 @@ export function compactSafety(workflow) {
   if (workflow.kind === 'catalog' && mayUseOnlineLookups) {
     return {
       tone: 'review',
-      label: 'Read-only · Some options may use online lookups',
+      label: 'Read only',
     }
   }
 
   return {
     tone: 'safe',
-    label: 'Read-only · No network',
+    label: 'Read only',
   }
 }

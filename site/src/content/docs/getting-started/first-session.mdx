@@ -1,6 +1,6 @@
 ---
 title: First 10 minutes
-description: Confirm that reklawdbox can read your library with one bounded, read-only first result.
+description: Check the connection, then choose what to do next.
 sidebar:
   order: 1
 ---
@@ -8,25 +8,9 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import GoalChooser from '../../../components/GoalChooser.astro';
 
-## Before you start
-
-This page covers the first ten minutes **after installation and connection**.
-Package installation, source compilation, host restart, and troubleshooting are
-not part of that time estimate.
-
-Before continuing, make sure:
-
-- [installation and host configuration are complete](/getting-started/);
-- you reconnected the host after changing its MCP configuration; and
-- Rekordbox 7.x has a library available on this Mac.
-
-Automatic `reklawdbox setup` attempts to install Essentia before it configures a
-host. Manual host configuration can instead connect directly to the Homebrew or
-source-built binary without Essentia. This first result does not use Essentia.
-
 ## Copy this first prompt
 
-Paste this into the newly connected host as one message:
+Paste into ChatGPT or Claude:
 
 {/* <!-- doc-contract:first-session-prompt tool=read_library --> */}
 
@@ -42,47 +26,20 @@ caches, write files, stage changes, or export XML.
 
 {/* <!-- /doc-contract:first-session-prompt --> */}
 
-## What you should see
-
-The result should describe the library the host connected to, including:
-
-- total track and playlist counts;
-- a genre distribution, from which the host can show the most common genres;
-- the average BPM; and
-- a key distribution.
-
-The underlying result also includes rated and unrated track counts and detected
-content roots. The track total and every track-derived statistic above exclude
-Rekordbox factory sampler content. The playlist count is independent of that
-track filter. A zero-track result is not a success to wave through: it can mean
-the detected library has no imported music, contains only factory sampler
-content, or the host is connected to the wrong database path.
-
-## What just happened
-
-`read_library` made one read through reklawdbox's enforced read-only Rekordbox
-database path. It did not make an external request, analyze audio, require or
-populate enrichment/audio caches, write a file, stage a metadata change, or
-create an XML export.
-
 <Aside type="tip" title="You're connected 🎉">
-  reklawdbox can read this library, and no changes were made. If you do not
-  have another task in mind, you can stop here. This result is not a full file
-  or playlist health scan.
+  See your tracks? No changes were made. You can stop here.
 </Aside>
 
-## If it did not work
+<details>
+  <summary>Didn't work?</summary>
 
-- **No reklawdbox tools appear:** follow the
-  [host connection checks](/troubleshooting/#mcp-host-connection).
-- **The host needs a different configuration:** return to
-  [Manual configuration](/getting-started/#manual-configuration), then reconnect.
-- **The tool cannot find or open Rekordbox:** use the
-  [database connection guide](/troubleshooting/#database-connection).
+  Try the [connection checks](/troubleshooting/#mcp-host-connection).
 
-## Choose what to do next
+  **Seeing 0 tracks?** The library may be empty, contain only Rekordbox factory
+  sampler content, or be the wrong library. [Check the database
+  connection](/troubleshooting/#database-connection).
+</details>
 
-The goals below are optional alternatives—choose only one that matches what you
-want to do. Each workflow page explains the technical details before you start.
+## What do you want to do?
 
 <GoalChooser />
