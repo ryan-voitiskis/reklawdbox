@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
+import { compactSafety } from '../site/src/data/workflow-presentation.mjs'
 import {
   goalDefinitions,
   validateWorkflows,
@@ -1824,14 +1825,38 @@ test('XML workflow backup contracts reject missing, negated, and weaker gates', 
 
 test('goal definitions and workflow memberships are exact and exhaustive', () => {
   assert.deepEqual(
-    goalDefinitions.map(({ id, title }) => [id, title]),
+    goalDefinitions.map(({ id, title, summary }) => [id, title, summary]),
     [
-      ['inspect-health', 'Inspect collection health'],
-      ['clean-library', 'Clean existing metadata'],
-      ['prepare-downloads', 'Prepare newly downloaded music'],
-      ['classify-genres', 'Classify or audit genres'],
-      ['build-for-mixing', 'Build for mixing'],
-      ['explore-dj-ideas', 'Explore DJ ideas'],
+      [
+        'inspect-health',
+        'Check my library for problems',
+        'Find missing files, untracked music, playlist gaps, and duplicates.',
+      ],
+      [
+        'clean-library',
+        'Fix missing or messy track information',
+        'Choose a full cleanup, fix file tags, or fill missing Rekordbox fields.',
+      ],
+      [
+        'prepare-downloads',
+        'Prepare new downloads',
+        'Tag and organise new music before importing it into Rekordbox.',
+      ],
+      [
+        'classify-genres',
+        'Improve genre tags',
+        'Add missing genres or check whether existing tags still fit.',
+      ],
+      [
+        'build-for-mixing',
+        'Build a set or crate',
+        'Order a set, grow a flexible crate, or connect several chapters.',
+      ],
+      [
+        'explore-dj-ideas',
+        'Plan a DJ session',
+        'Get help preparing a gig, digging, practising, or reviewing a set.',
+      ],
     ],
   )
   assert.equal(
@@ -1906,6 +1931,113 @@ test('goal definitions and workflow memberships are exact and exhaustive', () =>
     () => validateWorkflows(wrongMembership, goalDefinitions),
     /goals/,
   )
+})
+
+test('workflow discovery copy stays concise and complete', () => {
+  const overlongTitle = structuredClone(goalDefinitions)
+  overlongTitle[0].title = 'One two three four five six seven eight nine'
+  assert.throws(
+    () => validateWorkflows(workflows, overlongTitle),
+    /goalDefinitions\[0\]\.title must contain at most 8 words/,
+  )
+
+  const overlongSummary = structuredClone(goalDefinitions)
+  overlongSummary[0].summary = Array.from(
+    { length: 19 },
+    (_, index) => `word${index}`,
+  ).join(' ')
+  assert.throws(
+    () => validateWorkflows(workflows, overlongSummary),
+    /goalDefinitions\[0\]\.summary must contain at most 18 words/,
+  )
+
+  const missingChooseWhen = structuredClone(workflows)
+  delete missingChooseWhen[0].chooseWhen
+  assert.throws(
+    () => validateWorkflows(missingChooseWhen),
+    /workflows\[0\]\.chooseWhen is required/,
+  )
+
+  const emptyChooseWhen = structuredClone(workflows)
+  emptyChooseWhen[0].chooseWhen = ' '
+  assert.throws(
+    () => validateWorkflows(emptyChooseWhen),
+    /workflows\[0\]\.chooseWhen must be a non-empty string/,
+  )
+
+  const overlongChooseWhen = structuredClone(workflows)
+  overlongChooseWhen[0].chooseWhen = Array.from(
+    { length: 21 },
+    (_, index) => `word${index}`,
+  ).join(' ')
+  assert.throws(
+    () => validateWorkflows(overlongChooseWhen),
+    /workflows\[0\]\.chooseWhen must contain at most 20 words/,
+  )
+})
+
+test('compact workflow safety is derived from canonical impact facts', () => {
+  const workflow = (id) => workflows.find((item) => item.id === id)
+  const cases = [
+    [
+      'library-health',
+      { tone: 'safe', label: 'Read-only · No network' },
+    ],
+    [
+      'set-building',
+      {
+        tone: 'review',
+        label: 'Read-only while planning · Optional XML export',
+      },
+    ],
+    [
+      'dj-prompts',
+      {
+        tone: 'review',
+        label: 'Read-only · Some options may use online lookups',
+      },
+    ],
+    [
+      'metadata-backfill',
+      {
+        tone: 'review',
+        label: 'Review first · Changes require XML import',
+      },
+    ],
+    [
+      'collection-audit',
+      {
+        tone: 'write',
+        label: 'Can change audio files · Approval required',
+      },
+    ],
+    [
+      'batch-import',
+      {
+        tone: 'write',
+        label: 'Can tag, rename, or move files · Approval required',
+      },
+    ],
+    [
+      'library-cleanup',
+      {
+        tone: 'write',
+        label: 'Can change files and prepare XML · Approval required',
+      },
+    ],
+  ]
+
+  for (const [id, expected] of cases) {
+    assert.deepEqual(compactSafety(workflow(id)), expected, id)
+  }
+
+  const exportAwareClone = structuredClone(workflow('library-health'))
+  exportAwareClone.id = 'future-read-only-export'
+  exportAwareClone.sideEffects.stagedMetadata.flushesExistingOnExport = true
+  assert.deepEqual(compactSafety(exportAwareClone), {
+    tone: 'review',
+    label: 'Read-only while planning · Optional XML export',
+  })
 })
 
 test('first-session prompt is structurally singular and capability-bounded', () => {
@@ -2058,9 +2190,25 @@ After`,
   )
 })
 
-test('onboarding sources preserve the three-selection journey and version sentinel', () => {
+test('onboarding sources preserve the six-goal journey and version sentinel', () => {
   const read = (relative) =>
     readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8')
+  const builtGroups = goalDefinitions.map((goal) => {
+    const members = workflows.filter((workflow) =>
+      workflow.goals.includes(goal.id)
+    )
+    const choices = members.map((workflow) =>
+      `<article data-workflow-choice><p class="safety-line">${
+        compactSafety(workflow).label
+      }</p><a href="${workflow.route}">${workflow.title}</a></article>`
+    ).join('')
+    if (members.length === 1) {
+      return `<article data-goal-choice data-goal-type="direct" data-workflow-choice><h3>${goal.title}</h3><p class="safety-line">${
+        compactSafety(members[0]).label
+      }</p><a href="${members[0].route}">${members[0].title}</a></article>`
+    }
+    return `<details data-goal-choice data-goal-type="disclosure"><summary>${goal.title}</summary>${choices}</details>`
+  }).join('')
   const sources = {
     homepage: read('site/src/content/docs/index.mdx'),
     install: read('site/src/content/docs/getting-started/index.mdx'),
@@ -2071,6 +2219,10 @@ test('onboarding sources preserve the three-selection journey and version sentin
     astroConfig: read('site/astro.config.mjs'),
     cargoToml: read('Cargo.toml'),
     builtPaths: new Set(['getting-started/first-session/index.html']),
+    builtFirstSession:
+      `<main><h2>Before you start</h2><div data-onboarding-goals>${builtGroups}</div></main>`,
+    workflowCatalog: workflows,
+    goalCatalog: goalDefinitions,
   }
   assert.doesNotThrow(() => validateOnboardingSources(sources))
 
@@ -2107,10 +2259,58 @@ test('onboarding sources preserve the three-selection journey and version sentin
       ),
     },
     {
-      goalChooser: sources.goalChooser.replaceAll(
-        '--sl-color-accent-high',
-        '--sl-color-text-accent',
+      firstSession: sources.firstSession.replace(
+        `title="You're connected 🎉"`,
+        'title="Connection result"',
       ),
+    },
+    {
+      firstSession: sources.firstSession.replace(
+        'no changes were made',
+        'the result came back',
+      ),
+    },
+    {
+      firstSession: sources.firstSession.replace(
+        'you can stop here',
+        'continue to the next section',
+      ),
+    },
+    {
+      goalChooser: sources.goalChooser.replace('<details', '<section'),
+    },
+    {
+      goalChooser: sources.goalChooser.replace('<summary>', '<div>'),
+    },
+    {
+      goalChooser: sources.goalChooser.replaceAll(
+        'data-goal-type="direct"',
+        '',
+      ),
+    },
+    { goalChooser: `${sources.goalChooser}\n<p>Goal 1</p>` },
+    { goalChooser: `${sources.goalChooser}\n<p>Direct user files</p>` },
+    { goalChooser: `${sources.goalChooser}\n<div client:load />` },
+    {
+      builtFirstSession: sources.builtFirstSession.replace(
+        'href="/workflows/library-health/"',
+        'href="/workflows/"',
+      ),
+    },
+    {
+      builtFirstSession: sources.builtFirstSession.replace(
+        goalDefinitions[0].title,
+        'Missing goal title',
+      ),
+    },
+    {
+      builtFirstSession: sources.builtFirstSession.replace(
+        'class="safety-line"',
+        'class="omitted"',
+      ),
+    },
+    {
+      builtFirstSession: `${sources.builtFirstSession}<p>Before you start</p>`,
     },
     {
       astroConfig: sources.astroConfig.replace(

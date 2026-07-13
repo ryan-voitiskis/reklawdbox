@@ -2571,6 +2571,9 @@ export function validateOnboardingSources({
   astroConfig,
   cargoToml,
   builtPaths,
+  builtFirstSession,
+  workflowCatalog,
+  goalCatalog,
 }) {
   sourceAssertion(
     homepage.includes("link: '/getting-started/'"),
@@ -2587,6 +2590,18 @@ export function validateOnboardingSources({
   sourceAssertion(
     firstSession.includes('<GoalChooser />'),
     'First 10 minutes must render GoalChooser',
+  )
+  sourceAssertion(
+    firstSession.includes('title="You\'re connected 🎉"'),
+    'First 10 minutes must name the successful connection',
+  )
+  sourceAssertion(
+    /no changes were made/i.test(firstSession),
+    'First 10 minutes must say that no changes were made',
+  )
+  sourceAssertion(
+    /you can stop here/i.test(firstSession),
+    'First 10 minutes must say that the user can stop after success',
   )
   sourceAssertion(
     /exclude\s+Rekordbox factory sampler content/i.test(firstSession),
@@ -2633,21 +2648,14 @@ export function validateOnboardingSources({
     ['goal definitions', /goalDefinitions/],
     ['workflow records', /workflows/],
     ['canonical goal membership', /workflow\.goals\.includes\(goal\.id\)/],
-    ['collection impact', /libraryImpact/],
-    ['direct user files', /directUserFiles/],
-    ['local state', /localStateWrites/],
-    ['outputs', /outputs/],
-    ['prerequisites', /prerequisites/],
+    ['compact safety formatter', /compactSafety/],
+    ['native details disclosure', /<details\b/],
+    ['native summary control', /<summary\b/],
+    ['direct goal choices', /data-goal-type="direct"/],
+    ['disclosure goal choices', /data-goal-type="disclosure"/],
+    ['workflow choice markers', /data-workflow-choice/],
     ['all workflows link', /href="\/workflows\/"/],
     ['reference overview link', /href="\/reference\/"/],
-    [
-      'high-contrast goal labels',
-      /\.goal-number,\s*\.workflow-kind\s*\{[^}]*color:\s*var\(--sl-color-accent-high\)/s,
-    ],
-    [
-      'high-contrast chooser links',
-      /\.workflow-link,\s*\.reference-links a\s*\{[^}]*color:\s*var\(--sl-color-accent-high\)/s,
-    ],
   ]
   chooserRequirements.forEach(([label, pattern]) => {
     sourceAssertion(
@@ -2658,6 +2666,20 @@ export function validateOnboardingSources({
   sourceAssertion(
     !/client:(?:load|only)/.test(goalChooser),
     'GoalChooser must render without client hydration',
+  )
+  sourceAssertion(
+    !/Goal (?:\{|[1-6]\b)|goal-number/.test(goalChooser),
+    'GoalChooser must not present goals as numbered steps',
+  )
+  const oldLedgerLabels = [
+    'Direct user files',
+    'Local state',
+    'Files created',
+    'Before you start',
+  ]
+  sourceAssertion(
+    oldLedgerLabels.every((label) => !goalChooser.includes(label)),
+    'GoalChooser must not render the old contract ledger',
   )
 
   const sidebarEntries = [
@@ -2692,6 +2714,79 @@ export function validateOnboardingSources({
       'built First 10 minutes route is missing',
     )
   }
+  sourceAssertion(
+    typeof builtFirstSession === 'string' && builtFirstSession.length > 0,
+    'built First 10 minutes HTML is missing',
+  )
+  sourceAssertion(
+    Array.isArray(workflowCatalog) && Array.isArray(goalCatalog),
+    'canonical workflow and goal catalogs are missing',
+  )
+
+  const goalSizes = goalCatalog.map((goal) =>
+    workflowCatalog.filter((workflow) => workflow.goals.includes(goal.id))
+      .length
+  )
+  const directGoalCount = goalSizes.filter((size) => size === 1).length
+  const disclosureGoalCount = goalSizes.filter((size) => size > 1).length
+  const count = (pattern) => [...builtFirstSession.matchAll(pattern)].length
+
+  sourceAssertion(
+    count(/data-goal-choice\b/g) === goalCatalog.length,
+    'built First 10 minutes must contain all six goal intents',
+  )
+  sourceAssertion(
+    count(/data-workflow-choice\b/g) === workflowCatalog.length,
+    'built First 10 minutes must contain all eleven workflow choices',
+  )
+  sourceAssertion(
+    count(/data-goal-type="direct"/g) === directGoalCount,
+    'single-workflow goals must render as direct choices',
+  )
+  sourceAssertion(
+    count(/<details\b[^>]*data-goal-type="disclosure"/g)
+        === disclosureGoalCount
+      && count(
+          /<details\b[^>]*data-goal-type="disclosure"[^>]*>\s*<summary\b/g,
+        ) === disclosureGoalCount,
+    'multi-workflow goals must render with native disclosure controls',
+  )
+  goalCatalog.forEach((goal) => {
+    sourceAssertion(
+      builtFirstSession.includes(goal.title),
+      `built First 10 minutes is missing goal title ${goal.title}`,
+    )
+  })
+  workflowCatalog.forEach((workflow) => {
+    sourceAssertion(
+      builtFirstSession.includes(`href="${workflow.route}"`),
+      `built First 10 minutes is missing workflow route ${workflow.route}`,
+    )
+  })
+
+  const safetyLines = [...builtFirstSession.matchAll(
+    /class="[^"]*\bsafety-line\b[^"]*"[^>]*>([\s\S]*?)<\/p>/g,
+  )]
+  sourceAssertion(
+    safetyLines.length === workflowCatalog.length
+      && safetyLines.every((match) => match[1].replace(/<[^>]+>/g, '').trim()),
+    'every built workflow choice must include a text safety summary',
+  )
+
+  const chooserStart = builtFirstSession.indexOf('data-onboarding-goals')
+  sourceAssertion(
+    chooserStart >= 0,
+    'built First 10 minutes is missing the goal chooser marker',
+  )
+  const chooserHtml = builtFirstSession.slice(chooserStart)
+  sourceAssertion(
+    oldLedgerLabels.every((label) => !chooserHtml.includes(label)),
+    'built GoalChooser must not contain the old contract ledger',
+  )
+  sourceAssertion(
+    !/Goal [1-6]\b/.test(chooserHtml),
+    'built GoalChooser must not present goals as numbered steps',
+  )
 }
 
 /**
@@ -3581,6 +3676,10 @@ async function main() {
   const distRoot = path.resolve(root, options.dist)
   const distFiles = await listFiles(distRoot)
   const builtPaths = new Set(distFiles)
+  const firstSessionBuiltPath = 'getting-started/first-session/index.html'
+  const builtFirstSession = builtPaths.has(firstSessionBuiltPath)
+    ? await fs.readFile(path.join(distRoot, firstSessionBuiltPath), 'utf8')
+    : ''
   check(() =>
     validateOnboardingSources({
       homepage: homepageDocument.content,
@@ -3590,6 +3689,9 @@ async function main() {
       astroConfig: astroConfigDocument.content,
       cargoToml,
       builtPaths,
+      builtFirstSession,
+      workflowCatalog: workflows,
+      goalCatalog: goalDefinitions,
     })
   )
   for (const workflow of workflows) {

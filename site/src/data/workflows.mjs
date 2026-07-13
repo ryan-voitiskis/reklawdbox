@@ -35,6 +35,7 @@
  *   route: string,
  *   summary: string,
  *   audience: string,
+ *   chooseWhen: string,
  *   kind: WorkflowKind,
  *   goals: string[],
  *   libraryImpact: LibraryImpact,
@@ -75,44 +76,41 @@ const WORKFLOW_IDS = [
 const GOAL_BLUEPRINTS = [
   {
     id: 'inspect-health',
-    title: 'Inspect collection health',
+    title: 'Check my library for problems',
     summary:
-      'Check collection structure and file health without changing your collection.',
+      'Find missing files, untracked music, playlist gaps, and duplicates.',
     workflows: ['library-health'],
   },
   {
     id: 'clean-library',
-    title: 'Clean existing metadata',
+    title: 'Fix missing or messy track information',
     summary:
-      'Audit files, fill metadata gaps, or follow the complete cleanup sequence.',
+      'Choose a full cleanup, fix file tags, or fill missing Rekordbox fields.',
     workflows: ['library-cleanup', 'collection-audit', 'metadata-backfill'],
   },
   {
     id: 'prepare-downloads',
-    title: 'Prepare newly downloaded music',
-    summary:
-      'Tag, add artwork to, rename, and organize a new batch before Rekordbox import.',
+    title: 'Prepare new downloads',
+    summary: 'Tag and organise new music before importing it into Rekordbox.',
     workflows: ['batch-import'],
   },
   {
     id: 'classify-genres',
-    title: 'Classify or audit genres',
-    summary:
-      'Assign missing genres or compare existing genres with available evidence.',
+    title: 'Improve genre tags',
+    summary: 'Add missing genres or check whether existing tags still fit.',
     workflows: ['genre-classification', 'genre-audit'],
   },
   {
     id: 'build-for-mixing',
-    title: 'Build for mixing',
-    summary:
-      'Sequence a set, grow a compatible pool, or connect chapters using local evidence.',
+    title: 'Build a set or crate',
+    summary: 'Order a set, grow a flexible crate, or connect several chapters.',
     workflows: ['set-building', 'pool-building', 'chapter-set-planning'],
   },
   {
     id: 'explore-dj-ideas',
-    title: 'Explore DJ ideas',
+    title: 'Plan a DJ session',
     summary:
-      'Use local library context for guided DJ planning or evaluate candidates you supply.',
+      'Get help preparing a gig, digging, practising, or reviewing a set.',
     workflows: ['dj-prompts'],
   },
 ]
@@ -161,6 +159,7 @@ export const workflows = [
       'Clean file metadata, hydrate evidence, backfill metadata, then classify and audit genres in an ordered five-session path.',
     audience:
       'New users and anyone preparing a disorganized library for reliable enrichment and DJ workflows.',
+    chooseWhen: 'You want one guided path through a generally messy library.',
     kind: 'workflow',
     goals: ['clean-library'],
     libraryImpact: 'mixed',
@@ -269,6 +268,8 @@ export const workflows = [
       'Find naming and tag problems, approve safe fixes, verify file writes, and synchronize changed imported tracks.',
     audience:
       'Users cleaning artist, title, tag-layer, filename, and directory conventions.',
+    chooseWhen:
+      'File names or embedded artist and title tags are inconsistent.',
     kind: 'workflow',
     goals: ['clean-library'],
     libraryImpact: 'direct-audio-files',
@@ -359,6 +360,7 @@ export const workflows = [
       'Fill missing labels, years, and albums from file, folder, cached provider, and researched evidence.',
     audience:
       'Users preparing missing metadata for stronger search and genre-classification evidence.',
+    chooseWhen: 'Rekordbox is missing labels, years, or albums.',
     kind: 'workflow',
     goals: ['clean-library'],
     libraryImpact: 'staged-metadata',
@@ -438,6 +440,7 @@ export const workflows = [
       'Classify ungenred tracks from cached provider, label, BPM, and audio evidence with confidence-based review.',
     audience:
       'Users assigning consistent DJ-oriented genres to ungenred or noncanonical tracks.',
+    chooseWhen: 'Tracks have no useful genre tag.',
     kind: 'workflow',
     goals: ['classify-genres'],
     libraryImpact: 'staged-metadata',
@@ -522,6 +525,7 @@ export const workflows = [
       'Compare existing genres with cached evidence and review only conflicts or uncertain classifications.',
     audience:
       'Users verifying existing genre tags after classification, imports, or taxonomy changes.',
+    chooseWhen: 'Genre tags exist, but you want to check them.',
     kind: 'workflow',
     goals: ['classify-genres'],
     libraryImpact: 'staged-metadata',
@@ -605,6 +609,7 @@ export const workflows = [
       'Compare transition-scored ordered set candidates, refine one with the user, and optionally export the approved playlist.',
     audience:
       'DJs planning a fixed sequence with a chosen duration, energy arc, and transition priorities.',
+    chooseWhen: 'You have candidate tracks and want one ordered set.',
     kind: 'workflow',
     goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
@@ -683,6 +688,7 @@ export const workflows = [
       'Grow and inspect a symmetric compatibility pool for live improvisation, then optionally export it as a playlist.',
     audience:
       'DJs building flexible crates whose tracks should mix well in any order.',
+    chooseWhen: 'You want a flexible crate whose tracks mix well together.',
     kind: 'workflow',
     goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
@@ -767,6 +773,8 @@ export const workflows = [
       'Order locked chapters, find bridge tracks, refine internal sequences, and optionally export the full plan.',
     audience:
       'DJs planning a longer performance from multiple approved pools or chapters.',
+    chooseWhen:
+      'You already have several chapters or pools and need a full-night plan.',
     kind: 'workflow',
     goals: ['build-for-mixing'],
     libraryImpact: 'read-only',
@@ -852,6 +860,7 @@ export const workflows = [
       'Extract, identify, tag, rename, add artwork to, and organize newly acquired music before Rekordbox import.',
     audience:
       'Users preparing downloads, albums, loose tracks, or ZIP archives for a consistent library layout.',
+    chooseWhen: 'You have new downloads to tag and organise before importing.',
     kind: 'workflow',
     goals: ['prepare-downloads'],
     libraryImpact: 'direct-library-files',
@@ -958,6 +967,8 @@ export const workflows = [
       'Scan broken links, orphan files, playlist gaps, and duplicate groups without changing the collection.',
     audience:
       'Users exploring a library safely or checking structure before and after larger changes.',
+    chooseWhen:
+      'You want to check files, duplicates, or playlist gaps without changing anything.',
     kind: 'workflow',
     goals: ['inspect-health'],
     libraryImpact: 'read-only',
@@ -1028,6 +1039,8 @@ export const workflows = [
       'Choose a conversational recipe for gig prep, collection analysis, candidate evaluation, debriefing, harmonic planning, or practice.',
     audience:
       'DJs who want a guided conversation rather than one fixed operational workflow.',
+    chooseWhen:
+      'You want conversational help planning, practising, digging, or reviewing a gig.',
     kind: 'catalog',
     goals: ['explore-dj-ideas'],
     libraryImpact: 'read-only',
@@ -1277,6 +1290,13 @@ function nonEmptyString(value, path) {
   }
 }
 
+function validateWordLimit(value, maximum, path) {
+  const wordCount = value.trim().split(/\s+/u).length
+  if (wordCount > maximum) {
+    fail(`${path} must contain at most ${maximum} words`)
+  }
+}
+
 function stringArray(value, path) {
   if (!Array.isArray(value)) fail(`${path} must be an array`)
   value.forEach((item, index) => nonEmptyString(item, `${path}[${index}]`))
@@ -1366,11 +1386,14 @@ function validateGoalDefinitions(definitions) {
     if (JSON.stringify(fields) !== JSON.stringify(['id', 'summary', 'title'])) {
       fail(`${path} must contain exactly id, title, summary`)
     }
+    nonEmptyString(definition.title, `${path}.title`)
+    nonEmptyString(definition.summary, `${path}.summary`)
+    validateWordLimit(definition.title, 8, `${path}.title`)
+    validateWordLimit(definition.summary, 18, `${path}.summary`)
     const expected = GOAL_BLUEPRINTS[index]
     if (definition.id !== expected.id || definition.title !== expected.title) {
       fail(`${path} must be ${expected.id} — ${expected.title}`)
     }
-    nonEmptyString(definition.summary, `${path}.summary`)
   })
 }
 
@@ -1399,6 +1422,7 @@ export function validateWorkflows(items, definitions = goalDefinitions) {
     'route',
     'summary',
     'audience',
+    'chooseWhen',
     'kind',
     'goals',
     'libraryImpact',
@@ -1430,6 +1454,8 @@ export function validateWorkflows(items, definitions = goalDefinitions) {
     nonEmptyString(item.route, `${path}.route`)
     nonEmptyString(item.summary, `${path}.summary`)
     nonEmptyString(item.audience, `${path}.audience`)
+    nonEmptyString(item.chooseWhen, `${path}.chooseWhen`)
+    validateWordLimit(item.chooseWhen, 20, `${path}.chooseWhen`)
     nonEmptyString(item.scope, `${path}.scope`)
     nonEmptyString(item.duration, `${path}.duration`)
     nonEmptyString(item.resumability, `${path}.resumability`)
