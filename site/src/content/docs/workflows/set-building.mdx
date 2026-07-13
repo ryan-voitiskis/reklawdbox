@@ -6,16 +6,21 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Compare transition-scored ordered set candidates, refine the best sequence with
 your own musical judgment, and optionally export the approved playlist for
 Rekordbox.
 
-<WorkflowContract id="set-building" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="set-building" />
+
+```
+Build a DJ set from my collection.
+```
+
+## What happens next
 
 1. **Define the brief.** Confirm duration, candidate scope, opener/closer pins,
    energy shape, and scoring priorities.
@@ -48,7 +53,7 @@ saved presets and exported XML persist. Change filters, weights, or pinned
 tracks and regenerate when a candidate does not work.
 
 Playlist export does not edit `master.db`, but it also writes and clears any
-metadata already staged by another workflow. Inspect `preview_changes` first
+metadata already staged by another workflow. Review all prepared changes first
 and complete the separate metadata XML handoff when needed. Export proceeds
 only after the built-in database backup succeeds or the configured custom
 backup script exits zero; an export failure restores staged metadata for retry.
@@ -61,11 +66,9 @@ Verify the playlist name, count, first and last tracks, and representative
 transitions before deleting the XML. Import any staged metadata through the
 separate All Tracks flow described on that page.
 
-## Start this workflow
+## Technical details
 
-```
-Build a DJ set from my collection.
-```
+<WorkflowContract id="set-building" />
 
 ## Next steps
 

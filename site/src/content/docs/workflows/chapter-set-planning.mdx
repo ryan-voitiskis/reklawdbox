@@ -6,15 +6,20 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Order at least two locked chapters, find bridge tracks between them, refine any
 internal sequences, and optionally export the approved full plan for Rekordbox.
 
-<WorkflowContract id="chapter-set-planning" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="chapter-set-planning" />
+
+```
+Plan a set from my locked chapters.
+```
+
+## What happens next
 
 1. **Define the chapters.** Start from playlists already built and validated
    with [Pool Building](/workflows/pool-building/), and mark each one as fixed
@@ -45,15 +50,14 @@ unordered crate.
 
 ## What changes and how to recover
 
-The plan lives in the conversation rather than a durable cursor. Chapter
-playlists persist, but ordering and bridge choices must be reconstructed after
-a restart. Change the chapter order, boundary tracks, or scoring preferences
-and rerun only the affected bridge search when a transition fails. Timbral
-normalization or saved presets may persist locally.
+The plan lives in the conversation. Chapter playlists persist, but ordering and
+bridge choices must be reconstructed after a restart. Change the chapter order,
+boundary tracks, or scoring preferences and revisit only the affected bridge
+when a transition fails. Saved scoring information may remain available.
 
 Playlist export also writes and clears unrelated staged metadata, so inspect
-`preview_changes` first and complete its separate metadata handoff when needed.
-Export fails closed unless the built-in database backup succeeds or the
+all prepared changes first and complete their separate metadata handoff when
+needed. Export fails closed unless the built-in database backup succeeds or the
 configured custom backup script exits zero. A failed export restores staged
 metadata for retry.
 
@@ -65,11 +69,9 @@ Verify each imported playlist's name, count, and order—including chapter
 boundaries—before cleanup. Use the separate All Tracks flow for any included
 staged metadata.
 
-## Start this workflow
+## Technical details
 
-```
-Plan a set from my locked chapters.
-```
+<WorkflowContract id="chapter-set-planning" />
 
 ## Next steps
 

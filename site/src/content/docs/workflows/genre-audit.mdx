@@ -6,23 +6,28 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Compare existing genre tags with cached provider, label, BPM, and audio evidence;
 review only conflicts or uncertain cases; and export approved corrections as
 Rekordbox metadata XML.
 
-<WorkflowContract id="genre-audit" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="genre-audit" />
+
+```
+Audit my existing genre tags.
+```
+
+## What happens next
 
 1. **Choose the audit scope.** Start after classification, after importing a
    differently tagged collection, when a genre seems over-applied, or when
    newer evidence warrants a review.
-2. **Measure and prepare evidence.** Run scoped `cache_coverage` for genred
-   tracks and fill core Discogs, Beatport, and Stratum gaps where practical.
-   Essentia is useful but optional.
+2. **Measure and prepare evidence.** Check whether enough evidence is ready for
+   genred tracks, then fill core Discogs, Beatport, and Stratum gaps where
+   practical. Essentia is useful but optional.
 3. **Compare rather than refill.** Use the same evidence model as
    classification, but surface only conflicts and uncertain existing tags.
 4. **Review and export.** Decide each conflict group, preview the staged
@@ -44,11 +49,10 @@ export fails closed unless the built-in database backup succeeds or the
 configured custom backup script exits zero. Clear unwanted corrections before
 export; a failed XML write keeps the staged changes available for retry.
 
-Preparation follows `page.next_offset` and later retries explicit failed track
-IDs. Resume only with the same selector/library order, provider/cache policy,
-audio `skip_cached` setting, and Essentia availability; restart from zero after
-one changes. Audit pagination has its own caller-managed offset. Caches persist,
-but staged corrections must be exported before the MCP process restarts.
+You can continue an interrupted audit with the same scope and evidence sources.
+Start a fresh pass after changing either so every existing genre is judged
+consistently. Previously prepared evidence remains available, but staged
+corrections must be exported before the MCP process restarts.
 
 ## Finish in Rekordbox
 
@@ -56,11 +60,9 @@ Keep the exported XML until the correction import is verified. Follow the
 [metadata XML handoff](/reference/xml-export/#importing-into-rekordbox), then
 check representative corrected and intentionally retained genres.
 
-## Start this workflow
+## Technical details
 
-```
-Audit my existing genre tags.
-```
+<WorkflowContract id="genre-audit" />
 
 ## Next steps
 

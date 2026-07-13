@@ -2,7 +2,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-import { compactSafety } from '../site/src/data/workflow-presentation.mjs'
+import { toolReferences } from '../site/src/data/tool-reference.mjs'
+import {
+  compactSafety,
+  effectLabel,
+  hasExportFlushRisk,
+  hasMaterialDirectWrite,
+  hasXmlOutput,
+  impactLabel,
+  modeLabel,
+  networkLabel,
+  quickStartNetworkMessage,
+} from '../site/src/data/workflow-presentation.mjs'
 import {
   goalDefinitions,
   validateWorkflows,
@@ -32,6 +43,9 @@ import {
   validatePublishingAudiences,
   validateRuntimeHelpUrls,
   validateSopContracts,
+  validateWorkflowActionPages,
+  validateWorkflowCatalog,
+  validateWorkflowTechnicalContracts,
   validateXmlBackupContracts,
 } from './check-doc-contract.mjs'
 import { decodeProtocolLine, routeProtocolLine } from './lib/mcp-stdio.mjs'
@@ -2038,6 +2052,633 @@ test('compact workflow safety is derived from canonical impact facts', () => {
     tone: 'review',
     label: 'Read-only while planning · Optional XML export',
   })
+})
+
+test('workflow presentation vocabulary and warning detectors are canonical', () => {
+  const workflow = (id) => workflows.find((item) => item.id === id)
+
+  const impacts = [
+    ['read-only', 'Collection read-only'],
+    ['staged-metadata', 'Stages metadata for XML'],
+    ['direct-audio-files', 'Writes audio-file tags or names'],
+    ['direct-library-files', 'Writes and organizes library files'],
+    ['mixed', 'Direct file writes and staged metadata'],
+  ]
+  for (const [value, expected] of impacts) {
+    assert.equal(impactLabel(value), expected, value)
+  }
+
+  const effects = [
+    ['audio-tags', 'Audio tags'],
+    ['embedded-artwork', 'Embedded artwork'],
+    ['extracted-artwork', 'Extracted artwork'],
+    ['downloaded-artwork', 'Downloaded artwork'],
+    ['move-rename', 'File or directory moves/renames'],
+    ['archive-extraction', 'Archive extraction'],
+    ['archive-move', 'Archive moves'],
+    ['directory-create-remove', 'Directory creation/removal'],
+    ['enrichment-cache', 'Enrichment cache'],
+    ['audio-cache', 'Audio-analysis cache'],
+    ['audit-state', 'Audit state'],
+    ['preset', 'Saved scoring preset'],
+    ['timbral-normalization', 'Timbral normalization statistics'],
+    ['provider-session', 'Provider session'],
+    ['backup', 'Rekordbox database backup'],
+    ['metadata-xml', 'Metadata XML file'],
+    ['playlist-xml', 'Playlist XML file'],
+    ['artwork-file', 'Artwork file'],
+    ['organized-library-files', 'Organized library files'],
+    ['reload-tag', 'Reload Tag for changed imported tracks'],
+    ['library-file-import', 'Import files or folders into Collection'],
+    ['manual-cover-art', 'Add WAV cover art manually'],
+    ['manual-relocate', 'Relocate files in Rekordbox'],
+    ['import-or-delete-orphans', 'Import or remove orphan files'],
+    ['assign-playlists', 'Assign tracks to playlists'],
+    ['remove-duplicates', 'Review and remove duplicates'],
+  ]
+  for (const [value, expected] of effects) {
+    assert.equal(effectLabel(value), expected, value)
+  }
+  assert.equal(effectLabel('future-effect'), 'future-effect')
+
+  const modes = [
+    ['always', 'Always'],
+    ['conditional', 'When needed'],
+    ['optional', 'Optional'],
+    ['on-export', 'On export'],
+  ]
+  for (const [value, expected] of modes) {
+    assert.equal(modeLabel(value), expected, value)
+  }
+
+  const networks = [
+    ['none', 'No network'],
+    ['conditional', 'Network when needed'],
+    ['required', 'Network required'],
+  ]
+  for (const [value, expected] of networks) {
+    assert.equal(networkLabel(value), expected, value)
+  }
+
+  assert.equal(quickStartNetworkMessage({ level: 'none' }), null)
+  assert.equal(
+    quickStartNetworkMessage({
+      level: 'conditional',
+      condition:
+        'Hydration uses auto_enrich and is cache-first unless skip_cached changes.',
+    }),
+    'Online services are used only when the chosen step needs information that is not available locally.',
+  )
+  assert.equal(
+    quickStartNetworkMessage({
+      level: 'required',
+      condition: 'Internal provider details.',
+    }),
+    'This workflow needs an online service to complete.',
+  )
+
+  assert.equal(hasMaterialDirectWrite(workflow('batch-import')), true)
+  assert.equal(hasMaterialDirectWrite(workflow('library-cleanup')), true)
+  assert.equal(hasMaterialDirectWrite(workflow('metadata-backfill')), false)
+  assert.equal(hasXmlOutput(workflow('metadata-backfill')), true)
+  assert.equal(hasXmlOutput(workflow('library-health')), false)
+  assert.equal(hasExportFlushRisk(workflow('set-building')), true)
+  assert.equal(hasExportFlushRisk(workflow('library-health')), false)
+})
+
+test('workflow quick start exposes risk-adaptive semantic warning hooks', () => {
+  const source = readFileSync(
+    new URL(
+      '../site/src/components/WorkflowQuickStart.astro',
+      import.meta.url,
+    ),
+    'utf8',
+  )
+  for (
+    const marker of [
+      'data-workflow-quick-start',
+      'data-quickstart-purpose',
+      'data-quickstart-safety',
+      'data-quickstart-fact="time"',
+      'data-quickstart-fact="result"',
+      'data-warning="direct-files"',
+      'data-warning="staged-metadata"',
+      'data-warning="export-flush"',
+      'data-warning="xml-handoff"',
+      'data-warning="catalog-variance"',
+      'data-warning="network"',
+      'Unknown workflow quick-start ID',
+    ]
+  ) {
+    assert.match(source, new RegExp(marker))
+  }
+  assert.doesNotMatch(source, /client:/)
+  assert.doesNotMatch(source, />None[.<]/)
+  assert.doesNotMatch(source, /workflow\.network\.(?:condition|reason)/)
+  const cleanupDuration =
+    workflows.find((item) => item.id === 'library-cleanup').duration
+  assert.doesNotMatch(cleanupDuration, /\bhydration\b/i)
+  assert.match(cleanupDuration, /run overnight/)
+
+  const warningKinds = (workflow) => [
+    ...(hasMaterialDirectWrite(workflow) ? ['direct-files'] : []),
+    ...(workflow.sideEffects.stagedMetadata.creates
+      ? ['staged-metadata']
+      : []),
+    ...(hasExportFlushRisk(workflow) ? ['export-flush'] : []),
+    ...(hasXmlOutput(workflow) ? ['xml-handoff'] : []),
+    ...(workflow.kind === 'catalog' ? ['catalog-variance'] : []),
+    ...(workflow.network.level !== 'none' ? ['network'] : []),
+  ]
+  const cases = [
+    ['library-health', []],
+    ['metadata-backfill', ['staged-metadata', 'xml-handoff', 'network']],
+    ['batch-import', ['direct-files', 'network']],
+    [
+      'library-cleanup',
+      ['direct-files', 'staged-metadata', 'xml-handoff', 'network'],
+    ],
+    ['set-building', ['export-flush', 'xml-handoff']],
+    ['dj-prompts', ['catalog-variance', 'network']],
+  ]
+  for (const [id, expected] of cases) {
+    const workflow = workflows.find((item) => item.id === id)
+    assert.deepEqual(warningKinds(workflow), expected, id)
+  }
+})
+
+test('workflow technical contracts stay complete inside native disclosure', () => {
+  const contractSource = readFileSync(
+    new URL('../site/src/components/WorkflowContract.astro', import.meta.url),
+    'utf8',
+  )
+  const quickStartSource = readFileSync(
+    new URL('../site/src/components/WorkflowQuickStart.astro', import.meta.url),
+    'utf8',
+  )
+  const fields = [
+    'impact',
+    'summary',
+    'audience',
+    'network',
+    'scope',
+    'duration',
+    'resumability',
+    'result',
+    'staged-metadata',
+    'direct-user-files',
+    'local-state',
+    'outputs',
+    'prerequisites',
+    'approval',
+    'recovery',
+    'rekordbox-handoff',
+  ]
+  const builtDocument = (workflow) => ({
+    file: `dist${workflow.route}index.html`,
+    builtPath: `${workflow.route.replace(/^\//, '')}index.html`,
+    content: `${
+      workflow.sideEffects.stagedMetadata.flushesExistingOnExport
+        ? '<p data-visible-warning="export-flush">Visible warning</p>'
+        : ''
+    }<details data-workflow-contract="${workflow.id}"><summary>Technical details, safety, and recovery</summary>${
+      fields.map((field) => `<div data-contract-field="${field}"></div>`)
+        .join('')
+    }${
+      workflow.variants.length > 0
+        ? '<div data-contract-field="variants"></div>'
+        : ''
+    }${
+      workflow.sideEffects.stagedMetadata.flushesExistingOnExport
+        ? '<p data-contract-warning="export-flush">Full warning</p>'
+        : ''
+    }</details>`,
+  })
+  const htmlDocuments = workflows.map(builtDocument)
+  const options = {
+    workflows,
+    htmlDocuments,
+    contractSource,
+    quickStartSource,
+  }
+  assert.doesNotThrow(() => validateWorkflowTechnicalContracts(options))
+
+  const incomplete = structuredClone(htmlDocuments)
+  incomplete[0].content = incomplete[0].content.replace(
+    '<div data-contract-field="recovery"></div>',
+    '',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowTechnicalContracts({
+        ...options,
+        htmlDocuments: incomplete,
+      }),
+    /contract is missing recovery/,
+  )
+
+  const hiddenFlush = structuredClone(htmlDocuments)
+  const setBuilding = hiddenFlush.find((entry) =>
+    entry.builtPath.includes('/set-building/')
+  )
+  setBuilding.content = setBuilding.content.replace(
+    '<p data-visible-warning="export-flush">Visible warning</p>',
+    '',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowTechnicalContracts({
+        ...options,
+        htmlDocuments: hiddenFlush,
+      }),
+    /export flush warning is not visible/,
+  )
+})
+
+test('workflow catalog is grouped and keeps every compact choice reachable', () => {
+  const catalogSource = readFileSync(
+    new URL('../site/src/components/WorkflowCatalog.astro', import.meta.url),
+    'utf8',
+  )
+  const builtCatalog = `${
+    goalDefinitions.map((goal) =>
+      `<section data-goal-group="${goal.id}"></section>`
+    ).join('')
+  }${
+    workflows.map((workflow) =>
+      `<article data-workflow-choice="${workflow.id}"><p>${workflow.chooseWhen}</p><p>${
+        compactSafety(workflow).label
+      }</p><a href="${workflow.route}">Open</a></article>`
+    ).join('')
+  }`
+  const options = {
+    workflows,
+    goalDefinitions,
+    compactSafety,
+    catalogSource,
+    builtCatalog,
+  }
+  assert.doesNotThrow(() => validateWorkflowCatalog(options))
+  assert.throws(
+    () =>
+      validateWorkflowCatalog({
+        ...options,
+        builtCatalog: builtCatalog.replace(workflows[0].route, '/missing/'),
+      }),
+    /missing route/,
+  )
+  assert.throws(
+    () => validateWorkflowCatalog({ ...options, catalogSource: '<dl></dl>' }),
+    /must not render an exhaustive fact list/,
+  )
+})
+
+test('workflow action pages keep hierarchy, visible warnings, and Agent separation', () => {
+  const standardIds = new Set([
+    'batch-import',
+    'chapter-set-planning',
+    'collection-audit',
+    'genre-audit',
+    'genre-classification',
+    'library-health',
+    'metadata-backfill',
+    'pool-building',
+    'set-building',
+  ])
+  const warningKinds = (workflow) => [
+    ...(workflow.libraryImpact === 'mixed'
+        || workflow.sideEffects.directUserFiles.length > 0
+      ? ['direct-files']
+      : []),
+    ...(workflow.sideEffects.stagedMetadata.creates
+      ? ['staged-metadata']
+      : []),
+    ...(workflow.sideEffects.stagedMetadata.flushesExistingOnExport
+      ? ['export-flush']
+      : []),
+    ...(hasXmlOutput(workflow) ? ['xml-handoff'] : []),
+    ...(workflow.kind === 'catalog' ? ['catalog-variance'] : []),
+    ...(workflow.network.level !== 'none' ? ['network'] : []),
+  ]
+  const toolNames = toolReferences.map(({ name }) => name)
+  const djTechnicalTools = [
+    'search_tracks',
+    'read_library',
+    'lookup_discogs',
+    'get_sessions',
+    'query_transition_candidates',
+    'score_transition',
+  ]
+  const djBuiltRecipes = (workflow) =>
+    workflow.variants.map((variant, index) =>
+      `<h2 id="${variant.id}">${variant.title}</h2><pre>Prompt ${variant.title}</pre><details data-dj-recipe-technical="${variant.id}"><summary>How the assistant works (technical)</summary><code>${
+        djTechnicalTools[index]
+      }</code></details>`
+    ).join('')
+  const djSourceRecipes = (workflow) =>
+    workflow.variants.map((variant, index) =>
+      `## ${variant.title}
+\`\`\`
+Prompt ${variant.title}
+\`\`\`
+<details data-dj-recipe-technical="${variant.id}">
+<summary>How the assistant works (technical)</summary>
+\`${djTechnicalTools[index]}\`
+</details>`
+    ).join('\n')
+  const htmlDocuments = workflows.map((workflow) => ({
+    file: `dist${workflow.route}index.html`,
+    builtPath: `${workflow.route.replace(/^\//, '')}index.html`,
+    content:
+      `<h2 id="start-here">Start here</h2><section data-workflow-quick-start="${workflow.id}"><p data-quickstart-purpose>Purpose</p><p data-quickstart-safety>Safety</p>${
+        warningKinds(workflow).map((kind) =>
+          `<p data-warning="${kind}">${
+            kind === 'network'
+              ? quickStartNetworkMessage(workflow.network)
+              : 'Warning'
+          }</p>`
+        ).join('')
+      }</section>${
+        workflow.id === 'dj-prompts'
+          ? djBuiltRecipes(workflow)
+          : '<pre>Prompt</pre>'
+      }${
+        standardIds.has(workflow.id)
+          ? '<h2 id="what-happens-next">What happens next</h2>'
+          : ''
+      }<h2 id="technical-details">Technical details</h2><details data-workflow-contract="${workflow.id}"></details>${
+        workflow.runtimeHelp
+          ? `<a href="/agent/${workflow.id}/">advanced, model-facing operational instructions</a>`
+          : ''
+      }`,
+  }))
+  htmlDocuments.push(
+    ...workflows.filter((workflow) => workflow.runtimeHelp).map((workflow) => ({
+      file: `dist/agent/${workflow.id}/index.html`,
+      builtPath: `agent/${workflow.id}/index.html`,
+      content:
+        '<main>Agent SOP: page.next_offset page.has_more skip_cached cache-first search_tracks</main>',
+    })),
+  )
+  const sourceDocuments = workflows.map((workflow) => ({
+    file: `site/src/content/docs/workflows/${workflow.id}.mdx`,
+    content: `import WorkflowQuickStart from 'quick'
+import WorkflowContract from 'contract'
+## Start here
+<WorkflowQuickStart id="${workflow.id}" />
+${
+      workflow.id === 'dj-prompts'
+        ? djSourceRecipes(workflow)
+        : '\`\`\`\nPrompt\n\`\`\`'
+    }
+${standardIds.has(workflow.id) ? '## What happens next\n' : ''}
+## Technical details
+<WorkflowContract id="${workflow.id}" />`,
+  }))
+  const options = {
+    workflows,
+    htmlDocuments,
+    sourceDocuments,
+    componentSources: [
+      { file: 'WorkflowQuickStart.astro', content: '<section />' },
+      { file: 'WorkflowContract.astro', content: '<details />' },
+    ],
+    quickStartNetworkMessage,
+    toolNames,
+  }
+  assert.doesNotThrow(() => validateWorkflowActionPages(options))
+
+  const hiddenRisk = structuredClone(htmlDocuments)
+  const metadataPage = hiddenRisk.find((entry) =>
+    entry.builtPath === 'workflows/metadata-backfill/index.html'
+  )
+  metadataPage.content = metadataPage.content.replace(
+    '<p data-warning="staged-metadata">Warning</p>',
+    '',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({ ...options, htmlDocuments: hiddenRisk }),
+    /visible warnings differ/,
+  )
+
+  const lateAction = structuredClone(htmlDocuments)
+  const healthPage = lateAction.find((entry) =>
+    entry.builtPath === 'workflows/library-health/index.html'
+  )
+  healthPage.content = healthPage.content.replace(
+    '<pre>Prompt</pre>',
+    '',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({ ...options, htmlDocuments: lateAction }),
+    /first action must precede technical details/,
+  )
+
+  const internalQuickStart = structuredClone(htmlDocuments)
+  const backfillPage = internalQuickStart.find((entry) =>
+    entry.builtPath === 'workflows/metadata-backfill/index.html'
+  )
+  backfillPage.content = backfillPage.content.replace(
+    quickStartNetworkMessage(
+      workflows.find((item) => item.id === 'metadata-backfill').network,
+    ),
+    'Use auto_enrich with skip_cached and cache-first page.next_offset handling.',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: internalQuickStart,
+      }),
+    /quick start exposes internal workflow term/,
+  )
+
+  const hydrationQuickStart = structuredClone(htmlDocuments)
+  const cleanupQuick = hydrationQuickStart.find((entry) =>
+    entry.builtPath === 'workflows/library-cleanup/index.html'
+  )
+  cleanupQuick.content = cleanupQuick.content.replace(
+    '<p data-quickstart-purpose>Purpose</p>',
+    '<p data-quickstart-purpose>Hydration can run overnight.</p>',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: hydrationQuickStart,
+      }),
+    /quick start exposes implementation term hydration/,
+  )
+
+  const internalDefault = structuredClone(htmlDocuments)
+  const healthDefault = internalDefault.find((entry) =>
+    entry.builtPath === 'workflows/library-health/index.html'
+  )
+  healthDefault.content = healthDefault.content.replace(
+    '<h2 id="technical-details">',
+    '<p>Follow page.has_more with a continuation cursor.</p><h2 id="technical-details">',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: internalDefault,
+      }),
+    /default guidance exposes internal workflow term/,
+  )
+
+  const exactToolDefault = structuredClone(htmlDocuments)
+  const setDefault = exactToolDefault.find((entry) =>
+    entry.builtPath === 'workflows/set-building/index.html'
+  )
+  setDefault.content = setDefault.content.replace(
+    '<h2 id="technical-details">',
+    '<p>Run preview_changes first.</p><h2 id="technical-details">',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: exactToolDefault,
+      }),
+    /default guidance exposes exact tool identifier preview_changes/,
+  )
+
+  const internalSource = structuredClone(sourceDocuments)
+  const genreSource = internalSource.find((entry) =>
+    entry.file.endsWith('/workflows/genre-classification.mdx')
+  )
+  genreSource.content = genreSource.content.replace(
+    '## Technical details',
+    'Resume with the same provider/cache policy and skip_cached setting.\n## Technical details',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        sourceDocuments: internalSource,
+      }),
+    /default guidance exposes internal workflow term/,
+  )
+
+  const exactToolSource = structuredClone(sourceDocuments)
+  const metadataSource = exactToolSource.find((entry) =>
+    entry.file.endsWith('/workflows/metadata-backfill.mdx')
+  )
+  metadataSource.content = metadataSource.content.replace(
+    '## Technical details',
+    'Run cache_coverage first.\n## Technical details',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        sourceDocuments: exactToolSource,
+      }),
+    /default guidance exposes exact tool identifier cache_coverage/,
+  )
+
+  const exactHelpSource = structuredClone(sourceDocuments)
+  const helpSource = exactHelpSource.find((entry) =>
+    entry.file.endsWith('/workflows/library-health.mdx')
+  )
+  helpSource.content = helpSource.content.replace(
+    '## Technical details',
+    'Run `help` first.\n## Technical details',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        sourceDocuments: exactHelpSource,
+      }),
+    /default guidance exposes exact tool identifier help/,
+  )
+
+  const openDjDisclosure = structuredClone(htmlDocuments)
+  const openDjPage = openDjDisclosure.find((entry) =>
+    entry.builtPath === 'workflows/dj-prompts/index.html'
+  )
+  openDjPage.content = openDjPage.content.replace(
+    '<details data-dj-recipe-technical="gig-prep">',
+    '<details open data-dj-recipe-technical="gig-prep">',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: openDjDisclosure,
+      }),
+    /technical disclosure must be closed by default/,
+  )
+
+  const missingDjDisclosure = structuredClone(htmlDocuments)
+  const missingDjPage = missingDjDisclosure.find((entry) =>
+    entry.builtPath === 'workflows/dj-prompts/index.html'
+  )
+  missingDjPage.content = missingDjPage.content.replace(
+    'data-dj-recipe-technical="collection-gap-analysis"',
+    'data-missing-recipe-technical="collection-gap-analysis"',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: missingDjDisclosure,
+      }),
+    /Collection Gap Analysis must have one native technical disclosure/,
+  )
+
+  const missingDjPrompt = structuredClone(sourceDocuments)
+  const promptSource = missingDjPrompt.find((entry) =>
+    entry.file.endsWith('/workflows/dj-prompts.mdx')
+  )
+  promptSource.content = promptSource.content.replace(
+    '\`\`\`\nPrompt Gig Prep\n\`\`\`',
+    '',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        sourceDocuments: missingDjPrompt,
+      }),
+    /Gig Prep heading or prompt is missing before technical disclosure/,
+  )
+
+  const exposedDjTool = structuredClone(htmlDocuments)
+  const exposedDjPage = exposedDjTool.find((entry) =>
+    entry.builtPath === 'workflows/dj-prompts/index.html'
+  )
+  exposedDjPage.content = exposedDjPage.content.replace(
+    '<details data-dj-recipe-technical="gig-prep">',
+    '<p>Run search_tracks.</p><details data-dj-recipe-technical="gig-prep">',
+  )
+  assert.throws(
+    () =>
+      validateWorkflowActionPages({
+        ...options,
+        htmlDocuments: exposedDjTool,
+      }),
+    /default guidance exposes exact tool identifier search_tracks/,
+  )
+
+  const allowedTechnicalDetail = structuredClone(htmlDocuments)
+  const healthTechnical = allowedTechnicalDetail.find((entry) =>
+    entry.builtPath === 'workflows/library-health/index.html'
+  )
+  healthTechnical.content = healthTechnical.content.replace(
+    '<details data-workflow-contract="library-health">',
+    '<details data-workflow-contract="library-health"><p>page.next_offset page.has_more skip_cached cache-first cache_coverage preview_changes search_tracks</p>',
+  )
+  assert.doesNotThrow(() =>
+    validateWorkflowActionPages({
+      ...options,
+      htmlDocuments: allowedTechnicalDetail,
+    })
+  )
 })
 
 test('first-session prompt is structurally singular and capability-bounded', () => {

@@ -1,0 +1,192 @@
+---
+import {
+  compactSafety,
+  hasExportFlushRisk,
+  hasMaterialDirectWrite,
+  hasXmlOutput,
+  quickStartNetworkMessage,
+} from '../data/workflow-presentation.mjs'
+import { workflows } from '../data/workflows.mjs'
+
+const { id } = Astro.props
+const workflow = workflows.find((entry) => entry.id === id)
+
+if (!workflow) {
+  throw new Error(`Unknown workflow quick-start ID: ${id}`)
+}
+
+const safety = compactSafety(workflow)
+const directWrite = hasMaterialDirectWrite(workflow)
+const stagedMetadata = workflow.sideEffects.stagedMetadata.creates
+const exportFlush = hasExportFlushRisk(workflow)
+const xmlOutput = hasXmlOutput(workflow)
+const catalogVariance = workflow.kind === 'catalog'
+const networkUse = workflow.network.level !== 'none'
+const networkMessage = quickStartNetworkMessage(workflow.network)
+const hasWarnings = directWrite
+  || stagedMetadata
+  || exportFlush
+  || xmlOutput
+  || catalogVariance
+  || networkUse
+---
+
+<section
+  class="workflow-quick-start"
+  aria-label="Workflow quick start"
+  data-workflow-quick-start={workflow.id}
+>
+  <p class="quick-purpose" data-quickstart-purpose>{workflow.chooseWhen}</p>
+
+  <p
+    class:list={['quick-safety', `quick-safety--${safety.tone}`]}
+    data-quickstart-safety={safety.tone}
+  >
+    <strong>Safety:</strong> {safety.label}
+  </p>
+
+  <dl class="quick-facts">
+    <div data-quickstart-fact="time">
+      <dt>Time</dt>
+      <dd>{workflow.duration}</dd>
+    </div>
+    <div data-quickstart-fact="result">
+      <dt>You'll get</dt>
+      <dd>{workflow.output}</dd>
+    </div>
+  </dl>
+
+  {hasWarnings && (
+    <div class="quick-warnings" data-quickstart-warnings>
+      {directWrite && (
+        <p data-warning="direct-files">
+          <strong>Files can change.</strong> The assistant must show you its plan and wait for approval. There is no automatic rollback, so keep a recoverable backup.
+        </p>
+      )}
+      {stagedMetadata && (
+        <p data-warning="staged-metadata">
+          <strong>Review before import.</strong> Changes are prepared only.
+          {xmlOutput && (
+            <span data-warning="xml-handoff"> Approved export creates a backup and XML; import and verify it in Rekordbox, and keep the XML until then.</span>
+          )}
+        </p>
+      )}
+      {exportFlush && (
+        <p data-warning="export-flush">
+          <strong>Planning is read-only.</strong> Optional playlist export can also write and clear unrelated metadata that is already staged; review staged changes before exporting.
+        </p>
+      )}
+      {xmlOutput && !stagedMetadata && (
+        <p data-warning="xml-handoff">
+          <strong>Export creates a backup and an XML file.</strong> Keep the XML until you have imported it and verified the result in Rekordbox.
+        </p>
+      )}
+      {catalogVariance && (
+        <p data-warning="catalog-variance">
+          <strong>Behavior varies by recipe.</strong> Compare the selected recipe's time, online use, and result before continuing.
+        </p>
+      )}
+      {networkUse && (
+        <p data-warning="network">
+          <strong>Online access:</strong> {networkMessage}
+        </p>
+      )}
+    </div>
+  )}
+</section>
+
+<style>
+  .workflow-quick-start {
+    display: grid;
+    gap: 0.65rem;
+    margin-block: 0.85rem 0.75rem;
+    padding: clamp(0.8rem, 2vw, 1rem);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+  }
+
+  p,
+  dl,
+  dd {
+    margin: 0;
+  }
+
+  .quick-purpose {
+    color: var(--sl-color-white);
+    font-size: 1rem;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .quick-safety {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.35rem 0.6rem;
+    border-left: 3px solid;
+    border-radius: 0.25rem;
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-gray-1);
+    font-size: 0.85rem;
+    line-height: 1.35;
+  }
+
+  .quick-safety--safe {
+    border-color: var(--sl-color-green-high);
+  }
+
+  .quick-safety--review {
+    border-color: var(--sl-color-orange-high);
+  }
+
+  .quick-safety--write {
+    border-color: var(--sl-color-red-high);
+  }
+
+  .quick-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+  }
+
+  .quick-facts > div {
+    display: grid;
+    gap: 0.2rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--card-border);
+  }
+
+  dt {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  dd {
+    min-width: 0;
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+
+  .quick-warnings {
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .quick-warnings p {
+    padding: 0.5rem 0.65rem;
+    border-left: 3px solid var(--sl-color-orange);
+    background: var(--sl-color-orange-low);
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+
+  @media (max-width: 32rem) {
+    .quick-facts {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

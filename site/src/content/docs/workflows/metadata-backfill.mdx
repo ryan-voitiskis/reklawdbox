@@ -6,20 +6,25 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Fill missing labels, years, and albums from file, folder, cached provider, and
 researched evidence, then export only the approved staged changes as Rekordbox
 metadata XML.
 
-<WorkflowContract id="metadata-backfill" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="metadata-backfill" />
 
-1. **Measure readiness.** Start with scoped `cache_coverage` for the tracks with
-   missing metadata. A searched no-match is valid completion; an unavailable
-   release does not need to produce a match.
+```
+Find tracks missing labels and years in my collection and fill them from enrichment data.
+```
+
+## What happens next
+
+1. **Measure readiness.** Check whether enough evidence is ready for the tracks
+   with missing metadata. A searched no-match is valid completion; an
+   unavailable release does not need to produce a match.
 2. **Fill evidence gaps.** Complete relevant Discogs and Beatport searches,
    then use targeted Bandcamp, MusicBrainz, automatic enrichment, file/folder
    evidence, or web research for unresolved gaps.
@@ -35,8 +40,8 @@ metadata XML.
   the evidence gate casually.
 - Decide whether a missing album is a genuine gap or an acceptable loose-track
   result.
-- Inspect `preview_changes` before export; staged values remain in memory until
-  exported, cleared, or the MCP process restarts.
+- Review all prepared changes before export; staged values remain in memory
+  until exported, cleared, or the MCP process restarts.
 
 ## What changes and how to recover
 
@@ -46,11 +51,10 @@ are not edited. The export fails closed: XML is written only after the built-in
 Rekordbox database backup succeeds or the configured custom backup script exits
 zero. A failed XML write keeps staged changes available for retry.
 
-Bounded preparation follows its continuation cursor and later retries explicit
-failed track IDs. Resume with the same selector order, providers, and cache
-policy; restart from zero if any of those inputs change. Provider caches
-persist, but the research gate and staged changes belong to the current MCP
-process.
+You can continue an interrupted preparation pass with the same scope. Start a
+fresh pass after changing the scope or evidence sources so every track is
+judged consistently. Previously researched evidence remains available, but
+unexported staged changes do not survive an MCP restart.
 
 ## Finish in Rekordbox
 
@@ -59,11 +63,9 @@ Keep the exported XML until the import is verified. Follow the
 then confirm representative labels, years, and albums in Rekordbox before
 cleaning up the file.
 
-## Start this workflow
+## Technical details
 
-```
-Find tracks missing labels and years in my collection and fill them from enrichment data.
-```
+<WorkflowContract id="metadata-backfill" />
 
 ## Next steps
 

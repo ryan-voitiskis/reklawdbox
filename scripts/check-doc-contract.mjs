@@ -2117,6 +2117,600 @@ function normalizeBuiltDocumentPath(document) {
     : normalized
 }
 
+export function validateWorkflowTechnicalContracts({
+  workflows,
+  htmlDocuments,
+  contractSource,
+  quickStartSource,
+  presentation = null,
+  validateCanonicalText = false,
+}) {
+  const issues = []
+  const requiredFields = [
+    'impact',
+    'summary',
+    'audience',
+    'network',
+    'scope',
+    'duration',
+    'resumability',
+    'result',
+    'staged-metadata',
+    'direct-user-files',
+    'local-state',
+    'outputs',
+    'prerequisites',
+    'approval',
+    'recovery',
+    'rekordbox-handoff',
+  ]
+
+  if (/client:/.test(contractSource) || /client:/.test(quickStartSource)) {
+    issues.push('workflow components must not use client hydration')
+  }
+  for (
+    const hook of [
+      'data-warning="direct-files"',
+      'data-warning="staged-metadata"',
+      'data-warning="xml-handoff"',
+      'data-warning="export-flush"',
+    ]
+  ) {
+    if (!quickStartSource.includes(hook)) {
+      issues.push(`WorkflowQuickStart.astro is missing ${hook}`)
+    }
+  }
+
+  for (const workflow of workflows) {
+    const builtPath = `${workflow.route.replace(/^\//, '')}index.html`
+    const document = htmlDocuments.find((entry) =>
+      normalizeBuiltDocumentPath(entry) === builtPath
+    )
+    if (!document) {
+      issues.push(`canonical workflow route is not built: ${workflow.route}`)
+      continue
+    }
+
+    const marker = `data-workflow-contract="${workflow.id}"`
+    const markerIndex = document.content.indexOf(marker)
+    const detailsStart = document.content.lastIndexOf('<details', markerIndex)
+    const detailsEnd = document.content.indexOf('</details>', markerIndex)
+    if (markerIndex < 0 || detailsStart < 0 || detailsEnd < 0) {
+      issues.push(
+        `${document.file}: missing technical contract for ${workflow.id}`,
+      )
+      continue
+    }
+    const details = document.content.slice(detailsStart, detailsEnd)
+    if (!details.includes('Technical details, safety, and recovery')) {
+      issues.push(`${document.file}: missing technical disclosure summary`)
+    }
+    for (const field of requiredFields) {
+      if (!details.includes(`data-contract-field="${field}"`)) {
+        issues.push(`${document.file}: contract is missing ${field}`)
+      }
+    }
+    if (
+      workflow.variants.length > 0
+      && !details.includes('data-contract-field="variants"')
+    ) {
+      issues.push(`${document.file}: contract is missing recipe variants`)
+    }
+    if (workflow.sideEffects.stagedMetadata.flushesExistingOnExport) {
+      const visibleWarning = document.content.indexOf(
+        'data-visible-warning="export-flush"',
+      )
+      if (visibleWarning < 0 || visibleWarning > detailsStart) {
+        issues.push(`${document.file}: export flush warning is not visible`)
+      }
+      if (!details.includes('data-contract-warning="export-flush"')) {
+        issues.push(`${document.file}: export flush detail is missing`)
+      }
+    }
+    if (validateCanonicalText) {
+      const visibleText = normalizedHtmlText(details)
+      for (const fact of workflowContractFacts(workflow, presentation)) {
+        if (!visibleText.includes(normalizedText(fact))) {
+          issues.push(
+            `${document.file}: contract is missing canonical fact ${
+              JSON.stringify(fact)
+            }`,
+          )
+        }
+      }
+    }
+  }
+
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
+function workflowContractFacts(workflow, presentation) {
+  const effects = [
+    ...workflow.sideEffects.directUserFiles,
+    ...workflow.sideEffects.localStateWrites,
+    ...workflow.sideEffects.outputs,
+    ...workflow.rekordboxHandoff,
+  ]
+  const facts = [
+    workflow.summary,
+    workflow.audience,
+    workflow.network.condition ?? workflow.network.reason,
+    workflow.scope,
+    workflow.duration,
+    workflow.resumability,
+    workflow.output,
+    ...workflow.prerequisites,
+    ...workflow.approval,
+    ...workflow.recovery,
+    ...effects.flatMap((entry) => [
+      presentation?.effectLabel(entry.kind),
+      presentation?.modeLabel(entry.mode),
+      entry.condition,
+    ]),
+  ]
+  if (presentation) {
+    facts.push(
+      presentation.impactLabel(workflow.libraryImpact),
+      presentation.networkLabel(workflow.network.level),
+    )
+  }
+  for (const variant of workflow.variants) {
+    facts.push(
+      variant.title,
+      variant.summary,
+      variant.network.condition ?? variant.network.reason,
+      variant.duration,
+      variant.output,
+      ...variant.prerequisites,
+      ...variant.localStateWrites.flatMap((entry) => [
+        presentation?.effectLabel(entry.kind),
+        presentation?.modeLabel(entry.mode),
+        entry.condition,
+      ]),
+    )
+    if (presentation) {
+      facts.push(presentation.networkLabel(variant.network.level))
+    }
+  }
+  return facts.filter((fact) => typeof fact === 'string' && fact.length > 0)
+}
+
+function normalizedHtmlText(source) {
+  return normalizedText(
+    source
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&#(\d+);/g, (_, value) => String.fromCodePoint(Number(value)))
+      .replace(
+        /&#x([0-9a-f]+);/gi,
+        (_, value) => String.fromCodePoint(Number.parseInt(value, 16)),
+      )
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>'),
+  )
+}
+
+function normalizedText(source) {
+  return source.replace(/\s+/g, ' ').trim()
+}
+
+const HUMAN_WORKFLOW_INTERNAL_PATTERNS = [
+  ['auto_enrich', /\bauto_enrich\b/i],
+  ['skip_cached', /\bskip_cached\b/i],
+  ['next_offset', /\bnext_offset\b/i],
+  ['has_more', /\bhas_more\b/i],
+  ['continuation cursor', /\bcontinuation cursors?\b/i],
+  ['durable cursor', /\bdurable cursors?\b/i],
+  ['caller-managed offset', /\bcaller-managed offset\b/i],
+  ['cache-first', /\bcache-first\b/i],
+  ['provider/cache policy', /\bprovider\/cache policy\b/i],
+  ['cache policy', /\bcache policy\b/i],
+]
+
+function internalWorkflowTerms(source) {
+  return HUMAN_WORKFLOW_INTERNAL_PATTERNS
+    .filter(([, pattern]) => pattern.test(source))
+    .map(([label]) => label)
+}
+
+const DJ_RECIPE_TECHNICAL_SUMMARY = 'How the assistant works (technical)'
+
+function escapeRegExp(source) {
+  return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function withoutMarkedTechnicalDisclosures(source) {
+  return source.replace(
+    /<details\b(?=[^>]*\bdata-dj-recipe-technical="[^"]+")[^>]*>[\s\S]*?<\/details>/gi,
+    ' ',
+  )
+}
+
+function exactToolIdentifiers(source, toolNames) {
+  return toolNames.filter((name) => {
+    if (name === 'help') {
+      return /`help`|<code\b[^>]*>\s*help\s*<\/code>/i.test(source)
+    }
+    return new RegExp(
+      `(^|[^A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`,
+    ).test(source)
+  })
+}
+
+function validateDjRecipeTechnicalDisclosures({
+  workflow,
+  built,
+  source,
+  issues,
+}) {
+  if (workflow.id !== 'dj-prompts') return
+  if (/client:/.test(source.content)) {
+    issues.push(`${source.file}: DJ recipe disclosures must not hydrate`)
+  }
+
+  for (const variant of workflow.variants) {
+    const attribute = `data-dj-recipe-technical="${variant.id}"`
+    const sourceTags = source.content.match(
+      new RegExp(`<details\\b[^>]*${escapeRegExp(attribute)}[^>]*>`, 'gi'),
+    ) ?? []
+    const builtTags = built.content.match(
+      new RegExp(`<details\\b[^>]*${escapeRegExp(attribute)}[^>]*>`, 'gi'),
+    ) ?? []
+    if (sourceTags.length !== 1 || builtTags.length !== 1) {
+      issues.push(
+        `${source.file}: ${variant.title} must have one native technical disclosure`,
+      )
+      continue
+    }
+    if (
+      sourceTags.some((tag) => /\sopen(?:\s|=|>)/i.test(tag))
+      || builtTags.some((tag) => /\sopen(?:\s|=|>)/i.test(tag))
+    ) {
+      issues.push(
+        `${source.file}: ${variant.title} technical disclosure must be closed by default`,
+      )
+    }
+
+    const sourceHeading = source.content.indexOf(`## ${variant.title}`)
+    const sourceDetails = source.content.indexOf(sourceTags[0], sourceHeading)
+    const sourceNextHeading = source.content.indexOf('\n## ', sourceHeading + 3)
+    const sourceBoundary = sourceNextHeading < 0
+      ? source.content.length
+      : sourceNextHeading
+    const sourcePrompt = source.content.indexOf('```', sourceHeading)
+    const sourceDetailsEnd = source.content.indexOf(
+      '</details>',
+      sourceDetails,
+    )
+    const sourceDisclosure = source.content.slice(
+      sourceDetails,
+      sourceDetailsEnd,
+    )
+    if (
+      sourceHeading < 0 || sourcePrompt < sourceHeading
+      || sourcePrompt > sourceDetails || sourceDetails > sourceBoundary
+    ) {
+      issues.push(
+        `${source.file}: ${variant.title} heading or prompt is missing before technical disclosure`,
+      )
+    }
+    if (!sourceDisclosure.includes(DJ_RECIPE_TECHNICAL_SUMMARY)) {
+      issues.push(
+        `${source.file}: ${variant.title} technical disclosure summary is missing`,
+      )
+    }
+
+    const builtHeading = built.content.indexOf(`<h2 id="${variant.id}"`)
+    const builtDetails = built.content.indexOf(builtTags[0], builtHeading)
+    const builtNextHeading = built.content.indexOf('<h2 id="', builtHeading + 4)
+    const builtBoundary = builtNextHeading < 0
+      ? built.content.length
+      : builtNextHeading
+    const builtPrompt = built.content.indexOf('<pre', builtHeading)
+    const builtDetailsEnd = built.content.indexOf('</details>', builtDetails)
+    const builtDisclosure = built.content.slice(builtDetails, builtDetailsEnd)
+    if (
+      builtHeading < 0 || builtPrompt < builtHeading
+      || builtPrompt > builtDetails || builtDetails > builtBoundary
+    ) {
+      issues.push(
+        `${built.file}: ${variant.title} heading or prompt is missing before technical disclosure`,
+      )
+    }
+    if (
+      !normalizedHtmlText(builtDisclosure).includes(
+        DJ_RECIPE_TECHNICAL_SUMMARY,
+      )
+    ) {
+      issues.push(
+        `${built.file}: ${variant.title} technical disclosure summary is missing`,
+      )
+    }
+  }
+}
+
+export function validateWorkflowCatalog({
+  workflows,
+  goalDefinitions,
+  compactSafety,
+  catalogSource,
+  builtCatalog,
+}) {
+  const issues = []
+  if (/<dl\b/.test(catalogSource)) {
+    issues.push('WorkflowCatalog.astro must not render an exhaustive fact list')
+  }
+  if ((builtCatalog.match(/data-goal-group=/g) ?? []).length !== 6) {
+    issues.push('workflow catalog must render all six canonical goal groups')
+  }
+  if (
+    (builtCatalog.match(/data-workflow-choice=/g) ?? []).length
+      !== workflows.length
+  ) {
+    issues.push('workflow catalog must render all eleven workflow choices')
+  }
+  for (const goal of goalDefinitions) {
+    if (!builtCatalog.includes(`data-goal-group="${goal.id}"`)) {
+      issues.push(`workflow catalog is missing goal ${goal.id}`)
+    }
+  }
+  for (const workflow of workflows) {
+    if (!builtCatalog.includes(`href="${workflow.route}"`)) {
+      issues.push(`workflow catalog is missing route ${workflow.route}`)
+    }
+    if (!builtCatalog.includes(workflow.chooseWhen)) {
+      issues.push(`workflow catalog is missing chooseWhen for ${workflow.id}`)
+    }
+    if (!builtCatalog.includes(compactSafety(workflow).label)) {
+      issues.push(`workflow catalog is missing safety label for ${workflow.id}`)
+    }
+  }
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
+export function validateWorkflowActionPages({
+  workflows,
+  htmlDocuments,
+  sourceDocuments,
+  componentSources,
+  quickStartNetworkMessage = null,
+  toolNames = [],
+}) {
+  const issues = []
+  const standardIds = new Set([
+    'batch-import',
+    'chapter-set-planning',
+    'collection-audit',
+    'genre-audit',
+    'genre-classification',
+    'library-health',
+    'metadata-backfill',
+    'pool-building',
+    'set-building',
+  ])
+
+  for (const component of componentSources) {
+    if (/client:/.test(component.content)) {
+      issues.push(`${component.file}: workflow components must not hydrate`)
+    }
+  }
+
+  for (const workflow of workflows) {
+    const builtPath = `${workflow.route.replace(/^\//, '')}index.html`
+    const built = htmlDocuments.find((entry) =>
+      normalizeBuiltDocumentPath(entry) === builtPath
+    )
+    const source = sourceDocuments.find((entry) =>
+      entry.file.endsWith(`/workflows/${workflow.id}.mdx`)
+    )
+    if (!built || !source) {
+      issues.push(`workflow action page is missing for ${workflow.id}`)
+      continue
+    }
+    if (/noindex/i.test(built.content)) {
+      issues.push(`${built.file}: human workflow route must remain indexable`)
+    }
+
+    const quickMarker = `data-workflow-quick-start="${workflow.id}"`
+    const quickStart = built.content.indexOf(quickMarker)
+    const quickEnd = built.content.indexOf('</section>', quickStart)
+    const contractStart = built.content.indexOf(
+      `data-workflow-contract="${workflow.id}"`,
+    )
+    if (quickStart < 0 || quickEnd < 0 || contractStart < 0) {
+      issues.push(`${built.file}: quick start or technical contract is missing`)
+      continue
+    }
+    if (quickStart > contractStart) {
+      issues.push(`${built.file}: quick start must precede technical contract`)
+    }
+    const quick = built.content.slice(quickStart, quickEnd)
+    const quickText = normalizedHtmlText(quick)
+    if (
+      quick.indexOf('data-quickstart-purpose')
+        > quick.indexOf('data-quickstart-safety')
+    ) {
+      issues.push(
+        `${built.file}: chooseWhen must be the first quick-start copy`,
+      )
+    }
+    if (/\bNone\b/.test(quickText)) {
+      issues.push(
+        `${built.file}: quick start must not render empty None values`,
+      )
+    }
+    for (const term of internalWorkflowTerms(quickText)) {
+      issues.push(
+        `${built.file}: quick start exposes internal workflow term ${term}`,
+      )
+    }
+    if (/\bhydration\b/i.test(quickText)) {
+      issues.push(
+        `${built.file}: quick start exposes implementation term hydration`,
+      )
+    }
+    if (
+      workflow.network.level !== 'none'
+      && quickStartNetworkMessage
+      && !quickText.includes(quickStartNetworkMessage(workflow.network))
+    ) {
+      issues.push(
+        `${built.file}: quick start is missing plain-language network guidance`,
+      )
+    }
+
+    const expectedWarnings = [
+      ...(workflow.libraryImpact === 'mixed'
+          || workflow.sideEffects.directUserFiles.length > 0
+        ? ['direct-files']
+        : []),
+      ...(workflow.sideEffects.stagedMetadata.creates
+        ? ['staged-metadata']
+        : []),
+      ...(workflow.sideEffects.stagedMetadata.flushesExistingOnExport
+        ? ['export-flush']
+        : []),
+      ...(workflow.sideEffects.outputs.some(({ kind }) =>
+          kind === 'metadata-xml' || kind === 'playlist-xml'
+        )
+        ? ['xml-handoff']
+        : []),
+      ...(workflow.kind === 'catalog' ? ['catalog-variance'] : []),
+      ...(workflow.network.level !== 'none' ? ['network'] : []),
+    ]
+    const actualWarnings = [...quick.matchAll(/data-warning="([^"]+)"/g)]
+      .map((match) => match[1])
+    if (actualWarnings.join('|') !== expectedWarnings.join('|')) {
+      issues.push(
+        `${built.file}: visible warnings differ; expected ${
+          expectedWarnings.join(', ') || 'none'
+        }, found ${actualWarnings.join(', ') || 'none'}`,
+      )
+    }
+
+    const quickSource = `<WorkflowQuickStart id="${workflow.id}" />`
+    const contractSource = `<WorkflowContract id="${workflow.id}" />`
+    if (!source.content.includes(quickSource)) {
+      issues.push(`${source.file}: missing ${quickSource}`)
+    }
+    if (!source.content.includes(contractSource)) {
+      issues.push(`${source.file}: missing ${contractSource}`)
+    }
+    if (
+      source.content.includes(`partials/sops/${workflow.id}.mdx`)
+      || source.content.includes(`partials/sops/${workflow.id}.astro`)
+    ) {
+      issues.push(`${source.file}: human page must not import its Agent SOP`)
+    }
+    const technicalSourceHeading = source.content.indexOf(
+      '## Technical details',
+    )
+    if (technicalSourceHeading >= 0) {
+      const defaultSourceGuidance = withoutMarkedTechnicalDisclosures(
+        source.content.slice(0, technicalSourceHeading),
+      )
+      for (const term of internalWorkflowTerms(defaultSourceGuidance)) {
+        issues.push(
+          `${source.file}: default guidance exposes internal workflow term ${term}`,
+        )
+      }
+      for (
+        const name of exactToolIdentifiers(
+          defaultSourceGuidance,
+          toolNames,
+        )
+      ) {
+        issues.push(
+          `${source.file}: default guidance exposes exact tool identifier ${name}`,
+        )
+      }
+    }
+
+    const firstAction = built.content.indexOf('<pre', quickEnd)
+    const technicalHeading = built.content.indexOf('id="technical-details"')
+    if (
+      firstAction < 0 || technicalHeading < 0 || firstAction > technicalHeading
+      || technicalHeading > contractStart
+    ) {
+      issues.push(`${built.file}: first action must precede technical details`)
+    }
+    if (technicalHeading >= 0) {
+      const defaultGuidance = withoutMarkedTechnicalDisclosures(
+        built.content.slice(0, technicalHeading),
+      )
+      for (const term of internalWorkflowTerms(defaultGuidance)) {
+        issues.push(
+          `${built.file}: default guidance exposes internal workflow term ${term}`,
+        )
+      }
+      for (const name of exactToolIdentifiers(defaultGuidance, toolNames)) {
+        issues.push(
+          `${built.file}: default guidance exposes exact tool identifier ${name}`,
+        )
+      }
+    }
+
+    validateDjRecipeTechnicalDisclosures({
+      workflow,
+      built,
+      source,
+      issues,
+    })
+
+    if (standardIds.has(workflow.id)) {
+      const startHeading = built.content.indexOf('id="start-here"')
+      const happensHeading = built.content.indexOf('id="what-happens-next"')
+      if (
+        startHeading < 0 || happensHeading < 0
+        || !(startHeading < firstAction && firstAction < happensHeading
+          && happensHeading < technicalHeading)
+      ) {
+        issues.push(
+          `${built.file}: standard workflow hierarchy is not action-first`,
+        )
+      }
+      const sourceOrder = [
+        source.content.indexOf('## Start here'),
+        source.content.indexOf('```'),
+        source.content.indexOf('## What happens next'),
+        source.content.indexOf('## Technical details'),
+      ]
+      if (
+        sourceOrder.some((index) => index < 0)
+        || sourceOrder.some((index, offset) =>
+          offset > 0 && index <= sourceOrder[offset - 1]
+        )
+      ) {
+        issues.push(`${source.file}: source hierarchy is not action-first`)
+      }
+    }
+
+    if (workflow.runtimeHelp) {
+      const agentRoute = `/agent/${workflow.id}/`
+      if (
+        !built.content.includes(`href="${agentRoute}"`)
+        || !built.content.includes(
+          'advanced, model-facing operational instructions',
+        )
+      ) {
+        issues.push(`${built.file}: Agent SOP link is missing or unclear`)
+      }
+      if (
+        !htmlDocuments.some((entry) =>
+          normalizeBuiltDocumentPath(entry)
+            === `agent/${workflow.id}/index.html`
+        )
+      ) {
+        issues.push(`${built.file}: separate Agent SOP route is missing`)
+      }
+    }
+  }
+
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
 function builtCandidates(target) {
   const directoryRoute = target.endsWith('/')
   const relative = target.replace(/^\//, '').replace(/\/$/, '')
@@ -3554,6 +4148,16 @@ async function main() {
   } = await import(
     pathToFileURL(path.join(root, 'site/src/data/workflows.mjs'))
   )
+  const {
+    compactSafety,
+    effectLabel,
+    impactLabel,
+    modeLabel,
+    networkLabel,
+    quickStartNetworkMessage,
+  } = await import(
+    pathToFileURL(path.join(root, 'site/src/data/workflow-presentation.mjs'))
+  )
   check(() => {
     try {
       validateWorkflows(workflows, goalDefinitions)
@@ -3572,12 +4176,18 @@ async function main() {
     firstSessionDocument,
     goalChooserDocument,
     astroConfigDocument,
+    workflowContractDocument,
+    workflowQuickStartDocument,
+    workflowCatalogDocument,
   ] = await readDocuments(root, [
     'site/src/content/docs/index.mdx',
     'site/src/content/docs/getting-started/index.mdx',
     'site/src/content/docs/getting-started/first-session.mdx',
     'site/src/components/GoalChooser.astro',
     'site/astro.config.mjs',
+    'site/src/components/WorkflowContract.astro',
+    'site/src/components/WorkflowQuickStart.astro',
+    'site/src/components/WorkflowCatalog.astro',
   ])
   const cargoToml = await fs.readFile(path.join(root, 'Cargo.toml'), 'utf8')
   const docsWorkflow = await fs.readFile(
@@ -3710,7 +4320,51 @@ async function main() {
       content: await fs.readFile(path.join(distRoot, file), 'utf8'),
     })),
   )
+  const workflowSourceDocuments = await readDocuments(
+    root,
+    workflows.map((workflow) =>
+      `site/src/content/docs${workflow.route.replace(/\/$/, '')}.mdx`
+    ),
+  )
   check(() => validateBuiltLinkSet(htmlDocuments, builtPaths))
+  const builtWorkflowCatalog =
+    htmlDocuments.find((document) =>
+      normalizeBuiltDocumentPath(document) === 'workflows/index.html'
+    )?.content ?? ''
+  check(() =>
+    validateWorkflowCatalog({
+      workflows,
+      goalDefinitions,
+      compactSafety,
+      catalogSource: workflowCatalogDocument.content,
+      builtCatalog: builtWorkflowCatalog,
+    })
+  )
+  check(() =>
+    validateWorkflowTechnicalContracts({
+      workflows,
+      htmlDocuments,
+      contractSource: workflowContractDocument.content,
+      quickStartSource: workflowQuickStartDocument.content,
+      presentation: { effectLabel, impactLabel, modeLabel, networkLabel },
+      validateCanonicalText: true,
+    })
+  )
+  check(() =>
+    validateWorkflowActionPages({
+      workflows,
+      htmlDocuments,
+      sourceDocuments: workflowSourceDocuments,
+      componentSources: [
+        goalChooserDocument,
+        workflowCatalogDocument,
+        workflowContractDocument,
+        workflowQuickStartDocument,
+      ],
+      quickStartNetworkMessage,
+      toolNames: liveTools.map(({ name }) => name),
+    })
+  )
 
   const audienceSourceFiles = [
     ...workflows.map((workflow) =>

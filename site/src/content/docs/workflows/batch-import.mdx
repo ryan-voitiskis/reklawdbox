@@ -6,16 +6,23 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Turn one incoming batch into consistently tagged, named, and organized files
 that are ready for a normal Rekordbox file or folder import. Genre tagging stays
 separate so you can classify it after Rekordbox sees the new tracks.
 
-<WorkflowContract id="batch-import" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="batch-import" />
+
+Copy this prompt and replace the placeholder path:
+
+```
+Process the new music in [/path/to/folder] for Rekordbox import.
+```
+
+## What happens next
 
 1. **Inspect the batch.** Confirm the incoming path, final library layout, and a
    file backup before anything moves.
@@ -57,13 +64,9 @@ For a WAV with a colocated cover image, add that artwork manually after import.
 Then use [Genre Classification](/workflows/genre-classification/) if the new
 tracks still need genre tags.
 
-## Start this workflow
+## Technical details
 
-Copy this prompt and replace the placeholder path:
-
-```
-Process the new music in [/path/to/folder] for Rekordbox import.
-```
+<WorkflowContract id="batch-import" />
 
 ## Next steps
 

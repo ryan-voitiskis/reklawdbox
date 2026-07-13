@@ -6,16 +6,21 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Grow and inspect an unordered pool whose members are mutually compatible for
 live improvisation, then optionally export the locked pool as a Rekordbox
 playlist.
 
-<WorkflowContract id="pool-building" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="pool-building" />
+
+```
+Build a track pool from my collection.
+```
+
+## What happens next
 
 1. **Set the intent.** Confirm seed or candidate tracks, discovery scope, pool
    size, and whether you perform with master tempo enabled.
@@ -52,8 +57,8 @@ normalization statistics may be stored locally when enough Essentia vectors
 exist.
 
 Playlist export writes and clears unrelated staged metadata as well as the
-playlist, so run `preview_changes` first and complete a separate metadata XML
-handoff when needed. Export fails closed unless the built-in database backup
+playlist, so review all prepared changes first and complete a separate metadata
+XML handoff when needed. Export fails closed unless the built-in database backup
 succeeds or the configured custom backup script exits zero. A failed export
 restores staged metadata for retry.
 
@@ -65,11 +70,9 @@ Confirm the imported playlist name and count before calling the pool locked or
 deleting the XML. Use the separate All Tracks flow for any included staged
 metadata.
 
-## Start this workflow
+## Technical details
 
-```
-Build a track pool from my collection.
-```
+<WorkflowContract id="pool-building" />
 
 ## Next steps
 

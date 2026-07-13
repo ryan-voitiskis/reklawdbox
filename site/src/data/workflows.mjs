@@ -230,7 +230,7 @@ export const workflows = [
     scope:
       'Usually the full collection, with individual audit, hydration, and review passes scoped when needed.',
     duration:
-      'Several sessions; hydration can run overnight and review time is scope-dependent.',
+      'Several sessions; preparing a large library can run overnight and review time depends on library size.',
     resumability:
       'Session boundaries are checkpoints and caches/audit state persist. Bounded enrichment/audio preparation advances through page.next_offset while page.has_more, records failures, and retries failed explicit track IDs after traversal; restart at offset zero after selector/library-order changes, enrichment provider/cache-policy changes, or changed audio skip_cached/Essentia availability. Staged metadata is in memory, so export it before restarting the MCP host.',
     approval: [

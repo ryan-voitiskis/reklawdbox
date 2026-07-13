@@ -7,8 +7,20 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
-<WorkflowContract id="dj-prompts" />
+## Start here
+
+<WorkflowQuickStart id="dj-prompts" />
+
+Choose the recipe that matches today's task, then paste its prompt:
+
+- [Gig Prep](#gig-prep) — local library and cached analysis only.
+- [Collection Gap Analysis](#collection-gap-analysis) — local analysis; an uncached Discogs lookup is optional only for a specific candidate you supply.
+- [Dig Session Partner](#dig-session-partner) — local directions; Discogs or Beatport may be used for a specific candidate you supply.
+- [Post-Gig Debrief](#post-gig-debrief) — local Rekordbox session history.
+- [Harmonic Journey Planning](#harmonic-journey-planning) — local library and cached analysis only.
+- [Practice Session Design](#practice-session-design) — local library and cached analysis only.
 
 ---
 
@@ -31,7 +43,13 @@ I have a gig coming up. Here's the context:
 Help me prepare.
 ```
 
-**What the agent should do:**
+**You'll get:** A context-aware track pool, musical constraints you can review,
+and an optional suggested sequence.
+
+<details data-dj-recipe-technical="gig-prep">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Translate the context into musical constraints:
    - Time slot → energy arc shape (opening = slow build, peak = sustained high, closing = controlled descent, sunrise = floaty/euphoric)
@@ -47,6 +65,8 @@ Help me prepare.
    together within the pool
 5. Present a curated pool (not a fixed sequence) — the DJ picks the order live
 6. Optionally run `build_set` for a suggested sequence within the pool
+
+</details>
 
 The value is in the translation from natural language context to musical parameters — something a GUI tool can't do.
 
@@ -66,7 +86,13 @@ Analyze my collection for gaps and imbalances. I want to understand:
 - What limits my flexibility as a DJ?
 ```
 
-**What the agent should do:**
+**You'll get:** A practical map of strong and thin areas in your own library,
+with concrete gaps to explore or practise.
+
+<details data-dj-recipe-technical="collection-gap-analysis">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Use `read_library` for overall stats (genre distribution, key distribution, track count)
 2. Use `search_tracks` with supported filters to map local coverage, then use
@@ -86,6 +112,8 @@ Analyze my collection for gaps and imbalances. I want to understand:
    Open-ended catalog gap discovery is outside these tools; evaluate a concrete
    user-supplied track or release only after the user provides one.
 
+</details>
+
 ---
 
 ## Dig Session Partner
@@ -103,7 +131,13 @@ Use my collection to understand my taste and suggest directions. If I give you
 a concrete track or release candidate, evaluate how it fits.
 ```
 
-**What the agent should do:**
+**You'll get:** Collection-grounded directions and, when you supply a concrete
+candidate, a focused fit assessment rather than invented catalog suggestions.
+
+<details data-dj-recipe-technical="dig-session-partner">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Analyze the local collection for label, artist, genre, era, tempo, and key.
    Use `resolve_tracks_data` for analyzer evidence, then call
@@ -122,6 +156,8 @@ a concrete track or release candidate, evaluate how it fits.
    current cache entry.
 5. Defer open-ended catalog and collaborator research. These tools do not
    provide it, and this recipe does not add an external-search prerequisite.
+
+</details>
 
 <Aside type="tip">
   This works well as a conversation: bring back a concrete candidate, say what
@@ -143,7 +179,13 @@ Debrief my last gig. Analyze the session from [date] and help me understand:
 - How did my actual set compare to what I prepped?
 ```
 
-**What the agent should do:**
+**You'll get:** A review of the set's energy, tempo, harmony, genre flow, and
+rotation habits, with questions to carry into the next gig.
+
+<details data-dj-recipe-technical="post-gig-debrief">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Use `get_sessions` to find the session, `get_session_tracks` for the tracklist
 2. Use `resolve_tracks_data` for each local track's analyzer evidence; this
@@ -163,6 +205,7 @@ Debrief my last gig. Analyze the session from [date] and help me understand:
    - "Your derived 0–1 energy value jumped sharply at track 12 — was that intentional?"
    - "You played 'Black Sun' at your last 4 sessions — maybe rest it?"
 
+</details>
 
 ---
 
@@ -180,7 +223,13 @@ Plan a harmonic journey for my next set.
 - Pool: [playlist name, genre filter, or "my whole library"]
 ```
 
-**What the agent should do:**
+**You'll get:** A track-by-track harmonic path that respects your requested
+shape and calls out gaps that need a bridge or a deliberate jump.
+
+<details data-dj-recipe-technical="harmonic-journey-planning">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Map the user's available tracks by Camelot position using `search_tracks`
 2. Identify the harmonic landscape — where are the dense clusters? Where are the gaps?
@@ -194,6 +243,8 @@ Plan a harmonic journey for my next set.
    - "You have nothing in 12A — this journey can't pass through there"
    - "The jump from 9A to 11A skips a position — you'll need a bridge track or an intentional energy shift"
    - "Your 3B tracks are all above 135 BPM but your 2A tracks are all below 125 — the key transition will also be a big tempo jump"
+
+</details>
 
 ---
 
@@ -210,7 +261,13 @@ Focus: [e.g., "learn my new tracks", "practice difficult transitions",
 Duration: [e.g., 30 min, 1 hour]
 ```
 
-**What the agent should do:**
+**You'll get:** Ordered exercises matched to your focus and available time,
+with varied transition challenges and a clear next-session feedback loop.
+
+<details data-dj-recipe-technical="practice-session-design">
+<summary>How the assistant works (technical)</summary>
+
+**Exact operations:**
 
 1. Based on the focus area, select appropriate tracks:
    - **New tracks:** find recently added tracks (by date or specific batch), pair them with familiar tracks for context
@@ -227,3 +284,9 @@ Duration: [e.g., 30 min, 1 hour]
    - "Mix 2: Track C → Track D (key jump from 6A to 8A — try mixing during the breakdown)"
    - "Mix 3: Track E → Track F → Track G (3-track chain, maintain energy while shifting keys)"
 4. After practice, ask what worked and what didn't — refine for next session
+
+</details>
+
+## Technical details
+
+<WorkflowContract id="dj-prompts" />

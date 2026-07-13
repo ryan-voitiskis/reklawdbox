@@ -1,4 +1,10 @@
 ---
+import {
+  effectLabel,
+  impactLabel,
+  modeLabel,
+  networkLabel,
+} from '../data/workflow-presentation.mjs'
 import { workflows } from '../data/workflows.mjs'
 
 const { id } = Astro.props
@@ -8,223 +14,219 @@ if (!workflow) {
   throw new Error(`Unknown workflow contract ID: ${id}`)
 }
 
-const impactLabels = {
-  'read-only': 'Collection read-only',
-  'staged-metadata': 'Stages metadata for XML',
-  'direct-audio-files': 'Writes audio-file tags or names',
-  'direct-library-files': 'Writes and organizes library files',
-  mixed: 'Direct file writes and staged metadata',
-}
-
-const effectLabels = {
-  'audio-tags': 'Audio tags',
-  'embedded-artwork': 'Embedded artwork',
-  'extracted-artwork': 'Extracted artwork',
-  'downloaded-artwork': 'Downloaded artwork',
-  'move-rename': 'File or directory moves/renames',
-  'archive-extraction': 'Archive extraction',
-  'archive-move': 'Archive moves',
-  'directory-create-remove': 'Directory creation/removal',
-  'enrichment-cache': 'Enrichment cache',
-  'audio-cache': 'Audio-analysis cache',
-  'audit-state': 'Audit state',
-  preset: 'Saved scoring preset',
-  'timbral-normalization': 'Timbral normalization statistics',
-  'provider-session': 'Provider session',
-  backup: 'Rekordbox database backup',
-  'metadata-xml': 'Metadata XML file',
-  'playlist-xml': 'Playlist XML file',
-  'artwork-file': 'Artwork file',
-  'organized-library-files': 'Organized library files',
-  'reload-tag': 'Reload Tag for changed imported tracks',
-  'library-file-import': 'Import files or folders into Collection',
-  'manual-cover-art': 'Add WAV cover art manually',
-  'manual-relocate': 'Relocate files in Rekordbox',
-  'import-or-delete-orphans': 'Import or remove orphan files',
-  'assign-playlists': 'Assign tracks to playlists',
-  'remove-duplicates': 'Review and remove duplicates',
-}
-
-const modeLabels = {
-  always: 'Always',
-  conditional: 'When needed',
-  optional: 'Optional',
-  'on-export': 'On export',
-}
-
-const networkLabels = {
-  none: 'No network',
-  conditional: 'Network when needed',
-  required: 'Network required',
-}
-
-const formatEffect = (entry) => effectLabels[entry.kind] ?? entry.kind
 ---
 
-<section class="workflow-contract" aria-labelledby={`workflow-contract-${workflow.id}`}>
-  <header>
-    <div>
-      <p class="contract-eyebrow">Before you begin</p>
-      <h2 id={`workflow-contract-${workflow.id}`}>Workflow contract</h2>
-    </div>
-    <span class={`impact impact--${workflow.libraryImpact}`}>{impactLabels[workflow.libraryImpact]}</span>
-  </header>
-
-  <p class="contract-summary">{workflow.summary}</p>
-
-  {workflow.kind === 'catalog' && (
-    <p class="variant-banner"><strong>This page is a recipe catalog.</strong> Network use, local state, prerequisites, duration, and result vary by recipe; compare the six contracts below.</p>
+<section class="workflow-contract" data-workflow-contract-shell={workflow.id}>
+  {workflow.sideEffects.stagedMetadata.flushesExistingOnExport && (
+    <p class="flush-warning" data-visible-warning="export-flush"><strong>Before playlist export:</strong> export also writes any metadata already staged by another workflow and clears it from memory. Review staged changes first and complete the separate metadata XML handoff when needed.</p>
   )}
 
-  <dl class="contract-overview">
-    <div>
-      <dt>Best for</dt>
-      <dd>{workflow.audience}</dd>
-    </div>
-    <div>
-      <dt>Network</dt>
-      <dd><strong>{networkLabels[workflow.network.level]}</strong><span>{workflow.network.condition ?? workflow.network.reason}</span></dd>
-    </div>
-    <div>
-      <dt>Scope</dt>
-      <dd>{workflow.scope}</dd>
-    </div>
-    <div>
-      <dt>Time</dt>
-      <dd>{workflow.duration}</dd>
-    </div>
-    <div>
-      <dt>Resuming</dt>
-      <dd>{workflow.resumability}</dd>
-    </div>
-    <div>
-      <dt>Result</dt>
-      <dd>{workflow.output}</dd>
-    </div>
-  </dl>
+  <details class="contract-disclosure" data-workflow-contract={workflow.id}>
+    <summary>Technical details, safety, and recovery</summary>
 
-  <div class="contract-sections">
-    <section>
-      <h3>What can change</h3>
-      <dl class="effect-list">
+    <div class="contract-body">
+      <header>
         <div>
-          <dt>Staged metadata</dt>
-          <dd>{workflow.sideEffects.stagedMetadata.creates ? 'This workflow creates in-memory metadata changes for XML export.' : 'This workflow does not create staged metadata.'}</dd>
+          <p class="contract-eyebrow">Complete reference</p>
+          <h3 id={`workflow-contract-${workflow.id}`}>Workflow contract</h3>
         </div>
-        <div>
-          <dt>Direct user files</dt>
-          <dd>
-            {workflow.sideEffects.directUserFiles.length === 0
-              ? 'None.'
-              : <ul>{workflow.sideEffects.directUserFiles.map((entry) => (
-                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
-              ))}</ul>}
-          </dd>
+        <span
+          class={`impact impact--${workflow.libraryImpact}`}
+          data-contract-field="impact"
+        >{impactLabel(workflow.libraryImpact)}</span>
+      </header>
+
+      <p class="contract-summary" data-contract-field="summary">{workflow.summary}</p>
+
+      {workflow.kind === 'catalog' && (
+        <p class="variant-banner"><strong>This page is a recipe catalog.</strong> Network use, local state, prerequisites, duration, and result vary by recipe; compare the six contracts below.</p>
+      )}
+
+      <dl class="contract-overview">
+        <div data-contract-field="audience">
+          <dt>Best for</dt>
+          <dd>{workflow.audience}</dd>
         </div>
-        <div>
-          <dt>Local state</dt>
-          <dd>
-            {workflow.sideEffects.localStateWrites.length === 0
-              ? 'None.'
-              : <ul>{workflow.sideEffects.localStateWrites.map((entry) => (
-                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
-              ))}</ul>}
-          </dd>
+        <div data-contract-field="network">
+          <dt>Network</dt>
+          <dd><strong>{networkLabel(workflow.network.level)}</strong><span>{workflow.network.condition ?? workflow.network.reason}</span></dd>
         </div>
-        <div>
-          <dt>Files created</dt>
-          <dd>
-            {workflow.sideEffects.outputs.length === 0
-              ? 'None.'
-              : <ul>{workflow.sideEffects.outputs.map((entry) => (
-                <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
-              ))}</ul>}
-          </dd>
+        <div data-contract-field="scope">
+          <dt>Scope</dt>
+          <dd>{workflow.scope}</dd>
+        </div>
+        <div data-contract-field="duration">
+          <dt>Time</dt>
+          <dd>{workflow.duration}</dd>
+        </div>
+        <div data-contract-field="resumability">
+          <dt>Resuming</dt>
+          <dd>{workflow.resumability}</dd>
+        </div>
+        <div data-contract-field="result">
+          <dt>Result</dt>
+          <dd>{workflow.output}</dd>
         </div>
       </dl>
 
-      {workflow.sideEffects.stagedMetadata.flushesExistingOnExport && (
-        <p class="flush-warning"><strong>Existing staged changes:</strong> playlist export also writes any metadata already staged by another workflow and clears it from memory. Run <code>preview_changes</code> before export and complete the separate metadata XML handoff when needed.</p>
-      )}
-    </section>
+      <div class="contract-sections">
+        <section>
+          <h4>What can change</h4>
+          <dl class="effect-list">
+            <div data-contract-field="staged-metadata">
+              <dt>Staged metadata</dt>
+              <dd>{workflow.sideEffects.stagedMetadata.creates ? 'This workflow creates in-memory metadata changes for XML export.' : 'This workflow does not create staged metadata.'}</dd>
+            </div>
+            <div data-contract-field="direct-user-files">
+              <dt>Direct user files</dt>
+              <dd>
+                {workflow.sideEffects.directUserFiles.length === 0
+                  ? 'None.'
+                  : <ul>{workflow.sideEffects.directUserFiles.map((entry) => (
+                    <li><strong>{effectLabel(entry.kind)}</strong> <span class="mode">{modeLabel(entry.mode)}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+                  ))}</ul>}
+              </dd>
+            </div>
+            <div data-contract-field="local-state">
+              <dt>Local state</dt>
+              <dd>
+                {workflow.sideEffects.localStateWrites.length === 0
+                  ? 'None.'
+                  : <ul>{workflow.sideEffects.localStateWrites.map((entry) => (
+                    <li><strong>{effectLabel(entry.kind)}</strong> <span class="mode">{modeLabel(entry.mode)}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+                  ))}</ul>}
+              </dd>
+            </div>
+            <div data-contract-field="outputs">
+              <dt>Files created</dt>
+              <dd>
+                {workflow.sideEffects.outputs.length === 0
+                  ? 'None.'
+                  : <ul>{workflow.sideEffects.outputs.map((entry) => (
+                    <li><strong>{effectLabel(entry.kind)}</strong> <span class="mode">{modeLabel(entry.mode)}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+                  ))}</ul>}
+              </dd>
+            </div>
+          </dl>
 
-    <section>
-      <h3>Before you start</h3>
-      <ul>{workflow.prerequisites.map((item) => <li>{item}</li>)}</ul>
-    </section>
+          {workflow.sideEffects.stagedMetadata.flushesExistingOnExport && (
+            <p class="flush-warning" data-contract-warning="export-flush"><strong>Existing staged changes:</strong> playlist export also writes any metadata already staged by another workflow and clears it from memory. Run <code>preview_changes</code> before export and complete the separate metadata XML handoff when needed.</p>
+          )}
+        </section>
 
-    <section>
-      <h3>Approval checkpoints</h3>
-      <ul>{workflow.approval.map((item) => <li>{item}</li>)}</ul>
-    </section>
+        <section data-contract-field="prerequisites">
+          <h4>Before you start</h4>
+          <ul>{workflow.prerequisites.map((item) => <li>{item}</li>)}</ul>
+        </section>
 
-    <section>
-      <h3>Recovery</h3>
-      <ul>{workflow.recovery.map((item) => <li>{item}</li>)}</ul>
-    </section>
+        <section data-contract-field="approval">
+          <h4>Approval checkpoints</h4>
+          <ul>{workflow.approval.map((item) => <li>{item}</li>)}</ul>
+        </section>
 
-    <section>
-      <h3>Rekordbox handoff</h3>
-      {workflow.rekordboxHandoff.length === 0
-        ? <p>None. This workflow produces recommendations only.</p>
-        : <ol>{workflow.rekordboxHandoff.map((entry) => (
-          <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
-        ))}</ol>}
-    </section>
-  </div>
+        <section data-contract-field="recovery">
+          <h4>Recovery</h4>
+          <ul>{workflow.recovery.map((item) => <li>{item}</li>)}</ul>
+        </section>
 
-  {workflow.variants.length > 0 && (
-    <section class="variant-contracts" aria-labelledby={`recipe-contracts-${workflow.id}`}>
-      <h3 id={`recipe-contracts-${workflow.id}`}>Choose a recipe</h3>
-      <div class="variant-grid">
-        {workflow.variants.map((variant) => (
-          <article>
-            <h4>{variant.title}</h4>
-            <p>{variant.summary}</p>
-            <dl>
-              <div>
-                <dt>Network</dt>
-                <dd><strong>{networkLabels[variant.network.level]}</strong><span>{variant.network.condition ?? variant.network.reason}</span></dd>
-              </div>
-              <div>
-                <dt>Local state</dt>
-                <dd>
-                  {variant.localStateWrites.length === 0
-                    ? 'None.'
-                    : <ul>{variant.localStateWrites.map((entry) => (
-                      <li><strong>{formatEffect(entry)}</strong> <span class="mode">{modeLabels[entry.mode]}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
-                    ))}</ul>}
-                </dd>
-              </div>
-              <div>
-                <dt>Needs</dt>
-                <dd><ul>{variant.prerequisites.map((item) => <li>{item}</li>)}</ul></dd>
-              </div>
-              <div>
-                <dt>Time</dt>
-                <dd>{variant.duration}</dd>
-              </div>
-              <div>
-                <dt>Result</dt>
-                <dd>{variant.output}</dd>
-              </div>
-            </dl>
-          </article>
-        ))}
+        <section data-contract-field="rekordbox-handoff">
+          <h4>Rekordbox handoff</h4>
+          {workflow.rekordboxHandoff.length === 0
+            ? <p>None. This workflow produces recommendations only.</p>
+            : <ol>{workflow.rekordboxHandoff.map((entry) => (
+              <li><strong>{effectLabel(entry.kind)}</strong> <span class="mode">{modeLabel(entry.mode)}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+            ))}</ol>}
+        </section>
       </div>
-    </section>
-  )}
+
+      {workflow.variants.length > 0 && (
+        <section
+          class="variant-contracts"
+          aria-labelledby={`recipe-contracts-${workflow.id}`}
+          data-contract-field="variants"
+        >
+          <h4 id={`recipe-contracts-${workflow.id}`}>Choose a recipe</h4>
+          <div class="variant-grid">
+            {workflow.variants.map((variant) => (
+              <article>
+                <h5>{variant.title}</h5>
+                <p>{variant.summary}</p>
+                <dl>
+                  <div>
+                    <dt>Network</dt>
+                    <dd><strong>{networkLabel(variant.network.level)}</strong><span>{variant.network.condition ?? variant.network.reason}</span></dd>
+                  </div>
+                  <div>
+                    <dt>Local state</dt>
+                    <dd>
+                      {variant.localStateWrites.length === 0
+                        ? 'None.'
+                        : <ul>{variant.localStateWrites.map((entry) => (
+                          <li><strong>{effectLabel(entry.kind)}</strong> <span class="mode">{modeLabel(entry.mode)}</span>{entry.condition && <span> — {entry.condition}</span>}</li>
+                        ))}</ul>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Needs</dt>
+                    <dd><ul>{variant.prerequisites.map((item) => <li>{item}</li>)}</ul></dd>
+                  </div>
+                  <div>
+                    <dt>Time</dt>
+                    <dd>{variant.duration}</dd>
+                  </div>
+                  <div>
+                    <dt>Result</dt>
+                    <dd>{variant.output}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  </details>
 </section>
 
 <style>
   .workflow-contract {
     display: grid;
-    gap: 1.25rem;
+    gap: 0.85rem;
     margin-block: 1.5rem 2rem;
-    padding: clamp(1rem, 3vw, 1.5rem);
+  }
+
+  .contract-disclosure {
+    overflow: clip;
     border: 1px solid var(--card-border);
     border-radius: 0.75rem;
     background: var(--card-bg);
+  }
+
+  .contract-disclosure > summary {
+    padding: 1rem 1.2rem;
+    cursor: pointer;
+    color: var(--sl-color-white);
+    font-weight: 700;
+  }
+
+  .contract-disclosure > summary::marker {
+    color: var(--sl-color-accent-high);
+  }
+
+  .contract-disclosure > summary:focus-visible {
+    outline: 3px solid var(--sl-color-accent-high);
+    outline-offset: -4px;
+    border-radius: 0.7rem;
+  }
+
+  .contract-disclosure[open] > summary {
+    border-bottom: 1px solid var(--card-border);
+  }
+
+  .contract-body {
+    display: grid;
+    gap: 1.25rem;
+    padding: clamp(1rem, 3vw, 1.5rem);
   }
 
   header {
@@ -235,9 +237,9 @@ const formatEffect = (entry) => effectLabels[entry.kind] ?? entry.kind
     gap: 0.75rem;
   }
 
-  h2,
   h3,
   h4,
+  h5,
   p,
   dl,
   dd,
@@ -246,15 +248,15 @@ const formatEffect = (entry) => effectLabels[entry.kind] ?? entry.kind
     margin: 0;
   }
 
-  h2 {
+  h3 {
     font-size: 1.45rem;
   }
 
-  h3 {
+  h4 {
     font-size: 1.05rem;
   }
 
-  h4 {
+  h5 {
     font-size: 1rem;
   }
 

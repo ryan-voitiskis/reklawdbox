@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: Choose a reklawdbox workflow by outcome, prerequisites, and what it can change.
+description: Choose a reklawdbox workflow by the DJ task you want to complete.
 sidebar:
   order: 0
 ---
@@ -9,21 +9,20 @@ import WorkflowCatalog from '../../../components/WorkflowCatalog.astro'
 
 ## What are you trying to do?
 
-Choose by the result you want and the effects you are comfortable with. Workflows
-do not share one lifecycle: some only scan, some write tags or organize files,
-some stage metadata for review, and some create XML for a separate Rekordbox
-handoff.
+Choose the task that matches what you want to do. Each option says when to use
+it, how much time to allow, and whether it can change files or prepare changes
+for Rekordbox.
 
-Each card shows collection impact, network use, local state, files created,
-prerequisites, scope, and the final Rekordbox step before you commit to a path.
-Conditional and optional effects are labelled explicitly.
-
-**Not sure where to begin?** Start with [Library Health](/workflows/library-health/).
-It is network-free and collection-read-only. Its runtime still depends on library
-size, and any suggested fixes are separate manual actions.
-
-Before choosing a workflow that writes files or exports XML, read
-[Safety & Trust](/concepts/safety/). For provider and cache readiness, see
-[Enrichment & Analysis](/mcp-tools/enrichment-analysis/).
+If you only wanted to confirm that ChatGPT or Claude Desktop can connect, the
+[first session](/getting-started/first-session/) is enough. Choose a workflow
+when you have a specific task. If that task is checking files, duplicates, or
+playlist gaps, [Library Health](/workflows/library-health/) is the read-only
+choice.
 
 <WorkflowCatalog />
+
+## Optional deeper reading
+
+- [Safety & Trust](/concepts/safety/) explains approvals, backups, and XML import.
+- [Enrichment & Analysis](/mcp-tools/enrichment-analysis/) explains online providers and local analysis.
+- [Technical reference](/reference/) lists command and configuration details.

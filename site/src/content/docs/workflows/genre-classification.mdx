@@ -6,20 +6,25 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Assign genres to ungenred tracks from cached provider, label, BPM, and audio
 evidence, with confidence-based human review and a Rekordbox-compatible
 metadata XML handoff.
 
-<WorkflowContract id="genre-classification" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="genre-classification" />
 
-1. **Measure readiness.** Run scoped `cache_coverage` for ungenred tracks.
-   Cached no-matches count as searched, and incomplete optional evidence is
-   allowed.
+```
+Classify genres for my ungenred tracks.
+```
+
+## What happens next
+
+1. **Measure readiness.** Check whether enough evidence is ready for ungenred
+   tracks. A searched no-match counts as complete, and optional evidence may
+   remain unavailable.
 2. **Prepare evidence.** Fill core Discogs, Beatport, and Stratum gaps where
    practical. Essentia adds richer audio evidence but is not a hard gate.
 3. **Classify by confidence.** Compare Discogs styles, Beatport genres, label
@@ -48,12 +53,10 @@ proceeds only after the built-in database backup succeeds or the configured
 custom backup script exits zero. A failed XML write retains the staged genres
 for retry; clear unwanted genres before exporting.
 
-Preparation is bounded and resumable through `page.next_offset`; retry failed
-explicit track IDs after the scope. Resume only with the same selector/library
-order, enrichment provider/cache policy, audio `skip_cached` setting, and
-Essentia availability. Restart from zero when one changes. Classification has
-its own caller-managed offset, and staged genres are lost on MCP restart unless
-exported.
+You can continue an interrupted preparation pass with the same scope and
+evidence sources. Start a fresh pass after changing either so every track is
+classified consistently. Previously prepared evidence remains available, but
+unexported staged genres do not survive an MCP restart.
 
 ## Finish in Rekordbox
 
@@ -61,11 +64,9 @@ Keep the XML until the import is verified. Follow the
 [metadata XML handoff](/reference/xml-export/#importing-into-rekordbox), then
 check representative genre values in Rekordbox.
 
-## Start this workflow
+## Technical details
 
-```
-Classify genres for my ungenred tracks.
-```
+<WorkflowContract id="genre-classification" />
 
 ## Next steps
 

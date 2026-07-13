@@ -7,9 +7,15 @@ sidebar:
 
 import { Card, CardGrid, LinkCard, Aside, Badge } from '@astrojs/starlight/components';
 import WorkflowContract from '../../../components/WorkflowContract.astro'
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 import XmlImportSteps from '../../../partials/sops/xml-import-steps.mdx';
 
-<WorkflowContract id="library-cleanup" />
+## Start here
+
+<WorkflowQuickStart id="library-cleanup" />
+
+[Start with Session 1: Collection Audit](#session-1-collection-audit). It is the
+first direct action in the full five-session path.
 
 Before you start, consider running a [Library Health](/workflows/library-health/) scan to catch broken links, orphan files, and duplicates. Fixing structural issues first saves you from redoing work later.
 
@@ -150,6 +156,10 @@ Export to XML, import into Rekordbox. Spot-check the corrections.
 - **Labels and years present?** Skip Session 3.
 - **No ungenred tracks?** Skip Session 4.
 - **No existing genre tags?** Skip Session 5.
+
+## Technical details
+
+<WorkflowContract id="library-cleanup" />
 
 ## What's next
 

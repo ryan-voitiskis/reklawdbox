@@ -6,16 +6,21 @@ sidebar:
 ---
 
 import WorkflowContract from '../../../components/WorkflowContract.astro'
-
-## Outcome
+import WorkflowQuickStart from '../../../components/WorkflowQuickStart.astro'
 
 Get a point-in-time, read-only report of broken links, orphan files, playlist
 gaps, and duplicate groups, with suggested manual follow-up and no collection
 changes.
 
-<WorkflowContract id="library-health" />
+## Start here
 
-## Phases
+<WorkflowQuickStart id="library-health" />
+
+```
+Run a full health scan on my library.
+```
+
+## What happens next
 
 1. **Confirm access.** Connect to the intended Rekordbox library and make sure
    every content root you want checked is readable.
@@ -39,11 +44,10 @@ changes.
 ## What changes and how to recover
 
 The health workflow writes no metadata, files, caches, or workflow state. Its
-results are snapshots rather than a durable cursor. Duplicate groups use
-`page.next_offset` while `page.has_more`; exact mode hashes files again on every
-request. Restart from offset zero after scope or filesystem changes, and rerun
-all affected scans after manual fixes. If a root is unreadable, correct access
-or narrow the scope before trusting the report.
+results reflect the library and filesystem at scan time. After changing the
+scope, moving files, or making a manual fix, rerun the affected checks before
+trusting the new totals. If a root is unreadable, correct access or narrow the
+scope first.
 
 ## Finish in Rekordbox
 
@@ -52,11 +56,9 @@ tracks you intend to keep, and review duplicate removal in Rekordbox. The scan
 does not perform those actions for you. Rerun the relevant check and compare
 counts before declaring the issue resolved.
 
-## Start this workflow
+## Technical details
 
-```
-Run a full health scan on my library.
-```
+<WorkflowContract id="library-health" />
 
 ## Next steps
 
