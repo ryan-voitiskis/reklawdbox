@@ -141,9 +141,7 @@ pub(super) fn pending_batch_page<T: Clone>(
     let mut fully_cached_skipped = 0usize;
     let mut after_last_examined = None;
 
-    for (local_index, (candidate, is_complete)) in
-        candidates.iter().zip(complete.into_iter()).enumerate()
-    {
+    for (local_index, (candidate, is_complete)) in candidates.iter().zip(complete).enumerate() {
         examined_tracks += 1;
         after_last_examined = Some(start + local_index + 1);
         if is_complete {
@@ -349,7 +347,7 @@ pub(super) fn resolve_pending_tracks(
             for (local_index, (track, is_complete)) in chunk
                 .into_iter()
                 .skip(local_start)
-                .zip(complete.into_iter())
+                .zip(complete)
                 .enumerate()
             {
                 examined_tracks += 1;
