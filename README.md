@@ -1,207 +1,232 @@
 # reklawdbox
 
-MCP server for [Rekordbox](https://rekordbox.com/) 7.x library management.
-Gives an AI agent full read access to your encrypted Rekordbox database, stages
-metadata edits in memory, and exports Rekordbox-compatible XML for safe
-reimport. The database is never written to directly.
+AI-assisted Rekordbox 7 library management for Apple Silicon Macs.
 
-**Docs, workflows, and tool reference: [reklawdbox.com](https://reklawdbox.com)**
+reklawdbox connects an MCP-capable AI host to your local Rekordbox library, so
+you can inspect, clean, classify, and organize tracks through conversation. It
+combines library data, online metadata, and audio evidence while keeping normal
+Rekordbox metadata changes reviewable: the MCP server never performs SQL writes
+to `master.db`; it stages changes in memory and exports XML for you to import.
 
-## How it works
+Some explicit workflows can write audio tags, artwork, or other files. The
+[safety model](#safety-model) below explains each boundary, including the
+separate backup-restore command.
 
-You have a conversation with Claude. Claude calls reklawdbox tools to search
-your library, analyze audio, look up metadata from external sources, classify
-genres, score transitions, and build DJ sets. Proposed Rekordbox metadata
-changes are held in memory until you explicitly export them as an XML file. You
-then import that file into Rekordbox yourself. Separate tag and artwork tools
-can write directly to audio files when called.
+**[Documentation](https://reklawdbox.com) · [Install guide](https://reklawdbox.com/getting-started/) · [Workflow catalog](https://reklawdbox.com/workflows/) · [Tool reference](https://reklawdbox.com/mcp-tools/)**
 
-The result is an AI-assisted curation workflow where the agent handles the
-tedious work (metadata lookups, genre classification, harmonic analysis, set
-sequencing) while you choose which operations to authorize and what to import.
+## Why use it?
 
-### Workflows
+Maintaining a DJ library involves repetitive work across Rekordbox, audio
+files, metadata sites, and listening notes. reklawdbox gives your AI host
+purpose-built tools for that work while you choose the scope, review proposed
+changes, and control what reaches Rekordbox.
 
-The server includes step-by-step SOPs (standard operating procedures) compiled
-into the binary. Call `help()` in conversation to see the workflow menu.
+You can use it to:
 
-| Workflow             | What it does                                                  |
-| -------------------- | ------------------------------------------------------------- |
-| Collection Audit     | Fix naming, tagging, and convention violations                |
-| Metadata Backfill    | Fill missing labels, years, albums from enrichment            |
-| Genre Classification | Classify ungenred tracks using enrichment + audio evidence    |
-| Genre Audit          | Verify existing genre tags against evidence                   |
-| Library Health       | Scan for broken links, orphans, duplicates, coverage gaps     |
-| Set Building         | Sequence DJ sets with transition scoring and energy shaping   |
-| Pool Building        | Discover clusters of compatible tracks for live improvisation |
-| Chapter Set Planning | Plan multi-chapter sets with bridge tracks                    |
-| Batch Import         | Tag, rename, and embed cover art for new music                |
+- understand your library, playlists, play history, and health;
+- fill missing labels, years, albums, and genres;
+- compare Discogs, Beatport, MusicBrainz, Bandcamp, and audio evidence;
+- find compatible tracks already in your library and build ordered sets;
+- prepare new downloads, tags, and artwork before Rekordbox import; and
+- export approved metadata changes and playlists as Rekordbox XML.
 
-## Architecture
+## Quick start
 
-```mermaid
-flowchart TB
-    claude(["Claude Code / Claude Desktop"])
-    claude <-->|"MCP (stdio)"| router
+### Requirements
 
-    subgraph binary["reklawdbox (single Rust binary)"]
-        router["Tool Router"]
+- macOS on Apple Silicon (M1 or later)
+- Rekordbox 7.x with at least one collection imported
+- An MCP host for conversational use: Claude Code, Claude Desktop, the ChatGPT
+  desktop app, Codex CLI, or the Codex IDE extension
+- Python 3.9 or newer for `reklawdbox setup` and optional Essentia analysis
 
-        subgraph acquire["Acquire"]
-            library["Library Search"]
-            analysis["Audio Analysis<br/>stratum-dsp + Essentia"]
-            enrich["Enrichment<br/>Discogs · Beatport<br/>Bandcamp · MusicBrainz"]
-        end
+Python is not required for the built-in Stratum analysis or a manual MCP
+configuration without Essentia.
 
-        subgraph reason["Reason"]
-            classify["Genre Classifier<br/>multi-evidence decision tree"]
-            scoring["Transition & Pool Scoring<br/>multi-axis weighted"]
-            sets["Set Sequencer<br/>beam search"]
-        end
-
-        subgraph stage["Stage & Export"]
-            changes["Change Manager<br/>(in-memory)"]
-            xml["XML Export"]
-        end
-
-        router --> acquire
-        router --> reason
-        router --> changes
-        changes --> xml
-    end
-
-    library -.->|"read-only"| db[("Rekordbox master.db<br/>(SQLCipher)")]
-    analysis --> files["Audio Files"]
-    enrich <--> cache[("Cache Store<br/>(SQLite)")]
-    analysis --> cache
-    enrich --> broker["Discogs Broker<br/>Cloudflare Workers + D1"]
-    enrich --> apis["beatport.com<br/>bandcamp.com<br/>musicbrainz.org"]
-
-    xml -->|".xml"| rb(["Rekordbox<br/>File → Import Collection"])
-    rb -.->|"applies changes"| db
-```
-
-### Key design decisions
-
-- **Read-only database access.** The Rekordbox `master.db` is opened via
-  SQLCipher with `SQLITE_OPEN_READ_ONLY`. No reklawdbox code path writes
-  `master.db`.
-
-- **Staged Rekordbox metadata.** Genre, comments, rating, color, label, year, and
-  album changes made through `update_tracks` live in an in-memory
-  `ChangeManager`. You can preview, modify, or discard them before XML export.
-
-- **XML as the Rekordbox metadata path.** Rekordbox has no scripting API. The
-  server generates
-  Rekordbox-compatible XML that you import yourself via File → Import Collection.
-
-- **Direct file operations.** Tag and artwork tools can write audio files or
-  create extracted artwork. Tag writes support a dry run, but direct file tools
-  do not share the in-memory `ChangeManager` or a universal rollback layer.
-
-- **Separate local state.** Enrichment results, audio analysis, audit state,
-  calibration data, and presets persist in a local SQLite database (WAL mode),
-  separate from Rekordbox. Setup can also update host configuration, and XML
-  exports and backups create local files. Cache entries are
-  validated against the analysis schema plus the canonical audio file identity
-  (path, size, and modification time). Stratum results also include a versioned
-  fingerprint of the Rekordbox beat grid used for analysis, or of the no-grid
-  fallback, so a grid change invalidates and recomputes only the Stratum result;
-  Essentia freshness is independent of Rekordbox grid changes.
-
-- **Host permissions remain independent.** Workflow review checkpoints are
-  procedural. Keep the MCP host's normal permission checks enabled and scope
-  approvals to the tools and music paths the workflow needs.
-
-- **Two-tier audio analysis.** [stratum-dsp](https://github.com/ryan-voitiskis/stratum-dsp)
-  (Rust, always available) returns BPM/key confidence, grid provenance,
-  decay, dub-stab and kick-pattern evidence, and structural sections when
-  available. [Essentia](https://essentia.upf.edu/) (Python, optional) adds
-  loudness, danceability, onset/rhythm, and timbral/spectral evidence. It does
-  not return an `energy` field: scoring derives a 0–1 value from danceability,
-  integrated loudness, and onset rate, with a BPM proxy when any input is
-  missing. Downstream consumers use specific subsets; see the
-  [audio evidence reference](https://reklawdbox.com/mcp-tools/enrichment-analysis/#returned-and-cached-evidence).
-
-- **Broker-mediated enrichment.** Discogs API access is proxied through a
-  [Cloudflare Workers service](broker/) that handles OAuth, rate limiting, and
-  response caching. The Rust binary never holds Discogs consumer secrets.
-
-- **SOPs compiled in.** Workflow procedures are embedded in the binary via
-  `include_str!` so documentation can't drift from the release.
-
-## Install
-
-Requires macOS on Apple Silicon (M1 or later) and Rekordbox 7.x.
+### Install and connect
 
 ```bash
 brew tap ryan-voitiskis/reklawdbox
 brew install reklawdbox
-```
-
-Then run interactive setup:
-
-```bash
 reklawdbox setup
 ```
 
-This installs Essentia (audio analysis), configures Claude Code and Claude
-Desktop, and verifies the Rekordbox database connection. See the
-[install guide](https://reklawdbox.com/getting-started/) for details.
+`setup` installs and validates the optional Essentia analysis backend,
+configures Claude Code at `~/Music/.mcp.json`, configures Claude Desktop when
+detected, and checks the Rekordbox database connection. Then reconnect your
+host:
 
-## Build from source
+- **Claude Code:** start it from `~/Music`, then run `/mcp` or start a new
+  conversation.
+- **Claude Desktop:** quit and reopen the app.
+- **OpenAI clients:** the ChatGPT desktop app, Codex CLI, and Codex IDE
+  extension share MCP configuration. Add the server once in the ChatGPT desktop
+  app under **Settings → MCP servers**, or from Codex CLI:
 
-Requires the [Rust toolchain](https://rustup.rs/) and Xcode Command Line Tools.
+  ```bash
+  codex mcp add reklawdbox -- /opt/homebrew/bin/reklawdbox
+  ```
+
+  Then restart the desktop app or IDE extension, or start a new Codex CLI
+  session. Use `/mcp` to confirm that the server is connected.
+
+If you built from source, run `./target/release/reklawdbox setup` and use that
+binary's absolute path in your host configuration. To use reklawdbox without
+Essentia, skip `setup` and follow the [manual configuration guide](https://reklawdbox.com/getting-started/#manual-configuration).
+
+### Verify with one read-only request
+
+Paste this into your connected MCP host:
+
+```text
+Use only reklawdbox's read_library tool. Show me:
+- my total track and playlist counts
+- my top genres
+- my average BPM and key distribution
+
+Do not call any other tool, use online services, analyze or modify audio files,
+create or update caches, stage changes, create backups, or export XML. If
+read_library is unavailable or fails, stop and tell me the error.
+```
+
+If you see your library summary, the connection works and nothing was changed.
+Continue with the [first-session guide](https://reklawdbox.com/getting-started/first-session/)
+or choose a goal below.
+
+## Choose a goal
+
+| I want to…                             | Start here                                                                     | Collection effect                         |
+| -------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------- |
+| Check my library for problems          | [Library Health](https://reklawdbox.com/workflows/library-health/)             | Read-only checks                          |
+| Fix missing or messy track information | [Library Cleanup](https://reklawdbox.com/workflows/library-cleanup/)           | Direct file fixes and staged XML          |
+| Prepare new downloads                  | [Batch Import](https://reklawdbox.com/workflows/batch-import/)                 | Direct file work before Rekordbox import  |
+| Add or check genre tags                | [Genre Classification](https://reklawdbox.com/workflows/genre-classification/) | Staged metadata, then XML                 |
+| Build a set, crate, or full-night plan | [Set Building](https://reklawdbox.com/workflows/set-building/)                 | Read-only analysis; optional playlist XML |
+| Plan a gig, dig, or practice session   | [DJ Prompts](https://reklawdbox.com/workflows/dj-prompts/)                     | Read-only planning                        |
+
+For release-embedded, step-by-step SOPs, ask your agent to call `help()` without
+a topic. The public workflow catalog also includes composite and planning
+guides that are not separate runtime help entries.
+
+## Safety model
+
+Read-only Rekordbox access does not mean every operation is read-only. Know
+which layer a workflow uses:
+
+| Layer                      | What reklawdbox can do                                                                                                                                                                      | Your control point                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Rekordbox queries          | MCP tools and normal library operations open encrypted `master.db` with SQLite's read-only flag. They do not perform SQL writes.                                                            | No approval can turn these paths into database writes.                                                                                   |
+| Staged Rekordbox metadata  | Genre, comments, rating, color, label, year, and album changes live in memory. A successful `write_xml` exports all pending changes, plus any requested playlists, after a database backup. | Run `preview_changes` before every export, including playlist-only work. Clear unwanted changes or import the XML manually in Rekordbox. |
+| Audio and other user files | Explicit tag/artwork tools and workflow-approved host filesystem actions can write files outside Rekordbox. These do not use the staging layer.                                             | Use dry runs where available, test a small scope, and keep suitable audio-file backups.                                                  |
+| Reklawdbox-owned state     | Enrichment and analysis caches, audit state, calibration data, presets, broker-session metadata, configuration, backups, and XML exports persist outside `master.db`.                       | Treat these as local application data and review output/configuration paths.                                                             |
+| Backup restore             | `reklawdbox backup --restore` is a separate recovery command that can replace Rekordbox database/configuration files from an archive after typed confirmation.                              | Close Rekordbox, verify the archive, and use this only as an intentional restore.                                                        |
+
+Staged changes disappear when the MCP process ends unless exported. A failed
+backup or XML write restores the in-memory snapshot for retry; a successful
+export clears the exported snapshot.
+
+Keep your MCP host's normal permission checks enabled. Workflow approval steps
+are guidance for the agent, not a universal runtime confirmation layer for
+direct file tools.
+
+See [Safety & Trust](https://reklawdbox.com/concepts/safety/) and [XML Export](https://reklawdbox.com/reference/xml-export/) for the full operating
+model and current Rekordbox import steps.
+
+## How it works
+
+```mermaid
+flowchart LR
+    host["MCP host<br/>Claude Code · Claude Desktop<br/>ChatGPT desktop app · Codex CLI/IDE"] <-->|"MCP over stdio"| app["reklawdbox"]
+
+    app -->|"read-only SQL"| db[("Rekordbox master.db")]
+    app --> providers["Discogs · Beatport<br/>MusicBrainz · Bandcamp"]
+    app --> analysis["Stratum + optional Essentia"]
+    providers --> state[("Local state")]
+    analysis --> state
+
+    app --> staged["In-memory changes"]
+    staged --> export["Backup + XML export"]
+    export -->|"manual import"| rekordbox["Rekordbox"]
+
+    app -->|"explicit file tools"| files["Audio and artwork files"]
+```
+
+- **Audio analysis:** the built-in [stratum-dsp](stratum-dsp/) backend provides
+  tempo/key confidence, beat-grid, rhythm, decay, and structure evidence.
+  Optional [Essentia](https://essentia.upf.edu/) adds loudness, danceability,
+  onset, timbral, and spectral evidence. Scoring derives energy only when the
+  required Essentia inputs exist; otherwise it uses a BPM-based proxy.
+- **Enrichment:** Discogs access goes through the open-source
+  [broker](broker/), which handles OAuth, rate limiting, and response caching
+  without putting Discogs consumer secrets in the Rust binary. Other providers
+  are queried directly for specific metadata evidence. Library search,
+  classification, scoring, and audio analysis stay local; an uncached provider
+  lookup sends identifying track metadata to that selected service and caches
+  the result locally.
+- **Workflow guidance:** the site and each released binary share the same SOP
+  partials. Each release therefore carries the workflow text built with it.
+
+Read the [architecture guide](https://reklawdbox.com/concepts/architecture/)
+for cache freshness, scoring, provider, and data-flow details.
+
+## CLI
+
+Most DJ workflows happen through the connected AI host. MCP hosts launch the
+binary over piped stdin; in an interactive terminal, use CLI subcommands for
+setup, bulk processing, backups, and direct file work.
+
+| Subcommand          | Description                                                                |
+| ------------------- | -------------------------------------------------------------------------- |
+| `setup`             | Install Essentia, configure supported Claude hosts, and check the database |
+| `hydrate`           | Warm Discogs, Beatport, and audio-analysis caches in bulk                  |
+| `analyze`           | Run batch audio analysis only                                              |
+| `backup`            | Create, list, or explicitly restore Rekordbox backups                      |
+| `read-tags`         | Read metadata tags from audio files                                        |
+| `write-tags`        | Write metadata tags to audio files                                         |
+| `extract-art`       | Extract embedded artwork to a file                                         |
+| `embed-art`         | Embed artwork into audio files                                             |
+| `disconnect-broker` | Clear the stored Discogs broker session                                    |
+
+Run `reklawdbox <subcommand> --help` or see the [CLI reference](https://reklawdbox.com/cli/) for flags, defaults, and examples.
+
+## Build and develop
+
+Build from source with the [Rust toolchain](https://rustup.rs/) and Xcode
+Command Line Tools:
 
 ```bash
 git clone https://github.com/ryan-voitiskis/reklawdbox.git
 cd reklawdbox
 cargo build --release
+./target/release/reklawdbox --version
 ```
 
-The binary is at `./target/release/reklawdbox`.
-
-## CLI subcommands
-
-The binary runs as an MCP server by default. Subcommands are available for local
-workflows outside your MCP host:
-
-| Subcommand          | Description                                            |
-| ------------------- | ------------------------------------------------------ |
-| `setup`             | Install Essentia and configure MCP hosts               |
-| `hydrate`           | Batch enrichment + analysis (Discogs, Beatport, audio) |
-| `analyze`           | Batch audio analysis (stratum-dsp + Essentia)          |
-| `backup`            | Manage Rekordbox library backups                       |
-| `read-tags`         | Read metadata tags from audio files                    |
-| `write-tags`        | Write metadata tags to audio files                     |
-| `extract-art`       | Extract embedded cover art from an audio file          |
-| `embed-art`         | Embed cover art into audio files                       |
-| `disconnect-broker` | Clear stored Discogs broker session                    |
-
-Run `reklawdbox <subcommand> --help` for usage details.
-
-## Development
+The full local verification path is:
 
 ```bash
+cargo fmt --check
+dprint check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
 cargo build --release
-cargo test
-cargo test -- --ignored        # integration tests
-dprint fmt && cargo fmt        # format
-dprint check && cargo fmt --check  # verify formatting
+./target/release/reklawdbox --version
+./target/release/reklawdbox --help
+node scripts/mcp-smoke.mjs --bin ./target/release/reklawdbox --skip-db
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for expectations and workflow.
-
-Agent-specific notes: [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md).
+The repository contains the root Rust MCP/CLI crate, the `stratum-dsp/`
+workspace crate, the Astro documentation site in `site/`, and the Cloudflare
+Discogs broker in `broker/`. See [src/README.md](src/README.md) for the code map
+and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations.
 
 ## Releasing
 
-```bash
-./scripts/release.sh 0.25.0
-```
-
-Tags and pushes. CI builds the binary, creates a GitHub Release, and updates the
-[Homebrew tap](https://github.com/ryan-voitiskis/homebrew-reklawdbox).
+Maintainers pass a new semantic version to [`scripts/release.sh`](scripts/release.sh)
+from a clean `main`. The script runs the release preflight, uses a DB-backed MCP
+smoke test by default, bumps and commits version files, tags the commit, and
+pushes `main` plus the tag. Set `REKLAWDBOX_RELEASE_SKIP_DB_SMOKE=1` only when
+the DB-free smoke is required. Tag CI publishes the Apple Silicon GitHub
+release and updates the [Homebrew tap](https://github.com/ryan-voitiskis/homebrew-reklawdbox).
 
 ## License
 
