@@ -10,33 +10,49 @@ use crate::adapters::{
 };
 use crate::domain::classification::taxonomy::map_genre_through_taxonomy;
 use crate::domain::{
-    classification::{AudioFeatures, MappedGenre, TrackEvidence, taxonomy as genre},
+    classification::{
+        AudioFeatures, DiscogsMatchQuality, DiscogsReadiness, LabelProvenance, MappedGenre,
+        TrackEvidence, taxonomy as genre,
+    },
     library::Track,
+    metadata as normalize,
 };
+
+#[derive(Debug)]
+pub(crate) struct DiscogsInterpretation {
+    pub(crate) readiness: DiscogsReadiness,
+    pub(crate) match_quality: Option<DiscogsMatchQuality>,
+    pub(crate) mapped_genres: Vec<MappedGenre>,
+    pub(crate) label: Option<String>,
+    pub(crate) diagnostic: Option<String>,
+}
 
 pub(crate) fn build_track_evidence(
     track: &Track,
     discogs_cache: Option<&EnrichmentCacheEntry>,
-    beatport_cache: Option<&EnrichmentCacheEntry>,
     stratum_cache: Option<&CachedAudioAnalysis>,
     essentia_cache: Option<&CachedAudioAnalysis>,
     overrides: &[(String, String)],
 ) -> TrackEvidence {
-    let discogs_val = parse_response_json(discogs_cache);
-    let discogs_mapped = extract_discogs_genres(discogs_val.as_ref(), overrides);
+    let discogs = interpret_discogs(discogs_cache, overrides);
 
-    let beatport_val = parse_response_json(beatport_cache);
-    let (beatport_genre, beatport_raw) = extract_beatport_genre(beatport_val.as_ref(), overrides);
-
-    let effective_label = if !track.label.is_empty() {
-        Some(track.label.clone())
+    let (effective_label, label_provenance) = if !track.label.is_empty() {
+        let correlated = discogs.label.as_deref().is_some_and(|discogs_label| {
+            normalize::normalize_for_matching(discogs_label)
+                == normalize::normalize_for_matching(&track.label)
+        });
+        (
+            Some(track.label.clone()),
+            Some(if correlated {
+                LabelProvenance::CorrelatedDiscogs
+            } else {
+                LabelProvenance::Rekordbox
+            }),
+        )
+    } else if let Some(label) = discogs.label.clone() {
+        (Some(label), Some(LabelProvenance::Discogs))
     } else {
-        discogs_val
-            .as_ref()
-            .and_then(|v| v.get("label"))
-            .and_then(|v| v.as_str())
-            .filter(|l| !l.is_empty())
-            .map(std::string::ToString::to_string)
+        (None, None)
     };
     let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
@@ -49,15 +65,102 @@ pub(crate) fn build_track_evidence(
         title: track.title.clone(),
         current_genre: track.genre.clone(),
         bpm: track.bpm,
-        discogs_mapped,
-        beatport_genre,
-        beatport_raw,
+        discogs_mapped: discogs.mapped_genres,
         label: effective_label,
         label_genre: label_genre_val,
+        label_provenance,
         audio,
-        has_discogs: discogs_cache.is_some(),
-        has_beatport: beatport_cache.is_some(),
+        has_discogs: !matches!(discogs.readiness, DiscogsReadiness::NotSearched),
+        discogs_match_quality: discogs.match_quality,
         has_audio,
+    }
+}
+
+/// Interpret one exact, album-aware Discogs cache row into the shared genre
+/// readiness state. Unknown qualities and malformed payloads fail closed.
+pub(crate) fn interpret_discogs(
+    cache: Option<&EnrichmentCacheEntry>,
+    overrides: &[(String, String)],
+) -> DiscogsInterpretation {
+    let Some(cache) = cache else {
+        return DiscogsInterpretation {
+            readiness: DiscogsReadiness::NotSearched,
+            match_quality: None,
+            mapped_genres: Vec::new(),
+            label: None,
+            diagnostic: None,
+        };
+    };
+
+    match cache.match_quality.as_deref() {
+        Some("none") => DiscogsInterpretation {
+            readiness: DiscogsReadiness::NoMatch,
+            match_quality: None,
+            mapped_genres: Vec::new(),
+            label: None,
+            diagnostic: None,
+        },
+        Some(quality @ ("exact" | "fuzzy")) => {
+            let match_quality = if quality == "exact" {
+                DiscogsMatchQuality::Exact
+            } else {
+                DiscogsMatchQuality::Fuzzy
+            };
+            let Some(raw) = cache.response_json.as_deref() else {
+                return DiscogsInterpretation {
+                    readiness: DiscogsReadiness::MatchedUnmapped,
+                    match_quality: Some(match_quality),
+                    mapped_genres: Vec::new(),
+                    label: None,
+                    diagnostic: Some("discogs-response-missing".into()),
+                };
+            };
+            let value = match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(
+                        artist = cache.query_artist.as_str(),
+                        title = cache.query_title.as_str(),
+                        "Cached Discogs response_json failed to parse: {error}"
+                    );
+                    return DiscogsInterpretation {
+                        readiness: DiscogsReadiness::MatchedUnmapped,
+                        match_quality: Some(match_quality),
+                        mapped_genres: Vec::new(),
+                        label: None,
+                        diagnostic: Some("discogs-response-invalid".into()),
+                    };
+                }
+            };
+            let mapped_genres = extract_discogs_genres(Some(&value), overrides);
+            let label = value
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map(str::to_string);
+            DiscogsInterpretation {
+                readiness: if mapped_genres.is_empty() {
+                    DiscogsReadiness::MatchedUnmapped
+                } else {
+                    DiscogsReadiness::UsableGenre
+                },
+                match_quality: Some(match_quality),
+                mapped_genres,
+                label,
+                diagnostic: None,
+            }
+        }
+        unknown => DiscogsInterpretation {
+            readiness: DiscogsReadiness::MatchedUnmapped,
+            match_quality: Some(DiscogsMatchQuality::Invalid),
+            mapped_genres: Vec::new(),
+            label: None,
+            diagnostic: Some(format!(
+                "discogs-match-quality-invalid:{}",
+                unknown.unwrap_or("missing")
+            )),
+        },
     }
 }
 
@@ -129,41 +232,6 @@ fn extract_discogs_genres(
         .into_iter()
         .map(|(genre, style_count)| MappedGenre { genre, style_count })
         .collect()
-}
-
-fn extract_beatport_genre(
-    beatport_val: Option<&serde_json::Value>,
-    overrides: &[(String, String)],
-) -> (Option<&'static str>, Option<String>) {
-    let raw_str = beatport_val
-        .and_then(|v| v.get("genre"))
-        .and_then(|v| v.as_str())
-        .filter(|g| !g.is_empty());
-
-    let Some(raw) = raw_str else {
-        return (None, None);
-    };
-
-    if let Some(override_genre) = apply_override(raw, overrides) {
-        if let Some(canonical) = genre::canonical_genre_name(&override_genre) {
-            return (Some(canonical), Some(raw.to_string()));
-        } else {
-            warn!(
-                from = raw,
-                to = override_genre.as_str(),
-                "Genre override target is not a canonical genre — override ignored"
-            );
-        }
-    }
-
-    let (maps_to, mapping_type) = map_genre_through_taxonomy(raw);
-    let canonical = if mapping_type != "unknown" && maps_to.is_some() {
-        maps_to.and_then(|g| genre::canonical_genre_name(&g))
-    } else {
-        None
-    };
-
-    (canonical, Some(raw.to_string()))
 }
 
 pub(crate) fn extract_audio_features(
@@ -285,4 +353,114 @@ pub(crate) fn extract_audio_features(
             .as_ref()
             .and_then(|e| e.spectral_contrast_mean.clone()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::library::FileKind;
+
+    fn entry(quality: Option<&str>, response: Option<&str>) -> EnrichmentCacheEntry {
+        EnrichmentCacheEntry {
+            provider: "discogs".into(),
+            query_artist: "artist".into(),
+            query_title: "title".into(),
+            query_album: "album".into(),
+            match_quality: quality.map(str::to_string),
+            response_json: response.map(str::to_string),
+            created_at: String::new(),
+        }
+    }
+
+    fn track(label: &str) -> Track {
+        Track {
+            id: "track-1".into(),
+            title: "Title".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            genre: String::new(),
+            bpm: 128.0,
+            key: String::new(),
+            rating: 0,
+            comments: String::new(),
+            color: String::new(),
+            color_code: 0,
+            label: label.into(),
+            remixer: String::new(),
+            year: 0,
+            length: 0,
+            file_path: "/missing/evidence.flac".into(),
+            play_count: 0,
+            bit_rate: 0,
+            sample_rate: 0,
+            file_kind: FileKind::Flac,
+            date_added: String::new(),
+            position: None,
+            played_at: None,
+        }
+    }
+
+    #[test]
+    fn discogs_interpreter_distinguishes_readiness_states() {
+        assert_eq!(
+            interpret_discogs(None, &[]).readiness,
+            DiscogsReadiness::NotSearched
+        );
+        assert_eq!(
+            interpret_discogs(Some(&entry(Some("none"), None)), &[]).readiness,
+            DiscogsReadiness::NoMatch
+        );
+        assert_eq!(
+            interpret_discogs(
+                Some(&entry(Some("exact"), Some(r#"{"styles":["Unknown"]}"#))),
+                &[],
+            )
+            .readiness,
+            DiscogsReadiness::MatchedUnmapped
+        );
+        let usable = interpret_discogs(
+            Some(&entry(
+                Some("fuzzy"),
+                Some(r#"{"styles":["Techno"],"label":"Tresor"}"#),
+            )),
+            &[],
+        );
+        assert_eq!(usable.readiness, DiscogsReadiness::UsableGenre);
+        assert_eq!(usable.match_quality, Some(DiscogsMatchQuality::Fuzzy));
+        assert_eq!(usable.mapped_genres[0].genre, "Techno");
+    }
+
+    #[test]
+    fn malformed_or_unknown_discogs_data_fails_closed() {
+        let malformed = interpret_discogs(Some(&entry(Some("exact"), Some("not-json"))), &[]);
+        assert_eq!(malformed.readiness, DiscogsReadiness::MatchedUnmapped);
+        assert!(malformed.diagnostic.is_some());
+        assert!(malformed.mapped_genres.is_empty());
+
+        let unknown = interpret_discogs(
+            Some(&entry(Some("surprise"), Some(r#"{"styles":["Techno"]}"#))),
+            &[],
+        );
+        assert_eq!(unknown.match_quality, Some(DiscogsMatchQuality::Invalid));
+        assert!(unknown.mapped_genres.is_empty());
+    }
+
+    #[test]
+    fn library_label_duplicate_of_discogs_is_correlated() {
+        let cached = entry(
+            Some("exact"),
+            Some(r#"{"styles":["Techno"],"label":"Same Label"}"#),
+        );
+        let correlated = build_track_evidence(&track("same label"), Some(&cached), None, None, &[]);
+        assert_eq!(
+            correlated.label_provenance,
+            Some(LabelProvenance::CorrelatedDiscogs)
+        );
+
+        let distinct = build_track_evidence(&track("Other Label"), Some(&cached), None, None, &[]);
+        assert_eq!(distinct.label_provenance, Some(LabelProvenance::Rekordbox));
+
+        let fallback = build_track_evidence(&track(""), Some(&cached), None, None, &[]);
+        assert_eq!(fallback.label_provenance, Some(LabelProvenance::Discogs));
+    }
 }

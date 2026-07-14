@@ -1098,7 +1098,7 @@ fn test_batch_enrichment_existence() {
     .unwrap();
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_b",
         "title_3",
         None,
@@ -1112,10 +1112,10 @@ fn test_batch_enrichment_existence() {
     assert!(discogs.contains(&("artist_a".to_string(), "title_2".to_string())));
     assert!(!discogs.contains(&("artist_b".to_string(), "title_3".to_string())));
 
-    let beatport =
-        batch_enrichment_existence(&conn, "beatport", &["artist_a", "artist_b"]).unwrap();
-    assert!(beatport.contains(&("artist_b".to_string(), "title_3".to_string())));
-    assert!(!beatport.contains(&("artist_a".to_string(), "title_1".to_string())));
+    let bandcamp =
+        batch_enrichment_existence(&conn, "bandcamp", &["artist_a", "artist_b"]).unwrap();
+    assert!(bandcamp.contains(&("artist_b".to_string(), "title_3".to_string())));
+    assert!(!bandcamp.contains(&("artist_a".to_string(), "title_1".to_string())));
 
     let empty = batch_enrichment_existence(&conn, "discogs", &[]).unwrap();
     assert!(empty.is_empty());
@@ -1224,7 +1224,7 @@ fn test_batch_enrichment_with_label() {
 
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_a",
         "title_1",
         None,
@@ -1235,7 +1235,7 @@ fn test_batch_enrichment_with_label() {
 
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_a",
         "title_2",
         None,
@@ -1246,7 +1246,7 @@ fn test_batch_enrichment_with_label() {
 
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_a",
         "title_3",
         None,
@@ -1257,7 +1257,7 @@ fn test_batch_enrichment_with_label() {
 
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_a",
         "title_4",
         None,
@@ -1268,7 +1268,7 @@ fn test_batch_enrichment_with_label() {
 
     set_enrichment(
         &conn,
-        "beatport",
+        "bandcamp",
         "artist_a",
         "title_5",
         None,
@@ -1277,12 +1277,12 @@ fn test_batch_enrichment_with_label() {
     )
     .unwrap();
 
-    let results = batch_enrichment_with_label(&conn, "beatport", &["artist_a"]).unwrap();
+    let results = batch_enrichment_with_label(&conn, "bandcamp", &["artist_a"]).unwrap();
 
     assert_eq!(results.len(), 1);
     assert!(results.contains(&("artist_a".to_string(), "title_1".to_string())));
 
-    let empty = batch_enrichment_with_label(&conn, "beatport", &[]).unwrap();
+    let empty = batch_enrichment_with_label(&conn, "bandcamp", &[]).unwrap();
     assert!(empty.is_empty());
 }
 

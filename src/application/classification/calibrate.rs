@@ -1,15 +1,20 @@
 //! Audio-profile calibration and coverage workflows.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use crate::adapters::{audio, state};
 use crate::application::analysis::identity::{
     AudioCacheIdentity, audio_cache_identities_with_current_stratum_input,
 };
 use crate::domain::{
-    classification::{AudioFeatures, profiles, taxonomy as genre},
+    classification::{
+        AudioFeatures,
+        profiles::{self, ProfileMetadata},
+        taxonomy as genre,
+    },
     library::Track,
 };
 
@@ -18,7 +23,51 @@ use super::evidence::extract_audio_features;
 #[derive(Debug)]
 pub(crate) enum CalibrationError {
     NoSamples,
+    NoUsableProfiles,
     Store(rusqlite::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrainingFingerprintRow {
+    track_id: String,
+    genre: &'static str,
+    file_size: i64,
+    file_mtime: i64,
+    stratum_input_fingerprint: String,
+}
+
+/// Stable, privacy-safe identity for the scorable verified corpus. Absolute
+/// paths, payload JSON, timestamps, and iteration order are deliberately absent.
+fn training_fingerprint(rows: &[TrainingFingerprintRow]) -> String {
+    fn hash_field(hasher: &mut Sha256, value: &[u8]) {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+
+    let mut rows = rows.to_vec();
+    rows.sort_by(|a, b| {
+        a.track_id
+            .cmp(&b.track_id)
+            .then_with(|| a.genre.cmp(b.genre))
+            .then_with(|| a.file_size.cmp(&b.file_size))
+            .then_with(|| a.file_mtime.cmp(&b.file_mtime))
+            .then_with(|| {
+                a.stratum_input_fingerprint
+                    .cmp(&b.stratum_input_fingerprint)
+            })
+    });
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, b"reklawdbox:genre-profile-training:v1");
+    hash_field(&mut hasher, audio::STRATUM_SCHEMA_VERSION.as_bytes());
+    hash_field(&mut hasher, audio::ESSENTIA_SCHEMA_VERSION.as_bytes());
+    for row in rows {
+        hash_field(&mut hasher, row.track_id.as_bytes());
+        hash_field(&mut hasher, row.genre.as_bytes());
+        hasher.update(row.file_size.to_be_bytes());
+        hasher.update(row.file_mtime.to_be_bytes());
+        hash_field(&mut hasher, row.stratum_input_fingerprint.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 pub(crate) fn calibrate_audio_profiles(
@@ -28,8 +77,11 @@ pub(crate) fn calibrate_audio_profiles(
 ) -> Result<serde_json::Value, CalibrationError> {
     // 2. Load audio features for each track
     let mut samples: Vec<(&'static str, AudioFeatures)> = Vec::new();
+    let mut fingerprint_rows = Vec::new();
+    let mut tracks_with_audio_features = 0u32;
     let mut skipped_no_genre = 0u32;
     let mut skipped_no_audio = 0u32;
+    let mut skipped_unscorable_audio = 0u32;
     let mut skipped_unknown_genre = 0u32;
     let mut eligible_tracks = Vec::new();
 
@@ -97,23 +149,73 @@ pub(crate) fn calibrate_audio_profiles(
         let essentia_cache = audio_key.and_then(|key| essentia_map.get(key));
 
         match extract_audio_features(track, stratum_cache, essentia_cache) {
-            Some(features) => samples.push((canonical, features)),
+            Some(features) => {
+                tracks_with_audio_features += 1;
+                if !profiles::has_scorable_optional_features(&features) {
+                    skipped_unscorable_audio += 1;
+                    continue;
+                }
+                let identity = audio_identity
+                    .as_ref()
+                    .expect("fresh audio cache rows require a resolved file identity");
+                fingerprint_rows.push(TrainingFingerprintRow {
+                    track_id: track.id.clone(),
+                    genre: canonical,
+                    file_size: identity.file_size,
+                    file_mtime: identity.file_mtime,
+                    stratum_input_fingerprint: identity
+                        .stratum_input_fingerprint
+                        .clone()
+                        .unwrap_or_default(),
+                });
+                samples.push((canonical, features));
+            }
             None => {
                 skipped_no_audio += 1;
             }
         }
     }
 
-    if samples.is_empty() {
+    if tracks_with_audio_features == 0 {
         return Err(CalibrationError::NoSamples);
+    }
+    if samples.is_empty() {
+        return Err(CalibrationError::NoUsableProfiles);
     }
 
     // 3. Calibrate
     let sample_refs: Vec<(&str, &AudioFeatures)> = samples.iter().map(|(g, f)| (*g, f)).collect();
-    let registry = profiles::calibrate(&sample_refs);
+    let mut registry = profiles::calibrate(&sample_refs);
+    let usable_genres: HashSet<_> = registry
+        .prototypes
+        .keys()
+        .copied()
+        .filter(|candidate| {
+            samples.iter().any(|(sample_genre, features)| {
+                sample_genre == candidate
+                    && profiles::can_score_genre(features, &registry, candidate)
+            })
+        })
+        .collect();
+    registry
+        .prototypes
+        .retain(|genre, _| usable_genres.contains(genre));
+    if registry.prototypes.is_empty() {
+        return Err(CalibrationError::NoUsableProfiles);
+    }
 
     // 4. Save to SQLite
-    state::classification::save_to_db(store_conn, &registry).map_err(CalibrationError::Store)?;
+    let metadata = ProfileMetadata {
+        classifier_profile_schema_version: profiles::PROFILE_SCHEMA_VERSION.into(),
+        stratum_schema_version: audio::STRATUM_SCHEMA_VERSION.into(),
+        essentia_schema_version: audio::ESSENTIA_SCHEMA_VERSION.into(),
+        playlist_name: playlist_name.to_string(),
+        training_fingerprint: training_fingerprint(&fingerprint_rows),
+        scorable_sample_count: samples.len() as u32,
+        calibrated_at: chrono::Utc::now().to_rfc3339(),
+    };
+    state::classification::save_to_db(store_conn, &registry, &metadata)
+        .map_err(CalibrationError::Store)?;
 
     // 5. Build summary
     let mut genre_summaries: Vec<serde_json::Value> = registry
@@ -152,11 +254,14 @@ pub(crate) fn calibrate_audio_profiles(
         "status": "calibrated",
         "playlist": playlist_name,
         "total_tracks": tracks.len(),
-        "tracks_with_features": samples.len(),
+        "tracks_with_features": tracks_with_audio_features,
+        "tracks_with_scorable_features": samples.len(),
         "skipped_no_genre": skipped_no_genre,
         "skipped_unknown_genre": skipped_unknown_genre,
         "skipped_no_audio": skipped_no_audio,
+        "skipped_unscorable_audio": skipped_unscorable_audio,
         "prototypes_built": registry.prototypes.len(),
+        "profile_metadata": metadata,
         "genres": genre_summaries,
     });
 
@@ -168,6 +273,8 @@ struct CalibrationGenreStats {
     playlist_tracks: u32,
     tracks_with_audio_features: u32,
     missing_audio_features: u32,
+    tracks_with_scorable_features: u32,
+    missing_scorable_features: u32,
     tracks_with_stratum_features: u32,
     missing_stratum_features: u32,
     tracks_with_essentia_features: u32,
@@ -179,22 +286,12 @@ pub(crate) fn calibration_coverage(
     tracks: &[Track],
     resolved_playlist_name: &str,
 ) -> Result<serde_json::Value, rusqlite::Error> {
-    let existing_registry = state::classification::load_from_db(store_conn)?;
-    let existing_profiles: HashMap<&'static str, u32> = existing_registry
-        .as_ref()
-        .map(|registry| {
-            registry
-                .prototypes
-                .values()
-                .map(|proto| (proto.genre, proto.total_n))
-                .collect()
-        })
-        .unwrap_or_default();
-
     let mut by_genre: BTreeMap<&'static str, CalibrationGenreStats> = BTreeMap::new();
     let mut skipped_no_genre = 0u32;
     let mut skipped_unknown_genre = 0u32;
     let mut eligible_tracks = Vec::new();
+    let mut scorable_samples: Vec<(&'static str, AudioFeatures)> = Vec::new();
+    let mut fingerprint_rows = Vec::new();
 
     for track in tracks {
         if track.genre.trim().is_empty() {
@@ -269,18 +366,74 @@ pub(crate) fn calibration_coverage(
             stats.missing_essentia_features += 1;
         }
 
-        if extract_audio_features(track, stratum, essentia).is_some() {
-            stats.tracks_with_audio_features += 1;
-        } else {
-            stats.missing_audio_features += 1;
+        match extract_audio_features(track, stratum, essentia) {
+            Some(features) => {
+                stats.tracks_with_audio_features += 1;
+                if profiles::has_scorable_optional_features(&features) {
+                    stats.tracks_with_scorable_features += 1;
+                    let identity = audio_identity
+                        .as_ref()
+                        .expect("fresh audio cache rows require a resolved file identity");
+                    fingerprint_rows.push(TrainingFingerprintRow {
+                        track_id: track.id.clone(),
+                        genre: canonical,
+                        file_size: identity.file_size,
+                        file_mtime: identity.file_mtime,
+                        stratum_input_fingerprint: identity
+                            .stratum_input_fingerprint
+                            .clone()
+                            .unwrap_or_default(),
+                    });
+                    scorable_samples.push((canonical, features));
+                } else {
+                    stats.missing_scorable_features += 1;
+                }
+            }
+            None => {
+                stats.missing_audio_features += 1;
+                stats.missing_scorable_features += 1;
+            }
         }
     }
+
+    let sample_refs: Vec<_> = scorable_samples
+        .iter()
+        .map(|(genre, features)| (*genre, features))
+        .collect();
+    let candidate_registry = profiles::calibrate(&sample_refs);
+    let candidate_ready: HashSet<_> = candidate_registry
+        .prototypes
+        .keys()
+        .copied()
+        .filter(|candidate| {
+            scorable_samples.iter().any(|(sample_genre, features)| {
+                sample_genre == candidate
+                    && profiles::can_score_genre(features, &candidate_registry, candidate)
+            })
+        })
+        .collect();
+    let current_training_fingerprint = training_fingerprint(&fingerprint_rows);
+    let profile_load =
+        state::classification::load_from_db(store_conn, Some(&current_training_fingerprint))?;
+    let existing_profiles: HashMap<&'static str, u32> = profile_load
+        .registry
+        .as_ref()
+        .map(|registry| {
+            registry
+                .prototypes
+                .values()
+                .map(|proto| (proto.genre, proto.total_n))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut ready_to_calibrate = 0u32;
     let mut below_min_tracks = 0u32;
     let mut stored_profiles_present = 0u32;
     let mut total_with_audio_features = 0u32;
     let mut total_missing_audio_features = 0u32;
+    let mut total_with_scorable_features = 0u32;
+    let mut total_missing_scorable_features = 0u32;
     let mut total_with_stratum_features = 0u32;
     let mut total_missing_stratum_features = 0u32;
     let mut total_with_essentia_features = 0u32;
@@ -290,11 +443,11 @@ pub(crate) fn calibration_coverage(
         .iter()
         .map(|(&genre, stats)| {
             let stored_n = existing_profiles.get(genre).copied();
-            let prototype_ready = stats.tracks_with_audio_features >= profiles::MIN_TRACKS;
+            let prototype_ready = candidate_ready.contains(genre);
             if prototype_ready && stored_n.is_none() {
                 ready_to_calibrate += 1;
             }
-            if !prototype_ready {
+            if stats.tracks_with_scorable_features < profiles::MIN_TRACKS {
                 below_min_tracks += 1;
             }
             if stored_n.is_some() {
@@ -302,6 +455,8 @@ pub(crate) fn calibration_coverage(
             }
             total_with_audio_features += stats.tracks_with_audio_features;
             total_missing_audio_features += stats.missing_audio_features;
+            total_with_scorable_features += stats.tracks_with_scorable_features;
+            total_missing_scorable_features += stats.missing_scorable_features;
             total_with_stratum_features += stats.tracks_with_stratum_features;
             total_missing_stratum_features += stats.missing_stratum_features;
             total_with_essentia_features += stats.tracks_with_essentia_features;
@@ -311,6 +466,8 @@ pub(crate) fn calibration_coverage(
                 "profile_present"
             } else if prototype_ready {
                 "ready_to_calibrate"
+            } else if stats.tracks_with_scorable_features >= profiles::MIN_TRACKS {
+                "candidate_not_scorable"
             } else {
                 "needs_more_verified_audio"
             };
@@ -320,6 +477,8 @@ pub(crate) fn calibration_coverage(
                 "playlist_tracks": stats.playlist_tracks,
                 "tracks_with_audio_features": stats.tracks_with_audio_features,
                 "missing_audio_features": stats.missing_audio_features,
+                "tracks_with_scorable_features": stats.tracks_with_scorable_features,
+                "missing_scorable_features": stats.missing_scorable_features,
                 "tracks_with_stratum_features": stats.tracks_with_stratum_features,
                 "missing_stratum_features": stats.missing_stratum_features,
                 "tracks_with_essentia_features": stats.tracks_with_essentia_features,
@@ -349,6 +508,8 @@ pub(crate) fn calibration_coverage(
         "tracks_with_canonical_genre": by_genre.values().map(|stats| stats.playlist_tracks).sum::<u32>(),
         "tracks_with_audio_features": total_with_audio_features,
         "missing_audio_features": total_missing_audio_features,
+        "tracks_with_scorable_features": total_with_scorable_features,
+        "missing_scorable_features": total_missing_scorable_features,
         "tracks_with_stratum_features": total_with_stratum_features,
         "missing_stratum_features": total_missing_stratum_features,
         "tracks_with_essentia_features": total_with_essentia_features,
@@ -361,8 +522,50 @@ pub(crate) fn calibration_coverage(
         "genres_below_min_tracks": below_min_tracks,
         "genres_with_stored_profiles": stored_profiles_present,
         "stored_profiles_not_in_playlist": stored_profiles_not_in_playlist,
+        "profile_state": {
+            "status": profile_load.status,
+            "reason": profile_load.reason,
+            "metadata": profile_load.metadata,
+            "current_training_fingerprint": current_training_fingerprint,
+        },
         "genres": genres,
     });
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(track_id: &str, genre: &'static str) -> TrainingFingerprintRow {
+        TrainingFingerprintRow {
+            track_id: track_id.into(),
+            genre,
+            file_size: 100,
+            file_mtime: 200,
+            stratum_input_fingerprint: "grid:v1:test".into(),
+        }
+    }
+
+    #[test]
+    fn training_fingerprint_is_order_stable_and_privacy_safe() {
+        let a = row("track-a", "Techno");
+        let b = row("track-b", "House");
+        let first = training_fingerprint(&[a.clone(), b.clone()]);
+        let reversed = training_fingerprint(&[b, a]);
+        assert_eq!(first, reversed);
+        assert!(first.starts_with("sha256:"));
+        assert!(!first.contains('/'));
+    }
+
+    #[test]
+    fn training_fingerprint_changes_with_training_identity() {
+        let baseline = training_fingerprint(&[row("track-a", "Techno")]);
+        assert_ne!(baseline, training_fingerprint(&[row("track-a", "House")]));
+        assert_ne!(baseline, training_fingerprint(&[row("track-b", "Techno")]));
+        let mut changed_audio = row("track-a", "Techno");
+        changed_audio.file_mtime += 1;
+        assert_ne!(baseline, training_fingerprint(&[changed_audio]));
+    }
 }

@@ -5,28 +5,22 @@ use crate::adapters::providers::musicbrainz;
 use crate::adapters::rekordbox as db;
 use crate::adapters::state as store;
 use crate::application::analysis::batch::CacheWriteRequest;
+#[cfg(test)]
+use crate::application::enrichment::hydrate::acknowledge_mcp_enrichment_cache_write;
 use crate::application::enrichment::hydrate::{
     EnrichmentCachePolicy, EnrichmentCacheWrite, EnrichmentCacheWriterReport,
     EnrichmentWorkerConfig, HydrationFailure, HydrationFailureKind, HydrationTrackIdentity,
     enrichment_completion_flags, run_enrichment_cache_writer, run_enrichment_workers,
-};
-#[cfg(test)]
-use crate::application::enrichment::hydrate::{
-    acknowledge_mcp_enrichment_cache_write, run_beatport_stage,
 };
 use crate::application::enrichment::lookup::{
     self as enrichment_lookup, LookupIdentity, LookupPolicy, LookupProvider, PersistLookupError,
 };
 use crate::application::enrichment::model::CacheLookupOutcome;
 use crate::mcp::{
-    BatchPage, BatchProgress, EnrichTracksParams, LookupBandcampParams, LookupBeatportParams,
-    LookupDiscogsParams, LookupMusicBrainzParams, ReklawdboxServer, auth_remediation_message,
-    cache_error, db_error, lookup_discogs_remote, mcp_internal_error, ok_json, ok_structured_json,
-    resolve_pending_tracks,
+    BatchPage, BatchProgress, EnrichTracksParams, LookupBandcampParams, LookupDiscogsParams,
+    LookupMusicBrainzParams, ReklawdboxServer, auth_remediation_message, cache_error, db_error,
+    lookup_discogs_remote, mcp_internal_error, ok_json, ok_structured_json, resolve_pending_tracks,
 };
-
-#[cfg(test)]
-use super::core::take_test_beatport_lookup_override;
 
 fn cached_lookup(
     server: &ReklawdboxServer,
@@ -54,27 +48,15 @@ fn persist_lookup_result<T>(
     })
 }
 
-async fn lookup_beatport_remote(
-    server: &ReklawdboxServer,
-    artist: &str,
-    title: &str,
-) -> Result<Option<crate::adapters::providers::beatport::BeatportResult>, String> {
-    #[cfg(test)]
-    if let Some(result) = take_test_beatport_lookup_override(artist, title) {
-        return result;
-    }
-
-    let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
-    enrichment_lookup::dispatch_beatport(&server.context.enrichment.http, &identity)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 pub(in crate::mcp) async fn lookup_bandcamp_remote(
     server: &ReklawdboxServer,
     artist: &str,
     title: &str,
 ) -> Result<Option<crate::adapters::providers::bandcamp::BandcampResult>, String> {
+    #[cfg(test)]
+    if let Some(result) = super::core::take_test_bandcamp_lookup_override(artist, title) {
+        return result;
+    }
     let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
     enrichment_lookup::dispatch_bandcamp(&server.context.enrichment.http, &identity, None)
         .await
@@ -149,39 +131,6 @@ pub(in crate::mcp) async fn handle_lookup_discogs(
     })?;
     let result = persist_lookup_result(server, |conn| {
         enrichment_lookup::persist_discogs_result(conn, &identity, result)
-    })?;
-
-    ok_json(&result.into_output())
-}
-
-pub(in crate::mcp) async fn handle_lookup_beatport(
-    server: &ReklawdboxServer,
-    params: LookupBeatportParams,
-) -> Result<CallToolResult, McpError> {
-    let force_refresh = params.force_refresh.unwrap_or(false);
-
-    let (artist, title, _) = resolve_lookup_identity(
-        server,
-        params.track_id.as_deref(),
-        params.artist,
-        params.title,
-        None,
-    )?;
-
-    let identity = LookupIdentity::new(artist, title, None);
-    let policy = LookupPolicy {
-        force_refresh,
-        cache_read_enabled: true,
-    };
-    if let Some(cached) = cached_lookup(server, LookupProvider::Beatport, &identity, policy)? {
-        return ok_json(&cached.into_output());
-    }
-
-    let result = lookup_beatport_remote(server, &identity.artist, &identity.title)
-        .await
-        .map_err(|error| mcp_internal_error(format!("Beatport error: {error}")))?;
-    let result = persist_lookup_result(server, |conn| {
-        enrichment_lookup::persist_beatport_result(conn, &identity, result)
     })?;
 
     ok_json(&result.into_output())
@@ -264,6 +213,10 @@ pub(in crate::mcp) async fn lookup_musicbrainz_remote(
     artist: &str,
     title: &str,
 ) -> Result<Option<musicbrainz::MusicBrainzResult>, String> {
+    #[cfg(test)]
+    if let Some(result) = super::core::take_test_musicbrainz_lookup_override(artist, title) {
+        return result;
+    }
     let identity = LookupIdentity::new(artist.to_string(), title.to_string(), None);
     enrichment_lookup::dispatch_musicbrainz(&server.context.enrichment.http, &identity)
         .await
@@ -435,44 +388,33 @@ pub(in crate::mcp) async fn handle_enrich_tracks(
     let auth_fail_tx = std::sync::Arc::new(auth_fail_tx);
     let auth_fail_rx = std::sync::Arc::new(auth_fail_rx);
 
-    let worker_report =
-        run_enrichment_workers(
-            tracks.iter().map(hydration_identity).collect(),
-            EnrichmentWorkerConfig {
-                providers: providers.clone(),
-                policy: EnrichmentCachePolicy {
-                    skip_cached,
-                    force_refresh,
-                },
-                store_path: store_path.clone(),
-                concurrency,
+    let worker_report = run_enrichment_workers(
+        tracks.iter().map(hydration_identity).collect(),
+        EnrichmentWorkerConfig {
+            providers: providers.clone(),
+            policy: EnrichmentCachePolicy {
+                skip_cached,
+                force_refresh,
             },
-            server.context.enrichment.http.clone(),
-            cache_tx.clone(),
-            auth_fail_rx,
-            auth_fail_tx,
-            {
+            store_path: store_path.clone(),
+            concurrency,
+        },
+        server.context.enrichment.http.clone(),
+        cache_tx.clone(),
+        auth_fail_rx,
+        auth_fail_tx,
+        {
+            let server = server.clone();
+            move |identity: HydrationTrackIdentity| {
                 let server = server.clone();
-                move |identity: HydrationTrackIdentity| {
-                    let server = server.clone();
-                    async move {
-                        let album = (!identity.album.is_empty()).then_some(identity.album.as_str());
-                        lookup_discogs_remote(&server, &identity.artist, &identity.title, album)
-                            .await
-                    }
+                async move {
+                    let album = (!identity.album.is_empty()).then_some(identity.album.as_str());
+                    lookup_discogs_remote(&server, &identity.artist, &identity.title, album).await
                 }
-            },
-            {
-                let server = server.clone();
-                move |identity: HydrationTrackIdentity| {
-                    let server = server.clone();
-                    async move {
-                        lookup_beatport_remote(&server, &identity.artist, &identity.title).await
-                    }
-                }
-            },
-        )
-        .await;
+            }
+        },
+    )
+    .await;
 
     let mut progress = BatchProgress::new();
     for (_, track_result) in worker_report.completed {
@@ -613,14 +555,14 @@ mod pending_page_tests {
         ];
         let album_a = crate::domain::metadata::normalize_for_matching("Release A");
         cache(&conn, "discogs", Some(&album_a), "none");
-        cache(&conn, "beatport", None, "exact");
+        cache(&conn, "bandcamp", None, "exact");
 
         let complete = completion(
             &conn,
             &tracks,
             &[
                 crate::application::enrichment::model::EnrichmentProvider::Discogs,
-                crate::application::enrichment::model::EnrichmentProvider::Beatport,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
         )
         .expect("completion lookup should succeed");
@@ -654,14 +596,13 @@ mod pending_page_tests {
         let tracks = vec![track("error", "Error Album")];
         let album = crate::domain::metadata::normalize_for_matching("Error Album");
         cache(&conn, "discogs", Some(&album), "error");
-        cache(&conn, "beatport", None, "exact");
+        cache(&conn, "bandcamp", None, "exact");
 
         let complete = completion(
             &conn,
             &tracks,
             &[
                 crate::application::enrichment::model::EnrichmentProvider::Discogs,
-                crate::application::enrichment::model::EnrichmentProvider::Beatport,
                 crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
         )
@@ -687,33 +628,6 @@ mod pending_page_tests {
         assert_eq!(selection.selected[0].id, "first");
         assert_eq!(selection.page.next_offset, Some(1));
         assert!(selection.page.has_more);
-    }
-
-    #[tokio::test]
-    async fn enrich_tracks_pending_page_writer_failure_retains_retry_identity() {
-        let (cache_tx, cache_rx) = tokio::sync::mpsc::channel(1);
-        drop(cache_rx);
-        let outcome = run_beatport_stage(
-            true,
-            &HydrationTrackIdentity::new(
-                "retry-track".to_string(),
-                "Retry Artist".to_string(),
-                "Retry Title".to_string(),
-                String::new(),
-            ),
-            std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
-            &cache_tx,
-            async {
-                Ok::<Option<crate::adapters::providers::beatport::BeatportResult>, String>(None)
-            },
-        )
-        .await;
-
-        assert_eq!(outcome.failures.len(), 1);
-        let failure = hydration_failure_json(outcome.failures.into_iter().next().unwrap());
-        assert_eq!(failure["track_id"], "retry-track");
-        assert_eq!(failure["provider"], "beatport");
-        assert_eq!(failure["stage"], "cache_write");
     }
 
     #[test]
@@ -791,17 +705,15 @@ mod pending_page_tests {
             "Retry Title",
             &[
                 crate::application::enrichment::model::EnrichmentProvider::Discogs,
-                crate::application::enrichment::model::EnrichmentProvider::Beatport,
                 crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ],
             "cache_writer_join",
             "sentinel join failure",
         );
-        assert_eq!(failures.len(), 3);
+        assert_eq!(failures.len(), 2);
         assert_eq!(failures[0]["track_id"], "retry-track");
         assert_eq!(failures[0]["provider"], "discogs");
-        assert_eq!(failures[1]["provider"], "beatport");
-        assert_eq!(failures[2]["provider"], "bandcamp");
+        assert_eq!(failures[1]["provider"], "bandcamp");
         assert!(
             failures
                 .iter()
@@ -825,7 +737,7 @@ mod cache_write_tests {
 
     fn test_write(title: &str) -> EnrichCacheWrite {
         EnrichCacheWrite {
-            provider: crate::application::enrichment::model::EnrichmentProvider::Beatport,
+            provider: crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             norm_artist: "test artist".to_string(),
             norm_title: title.to_string(),
             norm_album: None,

@@ -85,7 +85,6 @@ instead of resetting the whole store.
 
 | Variable                                 | Description                                           | Default |
 | ---------------------------------------- | ----------------------------------------------------- | ------- |
-| `REKLAWDBOX_BEATPORT_MIN_INTERVAL_MS`    | Minimum interval between Beatport requests (ms)       | `1000`  |
 | `REKLAWDBOX_BANDCAMP_MIN_INTERVAL_MS`    | Minimum interval between Bandcamp requests (ms)       | `1500`  |
 | `REKLAWDBOX_MUSICBRAINZ_MIN_INTERVAL_MS` | Minimum interval between MusicBrainz requests (ms)    | `1100`  |
 | `REKLAWDBOX_DISCOGS_MIN_INTERVAL_MS`     | Minimum interval between Discogs broker requests (ms) | `1100`  |

@@ -28,8 +28,8 @@ I treated sources differently depending on what kind of claim they support:
 
 Important meta-point: Beatport itself warns that current genre names reflect how
 DJs and scenes categorize music now, and may not match historical definitions.
-This matters for `Beatport` votes in the classifier: Beatport labels are useful
-track-level evidence, but not immutable musicological truth. See
+This makes Beatport useful as genre-taxonomy research, but not immutable
+musicological truth or a required runtime evidence source. See
 [Beatport's house history](https://www.beatportal.com/articles/29020-beatports-definitive-history-of-house-music)
 and the current
 [Beatport delivery genre list](https://greenroomsupport.beatport.com/hc/en-us/articles/41043520429076-Beatport-Genres-Including-NEW-Open-Format-Genres).
@@ -216,7 +216,7 @@ Classifier implications:
 
 - Do not collapse Tech House into either House or Techno by family alone.
 - Useful positive signals: house-range BPM, four-on-floor, raw/short drum sound,
-  repetitive groove, limited harmonic density, some house/label/Beatport support.
+  repetitive groove, limited harmonic density, and some house or label support.
 - Sidechain/pumping may help but should be validated; it is less directly
   supported by sources than kick/drum/groove claims.
 
@@ -490,8 +490,9 @@ Classifier implications:
 
 - Kick-pattern detector should be the primary audio discriminator: Electro
   should be broken/syncopated/808-funk rather than four-on-floor Techno.
-- If provider says Electro but kick pattern is four-on-floor and Beatport says
-  Electro House/Tech House/etc, consider whether taxonomy mapping is wrong.
+- If metadata says Electro but the kick pattern is four-on-floor and other
+  evidence points to Electro House or Tech House, consider whether the taxonomy
+  mapping is wrong.
 
 Sources:
 [LSA Electro Funk and Electro House distinction](https://www.londonsoundacademy.com/blog/list-of-electronic-dance-music-genres).

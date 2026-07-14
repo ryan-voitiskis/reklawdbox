@@ -7,6 +7,8 @@ use crate::adapters::state as store;
 use crate::application::analysis::identity::{
     AudioCacheIdentity, audio_cache_identities_with_current_stratum_input, resolved_audio_cache_key,
 };
+use crate::application::classification::evidence::interpret_discogs;
+use crate::domain::classification::{DiscogsMatchQuality, DiscogsReadiness};
 use crate::mcp::enrichment::{
     ResolveTracksOpts, describe_resolve_scope, resolve_tracks, to_percent,
 };
@@ -54,8 +56,11 @@ pub(in crate::mcp) fn handle_cache_coverage(
     let mut essentia_cached = 0usize;
     let mut discogs_cached = 0usize;
     let mut discogs_has_result = 0usize;
-    let mut beatport_cached = 0usize;
-    let mut beatport_has_result = 0usize;
+    let mut discogs_usable_genre = 0usize;
+    let mut discogs_matched_unmapped = 0usize;
+    let mut discogs_diagnostics = 0usize;
+    let mut discogs_not_searched = 0usize;
+    let mut discogs_searched_no_match = 0usize;
     let mut no_audio_analysis = 0usize;
     let mut no_enrichment = 0usize;
     let mut no_data_at_all = 0usize;
@@ -73,35 +78,35 @@ pub(in crate::mcp) fn handle_cache_coverage(
             .map(|(t, audio_identity)| {
                 let norm_artist = crate::domain::metadata::normalize_for_matching(&t.artist);
                 let norm_title = crate::domain::metadata::normalize_for_matching(&t.title);
+                let norm_album = crate::domain::metadata::normalize_for_matching(&t.album);
                 let audio_key = audio_identity
                     .as_ref()
                     .map(|identity| identity.cache_key.clone())
                     .unwrap_or_else(|| resolved_audio_cache_key(&t.file_path));
-                (norm_artist, norm_title, audio_key, audio_identity)
+                (
+                    norm_artist,
+                    norm_title,
+                    norm_album,
+                    audio_key,
+                    audio_identity,
+                )
             })
             .collect();
 
-        let unique_artists: Vec<&str> = {
-            let mut seen = std::collections::HashSet::new();
-            track_keys
-                .iter()
-                .filter_map(|(a, _, _, _)| {
-                    if seen.insert(a.as_str()) {
-                        Some(a.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
+        let discogs_keys: Vec<_> = track_keys
+            .iter()
+            .map(|(artist, title, album, _, _)| {
+                ("discogs", artist.as_str(), title.as_str(), album.as_str())
+            })
+            .collect();
 
         let stratum_identities: Vec<_> = track_keys
             .iter()
-            .filter_map(|(_, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
+            .filter_map(|(_, _, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
             .collect();
         let essentia_identities: Vec<_> = track_keys
             .iter()
-            .filter_map(|(_, _, _, identity)| {
+            .filter_map(|(_, _, _, _, identity)| {
                 identity
                     .as_ref()
                     .map(AudioCacheIdentity::as_essentia_store_identity)
@@ -110,19 +115,8 @@ pub(in crate::mcp) fn handle_cache_coverage(
 
         let store = server.cache_store_conn()?;
 
-        let discogs_set = store::batch_enrichment_existence(&store, "discogs", &unique_artists)
-            .map_err(cache_error)?;
-        let beatport_set = store::batch_enrichment_existence(&store, "beatport", &unique_artists)
-            .map_err(cache_error)?;
-        let discogs_result_set =
-            store::batch_enrichment_with_results(&store, "discogs", &unique_artists)
-                .map_err(cache_error)?;
-        let beatport_result_set =
-            store::batch_enrichment_with_results(&store, "beatport", &unique_artists)
-                .map_err(cache_error)?;
-        let discogs_label_set =
-            store::batch_enrichment_with_label(&store, "discogs", &unique_artists)
-                .map_err(cache_error)?;
+        let discogs_map =
+            store::batch_get_enrichment(&store, &discogs_keys).map_err(cache_error)?;
         let stratum_set = store::batch_fresh_audio_analysis_existence(
             &store,
             &stratum_identities,
@@ -138,33 +132,25 @@ pub(in crate::mcp) fn handle_cache_coverage(
         )
         .map_err(cache_error)?;
 
-        // Build borrowed-key sets to avoid per-track clones during counting.
-        let discogs_ref: std::collections::HashSet<(&str, &str)> = discogs_set
-            .iter()
-            .map(|(a, t)| (a.as_str(), t.as_str()))
-            .collect();
-        let beatport_ref: std::collections::HashSet<(&str, &str)> = beatport_set
-            .iter()
-            .map(|(a, t)| (a.as_str(), t.as_str()))
-            .collect();
-        let discogs_result_ref: std::collections::HashSet<(&str, &str)> = discogs_result_set
-            .iter()
-            .map(|(a, t)| (a.as_str(), t.as_str()))
-            .collect();
-        let beatport_result_ref: std::collections::HashSet<(&str, &str)> = beatport_result_set
-            .iter()
-            .map(|(a, t)| (a.as_str(), t.as_str()))
-            .collect();
-        let discogs_label_ref: std::collections::HashSet<(&str, &str)> = discogs_label_set
-            .iter()
-            .map(|(a, t)| (a.as_str(), t.as_str()))
-            .collect();
-        for (idx, (norm_artist, norm_title, audio_key, _)) in track_keys.iter().enumerate() {
-            let key = (norm_artist.as_str(), norm_title.as_str());
-            let has_discogs = discogs_ref.contains(&key);
-            let has_beatport = beatport_ref.contains(&key);
-            let has_discogs_result = discogs_result_ref.contains(&key);
-            let has_beatport_result = beatport_result_ref.contains(&key);
+        for (idx, (norm_artist, norm_title, norm_album, audio_key, _)) in
+            track_keys.iter().enumerate()
+        {
+            let key = (
+                "discogs".to_string(),
+                norm_artist.clone(),
+                norm_title.clone(),
+                norm_album.clone(),
+            );
+            let discogs = interpret_discogs(discogs_map.get(&key), &[]);
+            let has_discogs = discogs.readiness != DiscogsReadiness::NotSearched;
+            let has_discogs_result = matches!(
+                discogs.match_quality,
+                Some(DiscogsMatchQuality::Exact | DiscogsMatchQuality::Fuzzy)
+            );
+            let has_usable_discogs = discogs.readiness == DiscogsReadiness::UsableGenre;
+            if discogs.diagnostic.is_some() {
+                discogs_diagnostics += 1;
+            }
             let has_stratum = stratum_set.contains(audio_key);
             let has_essentia = essentia_set.contains(audio_key);
 
@@ -180,19 +166,19 @@ pub(in crate::mcp) fn handle_cache_coverage(
             if has_discogs_result {
                 discogs_has_result += 1;
             }
-            if has_beatport {
-                beatport_cached += 1;
-            }
-            if has_beatport_result {
-                beatport_has_result += 1;
+            match discogs.readiness {
+                DiscogsReadiness::NotSearched => discogs_not_searched += 1,
+                DiscogsReadiness::NoMatch => discogs_searched_no_match += 1,
+                DiscogsReadiness::MatchedUnmapped => discogs_matched_unmapped += 1,
+                DiscogsReadiness::UsableGenre => discogs_usable_genre += 1,
             }
             if !has_stratum {
                 no_audio_analysis += 1;
             }
-            if !has_discogs_result && !has_beatport_result {
+            if !has_usable_discogs {
                 no_enrichment += 1;
             }
-            if !has_stratum && !has_essentia && !has_discogs_result && !has_beatport_result {
+            if !has_stratum && !has_essentia && !has_usable_discogs {
                 no_data_at_all += 1;
             }
 
@@ -201,7 +187,7 @@ pub(in crate::mcp) fn handle_cache_coverage(
                 has_label += 1;
             } else {
                 no_label += 1;
-                if discogs_label_ref.contains(&key) {
+                if discogs.label.is_some() {
                     enrichment_has_label += 1;
                 }
             }
@@ -229,12 +215,10 @@ pub(in crate::mcp) fn handle_cache_coverage(
                 "searched_percent": to_percent(discogs_cached, matched_tracks),
                 "has_result": discogs_has_result,
                 "has_result_percent": to_percent(discogs_has_result, matched_tracks),
-            },
-            "beatport": {
-                "searched": beatport_cached,
-                "searched_percent": to_percent(beatport_cached, matched_tracks),
-                "has_result": beatport_has_result,
-                "has_result_percent": to_percent(beatport_has_result, matched_tracks),
+                "usable_genre": discogs_usable_genre,
+                "usable_genre_percent": to_percent(discogs_usable_genre, matched_tracks),
+                "matched_unmapped": discogs_matched_unmapped,
+                "diagnostics": discogs_diagnostics,
             },
         },
         "label": {
@@ -247,6 +231,11 @@ pub(in crate::mcp) fn handle_cache_coverage(
             "no_audio_analysis": no_audio_analysis,
             "no_enrichment": no_enrichment,
             "no_data_at_all": no_data_at_all,
+            "discogs": {
+                "not_searched": discogs_not_searched,
+                "searched_no_match": discogs_searched_no_match,
+                "matched_unmapped": discogs_matched_unmapped,
+            },
         },
     });
 

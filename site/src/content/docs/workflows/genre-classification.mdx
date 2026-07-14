@@ -1,6 +1,6 @@
 ---
 title: Genre Classification
-description: Classify genres using Discogs, Beatport, and audio analysis evidence.
+description: Classify genres using Discogs, labels, and audio analysis evidence.
 sidebar:
   order: 2
 ---
@@ -25,9 +25,9 @@ Classify genres for my ungenred tracks.
 1. **Measure readiness.** Check whether enough evidence is ready for ungenred
    tracks. A searched no-match counts as complete, and optional evidence may
    remain unavailable.
-2. **Prepare evidence.** Fill core Discogs, Beatport, and Stratum gaps where
+2. **Prepare evidence.** Fill core Discogs and Stratum gaps where
    practical. Essentia adds richer audio evidence but is not a hard gate.
-3. **Classify by confidence.** Compare Discogs styles, Beatport genres, label
+3. **Classify by confidence.** Compare Discogs styles, label
    associations, BPM, and audio features against the DJ-oriented taxonomy.
 4. **Review and stage.** Apply the chosen confidence policy, inspect low or
    insufficient results individually, preview the aggregate, and export only
@@ -35,15 +35,16 @@ Classify genres for my ungenred tracks.
 
 ## Decisions and approval checkpoints
 
-- **High** — multiple sources agree and BPM is plausible
+- **High** — plausible agreement from at least two independent source groups;
+  Discogs styles and its fallback label count once
 - **Medium** — partial agreement or single strong source
 - **Low** — weak or ambiguous evidence
 - **Insufficient** — conflicting data, needs a manual call
 
-Choose which tiers, if any, may be staged in bulk. Low and insufficient tracks
-need individual judgment. The built-in taxonomy has roughly 50 DJ-oriented
-genres and is a starting point, not a closed list; add a genre only when the
-evidence and your collection vocabulary support it.
+Choose which tiers, if any, may be staged in bulk. Low and insufficient tracks,
+including confirmations, need individual judgment. The built-in taxonomy has roughly 50 DJ-oriented genres
+and is a starting point, not a closed list; add a genre only when the evidence
+and your collection vocabulary support it.
 
 ## What changes and how to recover
 

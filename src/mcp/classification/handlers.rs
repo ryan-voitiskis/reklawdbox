@@ -82,6 +82,7 @@ pub(in crate::mcp) fn handle_classify_tracks(
 
     let mut summary = serde_json::json!({
         "total": results.len(),
+        "review_required": results.iter().filter(|result| result.review_required()).count(),
         "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
         "by_action": { "suggest": suggest, "conflict": conflict, "confirm": confirm, "manual": manual },
     });
@@ -95,7 +96,10 @@ pub(in crate::mcp) fn handle_classify_tracks(
         let track_changes: Vec<TrackChange> = results
             .iter()
             .filter(|r| {
-                r.genre.is_some() && levels.iter().any(|l| l.matches_confidence(&r.confidence))
+                r.genre.is_some()
+                    && !matches!(r.action, ClassificationAction::Confirm)
+                    && !matches!(r.confidence, ClassificationConfidence::Insufficient)
+                    && levels.iter().any(|l| l.matches_confidence(&r.confidence))
             })
             .map(|r| TrackChange {
                 track_id: r.track_id.clone(),
@@ -117,19 +121,18 @@ pub(in crate::mcp) fn handle_classify_tracks(
         ClassifyFormat::Full => serde_json::json!({
             "summary": summary,
             "results": results.iter()
-                .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
+                .filter(|r| !matches!(r.action, ClassificationAction::Confirm) || r.review_required())
                 .collect::<Vec<_>>(),
             "needs_review": results.iter()
-                .filter(|r| !matches!(r.action, ClassificationAction::Confirm)
-                    && matches!(r.confidence,
-                        ClassificationConfidence::Low | ClassificationConfidence::Insufficient
-                    ))
+                .filter(|r| r.review_required())
                 .collect::<Vec<_>>(),
         }),
         ClassifyFormat::Compact => {
             let compact: Vec<_> = results
                 .iter()
-                .filter(|r| !matches!(r.action, ClassificationAction::Confirm))
+                .filter(|r| {
+                    !matches!(r.action, ClassificationAction::Confirm) || r.review_required()
+                })
                 .map(crate::domain::classification::ClassificationResult::to_compact)
                 .collect();
             serde_json::json!({
@@ -205,7 +208,11 @@ pub(in crate::mcp) fn handle_audit_genres(
 
     let visible: Vec<&ClassificationResult> = results
         .iter()
-        .filter(|r| include_confirmed || !matches!(r.action, ClassificationAction::Confirm))
+        .filter(|r| {
+            include_confirmed
+                || !matches!(r.action, ClassificationAction::Confirm)
+                || r.review_required()
+        })
         .collect();
 
     let confirmed_count = results
@@ -224,6 +231,7 @@ pub(in crate::mcp) fn handle_audit_genres(
         "confirmed": confirmed_count,
         "conflicts": conflict_count,
         "manual_review": results.iter().filter(|r| matches!(r.action, ClassificationAction::Manual)).count(),
+        "review_required": results.iter().filter(|r| r.review_required()).count(),
         "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
     });
     if cache_errors > 0 {
@@ -273,7 +281,7 @@ pub(in crate::mcp) fn build_genre_distribution(
     let mut genre_map: HashMap<&str, HashMap<&str, Vec<&str>>> = HashMap::new();
 
     for r in results {
-        if matches!(r.action, ClassificationAction::Confirm) {
+        if matches!(r.action, ClassificationAction::Confirm) && !r.review_required() {
             continue;
         }
         let Some(genre) = r.genre else {
@@ -353,9 +361,6 @@ fn build_dispatch_groups(
     let mut tracks_without_suggestion: usize = 0;
 
     for r in results {
-        if matches!(r.action, ClassificationAction::Confirm) {
-            continue;
-        }
         let conf = match r.confidence {
             ClassificationConfidence::Low => "low",
             ClassificationConfidence::Insufficient => "insufficient",
@@ -449,6 +454,12 @@ pub(in crate::mcp) fn handle_calibrate_audio_profiles(
             Err(classification::CalibrationError::NoSamples) => {
                 return Err(McpError::internal_error(
                     "No tracks with both genre tags and audio features found.",
+                    None,
+                ));
+            }
+            Err(classification::CalibrationError::NoUsableProfiles) => {
+                return Err(McpError::internal_error(
+                    "Audio rows were found, but none could build a scorable genre profile. Run full Stratum/Essentia analysis for the verified playlist.",
                     None,
                 ));
             }

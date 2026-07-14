@@ -1,9 +1,9 @@
 use crate::adapters::providers::discogs;
 #[cfg(test)]
+use crate::adapters::providers::{bandcamp, musicbrainz};
+#[cfg(test)]
 pub(in crate::mcp) use crate::application::enrichment::lookup::lookup_output_with_cache_metadata;
 
-#[cfg(test)]
-use crate::adapters::providers::beatport;
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
@@ -13,23 +13,11 @@ use std::sync::{Mutex, OnceLock};
 pub(in crate::mcp) type DiscogsLookupOverrideResult =
     Result<Option<discogs::DiscogsResult>, discogs::LookupError>;
 #[cfg(test)]
-pub(in crate::mcp) type BeatportLookupOverrideResult =
-    Result<Option<beatport::BeatportResult>, String>;
-
-#[cfg(test)]
 type DiscogsLookupOverrideKey = (String, String, Option<String>);
-#[cfg(test)]
-type BeatportLookupOverrideKey = (String, String);
-
 #[cfg(test)]
 static TEST_DISCOGS_LOOKUP_OVERRIDES: OnceLock<
     Mutex<HashMap<DiscogsLookupOverrideKey, DiscogsLookupOverrideResult>>,
 > = OnceLock::new();
-#[cfg(test)]
-static TEST_BEATPORT_LOOKUP_OVERRIDES: OnceLock<
-    Mutex<HashMap<BeatportLookupOverrideKey, BeatportLookupOverrideResult>>,
-> = OnceLock::new();
-
 #[cfg(test)]
 pub(in crate::mcp) fn set_test_discogs_lookup_override(
     artist: &str,
@@ -65,23 +53,63 @@ pub(in crate::mcp) fn take_test_discogs_lookup_override(
 }
 
 #[cfg(test)]
-pub(in crate::mcp) fn set_test_beatport_lookup_override(
+type ProviderLookupOverrideKey = (String, String);
+#[cfg(test)]
+pub(in crate::mcp) type BandcampLookupOverrideResult =
+    Result<Option<bandcamp::BandcampResult>, String>;
+#[cfg(test)]
+pub(in crate::mcp) type MusicBrainzLookupOverrideResult =
+    Result<Option<musicbrainz::MusicBrainzResult>, String>;
+#[cfg(test)]
+static TEST_BANDCAMP_LOOKUP_OVERRIDES: OnceLock<
+    Mutex<HashMap<ProviderLookupOverrideKey, BandcampLookupOverrideResult>>,
+> = OnceLock::new();
+#[cfg(test)]
+static TEST_MUSICBRAINZ_LOOKUP_OVERRIDES: OnceLock<
+    Mutex<HashMap<ProviderLookupOverrideKey, MusicBrainzLookupOverrideResult>>,
+> = OnceLock::new();
+
+#[cfg(test)]
+pub(in crate::mcp) fn set_test_bandcamp_lookup_override(
     artist: &str,
     title: &str,
-    result: BeatportLookupOverrideResult,
+    result: BandcampLookupOverrideResult,
 ) {
-    let map = TEST_BEATPORT_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    let map = TEST_BANDCAMP_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut guard) = map.lock() {
         guard.insert((artist.to_string(), title.to_string()), result);
     }
 }
 
 #[cfg(test)]
-pub(in crate::mcp) fn take_test_beatport_lookup_override(
+pub(in crate::mcp) fn take_test_bandcamp_lookup_override(
     artist: &str,
     title: &str,
-) -> Option<BeatportLookupOverrideResult> {
-    let map = TEST_BEATPORT_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+) -> Option<BandcampLookupOverrideResult> {
+    let map = TEST_BANDCAMP_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock()
+        .ok()?
+        .remove(&(artist.to_string(), title.to_string()))
+}
+
+#[cfg(test)]
+pub(in crate::mcp) fn set_test_musicbrainz_lookup_override(
+    artist: &str,
+    title: &str,
+    result: MusicBrainzLookupOverrideResult,
+) {
+    let map = TEST_MUSICBRAINZ_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        guard.insert((artist.to_string(), title.to_string()), result);
+    }
+}
+
+#[cfg(test)]
+pub(in crate::mcp) fn take_test_musicbrainz_lookup_override(
+    artist: &str,
+    title: &str,
+) -> Option<MusicBrainzLookupOverrideResult> {
+    let map = TEST_MUSICBRAINZ_LOOKUP_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
     map.lock()
         .ok()?
         .remove(&(artist.to_string(), title.to_string()))

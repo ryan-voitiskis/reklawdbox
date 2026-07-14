@@ -27,10 +27,10 @@ use super::classification::{
 };
 use super::context::ServerContext;
 use super::enrichment::{
-    EnrichTracksOutput, EnrichTracksParams, LookupBandcampParams, LookupBeatportParams,
-    LookupDiscogsParams, LookupMusicBrainzParams, ResolveTrackDataParams, ResolveTracksDataParams,
-    handle_enrich_tracks, handle_lookup_bandcamp, handle_lookup_beatport, handle_lookup_discogs,
-    handle_lookup_musicbrainz, handle_resolve_track_data, handle_resolve_tracks_data,
+    EnrichTracksOutput, EnrichTracksParams, LookupBandcampParams, LookupDiscogsParams,
+    LookupMusicBrainzParams, ResolveTrackDataParams, ResolveTracksDataParams, handle_enrich_tracks,
+    handle_lookup_bandcamp, handle_lookup_discogs, handle_lookup_musicbrainz,
+    handle_resolve_track_data, handle_resolve_tracks_data,
 };
 use super::error::mcp_internal_error;
 use super::files::{
@@ -330,7 +330,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels; pages conflicts with conflict_offset and conflict_page. Set auto_enrich=true to fetch Bandcamp data before backfilling; use dry_run=true and auto_enrich=false for later conflict pages. Use preview_changes then write_xml to export.",
+        description = "Auto-fill empty labels from enrichment caches using Discogs > MusicBrainz > Bandcamp precedence. Stages non-conflicting labels; pages conflicts with conflict_offset and conflict_page. Set auto_enrich=true to fetch missing MusicBrainz and Bandcamp keys before backfilling; provider counts report successful matches. Use dry_run=true and auto_enrich=false for later conflict pages. Use preview_changes then write_xml to export.",
         output_schema = rmcp::handler::server::tool::schema_for_output::<BackfillLabelsOutput>()
             .expect("backfill_labels output schema should be valid")
     )]
@@ -342,7 +342,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Set auto_enrich=true to automatically fetch Bandcamp and MusicBrainz data for uncached year-zero tracks before re-scanning. Use preview_changes then write_xml to export."
+        description = "Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/MusicBrainz/Bandcamp). Stages non-conflicting years; reports conflicts where Rekordbox and Discogs disagree. Set auto_enrich=true to automatically fetch Bandcamp and MusicBrainz data for uncached year-zero tracks before re-scanning. Use preview_changes then write_xml to export."
     )]
     pub(super) async fn backfill_years(
         &self,
@@ -379,16 +379,6 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Look up a track on Beatport for genre/BPM/key enrichment. Returns an object payload with lookup data plus cache metadata (`cache_hit`, optional `cached_at`). On no match, `result` is null. Results are cached. Pass track_id to auto-fill artist/title from the library."
-    )]
-    pub(super) async fn lookup_beatport(
-        &self,
-        params: Parameters<LookupBeatportParams>,
-    ) -> Result<CallToolResult, McpError> {
-        handle_lookup_beatport(self, params.0).await
-    }
-
-    #[tool(
         description = "Look up a track on MusicBrainz for year/label data. Returns year from first-release-date and label from the best matching release. Results are cached. Pass track_id to auto-fill artist/title from the library."
     )]
     pub(super) async fn lookup_musicbrainz(
@@ -409,7 +399,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Batch enrich pending tracks via Discogs/Beatport/Bandcamp. Cached candidates do not consume max_tracks; continue with page.next_offset while page.has_more. Keep providers, skip_cached, and force_refresh fixed during traversal, or restart at offset 0. Results are cached.",
+        description = "Batch enrich pending tracks via Discogs/Bandcamp. Cached candidates do not consume max_tracks; continue with page.next_offset while page.has_more. Keep providers, skip_cached, and force_refresh fixed during traversal, or restart at offset 0. Results are cached.",
         output_schema = rmcp::handler::server::tool::schema_for_output::<EnrichTracksOutput>()
             .expect("enrich_tracks output schema should be valid")
     )]
@@ -548,7 +538,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Get Rekordbox metadata plus cached Discogs and Beatport enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings for one track. Cache-only — never triggers external calls."
+        description = "Get Rekordbox metadata plus cached Discogs enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings for one track. Cache-only — never triggers external calls."
     )]
     pub(super) async fn resolve_track_data(
         &self,
@@ -558,7 +548,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Batch Rekordbox metadata plus cached Discogs and Beatport enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
+        description = "Batch Rekordbox metadata plus cached Discogs enrichment, current Stratum and optional current Essentia analysis, staged changes, and genre taxonomy mappings. Cache-only — never triggers external calls."
     )]
     pub(super) async fn resolve_tracks_data(
         &self,
@@ -568,7 +558,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Report cache completeness for a filtered track scope. Cache-only — no external calls."
+        description = "Report cache completeness for a filtered track scope. Discogs readiness uses the same exact album-aware key and genre mapping as classification, distinguishing searched, matched, mapped, and usable rows. Cache-only — no external calls."
     )]
     pub(super) async fn cache_coverage(
         &self,
@@ -578,7 +568,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Apply genre decision tree to ungenred tracks. Returns genre recommendations with confidence levels (high/medium/low/insufficient), evidence strings, and ranked candidates. High/medium results are ready for approval; low/insufficient may benefit from agent review using artist/title context. Use format=\"compact\" when classifying all tracks upfront (returns only track_id, artist, title, genre, confidence, action). Use format=\"summary\" to get only confidence distribution and genre-grouped counts without per-track results. Use format=\"dispatch\" to get low/insufficient tracks grouped by artist for subagent dispatch. Follow up with resolve_tracks_data(format=\"classification\") for full evidence on tracks that need review. When track_ids are provided explicitly, tracks with existing (non-canonical) genres can also be classified. Use auto_stage=[\"high\",\"medium\"] to directly stage results at specified confidence levels, eliminating the need for a separate update_tracks call. Cache-only — never triggers external calls."
+        description = "Apply the genre decision tree to ungenred tracks. High confidence requires agreement from at least two independent source groups (Discogs, a distinct Rekordbox label, or audio); Discogs styles and its fallback label count once. Current genre is only a low-confidence hint or unresolved-tie breaker. Low/insufficient confirmations remain reviewable even when the recommendation matches the current tag. Use format=\"compact\", \"summary\", or \"dispatch\" for bounded workflows. auto_stage never stages confirmations, genre-less results, or insufficient results. Cache-only — never triggers external calls."
     )]
     pub(super) async fn classify_tracks(
         &self,
@@ -588,7 +578,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Verify existing genre tags against enrichment and audio evidence. Returns only conflicts (genre disagrees with evidence) and manual-review tracks. Confirmed tracks are silently counted in the summary. Cache-only — never triggers external calls."
+        description = "Verify existing genre tags against enrichment and audio evidence. Strong high/medium confirmations are counted but omitted by default; low/insufficient confirmations remain visible because confidence determines review eligibility. Set include_confirmed=true to return every confirmation. Cache-only — never triggers external calls."
     )]
     pub(super) async fn audit_genres(
         &self,
@@ -598,7 +588,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Calibrate genre audio profiles from a playlist of verified tracks. Computes Fisher discriminant weights per genre and stores prototypes in the internal database. These prototypes are used as supplementary votes during genre classification. Requires a playlist of ear-verified tracks with correct genre tags."
+        description = "Calibrate genre audio profiles from a playlist of verified tracks. Only scorable optional-feature rows can build candidates; BPM-only rows cannot qualify or replace a usable registry. Stores prototypes atomically with classifier/analyzer versions and a privacy-safe training fingerprint."
     )]
     pub(super) async fn calibrate_audio_profiles(
         &self,
@@ -608,7 +598,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Report per-genre verified-playlist coverage for audio-profile calibration. Read-only: checks canonical genre counts, cached audio-feature availability, and stored prototype presence without recalibrating."
+        description = "Report per-genre verified-playlist calibration readiness. Distinguishes cached audio rows, extracted features, scorable optional features, candidate prototypes, and stored profile state: missing, fresh, training_changed, or incompatible. Read-only — never recalibrates."
     )]
     pub(super) async fn calibration_coverage(
         &self,

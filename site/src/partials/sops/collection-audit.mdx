@@ -101,7 +101,7 @@ Present each issue type in batches.
 
 **Empty/missing tags** (`EMPTY_ARTIST`, `EMPTY_TITLE`, `MISSING_TRACK_NUM`, `MISSING_ALBUM`, `MISSING_YEAR`):
 - Check the `detail` field — it may be `null` for empty/missing-tag issues. Infer fix from filename and parent directory structure.
-- Use `lookup_discogs()` / `lookup_beatport()` / `lookup_bandcamp()` / `lookup_musicbrainz()` for missing album/year
+- Use `lookup_discogs()` / `lookup_bandcamp()` / `lookup_musicbrainz()` for missing album/year
 - Ask user to confirm each fix
 
 **Filename issues** (`BAD_FILENAME`, `MISSING_YEAR_IN_DIR`, `FILENAME_TAG_DRIFT`):
@@ -116,7 +116,7 @@ Workflow:
 1. Read the `detail` JSON — contains `filename` and `tag` values for each drifted field
 2. If the file is **not imported** into Rekordbox, rename to match the tag
 3. If the file **is imported**, defer with a note about manual Rekordbox relocate, or accept as-is
-4. If the drift is a genuinely different name (not just character substitution), look up via `lookup_discogs` / `lookup_beatport` / `lookup_bandcamp` / `lookup_musicbrainz`
+4. If the drift is a genuinely different name (not just character substitution), look up via `lookup_discogs` / `lookup_bandcamp` / `lookup_musicbrainz`
 5. If ambiguous after lookup, flag for user review — do not guess
 
 **Genre tags** (`GENRE_SET`, if included):

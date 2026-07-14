@@ -1,6 +1,6 @@
 ---
 title: Enrichment & Analysis
-description: Tools for looking up external metadata from Discogs, Beatport, MusicBrainz, and Bandcamp, and analyzing audio with stratum-dsp and Essentia.
+description: Tools for looking up external metadata from Discogs, MusicBrainz, and Bandcamp, and analyzing audio with stratum-dsp and Essentia.
 sidebar:
   order: 2
 ---
@@ -12,13 +12,13 @@ import DataFlowDiagram from '../../../components/DataFlowDiagram.astro';
 
 ## Enrichment tools
 
-Single-track lookups cover Discogs, Beatport, MusicBrainz, and Bandcamp. Results
+Single-track lookups cover Discogs, MusicBrainz, and Bandcamp. Results
 are cached — subsequent calls return instantly unless `force_refresh` is set.
 
 The batch surfaces are deliberately narrower:
 
-- CLI `hydrate` runs Discogs, Beatport, and audio analysis.
-- MCP `enrich_tracks` runs Discogs, Beatport, and Bandcamp.
+- CLI `hydrate` runs Discogs and audio analysis.
+- MCP `enrich_tracks` runs Discogs and Bandcamp.
 - MusicBrainz is an individual lookup and targeted backfill source; it is not an
   `enrich_tracks` batch provider.
 
@@ -51,31 +51,6 @@ credits, collaborator, or release-discovery browser.
 <Aside type="note">
   If the session has expired, the response includes an `auth_url` — open it in a browser, approve access, and call again.
 </Aside>
-
----
-
-### `lookup_beatport`
-
-Match one specific track on Beatport. The result contains one genre value, not
-a separate sub-genre.
-
-{/* doc-contract:mcp tool=lookup_beatport schema=/ requiredness=global */}
-
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `track_id` | string | | Track ID — auto-fills artist/title from library |
-| `artist` | string | | Artist name (required if no `track_id`) |
-| `title` | string | | Track title (required if no `track_id`) |
-| `force_refresh` | boolean | | Bypass cache (default: `false`) |
-
-{/* /doc-contract:mcp */}
-
-| Returned field | Meaning |
-|----------------|---------|
-| `genre`, `bpm`, `key` | Beatport's genre, tempo, and key for the matched track |
-| `track_name`, `artists` | Matched title and artist list |
-| `release_date`, `label` | Optional release date and label |
-| `fuzzy_match` | Whether the selected result was a fuzzy rather than exact title match |
 
 ---
 
@@ -116,7 +91,7 @@ Look up a track on Bandcamp for year/label/tags/cover data. Pass a direct Bandca
 
 ### `enrich_tracks`
 
-Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
+Batch enrich tracks via Discogs and Bandcamp. Accepts [shared search filters](/mcp-tools/#shared-search-filters) to scope which tracks to enrich.
 
 {/* doc-contract:mcp tool=enrich_tracks schema=/ requiredness=global include=shared-search-filters */}
 
@@ -126,7 +101,7 @@ Batch enrich tracks via Discogs/Beatport/Bandcamp. Accepts [shared search filter
 | `playlist_id` | string | | | Enrich tracks in this playlist |
 | `max_tracks` | integer | | | Max pending tracks to admit after cache checks (default: `50`, max: `200`) |
 | `offset` | integer | | | Index into the stable underlying selector order (default: `0`) |
-| `providers` | string[] | | `["discogs", "beatport", "bandcamp"]` | Providers (default: `["discogs"]`) |
+| `providers` | string[] | | `["discogs", "bandcamp"]` | Providers (default: `["discogs"]`) |
 | `skip_cached` | boolean | | | Skip already-cached tracks (default: `true`) |
 | `force_refresh` | boolean | | | Bypass cache entirely (default: `false`) |
 | `concurrency` | integer | | | Max concurrent enrichments (default: `4`, max: `8`) |
@@ -191,7 +166,7 @@ failure increments `summary.failed`, appears in `failures` with track and
 provider context, and is never also reported as enriched or skipped.
 
 <Aside type="tip">
-  For large Discogs, Beatport, and audio-analysis runs, use CLI `hydrate` — it
+  For large Discogs and audio-analysis runs, use CLI `hydrate` — it
   runs unattended with progress bars and graceful shutdown. Use `enrich_tracks`
   when a scoped MCP workflow needs Bandcamp. See [CLI](/cli/).
 </Aside>

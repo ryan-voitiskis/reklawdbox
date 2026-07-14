@@ -12,8 +12,7 @@ mod planning;
 use crate::mcp::analysis::{AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, CacheCoverageParams};
 use crate::mcp::audit::{AuditOperation, ScanDuplicatesParams};
 use crate::mcp::enrichment::{
-    EnrichTracksParams, LookupBeatportParams, LookupDiscogsParams, ResolveTrackDataParams,
-    ResolveTracksDataParams,
+    EnrichTracksParams, LookupDiscogsParams, ResolveTrackDataParams, ResolveTracksDataParams,
 };
 use crate::mcp::files::{
     EmbedCoverArtParams, ExtractCoverArtParams, ReadFileTagsParams, WriteFileTagsParams,
@@ -267,7 +266,7 @@ fn flatten_json_round_trip_enrich_tracks_params() {
         "track_ids": ["t1", "t2"],
         "playlist_id": "p1",
         "max_tracks": 20,
-        "providers": ["discogs", "beatport"],
+        "providers": ["discogs", "bandcamp"],
         "skip_cached": false,
         "force_refresh": true,
     });
@@ -466,7 +465,6 @@ fn tool_schemas_are_claude_api_compatible() {
     check::<ClearChangesParams>("ClearChangesParams");
     check::<SuggestNormalizationsParams>("SuggestNormalizationsParams");
     check::<LookupDiscogsParams>("LookupDiscogsParams");
-    check::<LookupBeatportParams>("LookupBeatportParams");
     check::<AnalyzeTrackAudioParams>("AnalyzeTrackAudioParams");
     check::<AnalyzeAudioBatchParams>("AnalyzeAudioBatchParams");
     check::<ResolveTrackDataParams>("ResolveTrackDataParams");

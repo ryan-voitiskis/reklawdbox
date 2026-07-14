@@ -1,5 +1,10 @@
 # Genre Classification: Research & Analysis
 
+> **Historical research snapshot:** The provider weights and classifier paths
+> below describe the pre-2026-07-14 implementation. Beatport is no longer a
+> runtime provider, and Plans 034–035 define the current source-aware confidence
+> and readiness contracts.
+
 **Date:** 2026-04-10
 **Status:** Research complete. See [genre-classification-implementation.md](genre-classification-implementation.md) for the implementation spec.
 

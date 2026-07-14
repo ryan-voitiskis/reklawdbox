@@ -233,14 +233,12 @@ pub(crate) struct BackfillYearsScanResult {
     pub(crate) filled_file_tags: usize,
     pub(crate) filled_folder_path: usize,
     pub(crate) filled_discogs: usize,
-    pub(crate) filled_beatport: usize,
     pub(crate) filled_musicbrainz: usize,
     pub(crate) filled_bandcamp: usize,
     pub(crate) already_set: usize,
     pub(crate) conflicts: Vec<serde_json::Value>,
     pub(crate) remaining_year_zero: Vec<serde_json::Value>,
     pub(crate) remaining_no_discogs: usize,
-    pub(crate) remaining_no_beatport: usize,
     pub(crate) remaining_no_musicbrainz: usize,
     pub(crate) remaining_no_bandcamp: usize,
     pub(crate) to_stage: Vec<TrackChange>,
@@ -260,14 +258,6 @@ pub(crate) fn extract_discogs_year(entry: Option<&state::EnrichmentCacheEntry>) 
             _ => None,
         })
         .and_then(|s| parse_year_str(&s))
-}
-
-/// Extract year from a Beatport enrichment cache entry.
-pub(crate) fn extract_beatport_year(entry: Option<&state::EnrichmentCacheEntry>) -> Option<i32> {
-    let val = parse_response_json(entry)?;
-    val.get("release_date")
-        .and_then(|v| v.as_str())
-        .and_then(parse_year_str)
 }
 
 /// Extract year from a MusicBrainz enrichment cache entry.
@@ -309,12 +299,11 @@ pub(crate) fn scan_years(
         })
         .collect();
 
-    // Build batch keys for all 4 providers × all tracks.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 4);
+    // Build batch keys for all providers × all tracks.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 3);
     for (a, t, al) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
-        enrich_keys.push(("beatport", a, t, ""));
         enrich_keys.push(("musicbrainz", a, t, ""));
         enrich_keys.push(("bandcamp", a, t, ""));
     }
@@ -329,7 +318,7 @@ pub(crate) fn scan_years(
         let album = norm_album.as_deref().unwrap_or("");
 
         if track.year == 0 {
-            // Priority cascade: file tags → folder path → Discogs → Beatport → MusicBrainz → Bandcamp.
+            // Priority cascade: file tags → folder path → Discogs → MusicBrainz → Bandcamp.
             if let Some(year) = year_from_file_tags(&track.file_path) {
                 r.filled_file_tags += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
@@ -347,12 +336,6 @@ pub(crate) fn scan_years(
                 norm_title.clone(),
                 album.to_string(),
             );
-            let bp_key = (
-                "beatport".to_string(),
-                norm_artist.clone(),
-                norm_title.clone(),
-                String::new(),
-            );
             let mb_key = (
                 "musicbrainz".to_string(),
                 norm_artist.clone(),
@@ -367,17 +350,11 @@ pub(crate) fn scan_years(
             );
 
             let discogs_entry = cache_map.get(&discogs_key);
-            let bp_entry = cache_map.get(&bp_key);
             let mb_entry = cache_map.get(&mb_key);
             let bc_entry = cache_map.get(&bc_key);
 
             if let Some(year) = extract_discogs_year(discogs_entry) {
                 r.filled_discogs += 1;
-                r.to_stage.push(year_change(track.id.clone(), year));
-                continue;
-            }
-            if let Some(year) = extract_beatport_year(bp_entry) {
-                r.filled_beatport += 1;
                 r.to_stage.push(year_change(track.id.clone(), year));
                 continue;
             }
@@ -395,9 +372,6 @@ pub(crate) fn scan_years(
             // Cache-gap tracking — presence in the map means cached (no second query needed).
             if discogs_entry.is_none() {
                 r.remaining_no_discogs += 1;
-            }
-            if bp_entry.is_none() {
-                r.remaining_no_beatport += 1;
             }
             if mb_entry.is_none() {
                 r.remaining_no_musicbrainz += 1;
@@ -490,9 +464,12 @@ pub(crate) struct BackfillLabelsScanResult {
     pub(crate) no_discogs: usize,
     pub(crate) no_musicbrainz: usize,
     pub(crate) no_bandcamp: usize,
-    pub(crate) no_beatport: usize,
     pub(crate) to_stage: Vec<TrackChange>,
-    /// Tracks that had no Bandcamp cache and got no label from any source.
+    /// Unlabeled tracks with no exact MusicBrainz cache after Discogs failed
+    /// to provide a label.
+    pub(crate) uncached_musicbrainz: Vec<(String, String, String, String)>,
+    /// Unlabeled tracks with no exact Bandcamp cache after higher-precedence
+    /// Discogs and MusicBrainz caches failed to provide a label.
     pub(crate) uncached_bandcamp: Vec<(String, String, String, String)>, // (norm_artist, norm_title, raw_artist, raw_title)
 }
 
@@ -513,17 +490,16 @@ pub(crate) fn scan_labels(
         })
         .collect();
 
-    // Build batch keys for all 4 providers × all tracks.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 4);
+    // Build batch keys for all providers × all tracks.
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 3);
     for (a, t, al) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
         enrich_keys.push(("musicbrainz", a, t, ""));
         enrich_keys.push(("bandcamp", a, t, ""));
-        enrich_keys.push(("beatport", a, t, ""));
     }
 
-    // Single batch load — replaces 4N individual queries.
+    // Single batch load — replaces 3N individual queries.
     let cache_map = state::batch_get_enrichment(store_conn, &enrich_keys).unwrap_or_else(|e| {
         tracing::warn!("batch enrichment load failed: {e}");
         std::collections::HashMap::new()
@@ -550,24 +526,36 @@ pub(crate) fn scan_labels(
             norm_title.clone(),
             String::new(),
         );
-        let bp_key = (
-            "beatport".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-
         let discogs_entry = cache_map.get(&discogs_key);
         let mb_entry = cache_map.get(&mb_key);
         let bc_entry = cache_map.get(&bc_key);
-        let bp_entry = cache_map.get(&bp_key);
 
         let discogs_label = extract_label(discogs_entry);
         let mb_label = extract_label(mb_entry);
         let bc_label = extract_label(bc_entry);
-        let bp_label = extract_label(bp_entry);
 
-        let enrichment_label = discogs_label.or(mb_label).or(bc_label).or(bp_label);
+        if track.label.is_empty() && discogs_label.is_none() && mb_entry.is_none() {
+            result.uncached_musicbrainz.push((
+                norm_artist.clone(),
+                norm_title.clone(),
+                track.artist.clone(),
+                track.title.clone(),
+            ));
+        }
+        if track.label.is_empty()
+            && discogs_label.is_none()
+            && mb_label.is_none()
+            && bc_entry.is_none()
+        {
+            result.uncached_bandcamp.push((
+                norm_artist.clone(),
+                norm_title.clone(),
+                track.artist.clone(),
+                track.title.clone(),
+            ));
+        }
+
+        let enrichment_label = discogs_label.or(mb_label).or(bc_label);
 
         let Some(enrich_label) = enrichment_label else {
             result.no_enrichment += 1;
@@ -579,15 +567,6 @@ pub(crate) fn scan_labels(
             }
             if bc_entry.is_none() {
                 result.no_bandcamp += 1;
-                result.uncached_bandcamp.push((
-                    norm_artist.clone(),
-                    norm_title.clone(),
-                    track.artist.clone(),
-                    track.title.clone(),
-                ));
-            }
-            if bp_entry.is_none() {
-                result.no_beatport += 1;
             }
             continue;
         };
@@ -876,6 +855,54 @@ pub(crate) fn scan_albums(
 #[cfg(test)]
 mod workflow_tests {
     use super::*;
+    use crate::domain::library::{FileKind, Track};
+
+    fn unlabeled_track() -> Track {
+        Track {
+            id: "label-track".into(),
+            title: "Title".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            genre: String::new(),
+            bpm: 128.0,
+            key: String::new(),
+            rating: 0,
+            comments: String::new(),
+            color: String::new(),
+            color_code: 0,
+            label: String::new(),
+            remixer: String::new(),
+            year: 0,
+            length: 0,
+            file_path: "/missing/label-track.flac".into(),
+            play_count: 0,
+            bit_rate: 0,
+            sample_rate: 0,
+            file_kind: FileKind::Flac,
+            date_added: String::new(),
+            position: None,
+            played_at: None,
+        }
+    }
+
+    fn store() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::adapters::state::migrate(&conn).unwrap();
+        conn
+    }
+
+    fn cache_label(conn: &rusqlite::Connection, provider: &str, album: Option<&str>, label: &str) {
+        crate::adapters::state::set_enrichment(
+            conn,
+            provider,
+            "artist",
+            "title",
+            album,
+            Some("exact"),
+            Some(&serde_json::json!({ "label": label }).to_string()),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn boundary_metadata_backfill_stages_through_change_manager() {
@@ -888,5 +915,38 @@ mod workflow_tests {
         let (staged, pending) = stage_suggestions(&manager, vec![suggestion], false);
         assert_eq!((staged, pending), (1, 1));
         assert_eq!(manager.pending_ids(), vec!["track-1".to_string()]);
+    }
+
+    #[test]
+    fn label_scan_queues_both_missing_fallback_providers() {
+        let conn = store();
+        let scan = scan_labels(&conn, &[unlabeled_track()]);
+        assert_eq!(scan.uncached_musicbrainz.len(), 1);
+        assert_eq!(scan.uncached_bandcamp.len(), 1);
+        assert!(scan.to_stage.is_empty());
+    }
+
+    #[test]
+    fn bandcamp_label_is_used_but_musicbrainz_is_still_queued_above_it() {
+        let conn = store();
+        cache_label(&conn, "bandcamp", None, "Bandcamp Label");
+        let scan = scan_labels(&conn, &[unlabeled_track()]);
+        assert_eq!(scan.to_stage[0].label.as_deref(), Some("Bandcamp Label"));
+        assert_eq!(scan.uncached_musicbrainz.len(), 1);
+        assert!(scan.uncached_bandcamp.is_empty());
+    }
+
+    #[test]
+    fn label_precedence_remains_discogs_then_musicbrainz_then_bandcamp() {
+        let conn = store();
+        cache_label(&conn, "bandcamp", None, "Bandcamp Label");
+        cache_label(&conn, "musicbrainz", None, "MusicBrainz Label");
+        let scan = scan_labels(&conn, &[unlabeled_track()]);
+        assert_eq!(scan.to_stage[0].label.as_deref(), Some("MusicBrainz Label"));
+        assert!(scan.uncached_musicbrainz.is_empty());
+
+        cache_label(&conn, "discogs", Some("album"), "Discogs Label");
+        let scan = scan_labels(&conn, &[unlabeled_track()]);
+        assert_eq!(scan.to_stage[0].label.as_deref(), Some("Discogs Label"));
     }
 }

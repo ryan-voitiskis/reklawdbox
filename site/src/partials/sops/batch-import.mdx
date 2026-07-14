@@ -11,9 +11,9 @@
 
 | Tool | Purpose |
 |------|---------|
-| `reklawdbox` MCP | Tag reading/writing, Discogs/Beatport lookups, cover art embedding |
+| `reklawdbox` MCP | Tag reading/writing, provider lookups, cover art embedding |
 
-`lookup_discogs`, `lookup_beatport`, `lookup_bandcamp`, `lookup_musicbrainz`, `read_file_tags`, `write_file_tags`, `embed_cover_art`, and `extract_cover_art` are MCP tool calls.
+`lookup_discogs`, `lookup_bandcamp`, `lookup_musicbrainz`, `read_file_tags`, `write_file_tags`, `embed_cover_art`, and `extract_cover_art` are MCP tool calls.
 
 ---
 
@@ -135,13 +135,7 @@ For VA: label name is **required**. Check Publisher tag, directory name, or look
 lookup_discogs(artist="Artist Name", title="First Track Title", album="Album Name")
 ```
 
-If no Discogs result, try Beatport:
-
-```
-lookup_beatport(artist="Artist Name", title="First Track Title")
-```
-
-If still missing data (common with self-released and digital-only music), try Bandcamp:
+If no Discogs result, try Bandcamp (especially for self-released and digital-only music):
 
 ```
 lookup_bandcamp(artist="Artist Name", title="First Track Title")
@@ -325,7 +319,7 @@ For each loose track, read existing tags:
 read_file_tags(paths=["/path/to/batch/Artist - Title.wav"])
 ```
 
-If tags are missing, look up with `lookup_discogs(...)` / `lookup_beatport(...)` / `lookup_bandcamp(...)` / `lookup_musicbrainz(...)`. Bandcamp is often the only source for self-released and digital-only music.
+If tags are missing, look up with `lookup_discogs(...)` / `lookup_bandcamp(...)` / `lookup_musicbrainz(...)`. Bandcamp is often the only source for self-released and digital-only music.
 
 Write tags (include album — almost always available from the source release):
 

@@ -6,7 +6,10 @@ concurrency, cache, testing, safety, and performance findings from that audit.
 Plans 021–033 were added on 2026-07-12 from commit `3451803` after a deep
 accuracy and discovery audit of the Astro documentation site. They cover ten
 documentation/runtime contract findings and three coordinated UX directions.
-No source change is part of either planning set.
+Plans 034–035 were added on 2026-07-14 from commit `4e031ca` plus the
+uncommitted post-Beatport-removal working-tree snapshot. They cover the
+classifier-safety and evidence-readiness work required after removing that
+provider. No source change is part of any planning set.
 
 Each executor must read its assigned plan in full before changing code, run the
 plan's drift check first, honor every STOP condition, and update the matching
@@ -62,41 +65,43 @@ files.
 Plan numbers are stable identifiers, not a top-to-bottom execution order. Dispatch by
 the dependency graph and recommended waves below.
 
-| Plan                                                  | Title                                                    | Priority | Effort | Depends on                   | Status |
-| ----------------------------------------------------- | -------------------------------------------------------- | -------- | ------ | ---------------------------- | ------ |
-| [001](001-strengthen-stratum-success-oracles.md)      | Strengthen Stratum success oracles                       | P1       | M      | -                            | DONE   |
-| [002](002-transactional-xml-export.md)                | Make XML export transactional                            | P1       | M      | -                            | DONE   |
-| [003](003-serialize-audio-file-mutations.md)          | Serialize audio-file mutations                           | P1       | M      | 002                          | DONE   |
-| [004](004-preserve-key-mode-evidence.md)              | Preserve key-mode evidence                               | P1       | M      | 001                          | DONE   |
-| [005](005-infer-meter-and-downbeat-phase.md)          | Infer meter and downbeat phase from evidence             | P1       | L      | 004, 008                     | DONE   |
-| [006](006-stabilize-variable-tempo-beat-grids.md)     | Stabilize variable-tempo beat grids                      | P1       | L      | 005                          | DONE   |
-| [007](007-invalidate-stratum-cache-on-grid-change.md) | Invalidate Stratum cache when the Rekordbox grid changes | P1       | L      | 004, 005, 006, 009, 011, 013 | DONE   |
-| [008](008-validate-stratum-analysis-inputs.md)        | Validate Stratum analysis inputs                         | P1       | L      | 001                          | DONE   |
-| [009](009-preserve-classification-missingness.md)     | Preserve missingness in audio classification             | P1       | M      | -                            | DONE   |
-| [010](010-version-timbral-normalization-stats.md)     | Version timbral normalization statistics                 | P1       | M      | -                            | DONE   |
-| [011](011-make-audit-freshness-complete.md)           | Make incremental audit freshness complete                | P1       | M      | 010                          | DONE   |
-| [012](012-acknowledge-enrichment-cache-writes.md)     | Acknowledge enrichment cache writes                      | P1       | M      | -                            | DONE   |
-| [013](013-propagate-cli-batch-failures.md)            | Propagate CLI batch failures                             | P2       | M      | -                            | DONE   |
-| [014](014-fix-selector-pagination-order.md)           | Apply pagination after selector filtering                | P2       | M      | -                            | DONE   |
-| [015](015-serialize-discogs-device-auth.md)           | Serialize Discogs device-auth transitions                | P1       | M      | 003, 012                     | DONE   |
-| [016](016-bound-recursive-audio-scan.md)              | Prevent recursive audio-scan symlink cycles              | P1       | M      | -                            | DONE   |
-| [017](017-defer-legacy-bpm-fallback.md)               | Defer legacy BPM fallback work                           | P2       | S      | 005                          | DONE   |
-| [018](018-make-year-suffix-unicode-safe.md)           | Make year-suffix parsing Unicode-safe                    | P2       | S      | 011                          | DONE   |
-| [019](019-validate-cover-art-picture-types.md)        | Validate cover-art picture types                         | P2       | M      | 003                          | DONE   |
-| [020](020-report-wav-dry-run-per-layer.md)            | Report WAV dry-run changes per layer                     | P2       | M      | 019                          | DONE   |
-| [021](021-correct-safety-permission-guidance.md)      | State the real safety and permission boundary            | P1       | S      | -                            | DONE   |
-| [022](022-add-reload-tag-handoff.md)                  | Add the Reload Tag synchronization handoff               | P1       | S      | 021                          | DONE   |
-| [023](023-define-capability-readiness-contracts.md)   | Define workflow-specific readiness contracts             | P1       | M      | 022                          | DONE   |
-| [024](024-preserve-internal-state-during-recovery.md) | Preserve internal state during targeted recovery         | P1       | S      | 021                          | DONE   |
-| [025](025-document-playlist-xml-import.md)            | Document the playlist XML import path                    | P1       | S      | 023                          | DONE   |
-| [026](026-publish-workflow-contract-catalog.md)       | Publish a canonical workflow contract catalog            | P1       | M      | 021, 023, 024, 025           | DONE   |
-| [027](027-automate-documentation-contracts.md)        | Automate code-backed documentation contracts             | P1       | M      | 026                          | DONE   |
-| [028](028-make-batch-workflows-convergent.md)         | Make bounded batch workflows convergent and resumable    | P1       | L      | 023, 027                     | DONE   |
-| [029](029-make-export-backups-fail-closed.md)         | Make export backups fail closed and path-aware           | P1       | M      | 021, 024, 027                | DONE   |
-| [030](030-create-first-ten-minutes-onboarding.md)     | Create a bounded first-ten-minutes onboarding journey    | P1       | M      | 021, 023, 026, 027           | DONE   |
-| [031](031-separate-human-agent-publishing.md)         | Separate human and agent publishing surfaces             | P2       | L      | 026, 027, 030                | DONE   |
-| [032](032-refresh-public-reference-contracts.md)      | Reconcile remaining public references and examples       | P2       | M      | 027, 028, 029, 030, 031, 033 | DONE   |
-| [033](033-return-all-staged-fields-from-resolve.md)   | Return every staged editable field from resolve tools    | P1       | S      | 031                          | DONE   |
+| Plan                                                       | Title                                                      | Priority | Effort | Depends on                   | Status |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | -------- | ------ | ---------------------------- | ------ |
+| [001](001-strengthen-stratum-success-oracles.md)           | Strengthen Stratum success oracles                         | P1       | M      | -                            | DONE   |
+| [002](002-transactional-xml-export.md)                     | Make XML export transactional                              | P1       | M      | -                            | DONE   |
+| [003](003-serialize-audio-file-mutations.md)               | Serialize audio-file mutations                             | P1       | M      | 002                          | DONE   |
+| [004](004-preserve-key-mode-evidence.md)                   | Preserve key-mode evidence                                 | P1       | M      | 001                          | DONE   |
+| [005](005-infer-meter-and-downbeat-phase.md)               | Infer meter and downbeat phase from evidence               | P1       | L      | 004, 008                     | DONE   |
+| [006](006-stabilize-variable-tempo-beat-grids.md)          | Stabilize variable-tempo beat grids                        | P1       | L      | 005                          | DONE   |
+| [007](007-invalidate-stratum-cache-on-grid-change.md)      | Invalidate Stratum cache when the Rekordbox grid changes   | P1       | L      | 004, 005, 006, 009, 011, 013 | DONE   |
+| [008](008-validate-stratum-analysis-inputs.md)             | Validate Stratum analysis inputs                           | P1       | L      | 001                          | DONE   |
+| [009](009-preserve-classification-missingness.md)          | Preserve missingness in audio classification               | P1       | M      | -                            | DONE   |
+| [010](010-version-timbral-normalization-stats.md)          | Version timbral normalization statistics                   | P1       | M      | -                            | DONE   |
+| [011](011-make-audit-freshness-complete.md)                | Make incremental audit freshness complete                  | P1       | M      | 010                          | DONE   |
+| [012](012-acknowledge-enrichment-cache-writes.md)          | Acknowledge enrichment cache writes                        | P1       | M      | -                            | DONE   |
+| [013](013-propagate-cli-batch-failures.md)                 | Propagate CLI batch failures                               | P2       | M      | -                            | DONE   |
+| [014](014-fix-selector-pagination-order.md)                | Apply pagination after selector filtering                  | P2       | M      | -                            | DONE   |
+| [015](015-serialize-discogs-device-auth.md)                | Serialize Discogs device-auth transitions                  | P1       | M      | 003, 012                     | DONE   |
+| [016](016-bound-recursive-audio-scan.md)                   | Prevent recursive audio-scan symlink cycles                | P1       | M      | -                            | DONE   |
+| [017](017-defer-legacy-bpm-fallback.md)                    | Defer legacy BPM fallback work                             | P2       | S      | 005                          | DONE   |
+| [018](018-make-year-suffix-unicode-safe.md)                | Make year-suffix parsing Unicode-safe                      | P2       | S      | 011                          | DONE   |
+| [019](019-validate-cover-art-picture-types.md)             | Validate cover-art picture types                           | P2       | M      | 003                          | DONE   |
+| [020](020-report-wav-dry-run-per-layer.md)                 | Report WAV dry-run changes per layer                       | P2       | M      | 019                          | DONE   |
+| [021](021-correct-safety-permission-guidance.md)           | State the real safety and permission boundary              | P1       | S      | -                            | DONE   |
+| [022](022-add-reload-tag-handoff.md)                       | Add the Reload Tag synchronization handoff                 | P1       | S      | 021                          | DONE   |
+| [023](023-define-capability-readiness-contracts.md)        | Define workflow-specific readiness contracts               | P1       | M      | 022                          | DONE   |
+| [024](024-preserve-internal-state-during-recovery.md)      | Preserve internal state during targeted recovery           | P1       | S      | 021                          | DONE   |
+| [025](025-document-playlist-xml-import.md)                 | Document the playlist XML import path                      | P1       | S      | 023                          | DONE   |
+| [026](026-publish-workflow-contract-catalog.md)            | Publish a canonical workflow contract catalog              | P1       | M      | 021, 023, 024, 025           | DONE   |
+| [027](027-automate-documentation-contracts.md)             | Automate code-backed documentation contracts               | P1       | M      | 026                          | DONE   |
+| [028](028-make-batch-workflows-convergent.md)              | Make bounded batch workflows convergent and resumable      | P1       | L      | 023, 027                     | DONE   |
+| [029](029-make-export-backups-fail-closed.md)              | Make export backups fail closed and path-aware             | P1       | M      | 021, 024, 027                | DONE   |
+| [030](030-create-first-ten-minutes-onboarding.md)          | Create a bounded first-ten-minutes onboarding journey      | P1       | M      | 021, 023, 026, 027           | DONE   |
+| [031](031-separate-human-agent-publishing.md)              | Separate human and agent publishing surfaces               | P2       | L      | 026, 027, 030                | DONE   |
+| [032](032-refresh-public-reference-contracts.md)           | Reconcile remaining public references and examples         | P2       | M      | 027, 028, 029, 030, 031, 033 | DONE   |
+| [033](033-return-all-staged-fields-from-resolve.md)        | Return every staged editable field from resolve tools      | P1       | S      | 031                          | DONE   |
+| [034](034-make-classification-confidence-source-aware.md)  | Make classification confidence source-aware and measurable | P1       | L      | post-Beatport removal base   | DONE   |
+| [035](035-align-classification-readiness-and-fallbacks.md) | Align readiness, profile freshness, and label fallbacks    | P1       | L      | 034                          | DONE   |
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED: <reason>` |
 `REJECTED: <rationale>`.
@@ -115,6 +120,30 @@ Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED: <reason>` |
 
 The UX plans consume the corrected contracts rather than creating an
 independent copy of product behavior.
+
+## Post-Beatport classifier-hardening coverage
+
+- Plan 034 is the release-safety lane: establish a non-leaky real classifier
+  benchmark, require independent evidence for High confidence, make the current
+  genre a hint rather than a vote, keep weak confirmations reviewable, and
+  restore provider-independent engine regressions removed with Beatport.
+- Plan 035 is the evidence-readiness lane: make coverage use the classifier's
+  exact cache identity and mapped evidence, distinguish raw from scorable
+  calibration inputs, version stored profile provenance, and hydrate the
+  already-supported MusicBrainz label fallback.
+
+Both plans extend completed Plan 009's missing-audio contract and Plan 023's
+capability-specific readiness vocabulary. Neither plan restores or replaces
+Beatport, adds a direct Rekordbox write, deletes legacy provider cache rows, or
+authorizes a release.
+
+Plans 034–035 were implemented sequentially on 2026-07-14 on the exact
+user-authorized uncommitted Beatport-removal snapshot rather than the planned
+clean composite commits. Active Rust was verified Beatport-free before work;
+the predictive benchmark, full workspace gates, release build, MCP smoke, site
+build, and documentation contract passed on the resulting composite. The plan
+files retain the unchecked clean-base criteria so this procedural deviation is
+not hidden.
 
 ## Dependency graph
 
@@ -173,6 +202,9 @@ flowchart LR
     P030 --> P032
     P031 --> P033["033 Complete staged resolve"]
     P033 --> P032
+
+    REMOVAL["Reviewed post-Beatport removal base"] --> P034["034 Source-aware confidence"]
+    P034 --> P035["035 Readiness and fallbacks"]
 ```
 
 ## Recommended execution waves
@@ -199,6 +231,12 @@ flowchart LR
   changes.
 - Wave 12c: run 033 after 031 is reviewed and integrated.
 - Wave 13: 032 only after 027–031 and 033 are reviewed and integrated.
+- Wave 14, post-Beatport release safety: first review and commit the current
+  Beatport-removal worktree as a clean base, then run 034. Do not tune taxonomy
+  or weights if its private real benchmark cannot run.
+- Wave 15, evidence alignment: run 035 only after 034 is reviewed and
+  integrated. It consumes 034's typed provenance and review contract, so it
+  must not recreate them independently.
 - Final portfolio gate after every row is DONE:
 
   ```bash
@@ -271,6 +309,21 @@ flowchart LR
 - 032 is the final integrated reference pass. Do not dispatch it early: it is
   responsible for reconciling the final runtime/help/schema/output state left
   by 027–031.
+- 034 and 035 were planned from a dirty post-removal snapshot while `4e031ca`
+  still contains Beatport. Their first execution prerequisite is a reviewed,
+  clean base containing that exact removal; an executor must STOP if active
+  Rust Beatport code remains.
+- 034 owns source-independence, current-genre hints, confidence policy, weak
+  Confirm visibility, and the real classifier benchmark. 035 consumes those
+  types and semantics; it owns exact-key evidence readiness, profile
+  compatibility/calibration readiness, and MusicBrainz label hydration.
+- 034 and 035 both touch classifier models, handlers/tests, and genre docs, so
+  they are strictly sequential. 035 must preserve 034's benchmark and rerun
+  the full runtime/documentation gate from the integrated base.
+- Plans 009, 023, 034, and 035 form one semantic chain: missing measurements
+  stay unknown; readiness is capability-specific; confidence reflects
+  independent usable sources; coverage and calibration report those same
+  usable states.
 - No plan may add a direct write path to Rekordbox `master.db`.
 
 ## Findings considered and rejected or deferred
@@ -294,3 +347,21 @@ flowchart LR
 - Credential-config atomicity and multi-query read snapshots: confirmed but
   not selected into this portfolio because they ranked below the 20 findings
   the user reviewed. Reconsider after the P1 rows are complete.
+- Immediate deletion of legacy Beatport cache rows: rejected. The observed
+  local footprint was about 266 KiB; inert rows are more useful for rollback
+  and aggregate A/B comparison than a destructive migration.
+- Bandcamp tags as classifier votes: deferred until Plan 034's non-leaky real
+  benchmark exists. Only 3 of the 359 observed Beatport-genre rows without
+  Discogs styles had Bandcamp tags, so it is not an evidenced drop-in
+  replacement.
+- MusicBrainz genre evidence: rejected because the adapter exposes recording,
+  release-date, label, and match-score data, not genre. Plan 035 uses it only
+  for the existing label cascade.
+- Album/year cascade changes and automatic profile recalibration on Beatport
+  removal: rejected because those paths are not made stale by deleting a genre
+  provider. Plan 035 versions audio profiles against their actual classifier,
+  analyzer, and training inputs instead.
+- A durable user-verified genre registry and broader taxonomy/weight retuning:
+  deferred. Plan 034 first establishes benchmark and provenance invariants;
+  future work should be justified by its measured confusion and abstention
+  output.

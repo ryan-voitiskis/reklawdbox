@@ -1,3 +1,6 @@
+use crate::mcp::enrichment::{
+    set_test_bandcamp_lookup_override, set_test_musicbrainz_lookup_override,
+};
 use crate::mcp::metadata::{
     BackfillLabelsParams, TrackChangeInput, UpdateTracksParams, WriteXmlParams,
     WriteXmlPlaylistInput, handle_update_tracks,
@@ -423,6 +426,161 @@ async fn backfill_labels_conflict_page_later_dry_run_does_not_repeat_staging() {
         server.context.mutation.changes.pending_ids(),
         pending_after_first
     );
+}
+
+#[tokio::test]
+async fn backfill_labels_auto_enriches_both_providers_and_preserves_precedence() {
+    let db_conn = create_single_track_test_db(
+        "labels-auto-enrich-match",
+        "/music/labels-auto-enrich-match.flac",
+    );
+    db_conn
+        .execute_batch(
+            "UPDATE djmdArtist SET Name = 'Auto Match Artist' WHERE ID = 'a1';
+             UPDATE djmdContent
+             SET Title = 'Auto Match Title', LabelID = NULL
+             WHERE ID = 'labels-auto-enrich-match';",
+        )
+        .expect("label fixture should become unlabeled");
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+
+    set_test_musicbrainz_lookup_override(
+        "Auto Match Artist",
+        "Auto Match Title",
+        Ok(Some(
+            crate::adapters::providers::musicbrainz::MusicBrainzResult {
+                recording_title: "Auto Match Title".into(),
+                artist: "Auto Match Artist".into(),
+                first_release_date: Some("2025-01-01".into()),
+                label: Some("MusicBrainz Label".into()),
+                score: 100,
+            },
+        )),
+    );
+    set_test_bandcamp_lookup_override(
+        "Auto Match Artist",
+        "Auto Match Title",
+        Ok(Some(crate::adapters::providers::bandcamp::BandcampResult {
+            track_title: "Auto Match Title".into(),
+            artist_name: "Auto Match Artist".into(),
+            release_date: Some("2025-01-02".into()),
+            label: Some("Bandcamp Label".into()),
+            tags: vec![],
+            album: Some("Encoded Paths".into()),
+            cover_image: None,
+            bandcamp_url: "https://example.bandcamp.com/track/senorita".into(),
+            score: 100,
+        })),
+    );
+
+    let result = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(false),
+            auto_enrich: Some(true),
+            max_conflicts: None,
+            conflict_offset: None,
+        }))
+        .await
+        .expect("dual-provider label hydration should succeed");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["auto_enriched"], 2);
+    assert_eq!(payload["auto_enriched_by_provider"]["musicbrainz"], 1);
+    assert_eq!(payload["auto_enriched_by_provider"]["bandcamp"], 1);
+    assert_eq!(payload["staged"], 1);
+    let pending = server
+        .context
+        .mutation
+        .changes
+        .get("labels-auto-enrich-match")
+        .expect("label fill should be staged");
+    assert_eq!(pending.label.as_deref(), Some("MusicBrainz Label"));
+
+    let store_conn = server.cache_store_conn().expect("test store should open");
+    let norm_artist = crate::domain::metadata::normalize_for_matching("Auto Match Artist");
+    let norm_title = crate::domain::metadata::normalize_for_matching("Auto Match Title");
+    for provider in ["musicbrainz", "bandcamp"] {
+        let cached = store::get_enrichment(
+            &store_conn,
+            provider,
+            &norm_artist,
+            &norm_title,
+            None,
+            false,
+        )
+        .expect("provider cache should be readable")
+        .expect("provider result should be cached");
+        assert_eq!(cached.match_quality.as_deref(), Some("exact"));
+    }
+}
+
+#[tokio::test]
+async fn backfill_labels_keeps_provider_errors_retryable_and_caches_no_match() {
+    let db_conn = create_single_track_test_db(
+        "labels-auto-enrich-error",
+        "/music/labels-auto-enrich-error.flac",
+    );
+    db_conn
+        .execute_batch(
+            "UPDATE djmdArtist SET Name = 'Auto Error Artist' WHERE ID = 'a1';
+             UPDATE djmdContent
+             SET Title = 'Auto Error Title', LabelID = NULL
+             WHERE ID = 'labels-auto-enrich-error';",
+        )
+        .expect("label fixture should become unlabeled");
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+
+    set_test_musicbrainz_lookup_override(
+        "Auto Error Artist",
+        "Auto Error Title",
+        Err("synthetic MusicBrainz failure".into()),
+    );
+    set_test_bandcamp_lookup_override("Auto Error Artist", "Auto Error Title", Ok(None));
+
+    let result = server
+        .backfill_labels(Parameters(BackfillLabelsParams {
+            dry_run: Some(true),
+            auto_enrich: Some(true),
+            max_conflicts: None,
+            conflict_offset: None,
+        }))
+        .await
+        .expect("provider failures should not fail the whole label pass");
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["auto_enriched"], 0);
+    assert_eq!(payload["auto_enriched_by_provider"]["musicbrainz"], 0);
+    assert_eq!(payload["auto_enriched_by_provider"]["bandcamp"], 0);
+    assert_eq!(payload["staged"], 0);
+
+    let store_conn = server.cache_store_conn().expect("test store should open");
+    let norm_artist = crate::domain::metadata::normalize_for_matching("Auto Error Artist");
+    let norm_title = crate::domain::metadata::normalize_for_matching("Auto Error Title");
+    assert!(
+        store::get_enrichment(
+            &store_conn,
+            "musicbrainz",
+            &norm_artist,
+            &norm_title,
+            None,
+            false,
+        )
+        .expect("MusicBrainz cache should be readable")
+        .is_none(),
+        "provider errors must remain retryable"
+    );
+    let bandcamp = store::get_enrichment(
+        &store_conn,
+        "bandcamp",
+        &norm_artist,
+        &norm_title,
+        None,
+        false,
+    )
+    .expect("Bandcamp cache should be readable")
+    .expect("completed no-match should be durable");
+    assert_eq!(bandcamp.match_quality.as_deref(), Some("none"));
+    assert!(bandcamp.response_json.is_none());
 }
 
 #[test]

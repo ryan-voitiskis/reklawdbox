@@ -925,6 +925,13 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         "",
         &stale_identity_path_str,
     );
+    insert_test_track(
+        &db_conn,
+        "coverage-no-genre-4",
+        "No Genre Four",
+        "",
+        "/missing/coverage-no-genre-4.flac",
+    );
 
     let store_dir = tempfile::tempdir().expect("temp store dir should create");
     let store_path = store_dir.path().join("internal.sqlite3");
@@ -938,6 +945,8 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let norm_title_one = crate::domain::metadata::normalize_for_matching("No Genre One");
     let norm_title_two = crate::domain::metadata::normalize_for_matching("No Genre Two");
+    let norm_title_three = crate::domain::metadata::normalize_for_matching("No Genre Three");
+    let norm_title_four = crate::domain::metadata::normalize_for_matching("No Genre Four");
 
     set_test_audio_analysis(
         &store_conn,
@@ -1011,24 +1020,34 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     .expect("discogs cache should be seeded for first ungenred track");
     store::set_enrichment(
         &store_conn,
-        "beatport",
-        &norm_artist,
-        &norm_title_one,
-        None,
-        Some("exact"),
-        Some(r#"{"genre":"Deep House"}"#),
-    )
-    .expect("beatport cache should be seeded for first ungenred track");
-    store::set_enrichment(
-        &store_conn,
         "discogs",
         &norm_artist,
         &norm_title_two,
         Some("encoded paths"),
+        Some("none"),
+        None,
+    )
+    .expect("discogs no-match should be seeded for second ungenred track");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_three,
+        Some("encoded paths"),
+        Some("exact"),
+        Some(r#"{"styles":["Unmapped Test Style"]}"#),
+    )
+    .expect("unmapped Discogs result should be seeded for third ungenred track");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &norm_artist,
+        &norm_title_four,
+        Some("different album"),
         Some("exact"),
         Some(r#"{"styles":["Tech House"]}"#),
     )
-    .expect("discogs cache should be seeded for second ungenred track");
+    .expect("wrong-album Discogs result should be seeded for fourth ungenred track");
 
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
@@ -1053,30 +1072,30 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         .expect("cache_coverage should succeed");
     let payload = extract_json(&result);
 
-    assert_eq!(payload["scope"]["total_tracks"], 4);
-    assert_eq!(payload["scope"]["matched_tracks"], 3);
+    assert_eq!(payload["scope"]["total_tracks"], 5);
+    assert_eq!(payload["scope"]["matched_tracks"], 4);
     assert_eq!(payload["scope"]["filter_description"], "has_genre = false");
 
     assert_eq!(payload["coverage"]["stratum_dsp"]["cached"], 1);
-    assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 33.3);
+    assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 25.0);
 
     assert_eq!(payload["coverage"]["essentia"]["cached"], 1);
-    assert_eq!(payload["coverage"]["essentia"]["percent"], 33.3);
+    assert_eq!(payload["coverage"]["essentia"]["percent"], 25.0);
     assert_eq!(payload["coverage"]["essentia"]["installed"], true);
 
-    assert_eq!(payload["coverage"]["discogs"]["searched"], 2);
-    assert_eq!(payload["coverage"]["discogs"]["searched_percent"], 66.7);
+    assert_eq!(payload["coverage"]["discogs"]["searched"], 3);
+    assert_eq!(payload["coverage"]["discogs"]["searched_percent"], 75.0);
     assert_eq!(payload["coverage"]["discogs"]["has_result"], 2);
-    assert_eq!(payload["coverage"]["discogs"]["has_result_percent"], 66.7);
+    assert_eq!(payload["coverage"]["discogs"]["has_result_percent"], 50.0);
+    assert_eq!(payload["coverage"]["discogs"]["usable_genre"], 1);
+    assert_eq!(payload["coverage"]["discogs"]["matched_unmapped"], 1);
 
-    assert_eq!(payload["coverage"]["beatport"]["searched"], 1);
-    assert_eq!(payload["coverage"]["beatport"]["searched_percent"], 33.3);
-    assert_eq!(payload["coverage"]["beatport"]["has_result"], 1);
-    assert_eq!(payload["coverage"]["beatport"]["has_result_percent"], 33.3);
-
-    assert_eq!(payload["gaps"]["no_audio_analysis"], 2);
-    assert_eq!(payload["gaps"]["no_enrichment"], 1);
-    assert_eq!(payload["gaps"]["no_data_at_all"], 1);
+    assert_eq!(payload["gaps"]["no_audio_analysis"], 3);
+    assert_eq!(payload["gaps"]["no_enrichment"], 3);
+    assert_eq!(payload["gaps"]["no_data_at_all"], 3);
+    assert_eq!(payload["gaps"]["discogs"]["not_searched"], 1);
+    assert_eq!(payload["gaps"]["discogs"]["searched_no_match"], 1);
+    assert_eq!(payload["gaps"]["discogs"]["matched_unmapped"], 1);
 }
 
 #[tokio::test]
@@ -1175,6 +1194,9 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     let techno_path = audio_dir.path().join("calibrate-techno-stale.flac");
     let (techno_size, techno_mtime) = write_test_audio_file(&techno_path, 1200);
     let techno_path_str = techno_path.to_string_lossy().to_string();
+    let techno_fresh_path = audio_dir.path().join("calibrate-techno-fresh.flac");
+    let (techno_fresh_size, techno_fresh_mtime) = write_test_audio_file(&techno_fresh_path, 1201);
+    let techno_fresh_path_str = techno_fresh_path.to_string_lossy().to_string();
 
     let db_conn = create_single_track_test_db("calibrate-deep-1", &deep_paths[0].0);
     db_conn
@@ -1215,6 +1237,13 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         "g2",
         &techno_path_str,
     );
+    insert_test_track(
+        &db_conn,
+        "calibrate-techno-fresh",
+        "Calibrate Techno Fresh",
+        "g2",
+        &techno_fresh_path_str,
+    );
 
     for (track_no, track_id) in [
         "calibrate-deep-1",
@@ -1223,6 +1252,7 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         "calibrate-deep-4",
         "calibrate-deep-5",
         "calibrate-techno-stale",
+        "calibrate-techno-fresh",
     ]
     .iter()
     .enumerate()
@@ -1266,6 +1296,16 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
     )
     .expect("stale-identity stratum analysis should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &techno_fresh_path_str,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        techno_fresh_size,
+        techno_fresh_mtime,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
+    )
+    .expect("fresh contrast sample should seed");
 
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
@@ -1278,7 +1318,8 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     let payload = extract_json(&result);
 
     assert_eq!(payload["status"], "calibrated");
-    assert_eq!(payload["total_tracks"], 6);
-    assert_eq!(payload["tracks_with_features"], 5);
+    assert_eq!(payload["total_tracks"], 7);
+    assert_eq!(payload["tracks_with_features"], 6);
+    assert_eq!(payload["tracks_with_scorable_features"], 6);
     assert_eq!(payload["skipped_no_audio"], 1);
 }

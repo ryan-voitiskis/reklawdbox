@@ -39,23 +39,17 @@ pub(crate) struct TaxonomyMapping {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderCompleteness {
     pub(crate) discogs_cached: bool,
-    pub(crate) beatport_cached: bool,
     pub(crate) discogs_has_result: bool,
-    pub(crate) beatport_has_result: bool,
 }
 
 /// Parsed, source-separated provider data plus the deliberate merged fallbacks.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedProviderData {
     pub(crate) discogs: Option<serde_json::Value>,
-    pub(crate) beatport: Option<serde_json::Value>,
     pub(crate) effective_label: Option<String>,
     pub(crate) label_genre: Option<&'static str>,
     pub(crate) discogs_style_mappings: Vec<TaxonomyMapping>,
-    pub(crate) beatport_genre_mapping: Option<TaxonomyMapping>,
     pub(crate) discogs_mapped_genres: Vec<(String, usize)>,
-    pub(crate) beatport_genre_raw: Option<String>,
-    pub(crate) beatport_mapped_genre: Option<String>,
     pub(crate) completeness: ProviderCompleteness,
 }
 
@@ -88,10 +82,8 @@ pub(crate) fn canonical_current_genre(current_genre: &str) -> Option<&'static st
 pub(crate) fn resolve_cached_provider_data(
     rekordbox_label: &str,
     discogs_cache: Option<&EnrichmentCacheEntry>,
-    beatport_cache: Option<&EnrichmentCacheEntry>,
 ) -> ResolvedProviderData {
     let discogs = parse_enrichment_cache(discogs_cache);
-    let beatport = parse_enrichment_cache(beatport_cache);
 
     let discogs_label = discogs
         .as_ref()
@@ -133,42 +125,16 @@ pub(crate) fn resolve_cached_provider_data(
     let mut discogs_mapped_genres: Vec<_> = discogs_genre_counts.into_iter().collect();
     discogs_mapped_genres.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let beatport_genre_raw = beatport
-        .as_ref()
-        .and_then(|value| value.get("genre"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|genre| !genre.is_empty())
-        .map(str::to_string);
-    let beatport_genre_mapping = beatport_genre_raw.as_deref().map(|genre| {
-        let (maps_to, mapping_type) = map_genre_through_taxonomy(genre);
-        TaxonomyMapping {
-            raw: genre.to_string(),
-            maps_to,
-            mapping_type,
-        }
-    });
-    let beatport_mapped_genre = beatport_genre_mapping.as_ref().and_then(|mapping| {
-        (mapping.mapping_type != "unknown")
-            .then(|| mapping.maps_to.clone())
-            .flatten()
-    });
-
     ResolvedProviderData {
         completeness: ProviderCompleteness {
             discogs_cached: discogs_cache.is_some(),
-            beatport_cached: beatport_cache.is_some(),
             discogs_has_result: discogs.is_some(),
-            beatport_has_result: beatport.is_some(),
         },
         discogs,
-        beatport,
         effective_label,
         label_genre,
         discogs_style_mappings,
-        beatport_genre_mapping,
         discogs_mapped_genres,
-        beatport_genre_raw,
-        beatport_mapped_genre,
     }
 }
 
@@ -203,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_resolution_preserves_provider_precedence() {
+    fn enrichment_resolution_preserves_rekordbox_and_discogs_precedence() {
         let discogs = cached(
             "discogs",
             serde_json::json!({
@@ -211,38 +177,20 @@ mod tests {
                 "styles": ["Deep House", "Ambient"],
             }),
         );
-        let beatport = cached(
-            "beatport",
-            serde_json::json!({
-                "label": "Beatport Must Not Override",
-                "genre": "Techno (Peak Time / Driving)",
-            }),
-        );
-
-        let conflict =
-            resolve_cached_provider_data("Rekordbox Records", Some(&discogs), Some(&beatport));
+        let conflict = resolve_cached_provider_data("Rekordbox Records", Some(&discogs));
         assert_eq!(
             conflict.effective_label.as_deref(),
             Some("Rekordbox Records")
         );
         assert_eq!(conflict.discogs_style_mappings.len(), 2);
-        assert_eq!(
-            conflict.beatport_genre_raw.as_deref(),
-            Some("Techno (Peak Time / Driving)")
-        );
         assert!(conflict.completeness.discogs_cached);
-        assert!(conflict.completeness.beatport_has_result);
+        assert!(conflict.completeness.discogs_has_result);
 
-        let fallback = resolve_cached_provider_data("", Some(&discogs), Some(&beatport));
+        let fallback = resolve_cached_provider_data("", Some(&discogs));
         assert_eq!(fallback.effective_label.as_deref(), Some("Discogs Records"));
-        assert_eq!(
-            fallback.beatport_genre_raw.as_deref(),
-            Some("Techno (Peak Time / Driving)"),
-            "Beatport taxonomy remains source-separated and cannot override the label"
-        );
         assert_eq!(fallback.discogs.as_ref().unwrap()["match_quality"], "exact");
         assert_eq!(
-            fallback.beatport.as_ref().unwrap()["cached_at"],
+            fallback.discogs.as_ref().unwrap()["cached_at"],
             "2026-07-14T00:00:00Z"
         );
     }

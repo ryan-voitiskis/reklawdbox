@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 
 use rusqlite::{Connection, params};
 
@@ -57,7 +59,9 @@ pub fn get_enrichment(
 
 /// Shared helper for batch enrichment queries that differ only in WHERE suffix.
 /// Over-fetches by artist (all titles for matched artists), so the caller
-/// filters via `HashSet::contains`.
+/// filters via `HashSet::contains`. This collapses album identity and must not
+/// be used for classification readiness.
+#[cfg(test)]
 fn batch_enrichment_query(
     conn: &Connection,
     provider: &str,
@@ -93,6 +97,7 @@ fn batch_enrichment_query(
     Ok(result)
 }
 
+#[cfg(test)]
 pub fn batch_enrichment_existence(
     conn: &Connection,
     provider: &str,
@@ -104,6 +109,7 @@ pub fn batch_enrichment_existence(
 /// Batch existence check filtered to entries that have actual results
 /// (match_quality = "exact" or "fuzzy", i.e. response_json is non-null).
 /// Used by cache_coverage to distinguish "searched" from "has_result".
+#[cfg(test)]
 pub fn batch_enrichment_with_results(
     conn: &Connection,
     provider: &str,
@@ -119,6 +125,7 @@ pub fn batch_enrichment_with_results(
 
 /// Batch check for enrichment entries that have label data.
 /// Returns (artist, title) pairs where the cached response has a non-empty label field.
+#[cfg(test)]
 pub fn batch_enrichment_with_label(
     conn: &Connection,
     provider: &str,

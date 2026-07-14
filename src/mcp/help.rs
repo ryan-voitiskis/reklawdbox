@@ -78,7 +78,7 @@ const WORKFLOWS: &[Workflow] = &[
     Workflow {
         name: "Genre Classification",
         keywords: &["genre", "classify", "classification"],
-        summary: "Classify genres using Discogs, Beatport, and audio evidence.",
+        summary: "Classify genres using Discogs, labels, and audio evidence.",
         key_tools: &[
             "cache_coverage",
             "calibration_coverage",
@@ -153,7 +153,6 @@ const WORKFLOWS: &[Workflow] = &[
             "read_file_tags",
             "write_file_tags",
             "lookup_discogs",
-            "lookup_beatport",
             "embed_cover_art",
             "extract_cover_art",
         ],

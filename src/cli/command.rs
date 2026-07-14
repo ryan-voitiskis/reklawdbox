@@ -18,7 +18,7 @@ pub(crate) enum Cli {
     Analyze(super::analyze::AnalyzeArgs),
     /// Manage Rekordbox library backups
     Backup(super::backup::BackupArgs),
-    /// Batch enrichment + analysis (Discogs, Beatport, audio analysis)
+    /// Batch enrichment + analysis (Discogs and audio analysis)
     Hydrate(super::hydrate::HydrateArgs),
     /// Read metadata tags from audio files
     ReadTags(super::tags::ReadTagsArgs),

@@ -1,7 +1,7 @@
 //! Server-side genre decision tree.
 //!
-//! Applies evidence-based genre classification using cached enrichment data
-//! (Discogs, Beatport, label mapping) and audio analysis features (Essentia).
+//! Applies evidence-based genre classification using cached Discogs and label
+//! metadata plus audio analysis features (Essentia).
 
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use super::profiles::{self as audio_profile, ProfileRegistry};
 use super::taxonomy::{self as genre, GenreFamily};
 use super::{
     AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    GenreCandidate, TrackEvidence,
+    DiscogsMatchQuality, DiscogsReadiness, GenreCandidate, LabelProvenance, TrackEvidence,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,15 @@ struct GenreVote {
     genre: &'static str,
     weight: f32,
     source: &'static str,
+    group: EvidenceSourceGroup,
     bpm_plausible: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum EvidenceSourceGroup {
+    Discogs,
+    RekordboxLabel,
+    Audio,
 }
 
 /// BPM tolerance: ±5 BPM around the defined genre range.
@@ -114,11 +122,26 @@ pub(crate) fn classify_track_with_profiles(
         bpm_context,
     );
 
-    let (genre, confidence, mut ev_lines, mut flags) = if votes.is_empty() {
+    let (mut genre, mut confidence, mut ev_lines, mut flags) = if votes.is_empty() {
         audio_only_inference(evidence, audio_profile.as_ref())
     } else {
         find_consensus(evidence, &votes, audio_profile.as_ref(), bpm_context)
     };
+
+    if genre.is_none() {
+        let current_tokens = current_genre_tokens(&evidence.current_genre);
+        if current_tokens.len() == 1 {
+            genre = Some(current_tokens[0]);
+            confidence = ClassificationConfidence::Low;
+            ev_lines.push(format!(
+                "current-genre hint: \"{}\" → {} (no independent recommendation)",
+                evidence.current_genre, current_tokens[0]
+            ));
+            push_unique_flag(&mut flags, "current-genre-only");
+        } else if current_tokens.len() > 1 {
+            push_unique_flag(&mut flags, "current-genre-ambiguous");
+        }
+    }
 
     // Add audio-profile evidence strings for affinities that contributed
     for a in &affinities {
@@ -136,8 +159,21 @@ pub(crate) fn classify_track_with_profiles(
 
     let candidates = build_candidates(&votes, genre);
 
-    if !evidence.has_discogs && !evidence.has_beatport {
-        push_unique_flag(&mut flags, "no-enrichment");
+    match evidence.discogs_readiness() {
+        DiscogsReadiness::UsableGenre => {}
+        DiscogsReadiness::NotSearched => {
+            push_unique_flag(&mut flags, "no-enrichment");
+        }
+        DiscogsReadiness::NoMatch => {
+            push_unique_flag(&mut flags, "no-enrichment");
+        }
+        DiscogsReadiness::MatchedUnmapped => {
+            push_unique_flag(&mut flags, "no-enrichment");
+            push_unique_flag(&mut flags, "discogs-matched-unmapped");
+        }
+    }
+    if evidence.discogs_match_quality == Some(DiscogsMatchQuality::Invalid) {
+        push_unique_flag(&mut flags, "discogs-match-invalid");
     }
     if !evidence.has_audio {
         push_unique_flag(&mut flags, "no-audio");
@@ -431,15 +467,11 @@ fn check_audio_vetoes(
             Some(EnergyBucket::LowEnergy | EnergyBucket::Dancefloor | EnergyBucket::HighEnergy)
         )
     {
-        let has_enrichment =
-            !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
+        let has_enrichment = !evidence.discogs_mapped.is_empty();
         let enrichment_supports_bass = evidence
             .discogs_mapped
             .iter()
-            .any(|mg| genre::genre_family(mg.genre) == GenreFamily::Bass)
-            || evidence
-                .beatport_genre
-                .is_some_and(|g| genre::genre_family(g) == GenreFamily::Bass);
+            .any(|mg| genre::genre_family(mg.genre) == GenreFamily::Bass);
 
         if !has_enrichment || enrichment_supports_bass {
             let bass_genre =
@@ -489,31 +521,19 @@ fn check_audio_vetoes(
 }
 
 fn all_enrichment_dancefloor(evidence: &TrackEvidence) -> bool {
-    let has_any = !evidence.discogs_mapped.is_empty() || evidence.beatport_genre.is_some();
+    let has_any = !evidence.discogs_mapped.is_empty();
     if !has_any {
         return false;
     }
-    let all_dance = evidence.discogs_mapped.iter().all(|mg| {
+    evidence.discogs_mapped.iter().all(|mg| {
         matches!(
             genre::genre_family(mg.genre),
             GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass | GenreFamily::Hardcore
         )
-    });
-    let bp_dance = evidence.beatport_genre.is_none_or(|g| {
-        matches!(
-            genre::genre_family(g),
-            GenreFamily::House | GenreFamily::Techno | GenreFamily::Bass | GenreFamily::Hardcore
-        )
-    });
-    all_dance && bp_dance
+    })
 }
 
 fn find_family_genre(evidence: &TrackEvidence, family: GenreFamily) -> Option<&'static str> {
-    if let Some(bp) = evidence.beatport_genre
-        && genre::genre_family(bp) == family
-    {
-        return Some(bp);
-    }
     evidence
         .discogs_mapped
         .iter()
@@ -531,20 +551,8 @@ fn gather_votes(
     let mut votes = Vec::new();
     let effective_bpm = bpm_context.effective_bpm;
 
-    // Beatport: weight 1.0, halved if BPM-implausible
-    if let Some(bp) = evidence.beatport_genre {
-        let plausible = bpm_plausible(bp, effective_bpm);
-        votes.push(GenreVote {
-            genre: bp,
-            weight: if plausible { 1.0 } else { 0.5 },
-            source: "beatport",
-            bpm_plausible: plausible,
-        });
-    }
-
     // Discogs: proportional to style_count with steeper decay for diverse releases.
     // Album-level data is less informative per-genre when spread across many genres.
-    // Also discounted when track-level sources (Beatport) exist (confirmatory role).
     let total_styles: usize = evidence.discogs_mapped.iter().map(|m| m.style_count).sum();
     let n_mapped_genres = evidence.discogs_mapped.len();
     let diversity_decay = if n_mapped_genres <= 1 {
@@ -552,18 +560,13 @@ fn gather_votes(
     } else {
         1.0 / (n_mapped_genres as f32).powf(0.4)
     };
-    let confirmatory = if evidence.beatport_genre.is_some() {
-        0.75_f32
-    } else {
-        1.0
-    };
     for mg in &evidence.discogs_mapped {
         let proportion = if total_styles > 0 {
             (mg.style_count as f32 / total_styles as f32).min(1.0)
         } else {
             0.5
         };
-        let base_weight = proportion * 0.9 * diversity_decay * confirmatory;
+        let base_weight = proportion * 0.9 * diversity_decay;
         let plausible = bpm_plausible(mg.genre, effective_bpm);
         votes.push(GenreVote {
             genre: mg.genre,
@@ -573,6 +576,7 @@ fn gather_votes(
                 base_weight * 0.5
             },
             source: "discogs",
+            group: EvidenceSourceGroup::Discogs,
             bpm_plausible: plausible,
         });
     }
@@ -586,30 +590,14 @@ fn gather_votes(
             genre: lg,
             weight: if plausible { weight } else { weight * 0.5 },
             source: "label",
+            group: match evidence.label_provenance {
+                Some(LabelProvenance::Discogs | LabelProvenance::CorrelatedDiscogs) => {
+                    EvidenceSourceGroup::Discogs
+                }
+                Some(LabelProvenance::Rekordbox) | None => EvidenceSourceGroup::RekordboxLabel,
+            },
             bpm_plausible: plausible,
         });
-    }
-
-    // Current genre string: low-weight token-based evidence for non-canonical genres.
-    // Weight is inversely proportional to the number of candidate genres matched,
-    // capped at 0.5 total. Vague strings produce no votes.
-    let tokens = genre::extract_genre_tokens(&evidence.current_genre);
-    if !tokens.is_empty() {
-        let n = tokens.len();
-        let weight_per = (0.5 / n as f32).min(0.5);
-        for g in tokens {
-            let plausible = bpm_plausible(g, effective_bpm);
-            votes.push(GenreVote {
-                genre: g,
-                weight: if plausible {
-                    weight_per
-                } else {
-                    weight_per * 0.5
-                },
-                source: "current-genre",
-                bpm_plausible: plausible,
-            });
-        }
     }
 
     // Audio-profile votes: Fisher discriminant scoring against calibrated prototypes.
@@ -625,6 +613,7 @@ fn gather_votes(
                     genre: a.genre,
                     weight: a.vote_weight,
                     source: "audio-profile",
+                    group: EvidenceSourceGroup::Audio,
                     bpm_plausible: bpm_plausible(a.genre, effective_bpm),
                 });
             }
@@ -645,6 +634,7 @@ fn gather_votes(
             genre: "Drone Techno",
             weight: AUDIO_RULE_BOOST,
             source: "audio-long-tail-atonal",
+            group: EvidenceSourceGroup::Audio,
             bpm_plausible: bpm_plausible("Drone Techno", effective_bpm),
         });
     }
@@ -714,6 +704,12 @@ fn find_consensus(
     }
 
     if !evidence.discogs_mapped.is_empty() {
+        let match_quality = match evidence.discogs_match_quality {
+            Some(DiscogsMatchQuality::Exact) => "exact",
+            Some(DiscogsMatchQuality::Fuzzy) => "fuzzy",
+            Some(DiscogsMatchQuality::Invalid) => "invalid",
+            None => "unknown",
+        };
         let parts: Vec<String> = evidence
             .discogs_mapped
             .iter()
@@ -726,26 +722,21 @@ fn find_consensus(
                 format!("{}(x{}){}", mg.genre, mg.style_count, bpm_note)
             })
             .collect();
-        ev.push(format!("discogs: {}", parts.join(", ")));
-    }
-
-    if let Some(bp) = evidence.beatport_genre {
-        let raw = evidence.beatport_raw.as_deref().unwrap_or(bp);
-        let bpm_note = if !bpm_plausible(bp, bpm_context.effective_bpm) {
-            " [bpm-implausible]"
-        } else {
-            ""
-        };
-        if raw != bp {
-            ev.push(format!("beatport: {bp} (raw: {raw}){bpm_note}"));
-        } else {
-            ev.push(format!("beatport: {bp}{bpm_note}"));
-        }
+        ev.push(format!(
+            "discogs: {} [match={match_quality}]",
+            parts.join(", ")
+        ));
     }
 
     if let Some(lg) = evidence.label_genre {
         let label_name = evidence.label.as_deref().unwrap_or("?");
-        ev.push(format!("label: {label_name} → {lg}"));
+        let provenance = match evidence.label_provenance {
+            Some(LabelProvenance::Rekordbox) => "rekordbox",
+            Some(LabelProvenance::Discogs) => "discogs",
+            Some(LabelProvenance::CorrelatedDiscogs) => "correlated-discogs",
+            None => "unknown",
+        };
+        ev.push(format!("label: {label_name} → {lg} [source={provenance}]"));
     }
 
     if votes.iter().any(|v| v.source == "audio-long-tail-atonal") {
@@ -786,18 +777,6 @@ fn find_consensus(
             )
         };
         ev.push(audio_str);
-    }
-
-    // Log current-genre token evidence
-    {
-        let tokens = genre::extract_genre_tokens(&evidence.current_genre);
-        if !tokens.is_empty() {
-            ev.push(format!(
-                "current-genre: \"{}\" → {}",
-                evidence.current_genre,
-                tokens.join(", ")
-            ));
-        }
     }
 
     let mut confidence = if ranked.len() == 1 && top_score >= 1.0 {
@@ -954,12 +933,42 @@ fn find_consensus(
             ));
         }
     }
-    if let Some(bp) = evidence.beatport_genre
-        && genre::genre_family(bp) != primary_family
+
+    let tie_ratio = if total_weight > 0.0 {
+        margin / total_weight
+    } else {
+        1.0
+    };
+    if confidence == ClassificationConfidence::Insufficient
+        && ranked.len() >= 2
+        && tie_ratio <= 0.15
     {
-        ev.push(format!("influence: {bp} (beatport)"));
+        let current_tokens = current_genre_tokens(&evidence.current_genre);
+        let matching: Vec<_> = current_tokens
+            .into_iter()
+            .filter(|token| ranked.iter().any(|(candidate, _, _)| candidate == token))
+            .collect();
+        if matching.len() == 1 && bpm_plausible(matching[0], effective_bpm) {
+            final_genre = matching[0];
+            ev.push(format!(
+                "current-genre tie-break: \"{}\" → {}",
+                evidence.current_genre, final_genre
+            ));
+            flags.push("current-genre-tiebreak".into());
+        }
     }
 
+    if confidence == ClassificationConfidence::High {
+        let independent_groups: std::collections::HashSet<_> = votes
+            .iter()
+            .filter(|vote| vote.genre == final_genre)
+            .map(|vote| vote.group)
+            .collect();
+        if independent_groups.len() < 2 {
+            confidence = ClassificationConfidence::Medium;
+            flags.push("single-source-confidence-cap".into());
+        }
+    }
     (Some(final_genre), confidence, ev, flags)
 }
 
@@ -1346,7 +1355,7 @@ fn finish_audio_only_result(
     };
 
     let mut flags = vec!["audio-only".into()];
-    if !evidence.has_discogs && !evidence.has_beatport {
+    if evidence.discogs_readiness() != DiscogsReadiness::UsableGenre {
         flags.push("no-enrichment".into());
     }
 
@@ -1358,6 +1367,14 @@ fn resolve_current_canonical(current_genre: &str) -> Option<&'static str> {
         return None;
     }
     genre::resolve_genre(current_genre)
+}
+
+fn current_genre_tokens(current_genre: &str) -> Vec<&'static str> {
+    if let Some(canonical) = resolve_current_canonical(current_genre) {
+        vec![canonical]
+    } else {
+        genre::extract_genre_tokens(current_genre)
+    }
 }
 
 fn compare_to_current(
@@ -1409,7 +1426,7 @@ fn build_candidates(votes: &[GenreVote], top_genre: Option<&str>) -> Vec<GenreCa
 
 fn build_review_hint(evidence: &TrackEvidence, flags: &[String]) -> String {
     let mut hints = Vec::new();
-    if !evidence.has_discogs && !evidence.has_beatport {
+    if evidence.discogs_readiness() != DiscogsReadiness::UsableGenre {
         hints.push("No enrichment data available");
     }
     if !evidence.has_audio {
@@ -1479,13 +1496,12 @@ mod tests {
             current_genre: current.into(),
             bpm: 0.0,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: false,
-            has_beatport: false,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         }
     }
@@ -1581,10 +1597,8 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_confidence_is_preserved_when_optional_audio_is_missing() {
+    fn discogs_confidence_is_preserved_when_optional_audio_is_missing() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Techno",
             style_count: 3,
@@ -1601,7 +1615,7 @@ mod tests {
         let result = classify_track(&ev);
 
         assert_eq!(result.genre, Some("Techno"));
-        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
         assert!(result.flags.contains(&"missing-danceability".to_string()));
         assert!(
             result
@@ -1611,26 +1625,8 @@ mod tests {
     }
 
     #[test]
-    fn beatport_only_returns_medium() {
+    fn discogs_and_uncalibrated_audio_returns_medium() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
-        ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
-        ev.has_audio = true;
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Techno"));
-        assert!(matches!(
-            result.confidence,
-            ClassificationConfidence::High | ClassificationConfidence::Medium
-        ));
-        assert_eq!(result.action, ClassificationAction::Suggest);
-    }
-
-    #[test]
-    fn full_consensus_returns_high() {
-        let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Techno",
             style_count: 3,
@@ -1640,15 +1636,13 @@ mod tests {
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
-        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
         assert_eq!(result.action, ClassificationAction::Suggest);
     }
 
     #[test]
     fn confirms_correct_current_genre() {
         let mut ev = make_evidence("Techno");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Techno",
             style_count: 2,
@@ -1664,8 +1658,6 @@ mod tests {
     #[test]
     fn detects_conflict() {
         let mut ev = make_evidence("House");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Techno",
             style_count: 3,
@@ -1681,8 +1673,11 @@ mod tests {
     #[test]
     fn bpm_implausible_downgrades_confidence() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Deep House");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         // BPM 140 is way outside Deep House range (118-126)
         ev.audio = Some(make_audio(140.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
@@ -1697,8 +1692,6 @@ mod tests {
     #[test]
     fn audio_veto_ambient() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio(100.0, 0.5, 12.0, 0.3, 400.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -1709,15 +1702,163 @@ mod tests {
     #[test]
     fn label_confirms_enrichment() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.label = Some("Tresor".into());
         ev.label_genre = Some("Techno"); // Tresor → Techno
         ev.audio = Some(make_audio(132.0, 2.0, 3.0, 0.92, 1800.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+    }
+
+    #[test]
+    fn discogs_style_and_fallback_label_are_one_confidence_group() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.label = Some("Cached Discogs Label".into());
+        ev.label_genre = Some("Techno");
+        ev.label_provenance = Some(LabelProvenance::Discogs);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+        assert!(
+            result
+                .flags
+                .contains(&"single-source-confidence-cap".to_string())
+        );
+    }
+
+    #[test]
+    fn distinct_rekordbox_label_and_discogs_can_reach_high_confidence() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.label = Some("Independent Library Label".into());
+        ev.label_genre = Some("Techno");
+        ev.label_provenance = Some(LabelProvenance::Rekordbox);
+
+        let result = classify_track(&ev);
         assert_eq!(result.confidence, ClassificationConfidence::High);
+    }
+
+    #[test]
+    fn duplicate_rekordbox_and_discogs_label_is_correlated() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.label = Some("Same Label".into());
+        ev.label_genre = Some("Techno");
+        ev.label_provenance = Some(LabelProvenance::CorrelatedDiscogs);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+    }
+
+    #[test]
+    fn fuzzy_discogs_only_evidence_cannot_be_high() {
+        let mut ev = make_evidence("");
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "House",
+            style_count: 3,
+        }];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Fuzzy);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("House"));
+        assert_ne!(result.confidence, ClassificationConfidence::High);
+    }
+
+    #[test]
+    fn discogs_and_independent_audio_rule_can_reach_high_confidence() {
+        let mut ev = make_evidence("");
+        ev.bpm = 128.0;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Drone Techno",
+            style_count: 2,
+        }];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        let mut audio =
+            make_audio_with_key_conf_and_decay(128.0, 2.0, 3.0, 0.92, 900.0, 0.05, 250.0);
+        audio.rekordbox_bpm = 128.0;
+        ev.audio = Some(audio);
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Drone Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::High);
+    }
+
+    #[test]
+    fn invalid_discogs_match_cannot_create_provider_evidence() {
+        let mut ev = make_evidence("");
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Invalid);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, None);
+        assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
+        assert!(result.flags.contains(&"discogs-match-invalid".to_string()));
+    }
+
+    #[test]
+    fn current_genre_only_is_a_low_confidence_hint() {
+        let ev = make_evidence("Techno");
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Low);
+        assert_eq!(result.action, ClassificationAction::Confirm);
+        assert!(result.flags.contains(&"current-genre-only".to_string()));
+    }
+
+    #[test]
+    fn ambiguous_current_genre_does_not_create_a_recommendation() {
+        let ev = make_evidence("House / Techno");
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, None);
+        assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
+        assert!(
+            result
+                .flags
+                .contains(&"current-genre-ambiguous".to_string())
+        );
+    }
+
+    #[test]
+    fn current_genre_breaks_a_real_tie_without_raising_confidence() {
+        let mut ev = make_evidence("House");
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "House",
+                style_count: 1,
+            },
+            MappedGenre {
+                genre: "Techno",
+                style_count: 1,
+            },
+        ];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("House"));
+        assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
+        assert!(result.flags.contains(&"current-genre-tiebreak".to_string()));
     }
 
     #[test]
@@ -1728,8 +1869,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio(135.0, 2.8, 2.0, 0.95, 2500.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -1810,8 +1949,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         // Dancefloor (not high-energy), bright centroid, atonal (key_conf=0.05).
         ev.audio = Some(make_audio_with_key_conf(
             125.0, 2.0, 3.0, 0.92, 1800.0, 0.05,
@@ -1827,15 +1964,112 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_enrichment_is_resolved_by_independent_audio_characteristics() {
+        let mut ev = make_evidence("");
+        ev.bpm = 130.0;
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "House",
+                style_count: 1,
+            },
+            MappedGenre {
+                genre: "Techno",
+                style_count: 1,
+            },
+        ];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.audio = Some(make_audio_with_key_conf(
+            130.0, 2.2, 3.0, 0.95, 1800.0, 0.05,
+        ));
+        ev.has_audio = true;
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Low);
+        assert!(
+            result
+                .flags
+                .contains(&"audio-assisted-tiebreak".to_string())
+        );
+    }
+
+    #[test]
+    fn bpm_override_within_family_floors_at_medium() {
+        let mut ev = make_evidence("");
+        ev.bpm = 145.0;
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "Deep Techno",
+                style_count: 4,
+            },
+            MappedGenre {
+                genre: "Techno",
+                style_count: 1,
+            },
+        ];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.label = Some("Independent Library Label".into());
+        ev.label_genre = Some("Deep Techno");
+        ev.label_provenance = Some(LabelProvenance::Rekordbox);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
+        assert!(result.flags.contains(&"bpm-override".to_string()));
+        assert!(
+            result
+                .flags
+                .contains(&"bpm-override-same-family".to_string())
+        );
+    }
+
+    #[test]
+    fn bpm_override_across_families_downgrades_to_low() {
+        let mut ev = make_evidence("");
+        ev.bpm = 170.0;
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "House",
+                style_count: 4,
+            },
+            MappedGenre {
+                genre: "Drum & Bass",
+                style_count: 1,
+            },
+        ];
+        ev.has_discogs = true;
+        ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+        ev.label = Some("Independent Library Label".into());
+        ev.label_genre = Some("House");
+        ev.label_provenance = Some(LabelProvenance::Rekordbox);
+
+        let result = classify_track(&ev);
+        assert_eq!(result.genre, Some("Drum & Bass"));
+        assert_eq!(result.confidence, ClassificationConfidence::Low);
+        assert!(result.flags.contains(&"bpm-override".to_string()));
+        assert!(
+            !result
+                .flags
+                .contains(&"bpm-override-same-family".to_string())
+        );
+    }
+
+    #[test]
     fn atonal_house_demotes_to_house() {
         let mut ev = make_evidence("");
-        ev.discogs_mapped = vec![MappedGenre {
-            genre: "Deep House",
-            style_count: 2,
-        }];
+        ev.discogs_mapped = vec![
+            MappedGenre {
+                genre: "Deep House",
+                style_count: 1,
+            },
+            MappedGenre {
+                genre: "House",
+                style_count: 1,
+            },
+        ];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("House");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_key_conf(
             124.0, 2.0, 3.0, 0.92, 1800.0, 0.05,
         ));
@@ -1858,8 +2092,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         // HighEnergy bucket (danceability > 2.5) + atonal.
         ev.audio = Some(make_audio_with_key_conf(
             135.0, 2.8, 2.0, 0.95, 2500.0, 0.05,
@@ -1879,8 +2111,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("House");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_key_conf(124.0, 2.0, 3.0, 0.92, 1800.0, 0.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -1899,8 +2129,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_decay(125.0, 2.0, 3.0, 0.92, 1800.0, 250.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -1920,8 +2148,6 @@ mod tests {
             style_count: 1,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Ambient");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_key_conf_and_decay(
             126.0, 2.0, 3.0, 0.92, 1000.0, 0.05, 275.0,
         ));
@@ -1974,8 +2200,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_decay(135.0, 2.8, 2.0, 0.95, 2500.0, 260.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -1990,8 +2214,6 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio_with_loudness_range(
             128.0, 2.0, 3.0, 0.92, 1800.0, 0.7,
         ));
@@ -2008,8 +2230,6 @@ mod tests {
     #[test]
     fn compressed_atmospheric_skips_expanded_ambient_veto() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Dub Techno");
-        ev.has_beatport = true;
         // NonDancefloor + Atmospheric normally trips the expanded Ambient veto.
         let audio = make_audio_with_loudness_range(120.0, 0.8, 7.0, 0.85, 900.0, 0.6);
         let profile = compute_audio_profile(&audio);
@@ -2036,14 +2256,12 @@ mod tests {
             style_count: 2,
         }];
         ev.has_discogs = true;
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         let mut audio = make_audio_with_loudness_range(128.0, 2.0, 3.0, 0.92, 1800.0, 0.7);
         audio.duration_seconds = Some(45.0);
         ev.audio = Some(audio);
         ev.has_audio = true;
         let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Techno"));
+        assert_eq!(result.genre, Some("Deep Techno"));
         assert!(
             !result.evidence.iter().any(|e| e.contains("compressed")),
             "short tracks should not set compressed: {:?}",
@@ -2054,15 +2272,18 @@ mod tests {
     #[test]
     fn bpm_disagreement_uses_detector_consensus() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Deep House");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         // Rekordbox 132 is just outside Deep House plausibility after tolerance;
         // Stratum + Essentia agree that the track is really around 125 BPM.
         ev.audio = Some(make_audio_with_detector_bpms(132.0, 125.0, 125.2));
         ev.has_audio = true;
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Deep House"));
-        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert_eq!(result.confidence, ClassificationConfidence::Medium);
         assert!(
             result
                 .flags
@@ -2088,8 +2309,11 @@ mod tests {
     #[test]
     fn bpm_disagreement_no_detector_consensus_uses_rekordbox() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Deep House");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         // Stratum disagrees with Rekordbox, but Essentia does not agree with
         // Stratum, so keep Rekordbox for plausibility.
         ev.audio = Some(make_audio_with_detector_bpms(132.0, 125.0, 132.0));
@@ -2116,8 +2340,11 @@ mod tests {
     #[test]
     fn bpm_disagreement_rejects_double_time_consensus() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Ambient");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Ambient",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         // Both detectors agree near double Rekordbox tempo. That is common for
         // half-time material and should stay reviewable, not override Rekordbox.
         ev.audio = Some(make_audio_with_detector_bpms(74.0, 148.0, 147.8));
@@ -2136,8 +2363,11 @@ mod tests {
     #[test]
     fn bpm_disagreement_requires_dancefloor_audio() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Deep House");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "Deep House",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         let mut audio = make_audio_with_detector_bpms(90.0, 122.0, 122.2);
         audio.danceability = Some(1.2);
         ev.audio = Some(audio);
@@ -2153,8 +2383,7 @@ mod tests {
         );
     }
 
-    // 1. Marcel Dettmann - Aim: full consensus Techno
-    // Discogs Techno(x1), Beatport Techno, label Ostgut Ton → Techno, BPM 130
+    // 1. Marcel Dettmann - Aim: Discogs and label consensus on Techno.
     #[test]
     fn collection_dettmann_aim_full_consensus_techno() {
         let ev = TrackEvidence {
@@ -2167,13 +2396,12 @@ mod tests {
                 genre: "Techno",
                 style_count: 1,
             }],
-            beatport_genre: Some("Techno"),
-            beatport_raw: Some("Techno (Peak Time / Driving)".into()),
             label: Some("Ostgut Ton".into()),
             label_genre: Some("Techno"),
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2191,14 +2419,16 @@ mod tests {
             title: "Actions".into(),
             current_genre: "".into(),
             bpm: 132.0,
-            discogs_mapped: vec![],
-            beatport_genre: Some("Deep House"),
-            beatport_raw: Some("Deep House".into()),
+            discogs_mapped: vec![MappedGenre {
+                genre: "Deep House",
+                style_count: 1,
+            }],
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2212,52 +2442,6 @@ mod tests {
         );
     }
 
-    // 3. Vadz - Abstraction: Beatport breaks 5-way Discogs split
-    // Discogs: Electro, IDM, Minimal, Techno, Trance. Beatport: Techno. BPM 129
-    #[test]
-    fn collection_vadz_abstraction_beatport_breaks_split() {
-        let ev = TrackEvidence {
-            track_id: "121445057".into(),
-            artist: "Vadz".into(),
-            title: "Abstraction".into(),
-            current_genre: "".into(),
-            bpm: 129.31,
-            discogs_mapped: vec![
-                MappedGenre {
-                    genre: "Electro",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "IDM",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "Minimal",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "Techno",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "Trance",
-                    style_count: 1,
-                },
-            ],
-            beatport_genre: Some("Techno"),
-            beatport_raw: Some("Techno (Peak Time / Driving)".into()),
-            label: Some("Russian Techno".into()),
-            label_genre: None,
-            audio: None,
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: false,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Techno"));
-        assert_eq!(result.confidence, ClassificationConfidence::High);
-    }
-
     // 4. Dead Man's Chest - All About U: audio veto to bass family
     // No enrichment genres, audio: 157bpm, danceability 1.01, dc 3.95, rr 1.04, sc 1395
     #[test]
@@ -2269,51 +2453,17 @@ mod tests {
             current_genre: "".into(),
             bpm: 156.97,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: Some(make_audio(156.97, 1.01, 3.95, 1.04, 1395.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Breakbeat"));
         assert!(result.flags.contains(&"audio-vetoed".to_string()));
-    }
-
-    // 5. Gacha Bakradze - Attention: Beatport D&B breaks Discogs Electro/IDM
-    // Discogs: Electro, IDM. Beatport: Drum & Bass. BPM 180
-    #[test]
-    fn collection_bakradze_attention_beatport_dnb() {
-        let ev = TrackEvidence {
-            track_id: "10208805".into(),
-            artist: "Gacha Bakradze".into(),
-            title: "Attention".into(),
-            current_genre: "".into(),
-            bpm: 180.0,
-            discogs_mapped: vec![
-                MappedGenre {
-                    genre: "Electro",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "IDM",
-                    style_count: 1,
-                },
-            ],
-            beatport_genre: Some("Drum & Bass"),
-            beatport_raw: Some("Drum & Bass".into()),
-            label: None,
-            label_genre: None,
-            audio: None,
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: false,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Drum & Bass"));
     }
 
     // 6. Alarico - 0 Kelvin: Deep Techno BPM-implausible at 145, Techno barely plausible
@@ -2329,13 +2479,12 @@ mod tests {
                 genre: "Techno",
                 style_count: 1,
             }],
-            beatport_genre: Some("Deep Techno"),
-            beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2346,8 +2495,7 @@ mod tests {
         );
     }
 
-    // 7. Efdemin - Aachen: label tips depth to Techno
-    // Discogs: Techno(x1). Beatport: Deep Techno. Label: Ostgut Ton → Techno. BPM 135.
+    // 7. Efdemin - Aachen: Discogs and label agree on Techno.
     #[test]
     fn collection_efdemin_aachen_label_tips_depth() {
         let ev = TrackEvidence {
@@ -2360,13 +2508,12 @@ mod tests {
                 genre: "Techno",
                 style_count: 1,
             }],
-            beatport_genre: Some("Deep Techno"),
-            beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
             label: Some("Ostgut Ton".into()),
             label_genre: Some("Techno"),
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2388,13 +2535,12 @@ mod tests {
             current_genre: "".into(),
             bpm: 134.31,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: Some(make_audio(134.31, 1.74, 3.64, 1.07, 1244.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2402,8 +2548,7 @@ mod tests {
         assert!(result.flags.contains(&"audio-only".to_string()));
     }
 
-    // 9. prince of denmark - (in the end): 4-way Discogs split, insufficient
-    // Discogs: Ambient, Dub Techno, House, Techno — all x1. No Beatport. BPM 126.
+    // 9. prince of denmark - (in the end): 4-way Discogs split, insufficient.
     #[test]
     fn collection_pod_ghost_4way_split_insufficient() {
         let ev = TrackEvidence {
@@ -2430,13 +2575,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2460,13 +2604,12 @@ mod tests {
             current_genre: "".into(),
             bpm: 145.0,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2497,13 +2640,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: Some("Techno"),
-            beatport_raw: Some("Techno (Peak Time / Driving)".into()),
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let result = classify_track(&ev);
@@ -2517,31 +2659,6 @@ mod tests {
             "Should prefer BPM-plausible Tech House or House over implausible Techno, got {:?}",
             result.genre
         );
-    }
-
-    // 12. Baltra - 16 Pads: confirms existing Breakbeat
-    // Beatport: Breakbeat. Audio: 130bpm, danceability 1.15. Current: Breakbeat.
-    #[test]
-    fn collection_baltra_16_pads_confirms_breakbeat() {
-        let ev = TrackEvidence {
-            track_id: "21091446".into(),
-            artist: "Baltra".into(),
-            title: "16 Pads [update 26092017] v2 (FIX 4 MPC)".into(),
-            current_genre: "Breakbeat".into(),
-            bpm: 130.0,
-            discogs_mapped: vec![],
-            beatport_genre: Some("Breakbeat"),
-            beatport_raw: Some("Breaks / Breakbeat / UK Bass".into()),
-            label: None,
-            label_genre: None,
-            audio: Some(make_audio(130.0, 1.15, 3.35, 1.16, 1585.0)),
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: true,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Breakbeat"));
-        assert_eq!(result.action, ClassificationAction::Confirm);
     }
 
     // 13. Flying Lotus - ...And The World Laughs With You: enrichment overrides bass veto
@@ -2568,13 +2685,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None, // "Electronica" unmapped
-            beatport_raw: Some("Electronica".into()),
             label: None,
             label_genre: None,
             audio: Some(make_audio(164.7, 1.19, 4.18, 0.68, 1919.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2605,13 +2721,12 @@ mod tests {
                 genre: "Downtempo",
                 style_count: 1,
             }],
-            beatport_genre: None, // "Electronica" unmapped
-            beatport_raw: Some("Electronica".into()),
             label: None,
             label_genre: None,
             audio: Some(make_audio(104.02, 1.36, 7.02, 0.97, 1161.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2619,8 +2734,7 @@ mod tests {
         assert_eq!(result.action, ClassificationAction::Conflict);
     }
 
-    // 15. Gallery S - 100 Skyward Fist: BPM filters Jungle, House wins
-    // Discogs: House, Jungle (BPM-implausible at 128), Techno. Beatport: House. Audio: 128bpm.
+    // 15. Gallery S - 100 Skyward Fist: BPM filters Jungle, House wins.
     #[test]
     fn collection_gallery_s_100_skyward_fist_house() {
         let ev = TrackEvidence {
@@ -2643,13 +2757,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: Some("House"),
-            beatport_raw: Some("House".into()),
             label: None,
             label_genre: None,
             audio: Some(make_audio(128.0, 1.42, 1.76, 0.84, 1923.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2669,13 +2782,12 @@ mod tests {
             current_genre: "Techno".into(),
             bpm: 154.0,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: Some(make_audio(154.0, 1.36, 3.47, 1.10, 1341.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2703,13 +2815,12 @@ mod tests {
             current_genre: "Techno".into(),
             bpm: 136.0,
             discogs_mapped: vec![],
-            beatport_genre: None,
-            beatport_raw: None,
             label: Some("Lobster Theremin".into()),
             label_genre: Some("House"),
             audio: Some(make_audio(136.0, 1.69, 6.62, 0.95, 2205.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2717,9 +2828,7 @@ mod tests {
         assert_eq!(result.action, ClassificationAction::Conflict);
     }
 
-    // 18. Anthony Parasole - 7EVEN: high energy should veto Deep Techno
-    // Beatport: Deep Techno. Audio: 132bpm, danceability 3.62 (very high energy!)
-    // High energy contradicts "deep" — should prefer Techno
+    // 18. Anthony Parasole - 7EVEN: current Techno and high-energy audio agree.
     #[test]
     fn collection_parasole_7even_high_energy_vetoes_deep() {
         let ev = TrackEvidence {
@@ -2729,13 +2838,12 @@ mod tests {
             current_genre: "Techno".into(),
             bpm: 132.0,
             discogs_mapped: vec![],
-            beatport_genre: Some("Deep Techno"),
-            beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
             label: None,
             label_genre: None,
             audio: Some(make_audio(132.0, 3.62, 2.71, 1.00, 1572.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2744,40 +2852,6 @@ mod tests {
             Some("Techno"),
             "High energy (danceability 3.62) should veto Deep Techno in favor of Techno"
         );
-        assert_eq!(result.action, ClassificationAction::Confirm);
-    }
-
-    // 19. Skee Mask - 50 Euro To Break Boost: confirms Breakbeat
-    // Discogs: Ambient, Breakbeat. Beatport: Breakbeat. Label: Ilian Tape → Techno. BPM 132.
-    #[test]
-    fn collection_skee_mask_50_euro_confirms_breakbeat() {
-        let ev = TrackEvidence {
-            track_id: "52711233".into(),
-            artist: "Skee Mask".into(),
-            title: "50 Euro To Break Boost".into(),
-            current_genre: "Breakbeat".into(),
-            bpm: 132.0,
-            discogs_mapped: vec![
-                MappedGenre {
-                    genre: "Ambient",
-                    style_count: 1,
-                },
-                MappedGenre {
-                    genre: "Breakbeat",
-                    style_count: 1,
-                },
-            ],
-            beatport_genre: Some("Breakbeat"),
-            beatport_raw: Some("Breaks / Breakbeat / UK Bass".into()),
-            label: Some("Ilian Tape".into()),
-            label_genre: Some("Techno"),
-            audio: None,
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: false,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Breakbeat"));
         assert_eq!(result.action, ClassificationAction::Confirm);
     }
 
@@ -2801,13 +2875,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: Some(make_audio(122.0, 2.06, 4.30, 0.92, 601.0)),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -2819,130 +2892,6 @@ mod tests {
         assert_eq!(result.action, ClassificationAction::Conflict);
     }
 
-    // H5: Cross-family conflict (Discogs House vs Beatport Techno) resolved by audio tiebreaker
-    #[test]
-    fn test_conflicting_enrichment_resolved_by_audio() {
-        let ev = TrackEvidence {
-            track_id: "test-h5".into(),
-            artist: "Test Artist".into(),
-            title: "Conflict Tiebreak".into(),
-            current_genre: "".into(),
-            bpm: 130.0,
-            discogs_mapped: vec![MappedGenre {
-                genre: "House",
-                style_count: 1,
-            }],
-            beatport_genre: Some("Techno"),
-            beatport_raw: Some("Techno (Peak Time / Driving)".into()),
-            label: None,
-            label_genre: None,
-            audio: Some(make_audio(130.0, 2.2, 3.0, 0.92, 1800.0)),
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: true,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(
-            result.genre,
-            Some("Techno"),
-            "Beatport (track-level) should win over Discogs (album-level) for Techno"
-        );
-        // With confirmatory discount, Discogs weight is reduced when Beatport
-        // exists, so the margin exceeds the 15% tight-race threshold → Medium.
-        assert_eq!(
-            result.confidence,
-            ClassificationConfidence::Medium,
-            "Track-level source should produce Medium confidence, not a tight race"
-        );
-    }
-
-    // BPM override within the same genre family should floor confidence at Medium,
-    // not downgrade Medium → Low.
-    #[test]
-    fn bpm_override_same_family_floors_at_medium() {
-        // Beatport + Discogs both say "Deep Techno" (strong signal), BPM is 145 —
-        // outside Deep Techno range (120-132+5). Label says "Techno" which IS
-        // plausible at 145 BPM (128-140+5). Audio is dancefloor + atmospheric so
-        // depth resolution prefers deeper (Deep Techno), then BPM override swaps
-        // to Techno. Same Techno family → confidence floors at Medium.
-        let ev = TrackEvidence {
-            track_id: "test-bpm-same-family".into(),
-            artist: "Test".into(),
-            title: "Test".into(),
-            current_genre: "".into(),
-            bpm: 145.0,
-            discogs_mapped: vec![MappedGenre {
-                genre: "Deep Techno",
-                style_count: 2,
-            }],
-            beatport_genre: Some("Deep Techno"),
-            beatport_raw: Some("Techno (Raw / Deep / Hypnotic)".into()),
-            label: Some("Test Label".into()),
-            label_genre: Some("Techno"),
-            audio: Some(make_audio(145.0, 1.6, 6.0, 0.92, 800.0)),
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: true,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Techno"));
-        assert_eq!(result.confidence, ClassificationConfidence::Medium);
-        assert!(
-            result.flags.contains(&"bpm-override".to_string()),
-            "Expected bpm-override flag, got: {:?}",
-            result.flags
-        );
-        assert!(
-            result
-                .flags
-                .contains(&"bpm-override-same-family".to_string()),
-            "Expected bpm-override-same-family flag, got: {:?}",
-            result.flags
-        );
-    }
-
-    // BPM override across genre families should still downgrade Medium → Low.
-    #[test]
-    fn bpm_override_cross_family_downgrades_to_low() {
-        // Beatport + Discogs both say "House" (strong signal), BPM is 170 —
-        // outside House range (120-130+5). Label says "Drum & Bass" which IS
-        // plausible at 170 BPM (168-180). Different families (House vs Bass) →
-        // confidence downgrades Medium → Low.
-        let ev = TrackEvidence {
-            track_id: "test-bpm-cross-family".into(),
-            artist: "Test".into(),
-            title: "Test".into(),
-            current_genre: "".into(),
-            bpm: 170.0,
-            discogs_mapped: vec![MappedGenre {
-                genre: "House",
-                style_count: 2,
-            }],
-            beatport_genre: Some("House"),
-            beatport_raw: Some("House".into()),
-            label: Some("Test Label".into()),
-            label_genre: Some("Drum & Bass"),
-            audio: Some(make_audio(170.0, 2.0, 3.0, 0.85, 2000.0)),
-            has_discogs: true,
-            has_beatport: true,
-            has_audio: true,
-        };
-        let result = classify_track(&ev);
-        assert_eq!(result.genre, Some("Drum & Bass"));
-        assert_eq!(result.confidence, ClassificationConfidence::Low);
-        assert!(
-            result.flags.contains(&"bpm-override".to_string()),
-            "Expected bpm-override flag, got: {:?}",
-            result.flags
-        );
-        assert!(
-            !result
-                .flags
-                .contains(&"bpm-override-same-family".to_string()),
-            "Should NOT have same-family flag for cross-family override"
-        );
-    }
-
     // --- Tests for new behaviors from the classification improvements ---
 
     #[test]
@@ -2951,8 +2900,6 @@ mod tests {
         // danceability=0.5 → NonDancefloor
         // Should trigger the new NonDancefloor + Atmospheric veto
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.audio = Some(make_audio(100.0, 0.5, 7.0, 0.3, 400.0));
         ev.has_audio = true;
         let result = classify_track(&ev);
@@ -2988,14 +2935,13 @@ mod tests {
                     style_count: 2,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             // LowEnergy (1.2) + Atmospheric (dc=6.0) → Downtempo passes
             audio: Some(make_audio(100.0, 1.2, 6.0, 0.85, 1500.0)),
             has_discogs: true,
-            has_beatport: false,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -3030,14 +2976,13 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             // LowEnergy + very low centroid → both Downtempo and Techno pass
             audio: Some(make_audio(125.0, 1.2, 3.0, 0.95, 264.0)),
             has_discogs: true,
-            has_beatport: false,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
         let result = classify_track(&ev);
@@ -3067,13 +3012,12 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: None,
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: false,
         };
         let first_result = classify_track(&ev);
@@ -3089,8 +3033,6 @@ mod tests {
     #[test]
     fn candidates_include_chosen_genre() {
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("Techno");
-        ev.has_beatport = true;
         ev.discogs_mapped = vec![MappedGenre {
             genre: "Deep Techno",
             style_count: 1,
@@ -3151,8 +3093,6 @@ mod tests {
                     style_count: 1,
                 },
             ],
-            beatport_genre: None,
-            beatport_raw: None,
             label: None,
             label_genre: None,
             audio: Some({
@@ -3162,7 +3102,8 @@ mod tests {
                 a
             }),
             has_discogs: true,
-            has_beatport: true,
+            discogs_match_quality: None,
+            label_provenance: None,
             has_audio: true,
         };
 
@@ -3206,8 +3147,11 @@ mod tests {
         let registry = audio_profile::calibrate(&samples);
 
         let mut ev = make_evidence("");
-        ev.beatport_genre = Some("House");
-        ev.has_beatport = true;
+        ev.discogs_mapped = vec![MappedGenre {
+            genre: "House",
+            style_count: 1,
+        }];
+        ev.has_discogs = true;
         let mut sparse = make_audio(128.0, 2.0, 3.0, 0.9, 1500.0);
         sparse.danceability = None;
         ev.audio = Some(sparse);

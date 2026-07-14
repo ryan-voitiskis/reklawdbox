@@ -69,6 +69,15 @@ pub(crate) struct CompactClassificationResult {
 }
 
 impl ClassificationResult {
+    /// Confidence, rather than action, determines whether a result still needs
+    /// human review. A weak confirmation is not silently complete.
+    pub(crate) fn review_required(&self) -> bool {
+        matches!(
+            self.confidence,
+            ClassificationConfidence::Low | ClassificationConfidence::Insufficient
+        )
+    }
+
     /// Destructured so adding a field to [`ClassificationResult`] produces a
     /// compile error here, forcing a conscious decision about the compact view.
     pub(crate) fn to_compact(&self) -> CompactClassificationResult {
@@ -98,9 +107,36 @@ impl ClassificationResult {
 }
 
 /// Mapped genre from an enrichment source.
+#[derive(Debug, Clone)]
 pub(crate) struct MappedGenre {
     pub(crate) genre: &'static str,
     pub(crate) style_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiscogsMatchQuality {
+    Exact,
+    Fuzzy,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiscogsReadiness {
+    NotSearched,
+    NoMatch,
+    MatchedUnmapped,
+    UsableGenre,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LabelProvenance {
+    Rekordbox,
+    Discogs,
+    /// The library label duplicates the cached Discogs label and is therefore
+    /// conservatively treated as the same evidence source.
+    CorrelatedDiscogs,
 }
 
 /// Pre-extracted audio features from cache.
@@ -166,14 +202,34 @@ pub(crate) struct TrackEvidence {
     /// Rekordbox BPM — always available from the DB, independent of audio analysis.
     pub(crate) bpm: f64,
     pub(crate) discogs_mapped: Vec<MappedGenre>,
-    pub(crate) beatport_genre: Option<&'static str>,
-    pub(crate) beatport_raw: Option<String>,
     pub(crate) label: Option<String>,
     pub(crate) label_genre: Option<&'static str>,
+    pub(crate) label_provenance: Option<LabelProvenance>,
     pub(crate) audio: Option<AudioFeatures>,
     pub(crate) has_discogs: bool,
-    pub(crate) has_beatport: bool,
+    pub(crate) discogs_match_quality: Option<DiscogsMatchQuality>,
     pub(crate) has_audio: bool,
+}
+
+impl TrackEvidence {
+    pub(crate) fn discogs_readiness(&self) -> DiscogsReadiness {
+        if !self.has_discogs {
+            DiscogsReadiness::NotSearched
+        } else if !self.discogs_mapped.is_empty()
+            && matches!(
+                self.discogs_match_quality,
+                Some(DiscogsMatchQuality::Exact | DiscogsMatchQuality::Fuzzy) | None
+            )
+        {
+            // `None` supports provider-independent direct domain fixtures. The
+            // runtime interpreter always supplies typed match quality.
+            DiscogsReadiness::UsableGenre
+        } else if self.discogs_match_quality.is_some() {
+            DiscogsReadiness::MatchedUnmapped
+        } else {
+            DiscogsReadiness::NoMatch
+        }
+    }
 }
 
 #[cfg(test)]
@@ -190,7 +246,7 @@ mod tests {
             genre: Some("Techno"),
             confidence: ClassificationConfidence::High,
             action: ClassificationAction::Conflict,
-            evidence: vec!["beatport: Techno".into()],
+            evidence: vec!["discogs: Techno(x1)".into()],
             candidates: vec![GenreCandidate {
                 genre: "Techno",
                 score: 2.5,
@@ -211,7 +267,7 @@ mod tests {
                 "genre": "Techno",
                 "confidence": "high",
                 "action": "conflict",
-                "evidence": ["beatport: Techno"],
+                "evidence": ["discogs: Techno(x1)"],
                 "candidates": [{
                     "genre": "Techno",
                     "score": 2.5,

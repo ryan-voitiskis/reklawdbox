@@ -277,7 +277,6 @@ pub(in crate::mcp) async fn handle_backfill_years(
     let filled = scan.filled_file_tags
         + scan.filled_folder_path
         + scan.filled_discogs
-        + scan.filled_beatport
         + scan.filled_musicbrainz
         + scan.filled_bandcamp;
 
@@ -292,7 +291,6 @@ pub(in crate::mcp) async fn handle_backfill_years(
                 "file_tags": scan.filled_file_tags,
                 "folder_path": scan.filled_folder_path,
                 "discogs": scan.filled_discogs,
-                "beatport": scan.filled_beatport,
                 "musicbrainz": scan.filled_musicbrainz,
                 "bandcamp": scan.filled_bandcamp,
             },
@@ -301,7 +299,6 @@ pub(in crate::mcp) async fn handle_backfill_years(
             "remaining_year_zero": scan.remaining_year_zero.len(),
             "remaining_uncached_providers": {
                 "no_discogs": scan.remaining_no_discogs,
-                "no_beatport": scan.remaining_no_beatport,
                 "no_musicbrainz": scan.remaining_no_musicbrainz,
                 "no_bandcamp": scan.remaining_no_bandcamp,
             },
@@ -337,12 +334,6 @@ mod tests {
     fn parse_year_str_iso_date() {
         assert_eq!(parse_year_str("2019-01-15"), Some(2019));
         assert_eq!(parse_year_str("2024-12"), Some(2024));
-    }
-
-    #[test]
-    fn parse_year_str_beatport_datetime() {
-        assert_eq!(parse_year_str("2010-12-06T00:00:00"), Some(2010));
-        assert_eq!(parse_year_str("2023-03-17T00:00:00"), Some(2023));
     }
 
     #[test]

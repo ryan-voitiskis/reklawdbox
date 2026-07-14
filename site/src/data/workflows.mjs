@@ -189,7 +189,7 @@ export const workflows = [
           kind: 'enrichment-cache',
           mode: 'conditional',
           condition:
-            'Selected Discogs, Beatport, Bandcamp, or MusicBrainz evidence is missing.',
+            'Selected Discogs, Bandcamp, or MusicBrainz evidence is missing.',
         },
         {
           kind: 'audio-cache',
@@ -398,7 +398,7 @@ export const workflows = [
     runtimeHelp: { topic: 'metadata', menuOrder: 2, recommendedOrder: 2 },
     prerequisites: [
       'A scoped cache_coverage baseline for the tracks with missing metadata.',
-      'Completed Discogs and Beatport searches where relevant; a cached no-match counts as searched.',
+      'Completed Discogs searches where relevant; a cached no-match counts as searched.',
       'Time to research unresolved label and year gaps before bypassing the export gate.',
     ],
     scope:
@@ -451,7 +451,7 @@ export const workflows = [
           kind: 'enrichment-cache',
           mode: 'conditional',
           condition:
-            'Preparation fills missing Discogs or Beatport searches before cache-only classification.',
+            'Preparation fills missing Discogs searches before cache-only classification.',
         },
         {
           kind: 'audio-cache',
@@ -483,7 +483,7 @@ export const workflows = [
     runtimeHelp: { topic: 'genre', menuOrder: 3, recommendedOrder: 3 },
     prerequisites: [
       'A scoped cache_coverage baseline for ungenred tracks.',
-      'Core Discogs, Beatport, and Stratum gaps filled where practical; incomplete evidence is allowed.',
+      'Core Discogs and Stratum gaps filled where practical; incomplete evidence is allowed.',
       'A user-selected confidence approval policy.',
     ],
     scope:
@@ -536,7 +536,7 @@ export const workflows = [
           kind: 'enrichment-cache',
           mode: 'conditional',
           condition:
-            'Preparation fills missing Discogs or Beatport searches before the cache-only audit.',
+            'Preparation fills missing Discogs searches before the cache-only audit.',
         },
         {
           kind: 'audio-cache',
@@ -1143,14 +1143,14 @@ export const workflows = [
         network: {
           level: 'conditional',
           condition:
-            'A user-supplied track or release candidate needs a Discogs or Beatport lookup that is not already cached.',
+            'A user-supplied track or release candidate needs a Discogs lookup that is not already cached.',
         },
         localStateWrites: [
           {
             kind: 'enrichment-cache',
             mode: 'conditional',
             condition:
-              'The supplied candidate’s Discogs or Beatport lookup is not already cached.',
+              'The supplied candidate’s Discogs lookup is not already cached.',
           },
           {
             kind: 'provider-session',

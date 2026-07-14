@@ -1,5 +1,10 @@
 # Genre Classification: Implementation Spec
 
+> **Historical implementation snapshot:** This document predates the
+> 2026-07-14 Beatport removal, source-group confidence rules, and versioned
+> profile state. Preserve it as research context, but use Plans 034–035 and the
+> live classifier as the current contract.
+
 **Date:** 2026-04-10
 **Prereq:** Read [genre-classification-improvements.md](genre-classification-improvements.md) for full research context and empirical data.
 

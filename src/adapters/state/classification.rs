@@ -2,10 +2,12 @@
 
 use std::collections::HashMap;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
+use crate::adapters::audio;
 use crate::domain::classification::profiles::{
-    FeatureStat, GenrePrototype, ProfileRegistry, SCALAR_FEATURE_NAMES,
+    FeatureStat, GenrePrototype, PROFILE_SCHEMA_VERSION, ProfileLoad, ProfileLoadStatus,
+    ProfileMetadata, ProfileRegistry, SCALAR_FEATURE_NAMES,
 };
 use crate::domain::classification::taxonomy;
 
@@ -17,6 +19,7 @@ use crate::domain::classification::taxonomy;
 pub(crate) fn save_to_db(
     conn: &Connection,
     registry: &ProfileRegistry,
+    metadata: &ProfileMetadata,
 ) -> Result<(), rusqlite::Error> {
     let tx = conn.unchecked_transaction()?;
 
@@ -24,6 +27,7 @@ pub(crate) fn save_to_db(
     tx.execute("DELETE FROM genre_audio_profiles", [])?;
     tx.execute("DELETE FROM genre_timbral_centroids", [])?;
     tx.execute("DELETE FROM genre_global_stats", [])?;
+    tx.execute("DELETE FROM genre_profile_metadata", [])?;
 
     {
         let mut insert_feature = tx.prepare(
@@ -94,12 +98,134 @@ pub(crate) fn save_to_db(
         }
     }
 
+    tx.execute(
+        "INSERT INTO genre_profile_metadata (
+             id,
+             classifier_profile_schema_version,
+             stratum_schema_version,
+             essentia_schema_version,
+             playlist_name,
+             training_fingerprint,
+             scorable_sample_count,
+             calibrated_at
+         ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            metadata.classifier_profile_schema_version,
+            metadata.stratum_schema_version,
+            metadata.essentia_schema_version,
+            metadata.playlist_name,
+            metadata.training_fingerprint,
+            metadata.scorable_sample_count,
+            metadata.calibrated_at,
+        ],
+    )?;
+
     tx.commit()?;
     Ok(())
 }
 
-/// Load calibrated prototypes from SQLite.
-pub(crate) fn load_from_db(conn: &Connection) -> Result<Option<ProfileRegistry>, rusqlite::Error> {
+/// Load calibrated prototypes only when persisted metadata is structurally
+/// compatible. A changed training corpus remains usable but is reported.
+pub(crate) fn load_from_db(
+    conn: &Connection,
+    expected_training_fingerprint: Option<&str>,
+) -> Result<ProfileLoad, rusqlite::Error> {
+    let Some(registry) = load_registry_rows(conn)? else {
+        return Ok(ProfileLoad {
+            status: ProfileLoadStatus::Missing,
+            registry: None,
+            metadata: None,
+            reason: None,
+        });
+    };
+
+    let metadata_table_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'genre_profile_metadata')",
+        [],
+        |row| row.get(0),
+    )?;
+    let metadata = if metadata_table_exists {
+        conn.query_row(
+            "SELECT classifier_profile_schema_version,
+                    stratum_schema_version,
+                    essentia_schema_version,
+                    playlist_name,
+                    training_fingerprint,
+                    scorable_sample_count,
+                    calibrated_at
+             FROM genre_profile_metadata WHERE id = 1",
+            [],
+            |row| {
+                Ok(ProfileMetadata {
+                    classifier_profile_schema_version: row.get(0)?,
+                    stratum_schema_version: row.get(1)?,
+                    essentia_schema_version: row.get(2)?,
+                    playlist_name: row.get(3)?,
+                    training_fingerprint: row.get(4)?,
+                    scorable_sample_count: row.get(5)?,
+                    calibrated_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()?
+    } else {
+        None
+    };
+
+    let Some(metadata) = metadata else {
+        return Ok(ProfileLoad {
+            status: ProfileLoadStatus::Incompatible,
+            registry: None,
+            metadata: None,
+            reason: Some("profile metadata is missing".into()),
+        });
+    };
+
+    let incompatible_reason =
+        if metadata.classifier_profile_schema_version != PROFILE_SCHEMA_VERSION {
+            Some(format!(
+                "classifier profile schema {} != {}",
+                metadata.classifier_profile_schema_version, PROFILE_SCHEMA_VERSION
+            ))
+        } else if metadata.stratum_schema_version != audio::STRATUM_SCHEMA_VERSION {
+            Some(format!(
+                "Stratum schema {} != {}",
+                metadata.stratum_schema_version,
+                audio::STRATUM_SCHEMA_VERSION
+            ))
+        } else if metadata.essentia_schema_version != audio::ESSENTIA_SCHEMA_VERSION {
+            Some(format!(
+                "Essentia schema {} != {}",
+                metadata.essentia_schema_version,
+                audio::ESSENTIA_SCHEMA_VERSION
+            ))
+        } else {
+            None
+        };
+    if let Some(reason) = incompatible_reason {
+        return Ok(ProfileLoad {
+            status: ProfileLoadStatus::Incompatible,
+            registry: None,
+            metadata: Some(metadata),
+            reason: Some(reason),
+        });
+    }
+
+    let training_changed = expected_training_fingerprint
+        .is_some_and(|expected| expected != metadata.training_fingerprint);
+    Ok(ProfileLoad {
+        status: if training_changed {
+            ProfileLoadStatus::TrainingChanged
+        } else {
+            ProfileLoadStatus::Fresh
+        },
+        registry: Some(registry),
+        metadata: Some(metadata),
+        reason: training_changed.then(|| "verified training corpus changed".into()),
+    })
+}
+
+fn load_registry_rows(conn: &Connection) -> Result<Option<ProfileRegistry>, rusqlite::Error> {
     // Check if table has data
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM genre_audio_profiles", [], |row| {
         row.get(0)
@@ -282,12 +408,26 @@ mod tests {
         }
     }
 
+    fn test_metadata(fingerprint: &str) -> ProfileMetadata {
+        ProfileMetadata {
+            classifier_profile_schema_version: PROFILE_SCHEMA_VERSION.into(),
+            stratum_schema_version: audio::STRATUM_SCHEMA_VERSION.into(),
+            essentia_schema_version: audio::ESSENTIA_SCHEMA_VERSION.into(),
+            playlist_name: "genre_verified".into(),
+            training_fingerprint: fingerprint.into(),
+            scorable_sample_count: 8,
+            calibrated_at: "2026-07-14T00:00:00Z".into(),
+        }
+    }
+
     #[test]
     fn empty_store_has_no_profile_registry() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
 
-        assert!(load_from_db(&conn).unwrap().is_none());
+        let loaded = load_from_db(&conn, None).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Missing);
+        assert!(loaded.registry.is_none());
     }
 
     #[test]
@@ -295,9 +435,13 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let registry = test_registry();
+        let metadata = test_metadata("fingerprint-a");
 
-        save_to_db(&conn, &registry).unwrap();
-        let loaded = load_from_db(&conn).unwrap().unwrap();
+        save_to_db(&conn, &registry, &metadata).unwrap();
+        let loaded = load_from_db(&conn, Some("fingerprint-a")).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Fresh);
+        assert_eq!(loaded.metadata.as_ref(), Some(&metadata));
+        let loaded = loaded.registry.unwrap();
 
         assert_eq!(loaded.global_stats, registry.global_stats);
         let prototype = loaded.prototypes.get("Techno").unwrap();
@@ -313,5 +457,96 @@ mod tests {
         assert_eq!(prototype.mfcc_std_mean_dist, Some(0.3));
         assert_eq!(prototype.contrast_mean_dist, Some(0.5));
         assert_eq!(prototype.total_n, 8);
+    }
+
+    #[test]
+    fn compatible_training_change_remains_usable_and_reported() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_to_db(&conn, &test_registry(), &test_metadata("old")).unwrap();
+
+        let loaded = load_from_db(&conn, Some("new")).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::TrainingChanged);
+        assert!(loaded.registry.is_some());
+        assert!(loaded.reason.unwrap().contains("corpus changed"));
+    }
+
+    #[test]
+    fn missing_or_mismatched_metadata_suppresses_registry_without_deleting_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_to_db(&conn, &test_registry(), &test_metadata("same")).unwrap();
+
+        conn.execute("DELETE FROM genre_profile_metadata", [])
+            .unwrap();
+        let legacy = load_from_db(&conn, None).unwrap();
+        assert_eq!(legacy.status, ProfileLoadStatus::Incompatible);
+        assert!(legacy.registry.is_none());
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM genre_audio_profiles", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(rows > 0);
+
+        let mut incompatible = test_metadata("same");
+        incompatible.classifier_profile_schema_version = "future".into();
+        save_to_db(&conn, &test_registry(), &incompatible).unwrap();
+        let loaded = load_from_db(&conn, None).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Incompatible);
+        assert!(loaded.registry.is_none());
+    }
+
+    #[test]
+    fn v9_profile_rows_migrate_as_incompatible_and_are_preserved() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_to_db(&conn, &test_registry(), &test_metadata("legacy")).unwrap();
+        conn.execute_batch(
+            "DROP TABLE genre_profile_metadata;
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            version,
+            crate::adapters::state::migrations::STORE_SCHEMA_VERSION
+        );
+        let loaded = load_from_db(&conn, None).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Incompatible);
+        assert!(loaded.registry.is_none());
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM genre_audio_profiles", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(rows > 0);
+    }
+
+    #[test]
+    fn failed_metadata_insert_rolls_back_registry_replacement() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_to_db(&conn, &test_registry(), &test_metadata("original")).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_profile_metadata_insert
+             BEFORE INSERT ON genre_profile_metadata
+             BEGIN SELECT RAISE(ABORT, 'metadata write failed'); END;",
+        )
+        .unwrap();
+
+        let empty = ProfileRegistry {
+            prototypes: HashMap::new(),
+            global_stats: HashMap::new(),
+        };
+        let result = save_to_db(&conn, &empty, &test_metadata("new"));
+        assert!(result.is_err());
+        let loaded = load_from_db(&conn, Some("original")).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Fresh);
+        assert!(loaded.registry.unwrap().prototypes.contains_key("Techno"));
     }
 }

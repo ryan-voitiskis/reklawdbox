@@ -1,7 +1,7 @@
 # Genre Classification: Feature Development TODO
 
 **Started:** 2026-05-10 (post v0.27.0).
-**Current as of:** 2026-06-14.
+**Current as of:** 2026-07-14.
 **Goal:** Build out several more discriminating features in stratum-dsp, then wire
 them all into the genre classifier in one pass — avoiding per-feature classifier
 tuning churn.
@@ -19,6 +19,9 @@ notes or speculative plans; use them for implementation detail, not priority.
    wiring. User listening and genre judgement are part of the development loop.
 4. Defer conjunctive templates and training refactors until several
    independently validated features exist.
+5. Treat Plans 034–035 as the current classifier contract: confidence is
+   source-aware, Discogs readiness is album-aware, and audio profiles must be
+   scorable and metadata-compatible before they vote.
 
 ## Supporting docs
 
@@ -31,6 +34,8 @@ notes or speculative plans; use them for implementation detail, not priority.
   `conjunctive-templates-plan.md`,
   `prototype-training-improvements-plan.md`,
   `deep-techno-classification-ideas.md`.
+- Post-provider-removal contract: `../../plans/034-make-classification-confidence-source-aware.md`
+  and `../../plans/035-align-classification-readiness-and-fallbacks.md`.
 
 ## Background
 

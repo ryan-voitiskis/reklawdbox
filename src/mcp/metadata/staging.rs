@@ -140,7 +140,7 @@ pub(in crate::mcp) async fn handle_write_xml(
             "Label research gate: backfill_labels found {gate_count} unlabeled tracks that need research. \
              Complete Step 1c of the metadata backfill SOP (research remaining label gaps) before \
              exporting. Use search_tracks(has_label=false) to find them, then research labels \
-             via web search, lookup_beatport, lookup_discogs, and lookup_bandcamp.\n\n\
+             via web search, lookup_discogs, lookup_bandcamp, and lookup_musicbrainz.\n\n\
              Once label research is complete and remaining gaps are genuinely unresolvable, \
              call write_xml(skip_label_gate=true) to proceed."
         )),

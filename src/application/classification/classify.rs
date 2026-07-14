@@ -17,6 +17,26 @@ pub(crate) fn classify_batch(
     tracks: &[Track],
     overrides: &[(String, String)],
 ) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
+    classify_batch_inner(store_conn, tracks, overrides, true)
+}
+
+/// Classify from cached metadata and rule-based audio evidence without loading
+/// a persisted profile registry. Used by non-leaky benchmark baselines.
+#[cfg(test)]
+pub(crate) fn classify_batch_rules_only(
+    store_conn: &Connection,
+    tracks: &[Track],
+    overrides: &[(String, String)],
+) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
+    classify_batch_inner(store_conn, tracks, overrides, false)
+}
+
+fn classify_batch_inner(
+    store_conn: &Connection,
+    tracks: &[Track],
+    overrides: &[(String, String)],
+    load_profiles: bool,
+) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
     // Pre-compute normalized keys and resolved audio paths.
     let current_audio_identities = audio_cache_identities_with_current_stratum_input(
         tracks.iter().map(|track| track.file_path.as_str()),
@@ -43,7 +63,7 @@ pub(crate) fn classify_batch(
         .collect();
 
     // Build batch keys.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len());
     let stratum_identities: Vec<_> = norm_keys
         .iter()
         .filter_map(|(_, _, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
@@ -59,7 +79,6 @@ pub(crate) fn classify_batch(
     for (a, t, al, _, _) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
-        enrich_keys.push(("beatport", a, t, ""));
     }
 
     // Batch load — 3 queries total instead of 4N.
@@ -77,7 +96,11 @@ pub(crate) fn classify_batch(
             audio::ANALYZER_ESSENTIA,
             audio::ESSENTIA_SCHEMA_VERSION,
         )?;
-        let registry = state::classification::load_from_db(store_conn)?;
+        let registry = if load_profiles {
+            state::classification::load_from_db(store_conn, None)?.registry
+        } else {
+            None
+        };
         (enrich_map, stratum_map, essentia_map, registry)
     };
 
@@ -93,22 +116,13 @@ pub(crate) fn classify_batch(
             norm_title.clone(),
             album.to_string(),
         );
-        let beatport_key = (
-            "beatport".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-
         let discogs_cache = enrich_map.get(&discogs_key);
-        let beatport_cache = enrich_map.get(&beatport_key);
         let stratum_cache = stratum_map.get(audio_key);
         let essentia_cache = essentia_map.get(audio_key);
 
         let evidence = build_track_evidence(
             track,
             discogs_cache,
-            beatport_cache,
             stratum_cache,
             essentia_cache,
             overrides,
@@ -165,12 +179,12 @@ mod tests {
         let title = normalize::normalize_for_matching(&track.title);
         state::set_enrichment(
             &conn,
-            "beatport",
+            "discogs",
             &artist,
             &title,
             None,
             Some("exact"),
-            Some(r#"{"genre":"Techno"}"#),
+            Some(r#"{"styles":["Techno"]}"#),
         )
         .unwrap();
 
@@ -180,13 +194,13 @@ mod tests {
         assert_eq!(results.len(), 1);
         let result = &results[0];
         assert_eq!(result.genre, Some("Techno"));
-        assert_eq!(result.confidence, ClassificationConfidence::High);
+        assert_ne!(result.confidence, ClassificationConfidence::Insufficient);
         assert_eq!(result.action, ClassificationAction::Suggest);
         assert!(
             result
                 .evidence
                 .iter()
-                .any(|line| line.contains("beatport") && line.contains("Techno")),
+                .any(|line| line.contains("discogs") && line.contains("Techno")),
             "provider evidence should survive state loading and evidence construction"
         );
     }

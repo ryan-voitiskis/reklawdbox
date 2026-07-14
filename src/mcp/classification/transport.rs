@@ -20,16 +20,16 @@ pub struct ClassifyTracksParams {
     )]
     pub genre_overrides: Option<Vec<GenreOverrideInput>>,
     #[schemars(
-        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action — use when classifying all tracks upfront before dispatching review subagents. 'summary' returns only confidence distribution and genre-grouped counts without per-track results — use to get the lay of the land before deciding what to stage. 'dispatch' returns only low/insufficient confidence tracks grouped by artist (sorted by track count descending) — use to build subagent batches for Step 4 review."
+        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action. 'summary' returns confidence distribution and genre-grouped counts. 'dispatch' returns low/insufficient tracks grouped by artist. Weak confirmations remain visible in review formats."
     )]
     pub format: Option<ClassifyFormat>,
     #[schemars(
-        description = "Auto-stage results at these confidence levels after classification. Example: [\"high\", \"medium\"]. Only results with a recommended genre are staged. Omit to classify without staging (default)."
+        description = "Auto-stage real genre changes at these confidence levels after classification. Confirmations, genre-less results, and insufficient results are never staged. Example: [\"high\", \"medium\"]. Omit for classification only."
     )]
     pub auto_stage: Option<Vec<StageLevel>>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassifyFormat {
@@ -98,7 +98,7 @@ pub struct AuditGenresParams {
     #[schemars(description = "Offset for pagination (skip first N tracks)")]
     pub offset: Option<u32>,
     #[schemars(
-        description = "Include confirmed tracks (genre matches evidence) in results (default false)"
+        description = "Include every confirmed track (default false). Low/insufficient confirmations are always included because they require review."
     )]
     pub include_confirmed: Option<bool>,
 }

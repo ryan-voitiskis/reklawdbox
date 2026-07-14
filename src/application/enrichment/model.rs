@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EnrichmentProvider {
     Discogs,
-    Beatport,
     Bandcamp,
 }
 
@@ -19,7 +18,6 @@ impl EnrichmentProvider {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Discogs => "discogs",
-            Self::Beatport => "beatport",
             Self::Bandcamp => "bandcamp",
         }
     }
@@ -48,7 +46,6 @@ impl HydrationStages {
         for part in value.split(',') {
             let stage = match part.trim().to_ascii_lowercase().as_str() {
                 "discogs" => HydrationStage::Lookup(EnrichmentProvider::Discogs),
-                "beatport" => HydrationStage::Lookup(EnrichmentProvider::Beatport),
                 "analysis" => HydrationStage::Analysis,
                 other => return Err(format!("unknown provider: {other}")),
             };
@@ -90,10 +87,6 @@ mod tests {
             "\"discogs\""
         );
         assert_eq!(
-            serde_json::to_string(&EnrichmentProvider::Beatport).unwrap(),
-            "\"beatport\""
-        );
-        assert_eq!(
             serde_json::to_string(&EnrichmentProvider::Bandcamp).unwrap(),
             "\"bandcamp\""
         );
@@ -105,13 +98,12 @@ mod tests {
 
     #[test]
     fn hydration_stages_preserve_cli_spellings_and_order() {
-        let stages = HydrationStages::parse_csv("discogs, beatport,analysis").unwrap();
+        let stages = HydrationStages::parse_csv("discogs,analysis").unwrap();
 
         assert_eq!(
             stages,
             HydrationStages(vec![
                 HydrationStage::Lookup(EnrichmentProvider::Discogs),
-                HydrationStage::Lookup(EnrichmentProvider::Beatport),
                 HydrationStage::Analysis,
             ])
         );

@@ -161,7 +161,6 @@ impl EnrichmentTrackOutcome {
 #[derive(Clone, Copy, Debug, Default)]
 struct ProviderStagePlan {
     need_discogs: bool,
-    need_beatport: bool,
     need_bandcamp: bool,
     cached: usize,
 }
@@ -175,12 +174,10 @@ fn provider_stage_plan(
     let stages = provider_stages(providers);
     let wants = |provider| stages.contains(&HydrationStage::Lookup(provider));
     let want_discogs = wants(EnrichmentProvider::Discogs);
-    let want_beatport = wants(EnrichmentProvider::Beatport);
     let want_bandcamp = wants(EnrichmentProvider::Bandcamp);
     if !policy.skip_cached || policy.force_refresh {
         return ProviderStagePlan {
             need_discogs: want_discogs,
-            need_beatport: want_beatport,
             need_bandcamp: want_bandcamp,
             cached: 0,
         };
@@ -192,7 +189,6 @@ fn provider_stage_plan(
             tracing::warn!("track enrichment failed to open read-only store: {error}");
             return ProviderStagePlan {
                 need_discogs: want_discogs,
-                need_beatport: want_beatport,
                 need_bandcamp: want_bandcamp,
                 cached: 0,
             };
@@ -212,15 +208,11 @@ fn provider_stage_plan(
         .is_some()
     };
     let discogs_cached = want_discogs && is_cached(EnrichmentProvider::Discogs);
-    let beatport_cached = want_beatport && is_cached(EnrichmentProvider::Beatport);
     let bandcamp_cached = want_bandcamp && is_cached(EnrichmentProvider::Bandcamp);
     ProviderStagePlan {
         need_discogs: want_discogs && !discogs_cached,
-        need_beatport: want_beatport && !beatport_cached,
         need_bandcamp: want_bandcamp && !bandcamp_cached,
-        cached: usize::from(discogs_cached)
-            + usize::from(beatport_cached)
-            + usize::from(bandcamp_cached),
+        cached: usize::from(discogs_cached) + usize::from(bandcamp_cached),
     }
 }
 
@@ -560,51 +552,6 @@ where
     }
 }
 
-pub(crate) async fn run_beatport_stage<LookupFuture>(
-    need: bool,
-    identity: &HydrationTrackIdentity,
-    gate: std::sync::Arc<tokio::sync::Semaphore>,
-    cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
-    lookup: LookupFuture,
-) -> EnrichmentTrackOutcome
-where
-    LookupFuture:
-        std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>,
-{
-    if !need {
-        return EnrichmentTrackOutcome::default();
-    }
-    let _permit = match gate.acquire().await {
-        Ok(permit) => permit,
-        Err(_) => {
-            return failed_stage(
-                identity,
-                EnrichmentProvider::Beatport,
-                HydrationFailureKind::SemaphoreClosed,
-            );
-        }
-    };
-    match lookup.await {
-        Ok(result) => {
-            persist_provider_outcome(
-                identity,
-                EnrichmentProvider::Beatport,
-                result,
-                |result| {
-                    if result.fuzzy_match { "fuzzy" } else { "exact" }
-                },
-                cache_tx,
-            )
-            .await
-        }
-        Err(error) => failed_stage(
-            identity,
-            EnrichmentProvider::Beatport,
-            HydrationFailureKind::Lookup(error),
-        ),
-    }
-}
-
 async fn run_bandcamp_stage(
     need: bool,
     identity: &HydrationTrackIdentity,
@@ -652,19 +599,17 @@ async fn run_bandcamp_stage(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_track_enrichment<DiscogsFuture, BeatportFuture>(
+async fn run_track_enrichment<DiscogsFuture>(
     identity: HydrationTrackIdentity,
     providers: &[EnrichmentProvider],
     policy: EnrichmentCachePolicy,
     store_path: &str,
     http: &reqwest::Client,
     cache_tx: &tokio::sync::mpsc::Sender<CacheWriteRequest<EnrichmentCacheWrite>>,
-    beatport_gate: std::sync::Arc<tokio::sync::Semaphore>,
     bandcamp_gate: std::sync::Arc<tokio::sync::Semaphore>,
     auth_failed: &tokio::sync::watch::Receiver<bool>,
     auth_fail_tx: &tokio::sync::watch::Sender<bool>,
     discogs_lookup: DiscogsFuture,
-    beatport_lookup: BeatportFuture,
 ) -> EnrichmentTrackOutcome
 where
     DiscogsFuture: std::future::Future<
@@ -673,8 +618,6 @@ where
                 providers::discogs::LookupError,
             >,
         >,
-    BeatportFuture:
-        std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>,
 {
     let plan = provider_stage_plan(store_path, &identity, providers, policy);
     let discogs = run_discogs_stage(
@@ -685,22 +628,14 @@ where
         auth_fail_tx,
         discogs_lookup,
     );
-    let beatport = run_beatport_stage(
-        plan.need_beatport,
-        &identity,
-        beatport_gate,
-        cache_tx,
-        beatport_lookup,
-    );
     let bandcamp = run_bandcamp_stage(plan.need_bandcamp, &identity, http, bandcamp_gate, cache_tx);
-    let (discogs, beatport, bandcamp) = tokio::join!(discogs, beatport, bandcamp);
+    let (discogs, bandcamp) = tokio::join!(discogs, bandcamp);
 
     let mut outcome = EnrichmentTrackOutcome {
         cached: plan.cached,
         ..EnrichmentTrackOutcome::default()
     };
     outcome.absorb(discogs);
-    outcome.absorb(beatport);
     outcome.absorb(bandcamp);
     outcome
 }
@@ -715,12 +650,7 @@ pub(crate) struct EnrichmentWorkerConfig {
 
 /// Run all selected provider stages for a bounded set of tracks.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_enrichment_workers<
-    DiscogsLookup,
-    DiscogsFuture,
-    BeatportLookup,
-    BeatportFuture,
->(
+pub(crate) async fn run_enrichment_workers<DiscogsLookup, DiscogsFuture>(
     tracks: Vec<HydrationTrackIdentity>,
     config: EnrichmentWorkerConfig,
     http: reqwest::Client,
@@ -728,7 +658,6 @@ pub(crate) async fn run_enrichment_workers<
     auth_failed: std::sync::Arc<tokio::sync::watch::Receiver<bool>>,
     auth_fail_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     discogs_lookup: DiscogsLookup,
-    beatport_lookup: BeatportLookup,
 ) -> HydrationWorkerReport<HydrationTrackIdentity, EnrichmentTrackOutcome>
 where
     DiscogsLookup: Fn(HydrationTrackIdentity) -> DiscogsFuture + Clone + Send + 'static,
@@ -739,13 +668,8 @@ where
             >,
         > + Send
         + 'static,
-    BeatportLookup: Fn(HydrationTrackIdentity) -> BeatportFuture + Clone + Send + 'static,
-    BeatportFuture: std::future::Future<Output = Result<Option<providers::beatport::BeatportResult>, String>>
-        + Send
-        + 'static,
 {
     let concurrency = config.concurrency;
-    let beatport_gate = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
     let bandcamp_gate = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
     run_bounded_workers(
         "enrich track worker task",
@@ -758,15 +682,12 @@ where
             let store_path = config.store_path.clone();
             let http = http.clone();
             let cache_tx = cache_tx.clone();
-            let beatport_gate = beatport_gate.clone();
             let bandcamp_gate = bandcamp_gate.clone();
             let auth_failed = auth_failed.clone();
             let auth_fail_tx = auth_fail_tx.clone();
             let discogs_lookup = discogs_lookup.clone();
-            let beatport_lookup = beatport_lookup.clone();
             async move {
                 let discogs_future = discogs_lookup(identity.clone());
-                let beatport_future = beatport_lookup(identity.clone());
                 let outcome = run_track_enrichment(
                     identity,
                     &providers,
@@ -774,12 +695,10 @@ where
                     &store_path,
                     &http,
                     &cache_tx,
-                    beatport_gate,
                     bandcamp_gate,
                     &auth_failed,
                     &auth_fail_tx,
                     discogs_future,
-                    beatport_future,
                 )
                 .await;
                 HydrationWorkerCompletion::completed(outcome)
@@ -867,14 +786,14 @@ mod tests {
             let result = acknowledge_enrichment_cache_write(
                 &sender,
                 EnrichmentCacheWrite {
-                    provider: EnrichmentProvider::Beatport,
+                    provider: EnrichmentProvider::Bandcamp,
                     norm_artist: "shared artist".to_string(),
                     norm_title: "shared title".to_string(),
                     norm_album: None,
                     match_quality: Some("none".to_string()),
                     response_json: None,
                 },
-                "beatport hydration",
+                "bandcamp hydration",
             )
             .await;
             assert_eq!(result, Ok(()));
@@ -887,7 +806,7 @@ mod tests {
             let conn = state::open(&store_path_string).expect("hydration store should reopen");
             let cached = state::get_enrichment(
                 &conn,
-                "beatport",
+                "bandcamp",
                 "shared artist",
                 "shared title",
                 None,

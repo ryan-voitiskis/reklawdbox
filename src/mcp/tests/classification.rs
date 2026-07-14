@@ -1,5 +1,8 @@
+use crate::application::classification::evaluate::{self, EvaluationCase};
 use crate::mcp::classification;
-use crate::mcp::classification::{CalibrationCoverageParams, ClassifyFormat, ClassifyTracksParams};
+use crate::mcp::classification::{
+    AuditGenresParams, CalibrationCoverageParams, ClassifyFormat, ClassifyTracksParams,
+};
 use crate::mcp::library::SearchFilterParams;
 use std::collections::HashSet;
 
@@ -24,16 +27,6 @@ struct GoldenGenreFixtureEntry {
     title: String,
     expected_genre: String,
     notes: String,
-}
-
-fn canonical_genre_name(raw_genre: &str) -> String {
-    if let Some(canonical) = genre::canonical_genre_name(raw_genre) {
-        return canonical.to_string();
-    }
-    if let Some(alias_target) = genre::canonical_genre_from_alias(raw_genre) {
-        return alias_target.to_string();
-    }
-    raw_genre.to_string()
 }
 
 fn load_golden_genres_fixture() -> Vec<GoldenGenreFixtureEntry> {
@@ -159,6 +152,86 @@ async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
     assert_eq!(payload["staging"]["total_pending"], 0);
     assert_eq!(payload["results"][0]["genre"], serde_json::Value::Null);
     assert_eq!(payload["results"][0]["confidence"], "insufficient");
+}
+
+#[tokio::test]
+async fn weak_confirmations_remain_visible_on_every_review_surface() {
+    let db_conn = create_single_track_test_db("weak-confirm", "/missing/weak-confirm.flac");
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET BPM = 17000, LabelID = '' WHERE ID = 'weak-confirm'",
+            [],
+        )
+        .unwrap();
+    let store_dir = tempfile::tempdir().unwrap();
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).unwrap();
+    let artist = crate::domain::metadata::normalize_for_matching("Aníbal");
+    let title = crate::domain::metadata::normalize_for_matching("Señorita");
+    let album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &artist,
+        &title,
+        Some(&album),
+        Some("exact"),
+        Some(r#"{"styles":["Deep House"]}"#),
+    )
+    .unwrap();
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    for format in [
+        ClassifyFormat::Full,
+        ClassifyFormat::Compact,
+        ClassifyFormat::Dispatch,
+    ] {
+        let payload = extract_json(
+            &server
+                .classify_tracks(Parameters(ClassifyTracksParams {
+                    filters: SearchFilterParams::default(),
+                    track_ids: Some(vec!["weak-confirm".into()]),
+                    playlist_id: None,
+                    max_tracks: Some(1),
+                    offset: None,
+                    genre_overrides: None,
+                    format: Some(format),
+                    auto_stage: Some(vec![crate::mcp::classification::StageLevel::Low]),
+                }))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(payload["summary"]["review_required"], 1);
+        assert_eq!(payload["staging"]["staged"], 0);
+        if format == ClassifyFormat::Dispatch {
+            assert_eq!(payload["dispatch_stats"]["total_tracks"], 1);
+        } else {
+            assert_eq!(payload["results"].as_array().unwrap().len(), 1);
+            assert_eq!(payload["results"][0]["action"], "confirm");
+            assert_eq!(payload["results"][0]["confidence"], "low");
+        }
+        if format == ClassifyFormat::Full {
+            assert_eq!(payload["needs_review"].as_array().unwrap().len(), 1);
+        }
+    }
+
+    let audit = extract_json(
+        &server
+            .audit_genres(Parameters(AuditGenresParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["weak-confirm".into()]),
+                playlist_id: None,
+                max_tracks: Some(1),
+                offset: None,
+                include_confirmed: Some(false),
+            }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(audit["summary"]["review_required"], 1);
+    assert_eq!(audit["results"].as_array().unwrap().len(), 1);
+    assert_eq!(audit["results"][0]["action"], "confirm");
 }
 
 #[tokio::test]
@@ -303,6 +376,8 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(payload["tracks_with_canonical_genre"], 6);
     assert_eq!(payload["tracks_with_audio_features"], 5);
     assert_eq!(payload["missing_audio_features"], 1);
+    assert_eq!(payload["tracks_with_scorable_features"], 5);
+    assert_eq!(payload["missing_scorable_features"], 1);
     assert_eq!(payload["tracks_with_stratum_features"], 5);
     assert_eq!(payload["missing_stratum_features"], 1);
     assert_eq!(payload["tracks_with_essentia_features"], 0);
@@ -313,7 +388,7 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         payload["min_tracks_per_genre"],
         crate::domain::classification::profiles::MIN_TRACKS
     );
-    assert_eq!(payload["genres_ready_to_calibrate"], 1);
+    assert_eq!(payload["genres_ready_to_calibrate"], 0);
     assert_eq!(payload["genres_below_min_tracks"], 1);
 
     let genres = payload["genres"]
@@ -325,10 +400,11 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
         .expect("Deep House coverage should be present");
     assert_eq!(deep_house["playlist_tracks"], 5);
     assert_eq!(deep_house["tracks_with_audio_features"], 5);
+    assert_eq!(deep_house["tracks_with_scorable_features"], 5);
     assert_eq!(deep_house["tracks_with_stratum_features"], 5);
     assert_eq!(deep_house["tracks_with_essentia_features"], 0);
-    assert_eq!(deep_house["prototype_ready"], true);
-    assert_eq!(deep_house["status"], "ready_to_calibrate");
+    assert_eq!(deep_house["prototype_ready"], false);
+    assert_eq!(deep_house["status"], "candidate_not_scorable");
 
     let techno = genres
         .iter()
@@ -464,78 +540,144 @@ fn golden_genres_fixture_is_well_formed() {
 #[ignore]
 fn golden_dataset_genre_accuracy() {
     let entries = load_golden_genres_fixture();
-    let Some(conn) = db::open_real_db() else {
-        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
-        return;
-    };
+    let conn = db::open_real_db()
+        .expect("classifier benchmark requires the real test backup (set REKORDBOX_TEST_BACKUP)");
+    let store_path = store::resolve_path();
+    let store_conn = store::open_read_only(
+        store_path
+            .to_str()
+            .expect("classifier benchmark store path should be UTF-8"),
+    )
+    .expect("classifier benchmark requires the existing local enrichment/audio store");
 
-    let mut compared = 0usize;
-    let mut correct = 0usize;
+    let mut predictive_tracks = Vec::new();
+    let mut truths = Vec::new();
     let mut missing_tracks = Vec::new();
-    let mut no_genre = Vec::new();
-    let mut mismatches = Vec::new();
 
     for entry in &entries {
-        let Some(track) = find_track_by_artist_and_title(&conn, &entry.artist, &entry.title) else {
+        let Some(mut track) = find_track_by_artist_and_title(&conn, &entry.artist, &entry.title)
+        else {
             missing_tracks.push(format!("{} - {}", entry.artist, entry.title));
             continue;
         };
-
-        if track.genre.trim().is_empty() {
-            no_genre.push(format!("{} - {}", entry.artist, entry.title));
-            continue;
-        }
-
-        compared += 1;
-        let actual = canonical_genre_name(&track.genre);
-        if actual.eq_ignore_ascii_case(&entry.expected_genre) {
-            correct += 1;
-        } else {
-            mismatches.push(format!(
-                "{} - {}: expected '{}', actual '{}' ({})",
-                entry.artist, entry.title, entry.expected_genre, actual, entry.notes
-            ));
-        }
-    }
-
-    let accuracy = if compared == 0 {
-        0.0
-    } else {
-        (correct as f64 / compared as f64) * 100.0
-    };
-    eprintln!(
-        "[integration] golden dataset: total={} compared={} correct={} accuracy={:.1}%",
-        entries.len(),
-        compared,
-        correct,
-        accuracy
-    );
-    if !missing_tracks.is_empty() {
-        eprintln!("[integration] missing tracks ({}):", missing_tracks.len());
-        for item in &missing_tracks {
-            eprintln!("  - {item}");
-        }
-    }
-    if !no_genre.is_empty() {
-        eprintln!(
-            "[integration] tracks with empty genre ({}):",
-            no_genre.len()
-        );
-        for item in &no_genre {
-            eprintln!("  - {item}");
-        }
-    }
-    if !mismatches.is_empty() {
-        eprintln!("[integration] mismatches ({}):", mismatches.len());
-        for item in &mismatches {
-            eprintln!("  - {item}");
-        }
+        let truth = genre::resolve_genre(&entry.expected_genre)
+            .expect("validated fixture truth should resolve canonically");
+        // The field under evaluation is withheld from every predictive mode.
+        track.genre.clear();
+        predictive_tracks.push(track);
+        truths.push(truth);
     }
 
     assert!(
-        !missing_tracks.is_empty() || compared > 0,
-        "fixture should either report missing tracks or compare at least one track"
+        !predictive_tracks.is_empty(),
+        "classifier benchmark must evaluate at least one fixture track"
     );
+
+    let (rules_results, _) = crate::application::classification::classify_batch_rules_only(
+        &store_conn,
+        &predictive_tracks,
+        &[],
+    )
+    .expect("rules-only benchmark classification should succeed");
+    let rules_cases: Vec<_> = truths
+        .iter()
+        .zip(&rules_results)
+        .map(|(&truth, result)| EvaluationCase {
+            truth,
+            result,
+            source_stratum: benchmark_source_stratum(result),
+            discogs_match_quality: benchmark_discogs_quality(result),
+        })
+        .collect();
+
+    let deployed_registry_present = store::classification::load_from_db(&store_conn, None)
+        .expect("profile registry diagnostic should load")
+        .registry
+        .is_some();
+    let (deployed_results, _) =
+        crate::application::classification::classify_batch(&store_conn, &predictive_tracks, &[])
+            .expect("deployed-registry diagnostic classification should succeed");
+    let deployed_cases: Vec<_> = truths
+        .iter()
+        .zip(&deployed_results)
+        .map(|(&truth, result)| EvaluationCase {
+            truth,
+            result,
+            source_stratum: benchmark_source_stratum(result),
+            discogs_match_quality: benchmark_discogs_quality(result),
+        })
+        .collect();
+
+    let summary = serde_json::json!({
+        "benchmark_schema": 1,
+        "predictive_current_genre": "withheld",
+        "fixture_rows": entries.len(),
+        "missing_rows": missing_tracks.len(),
+        "rules_only": evaluate::evaluate(&rules_cases, missing_tracks.len()),
+        "deployed_registry_diagnostic": {
+            "acceptance_evidence": false,
+            "registry_present": deployed_registry_present,
+            "metrics": evaluate::evaluate(&deployed_cases, missing_tracks.len()),
+        },
+        "versions": {
+            "classifier_profile_schema": crate::domain::classification::profiles::PROFILE_SCHEMA_VERSION,
+            "stratum": crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+            "essentia": crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        },
+    });
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&summary).expect("benchmark summary should serialize")
+    );
+}
+
+fn benchmark_source_stratum(
+    result: &crate::domain::classification::ClassificationResult,
+) -> &'static str {
+    let discogs = result
+        .evidence
+        .iter()
+        .any(|line| line.starts_with("discogs:"));
+    let label = result
+        .evidence
+        .iter()
+        .any(|line| line.starts_with("label:") && line.contains("[source=rekordbox]"));
+    let audio = result.evidence.iter().any(|line| {
+        line.starts_with("audio:") || line.starts_with("audio ") || line.starts_with("D.")
+    });
+    match (discogs, label, audio) {
+        (true, true, true) => "discogs+label+audio",
+        (true, true, false) => "discogs+label",
+        (true, false, true) => "discogs+audio",
+        (false, true, true) => "label+audio",
+        (true, false, false) => "discogs",
+        (false, true, false) => "label",
+        (false, false, true) => "audio",
+        (false, false, false) => "none",
+    }
+}
+
+fn benchmark_discogs_quality(
+    result: &crate::domain::classification::ClassificationResult,
+) -> &'static str {
+    if result
+        .flags
+        .iter()
+        .any(|flag| flag == "discogs-match-invalid")
+    {
+        return "invalid";
+    }
+    let discogs = result
+        .evidence
+        .iter()
+        .find(|line| line.starts_with("discogs:"));
+    match discogs {
+        Some(line) if line.contains("[match=exact]") => "exact",
+        Some(line) if line.contains("[match=fuzzy]") => "fuzzy",
+        Some(line) if line.contains("[match=invalid]") => "invalid",
+        Some(_) => "unknown",
+        None => "not_usable",
+    }
 }
 
 #[test]
@@ -545,18 +687,22 @@ fn genre_distribution_empty_input() {
 }
 
 #[test]
-fn genre_distribution_excludes_confirm_and_genreless() {
+fn genre_distribution_excludes_strong_confirm_but_keeps_weak_confirm() {
     use crate::domain::classification::{ClassificationAction as A, ClassificationConfidence as C};
 
     let results = vec![
         make_result(Some("Techno"), C::High, A::Confirm, "Artist A"),
+        make_result(Some("Techno"), C::Low, A::Confirm, "Artist Weak"),
         make_result(None, C::Insufficient, A::Suggest, "Artist B"),
         make_result(Some("House"), C::Medium, A::Suggest, "Artist C"),
     ];
     let dist = classification::build_genre_distribution(&results);
     let arr = dist.as_array().unwrap();
-    assert_eq!(arr.len(), 1, "only House should appear");
-    assert_eq!(arr[0]["genre"], "House");
+    assert_eq!(
+        arr.len(),
+        2,
+        "House and the weak Techno confirmation appear"
+    );
     assert_eq!(arr[0]["count"], 1);
 }
 

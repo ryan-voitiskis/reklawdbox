@@ -18,18 +18,6 @@ pub struct LookupDiscogsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct LookupBeatportParams {
-    #[schemars(description = "Track ID — auto-fills artist/title from library")]
-    pub track_id: Option<String>,
-    #[schemars(description = "Artist name (required if no track_id)")]
-    pub artist: Option<String>,
-    #[schemars(description = "Track title (required if no track_id)")]
-    pub title: Option<String>,
-    #[schemars(description = "Bypass cache and fetch fresh data (default false)")]
-    pub force_refresh: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LookupMusicBrainzParams {
     #[schemars(description = "Track ID — auto-fills artist/title from library")]
     pub track_id: Option<String>,
@@ -71,9 +59,7 @@ pub struct EnrichTracksParams {
     pub max_tracks: Option<u32>,
     #[schemars(description = "Index into the stable underlying selector order (default 0)")]
     pub offset: Option<u32>,
-    #[schemars(
-        description = "Providers to use: 'discogs', 'beatport', 'bandcamp' (default ['discogs'])"
-    )]
+    #[schemars(description = "Providers to use: 'discogs', 'bandcamp' (default ['discogs'])")]
     pub providers: Option<Vec<crate::application::enrichment::model::EnrichmentProvider>>,
     #[schemars(description = "Skip tracks already in cache (default true)")]
     pub skip_cached: Option<bool>,

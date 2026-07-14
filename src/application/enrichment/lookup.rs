@@ -9,7 +9,6 @@ use super::model::{CacheLookupOutcome, ProviderLookupOutcome};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LookupProvider {
     Discogs,
-    Beatport,
     Bandcamp,
     MusicBrainz,
 }
@@ -18,7 +17,6 @@ impl LookupProvider {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Discogs => "discogs",
-            Self::Beatport => "beatport",
             Self::Bandcamp => "bandcamp",
             Self::MusicBrainz => "musicbrainz",
         }
@@ -178,29 +176,6 @@ pub(crate) fn persist_discogs_result(
     )
 }
 
-pub(crate) async fn dispatch_beatport(
-    http: &reqwest::Client,
-    identity: &LookupIdentity,
-) -> Result<Option<providers::beatport::BeatportResult>, providers::beatport::BeatportError> {
-    providers::beatport::lookup(http, &identity.artist, &identity.title).await
-}
-
-pub(crate) fn persist_beatport_result(
-    conn: &rusqlite::Connection,
-    identity: &LookupIdentity,
-    result: Option<providers::beatport::BeatportResult>,
-) -> Result<LookupResult, PersistLookupError> {
-    persist_provider_result(
-        conn,
-        LookupProvider::Beatport,
-        identity,
-        provider_outcome(result),
-        |result| {
-            if result.fuzzy_match { "fuzzy" } else { "exact" }
-        },
-    )
-}
-
 pub(crate) async fn dispatch_bandcamp(
     http: &reqwest::Client,
     identity: &LookupIdentity,
@@ -305,7 +280,7 @@ mod tests {
         );
         state::set_enrichment(
             &conn,
-            "beatport",
+            "bandcamp",
             &identity.norm_artist,
             &identity.norm_title,
             None,
@@ -316,7 +291,7 @@ mod tests {
 
         let outcome = read_lookup_cache(
             &conn,
-            LookupProvider::Beatport,
+            LookupProvider::Bandcamp,
             &identity,
             LookupPolicy {
                 force_refresh: false,
@@ -333,7 +308,7 @@ mod tests {
         assert!(matches!(
             read_lookup_cache(
                 &conn,
-                LookupProvider::Beatport,
+                LookupProvider::Bandcamp,
                 &identity,
                 LookupPolicy {
                     force_refresh: true,

@@ -11,15 +11,16 @@
 cache_coverage(has_genre=true)
 ```
 
-Use the scoped entries as evidence-quality signals. Discogs and Beatport
-`searched` coverage includes cached no-matches; `has_result` is the usable-match
-count, and errors are neither searched nor matched. Fill missing core searches
-and Stratum analysis where practical:
+Use the scoped entries as evidence-quality signals. Discogs readiness is
+album-aware: `searched` includes cached no-matches, `has_result` counts provider
+matches, and `usable_genre` counts matches that map into the classifier
+taxonomy. A searched no-match is operationally complete but not genre-usable;
+errors are neither searched nor matched. Fill missing core searches and
+Stratum analysis where practical:
 
 ```
 analyze_audio_batch(has_genre=true, skip_cached=true, max_tracks=200)
 enrich_tracks(has_genre=true, skip_cached=true, providers=["discogs"], max_tracks=50)
-enrich_tracks(has_genre=true, skip_cached=true, providers=["beatport"], max_tracks=50)
 ```
 
 For each bounded enrichment or audio call, start with `offset=0`, record its
@@ -37,9 +38,11 @@ installed or becomes newly available, or if `skip_cached` changes, restart that
 audio scope at zero.
 
 Essentia improves energy and timbral evidence but is not a hard gate. Proceed
-when coverage is incomplete; the audit will surface low or insufficient
-confidence for individual review. Retry actual errors, but do not require a
-match for a legitimately searched release.
+when coverage is incomplete; missing evidence may lower confidence, but it can
+also appear as flags on high- or medium-confidence results. Inspect those flags
+before bulk approval and review tracks without independent supporting evidence
+individually. Retry actual errors, but do not require a match for a legitimately
+searched release.
 
 **Recommended:** run `suggest_normalizations()` and stage alias fixes before auditing. This ensures the audit compares against canonical genre names, not aliases that inflate conflict counts.
 
@@ -51,7 +54,16 @@ match for a legitimately searched release.
 audit_genres(max_tracks=50)
 ```
 
-The server applies the genre decision tree to tracks that already have genres, comparing the evidence-based result against the current tag. Only conflicts and manual-review tracks appear in results.
+The server applies the genre decision tree to tracks that already have genres,
+comparing the evidence-based result against the current tag. Only conflicts and
+manual-review tracks appear in results. Manual review includes confirmations
+whose confidence is low or insufficient; agreement with the current tag does
+not make weak evidence disappear.
+
+High confidence requires at least two independent source groups: Discogs, a
+distinct Rekordbox label, or audio. Discogs styles and a label copied from that
+same response count once, and audio rules plus calibrated profiles count once.
+The current genre is only a normalization hint or conservative tie-breaker.
 
 Report the confidence distribution before review: "This batch: N high, N medium, N low, N insufficient out of N total."
 
@@ -67,12 +79,12 @@ Present as a numbered list, grouped by suggested genre for scannability:
 High confidence (12 conflicts):
 
 → Deep Techno (5):
- #1  Artist A — Track X | Techno → Deep Techno (Beatport: Raw/Deep, Discogs: Deep Techno x3)
- #2  Artist B — Track Y | Techno → Deep Techno (label: Ilian Tape, audio: atmospheric)
+ #1  Artist A — Track X | Techno → Deep Techno (Discogs: Deep Techno x3, label: Delsin → Deep Techno)
+ #2  Artist B — Track Y | Techno → Deep Techno (Discogs: Deep Techno x2, label: Ilian Tape → Deep Techno)
  ...
 
 → Tech House (3):
- #6  Artist C — Track Z | House → Tech House (Beatport: Tech House, Discogs: Tech House x2)
+ #6  Artist C — Track Z | House → Tech House (Discogs: Tech House x2, label: Tech House)
  ...
 ```
 

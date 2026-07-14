@@ -1,38 +1,92 @@
 # Contributing
 
-`reklawdbox` is primarily an MCP server over stdio (`./target/release/reklawdbox`).
+Reklawdbox is a Rust MCP server and CLI for working with Rekordbox 7.x
+libraries. The workspace also contains the `stratum-dsp` audio-analysis crate,
+an Astro documentation site, and a Cloudflare Discogs broker.
 
-## Local Setup
+Read [README.md](README.md) for the product workflow, [src/README.md](src/README.md)
+for the architecture, and [AGENTS.md](AGENTS.md) for repository-specific safety
+boundaries.
+
+## Set up and verify
+
+Install the Rust toolchain, Node.js 22, `dprint`, and the project dependencies,
+then run the standard gate:
 
 ```bash
+cargo fmt --check
+dprint check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
 cargo build --release
-cargo test
-cargo test -- --ignored
-# optional after docs/corpus edits
+./target/release/reklawdbox --version
+./target/release/reklawdbox --help
+./scripts/mcp-smoke.mjs --bin ./target/release/reklawdbox --skip-db
+```
+
+Ignored Rust tests are opt-in checks that may require private local audio,
+Rekordbox data, or benchmark fixtures. They are not part of the normal test
+suite. New required tests must use synthetic or checked-in fixtures.
+
+## Area-specific checks
+
+For documentation-site or public tool/CLI contract changes:
+
+```bash
+node --test scripts/check-doc-contract.test.mjs
+(cd site && npm ci && npm run build)
+node scripts/check-doc-contract.mjs \
+  --bin ./target/release/reklawdbox \
+  --dist ./site/dist
+```
+
+Then complete the semantic review in
+[`docs/workflows/doc-drift/README.md`](docs/workflows/doc-drift/README.md).
+
+For broker changes:
+
+```bash
+(cd broker && SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm ci && npm run typecheck && npm run build && npm test)
+```
+
+After changing the Rekordbox research corpus, also run:
+
+```bash
 bash docs/rekordbox/validate-corpus.sh
 python3 docs/rekordbox/verify-phase-b.py
 ```
 
-## Formatting
+## Safety boundaries
 
-Run formatters before committing. CI checks both:
+- Normal Rekordbox database access is SQLCipher read-only. Never add SQL that
+  mutates `master.db`. The confirmed `backup --restore` CLI workflow is a
+  separate recovery boundary.
+- Stage user-visible Rekordbox metadata through `ChangeManager` and export it
+  with `write_xml` for manual import.
+- Local Reklawdbox cache, audit, calibration, and broker-session writes are
+  allowed. Keep them separate from the Rekordbox library.
+- Audio tag and cover-art writes modify files directly. Preserve dry-run,
+  preview, backup, and confirmation safeguards.
+- Define MCP surfaces in `src/mcp/server.rs` and the matching
+  `src/mcp/*/transport.rs` types. Reusable behavior belongs in `application/`,
+  not in a transport handler.
+- SOPs under `site/src/partials/sops/` are compiled into the binary through
+  `src/mcp/help.rs`; changing one requires a rebuild and release/deploy.
 
-```bash
-dprint fmt && cargo fmt        # auto-fix
-dprint check && cargo fmt --check  # verify only
-```
+## Change expectations
 
-`dprint` covers TypeScript, JSON, Markdown, and TOML (`dprint.json`). `cargo fmt` covers Rust.
+- Keep changes scoped and preserve unrelated worktree edits.
+- Add or update tests for behavior changes, or explain why a test is not
+  practical.
+- Update user-facing documentation when behavior, tools, parameters, or CLI
+  flags change.
+- Run `cargo fmt` and `dprint fmt` before the verification commands. Note that
+  `dprint` intentionally excludes `docs/**`.
+- Use Conventional Commits, such as `fix(mcp): handle missing playlist`.
+- Never commit credentials, private library/audio data, caches, or local-only
+  configuration such as `.mcp.json`.
 
-## Expectations
+## Security issues
 
-- Keep changes scoped and reviewable.
-- Add/update tests for behavior changes, or explain why not.
-- Update docs for user-visible behavior changes.
-- Use Conventional Commits: `type(scope): short summary`.
-- Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`.
-- Never commit secrets or local-only config (for example `.mcp.json`).
-
-## Security Issues
-
-Do not open public vulnerability issues. Follow `SECURITY.md` for private disclosure.
+Do not open a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md)
+to report it privately.

@@ -15,8 +15,10 @@ use super::AudioFeatures;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Maximum vote weight for audio-profile votes (below Beatport 1.0, label 0.6).
+/// Maximum vote weight for audio-profile votes (below label votes at 0.6).
 const AFFINITY_CAP: f32 = 0.5;
+/// Compatibility version for persisted classifier-profile representation and scoring.
+pub(crate) const PROFILE_SCHEMA_VERSION: &str = "1";
 /// Tracks beyond this many weighted stddev from prototype score 0.
 const SCALE: f64 = 2.5;
 /// Minimum verified tracks to generate a prototype.
@@ -87,6 +89,34 @@ pub(crate) struct ProfileRegistry {
     pub(crate) prototypes: HashMap<&'static str, GenrePrototype>,
     /// Global stats per feature: (mean, stddev).
     pub(crate) global_stats: HashMap<&'static str, (f64, f64)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProfileMetadata {
+    pub(crate) classifier_profile_schema_version: String,
+    pub(crate) stratum_schema_version: String,
+    pub(crate) essentia_schema_version: String,
+    pub(crate) playlist_name: String,
+    pub(crate) training_fingerprint: String,
+    pub(crate) scorable_sample_count: u32,
+    pub(crate) calibrated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProfileLoadStatus {
+    Missing,
+    Fresh,
+    TrainingChanged,
+    Incompatible,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProfileLoad {
+    pub(crate) status: ProfileLoadStatus,
+    pub(crate) registry: Option<ProfileRegistry>,
+    pub(crate) metadata: Option<ProfileMetadata>,
+    pub(crate) reason: Option<String>,
 }
 
 /// Per-genre audio affinity score for a single track.
@@ -182,6 +212,18 @@ fn extract_contrast(audio: &AudioFeatures) -> Option<Vec<f64>> {
             None
         }
     })
+}
+
+/// A BPM-only row is valid cached analysis but cannot contribute the optional
+/// observations required by calibrated profile scoring.
+pub(crate) fn has_scorable_optional_features(audio: &AudioFeatures) -> bool {
+    extract_scalar_features(audio)
+        .into_iter()
+        .skip(1)
+        .any(|value| value.is_some())
+        || extract_mfcc_mean(audio).is_some()
+        || extract_mfcc_std(audio).is_some()
+        || extract_contrast(audio).is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +506,27 @@ pub(crate) fn score_all(audio: &AudioFeatures, registry: &ProfileRegistry) -> Au
         affinities,
         had_sufficient_coverage,
     }
+}
+
+/// Whether a representative row meets the exact scorer coverage contract for
+/// one candidate prototype, independent of the resulting affinity weight.
+pub(crate) fn can_score_genre(
+    audio: &AudioFeatures,
+    registry: &ProfileRegistry,
+    genre: &str,
+) -> bool {
+    let Some(proto) = registry.prototypes.get(genre) else {
+        return false;
+    };
+    score_track(
+        &extract_scalar_features(audio),
+        &extract_mfcc_mean(audio),
+        &extract_mfcc_std(audio),
+        &extract_contrast(audio),
+        proto,
+        registry,
+    )
+    .is_some()
 }
 
 fn score_track(
@@ -942,6 +1005,34 @@ mod tests {
         assert!(!scored.had_sufficient_coverage);
         assert!(scored.affinities.is_empty());
         assert!(score_single(&audio, &registry).is_none());
+    }
+
+    #[test]
+    fn bpm_only_rows_are_cached_but_not_scorable_samples() {
+        let mut audio = test_audio(130.0, 2.0, 3.0, 1500.0);
+        for value in [
+            &mut audio.danceability,
+            &mut audio.onset_rate,
+            &mut audio.rhythm_regularity,
+            &mut audio.spectral_centroid_mean,
+            &mut audio.spectral_centroid_cv,
+            &mut audio.dynamic_complexity,
+            &mut audio.loudness_integrated,
+            &mut audio.decay_mid_tau,
+            &mut audio.decay_high_tau,
+            &mut audio.spectral_flux_mean,
+            &mut audio.dissonance_mean,
+            &mut audio.key_clarity,
+        ] {
+            *value = None;
+        }
+        audio.mfcc_mean = None;
+        audio.mfcc_std = None;
+        audio.spectral_contrast_mean = None;
+        assert!(!has_scorable_optional_features(&audio));
+
+        audio.danceability = Some(2.0);
+        assert!(has_scorable_optional_features(&audio));
     }
 
     #[test]

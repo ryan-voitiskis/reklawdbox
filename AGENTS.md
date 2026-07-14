@@ -1,106 +1,69 @@
-# AGENTS.md
+# Repository guidance
 
-Reklawdbox is an MCP server and CLI for Rekordbox 7.x. It reads the encrypted
-Rekordbox library, stages metadata edits in memory, and exports XML for manual
-reimport.
+Reklawdbox is a Rust MCP server and CLI for Rekordbox 7.x. It reads the
+encrypted library, stages metadata in memory, and exports XML for manual
+Rekordbox import.
 
-## Non-Negotiables
+## Boundaries
 
-- Never add a direct write path to Rekordbox `master.db`. It is opened via
-  SQLCipher with `SQLITE_OPEN_READ_ONLY`; preserve that boundary.
-- User-visible metadata changes go through `ChangeManager` and `write_xml`.
-  Local SQLite cache/store writes are fine for enrichment, analysis, audit,
-  calibration, and broker-session state.
-- SOPs in `site/src/partials/sops/*.mdx` are embedded by
-  `src/mcp/help.rs` using `include_str!`; SOP changes need a rebuild
-  and deploy/release before an MCP host sees them.
-- Tool surfaces are defined by `#[tool(...)]` annotations and `schemars`
-  descriptions in `src/mcp/*/transport.rs`.
-- Use Conventional Commits.
+- Normal `master.db` access is SQLCipher read-only. Never add a SQL mutation
+  path. The confirmed `backup --restore` CLI flow may replace files for
+  disaster recovery; keep it isolated from MCP and normal library access.
+- Route user-visible Rekordbox metadata through `ChangeManager` and
+  `write_xml`. Reklawdbox-owned cache, analysis, audit, calibration, and broker
+  SQLite writes are allowed.
+- Audio tag and cover-art tools write directly to selected files. Preserve
+  preview, dry-run, backup, and confirmation behavior.
+- Preserve unrelated worktree changes and stage only files in scope. Use
+  Conventional Commits.
 
-## Repo Shape
+## Ownership
 
-- Root crate `reklawdbox` (Rust 2024): MCP server, CLI, DB access, enrichment,
-  classification, staging, XML export.
-- `stratum-dsp` (Rust 2021): DSP and audio analysis.
-- `site/`: Astro Starlight docs.
-- `broker/`: Cloudflare Workers + D1 Discogs broker.
-- `docs/tmp/`: research notes. `dprint` excludes `docs/**`.
+- `domain/` owns pure rules; `application/` owns reusable workflows;
+  `adapters/` owns I/O; `mcp/` and `cli/` own transport concerns. See
+  `src/README.md`.
+- MCP tool surfaces come from `#[tool(...)]` in `src/mcp/server.rs` and
+  `schemars` types/descriptions in `src/mcp/*/transport.rs`.
+- SOPs in `site/src/partials/sops/*.mdx` are embedded by `src/mcp/help.rs` with
+  `include_str!`; rebuild and deploy/release before a host can see edits.
+- `stratum-dsp/` owns DSP, `site/` owns Astro docs, and `broker/` owns the
+  Cloudflare/D1 Discogs broker. `dprint` intentionally excludes `docs/**`.
 
-## Build And Test
+## Verify
 
-Normal gate for server/CLI work:
+Run the standard workspace gate:
 
 ```bash
 cargo fmt --check
 dprint check
-cargo clippy -p reklawdbox --all-targets -- -D warnings
-cargo test -p reklawdbox --no-fail-fast
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
 cargo build --release
 ./target/release/reklawdbox --version
 ./target/release/reklawdbox --help
 ```
 
-Docs-site changes need:
+- Do not add mandatory tests that require private audio or Rekordbox data;
+  ignored tests are opt-in local or benchmark checks.
+- For docs/public-contract, broker, or research-corpus changes, run the exact
+  area gate in `CONTRIBUTING.md`. Public-surface changes also need the semantic
+  review in `docs/workflows/doc-drift/README.md`.
+- Audio output/schema changes usually require a cache-version bump in
+  `src/adapters/audio/mod.rs`.
 
-```bash
-cd site
-npm install
-npm run build
-```
+## MCP and releases
 
-Full workspace checks:
-
-```bash
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p stratum-dsp --no-fail-fast
-```
-
-Known state on 2026-06-13: `reklawdbox` and `stratum-dsp` both pass the normal
-and full workspace gates above. `stratum-dsp` integration tests use synthetic
-fixtures in memory; do not add mandatory tests that depend on private local
-audio files.
-
-The local pre-commit hook runs Rust formatting and clippy when staged Rust files
-exist, plus `dprint` for staged supported docs/config files.
-
-## MCP Local Testing
-
-The repo `.mcp.json` runs `reklawdbox mcp` from `PATH`, which usually resolves
-to the Homebrew binary, not `target/release/reklawdbox`. Claude Code also
-re-resolves from `PATH` on `/mcp`, so editing `.mcp.json` is not enough.
-
-Local MCP test loop:
-
-1. `./scripts/deploy-local.sh` builds release, overwrites the Homebrew Cellar
-   binary, and re-signs it. Requires `sudo`.
-2. Ask the user to run `/mcp`.
-3. Smoke-test changed MCP tools with a happy path and an error/edge path.
-
-In Codex Desktop, active MCP tools are fixed when the thread starts; there is no
-known in-thread equivalent of Claude Code's `/mcp` reconnect. Use
-`./scripts/mcp-smoke.mjs` after `cargo build --release` to drive the local
-binary over stdio from the current thread. It runs handshake, `tools/list`,
-`help(topic='genre')`, `calibration_coverage`, and a missing-playlist error
-path. Use `--skip-db` when the real Rekordbox DB is unavailable.
-
-If `sudo` is unavailable and Codex smoke is not enough, run the release build
-and CLI smoke tests, then say that MCP host testing was not performed.
-
-Essentia uses `.venvs/essentia/bin/python` via `CRATE_DIG_ESSENTIA_PYTHON` in
-`.mcp.json`. For analysis tests that must bypass cache, pass
-`skip_cached: false`.
-
-## Change-Specific Notes
-
-- Audio output/schema changes usually need a cache schema bump in
-  `src/adapters/audio/mod.rs` (`STRATUM_SCHEMA_VERSION` or `ESSENTIA_SCHEMA_VERSION`).
-- DSP tests should use synthetic fixtures where possible; do not make normal
-  tests depend on private local audio files.
-- Before release, run the doc-drift workflow in
-  `docs/workflows/doc-drift/README.md` if tools, params, SOPs, CLI flags, or
-  README claims changed.
-- `./scripts/release.sh <version>` requires clean `main` including no untracked
-  files, runs the release preflight checks, bumps version files, commits, tags,
-  pushes, and lets GitHub Actions publish the release plus Homebrew formula
-  update.
+- Claude Code `.mcp.json` runs `reklawdbox mcp` from `PATH`, usually the
+  Homebrew binary, and points Essentia at `.venvs/essentia/bin/python`. A repo
+  build does not refresh that host binary.
+- The ChatGPT desktop app, Codex CLI, and Codex IDE extension share Codex MCP
+  configuration rather than `.mcp.json`. Restart the app/extension or start a
+  new CLI task after changing the server or its tool schemas.
+- To test the current checkout directly, build release and run
+  `./scripts/mcp-smoke.mjs`; add `--skip-db` when the library is unavailable.
+  Pass `skip_cached: false` when testing fresh audio analysis.
+- For Claude Code host testing, run `./scripts/deploy-local.sh` (requires
+  `sudo`), reconnect with `/mcp`, then test a happy and an edge/error path. If
+  host deployment is unavailable, say so.
+- `./scripts/release.sh <version>` requires clean `main`, runs preflight,
+  commits/tags/pushes, and triggers release plus Homebrew formula publishing.

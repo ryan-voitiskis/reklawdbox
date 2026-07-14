@@ -1,7 +1,7 @@
 ## Constraints
 
-- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, Bandcamp, and Beatport enrichment caches — it does not check file tags or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 1c).
-- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → Beatport enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 2c).
+- **`backfill_labels` is enrichment-dependent.** The tool pulls labels from Discogs, MusicBrainz, and Bandcamp enrichment caches — it does not check file tags or the web. Tracks without cached enrichment are skipped (unless `auto_enrich=true`). For tracks still unlabeled after the tool runs, the agent researches labels manually (step 1c).
+- **Years use a priority cascade.** `backfill_years` tries multiple sources in order: file tags → folder path `(YYYY)` → Discogs enrichment → MusicBrainz enrichment → Bandcamp enrichment. For tracks still missing years after the tool runs, the agent researches release dates (step 2c).
 - **No auto-tagging without review (labels).** The backfill tools stage non-conflicting values automatically. Label conflicts require human approval before staging. Year conflicts are resolved automatically using the lowest year (see "Lowest year wins").
 - **XML export only.** All changes flow through `update_tracks` → `preview_changes` → `write_xml`.
 - **Self-released tracks are skipped (labels only).** Discogs "Not On Label" entries are filtered out — they carry no useful signal.
@@ -20,11 +20,11 @@ Check the reported baseline for unlabeled tracks:
 cache_coverage(has_label=false)
 ```
 
-`cache_coverage` reports scoped Stratum, Essentia, Discogs, and Beatport entries.
-For Discogs and Beatport, use `searched_percent` to find unattempted work and
-`has_result` to understand usable matches. Searched includes legitimate
-no-matches; errors count as neither searched nor matched and remain retryable.
-Essentia is useful evidence but not a prerequisite for metadata backfill.
+`cache_coverage` reports scoped Stratum, Essentia, and Discogs entries. For
+Discogs, use `searched_percent` to find unattempted work and `has_result` to
+understand usable matches. Searched includes legitimate no-matches; errors
+count as neither searched nor matched and remain retryable. Essentia is useful
+evidence but not a prerequisite for metadata backfill.
 
 ### Hydration priority
 
@@ -34,25 +34,15 @@ Essentia is useful evidence but not a prerequisite for metadata backfill.
 enrich_tracks(has_label=false, skip_cached=true, providers=["discogs"], max_tracks=50)
 ```
 
-2. **Beatport** (label data extracted from search results since v0.15; older cache entries lack labels):
-
-```
-enrich_tracks(has_label=false, skip_cached=true, providers=["beatport"], max_tracks=50)
-```
-
-If Beatport `searched_percent` is complete but labels are still missing, existing
-cache entries may predate label extraction. Re-enrich with `force_refresh=true`
-to populate them.
-
-3. **Bandcamp** is a targeted source for underground and independent releases.
+2. **Bandcamp** is a targeted source for underground and independent releases.
 Use the tool-specific gaps from the backfill response to select work:
 
 ```
 enrich_tracks(has_label=false, skip_cached=true, providers=["bandcamp"], max_tracks=50)
 ```
 
-4. **MusicBrainz** is an individual lookup used during year research (step 2c)
-or fetched by the relevant `auto_enrich` path.
+3. **MusicBrainz** supplies release-group and label fallbacks and is fetched by
+the relevant `auto_enrich` path.
 
 Run targeted enrichment for actual gaps, retry errors, and accept a cached
 no-match as a completed search. Do not require every provider to match every
@@ -69,7 +59,10 @@ changes; restart at zero after either changes. Keep `providers`, `skip_cached`,
 and `force_refresh` fixed for a traversal. Changing provider scope or cache
 policy can make earlier indices pending and requires a restart at zero.
 
-**Alternative: skip manual hydration** and use `auto_enrich=true` on the backfill tools (see steps 1 and 2). This automatically fetches Bandcamp data for uncached tracks before backfilling. Slower for large collections but requires no manual batching.
+**Alternative: skip manual hydration** and use `auto_enrich=true` on the
+backfill tools (see steps 1 and 2). Label and year backfill fetch Bandcamp and
+MusicBrainz for their exact unresolved provider gaps; album backfill fetches
+Bandcamp. This is slower for large collections but requires no manual batching.
 
 ## Steps
 
@@ -81,18 +74,28 @@ policy can make earlier indices pending and requires a restart at zero.
 backfill_labels()
 ```
 
-Or, to automatically fetch Bandcamp data for uncached tracks:
+Or, to automatically fetch MusicBrainz and Bandcamp data for their uncached
+label gaps:
 
 ```
 backfill_labels(auto_enrich=true)
 ```
 
-The tool scans the entire collection (excluding samples), looks up each track's enrichment across all four providers (Discogs, MusicBrainz, Bandcamp, Beatport), and:
+The tool scans the entire collection (excluding samples), looks up each track's enrichment across Discogs, MusicBrainz, and Bandcamp, and:
 - **Fills** empty labels from enrichment (auto-staged)
 - **Skips** tracks where current label matches enrichment
 - **Reports conflicts** where current label differs from enrichment (not staged)
 
-The summary includes `no_enrichment_by_provider` showing which providers are missing data for the remaining unlabeled tracks. If `no_bandcamp` is high, hydrate Bandcamp and re-run.
+Label precedence remains Discogs → MusicBrainz → Bandcamp. The additive
+`auto_enriched_by_provider` counts successful MusicBrainz and Bandcamp matches;
+their sum equals `auto_enriched`. Provider errors remain retryable and do not
+write durable cache rows, while completed no-matches are cached.
+
+The summary includes `no_enrichment_by_provider` for all scanned tracks that
+lack a usable enrichment label from each provider; these counts are broader
+than the remaining unlabeled set. Use `research_queue` for the actual unresolved
+label workload. If `no_bandcamp` is high, run targeted Bandcamp enrichment and
+re-run.
 
 Report the summary: "Backfill complete: N labels staged, N already correct, N conflicts, N without enrichment." Then immediately proceed to conflict resolution.
 
@@ -191,7 +194,7 @@ Then for each batch:
 
 1. **Group by artist** for efficient lookup — tracks from the same artist often share a label.
 2. **Prioritize by artist frequency** — artists with many unlabeled tracks first, for maximum coverage per lookup.
-3. **Research labels** using web search, store lookups (`lookup_beatport`, `lookup_discogs`, `lookup_bandcamp`), label catalogs, and model knowledge.
+3. **Research labels** using web search, store lookups (`lookup_discogs`, `lookup_bandcamp`, `lookup_musicbrainz`), label catalogs, and model knowledge.
 4. **Present findings** grouped by confidence:
    - **High confidence** (exact release found on store/catalog): present for bulk approval.
    - **Uncertain** (multiple candidates or ambiguous match): present individually with source context.
@@ -213,24 +216,21 @@ Or, to automatically fetch Bandcamp and MusicBrainz data for uncached year-zero 
 backfill_years(auto_enrich=true)
 ```
 
-The tool scans the entire collection (excluding samples) and tries six sources in priority order for each track with year=0:
+The tool scans the entire collection (excluding samples) and tries five sources in priority order for each track with year=0:
 
 1. **File tags** — reads year from the audio file's metadata (ID3v2, Vorbis Comment, RIFF INFO). Most reliable since the user tagged it.
 2. **Folder path** — extracts year from a `(YYYY)` suffix in the parent directory name (e.g. `Album (2019)/`).
 3. **Discogs enrichment** — falls back to the cached Discogs release year.
-4. **Beatport enrichment** — falls back to the cached Beatport `publish_date`/`release_date`.
-5. **MusicBrainz enrichment** — falls back to the cached MusicBrainz `first-release-date`.
-6. **Bandcamp enrichment** — falls back to the cached Bandcamp `release_date`. Particularly effective for underground/independent electronic music.
+4. **MusicBrainz enrichment** — falls back to the cached MusicBrainz `first-release-date`.
+5. **Bandcamp enrichment** — falls back to the cached Bandcamp `release_date`. Particularly effective for underground/independent electronic music.
 
-The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. For tracks that already have a non-zero year, the tool checks Discogs enrichment only — if the Discogs year differs from the current year, the track is reported as a conflict. Other providers (Beatport, MusicBrainz, Bandcamp) are not compared against existing years.
+The first source to produce a valid year (1900–2099) wins. Non-conflicting fills are auto-staged. For tracks that already have a non-zero year, the tool checks Discogs enrichment only — if the Discogs year differs from the current year, the track is reported as a conflict. MusicBrainz and Bandcamp are not compared against existing years.
 
 The summary includes `remaining_uncached_providers` showing which targeted
 sources are missing data for remaining year-zero tracks. Use those gaps to
 choose enrichment, then re-run (or use `auto_enrich=true`).
 
-Note: Beatport date extraction requires enrichment cache entries created after this feature was added. For tracks with older cache entries, re-enrich with `enrich_tracks(providers=["beatport"], force_refresh=true)` to populate the `release_date` field.
-
-Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N Beatport, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source." Then immediately proceed to resolve conflicts.
+Report the summary: "Year backfill complete: N years staged (N file tags, N folder paths, N Discogs, N MusicBrainz, N Bandcamp), N already correct, N conflicts, N without any source." Then immediately proceed to resolve conflicts.
 
 #### 2b. Resolve conflicts
 
@@ -278,7 +278,7 @@ This picks up years from the fresh Bandcamp/MusicBrainz cache entries.
 For tracks still without years after all enrichment sources are exhausted:
 
 1. **Group by artist** for efficient lookup.
-2. **Search for release dates** — use web search, Discogs links, store lookups (`lookup_beatport`, `lookup_discogs`, `lookup_bandcamp`), label catalogs, and model knowledge to find the original release year.
+2. **Search for release dates** — use web search, Discogs links, store lookups (`lookup_discogs`, `lookup_bandcamp`, `lookup_musicbrainz`), label catalogs, and model knowledge to find the original release year.
 3. **Present findings** grouped by confidence:
    - **High confidence** (exact release found): present for bulk approval.
    - **Uncertain** (multiple candidates or approximate): present individually with context.

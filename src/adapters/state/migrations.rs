@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub(crate) const STORE_SCHEMA_VERSION: i32 = 9;
+pub(crate) const STORE_SCHEMA_VERSION: i32 = 10;
 
 pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
@@ -94,6 +94,17 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             mean          REAL NOT NULL,
             stddev        REAL NOT NULL,
             updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS genre_profile_metadata (
+            id                                  INTEGER PRIMARY KEY CHECK (id = 1),
+            classifier_profile_schema_version   TEXT NOT NULL,
+            stratum_schema_version              TEXT NOT NULL,
+            essentia_schema_version             TEXT NOT NULL,
+            playlist_name                       TEXT NOT NULL,
+            training_fingerprint                TEXT NOT NULL,
+            scorable_sample_count               INTEGER NOT NULL,
+            calibrated_at                       TEXT NOT NULL,
+            updated_at                          TEXT NOT NULL DEFAULT (datetime('now'))
         );
         ",
     )?;

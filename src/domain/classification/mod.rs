@@ -9,5 +9,6 @@ pub(crate) mod taxonomy;
 
 pub(crate) use model::{
     AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    GenreCandidate, MappedGenre, TrackEvidence,
+    DiscogsMatchQuality, DiscogsReadiness, GenreCandidate, LabelProvenance, MappedGenre,
+    TrackEvidence,
 };

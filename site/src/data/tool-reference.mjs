@@ -42,7 +42,6 @@ const groupTools = {
   ],
   'enrichment-analysis': [
     'lookup_discogs',
-    'lookup_beatport',
     'lookup_musicbrainz',
     'lookup_bandcamp',
     'enrich_tracks',

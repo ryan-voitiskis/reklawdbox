@@ -137,10 +137,9 @@ Return locally-cached data without external API calls or analysis.
 
 ### `resolve_track_data`
 
-Return Rekordbox metadata, cached Discogs and Beatport enrichment, current
-Stratum and optional current Essentia analysis, staged changes, and genre
-taxonomy mappings for one track. It does not include cached Bandcamp or
-MusicBrainz payloads.
+Return Rekordbox metadata, cached Discogs enrichment, current Stratum and
+optional current Essentia analysis, staged changes, and genre taxonomy mappings
+for one track. It does not include cached Bandcamp or MusicBrainz payloads.
 
 {/* doc-contract:mcp tool=resolve_track_data schema=/ requiredness=global */}
 
@@ -169,7 +168,7 @@ to scope which tracks to resolve.
 
 {/* /doc-contract:mcp */}
 
-The `"classification"` format returns a compact payload (~400-500 bytes/track vs 2-4KB) with only genre classification fields: mapped Discogs genres/styles, Beatport genre, audio features, and completeness flags.
+The `"classification"` format returns a compact payload (~400-500 bytes/track vs 2-4KB) with only genre classification fields: mapped Discogs genres/styles, audio features, and completeness flags.
 
 <Aside type="tip">
   Use `format: "classification"` for large batches to keep context window usage low.
@@ -191,26 +190,27 @@ Report cache completeness for a track scope. Accepts [shared search filters](/mc
 
 {/* /doc-contract:mcp */}
 
-Returns exactly four coverage entries for the selected scope:
+Returns exactly three coverage entries for the selected scope:
 
 | Entry | What coverage means |
 |-------|---------------------|
 | `stratum_dsp` | Fresh built-in audio-analysis cache rows |
 | `essentia` | Fresh optional Essentia cache rows, plus whether Essentia is installed |
-| `discogs` | `searched` and `has_result` counts for Discogs enrichment |
-| `beatport` | `searched` and `has_result` counts for Beatport enrichment |
+| `discogs` | Exact album-aware `searched`, `has_result`, `matched_unmapped`, and `usable_genre` counts using the classifier's taxonomy mapping |
 
 Bandcamp and MusicBrainz are targeted metadata paths and are not reported by
 this tool.
 
 The gap counts use the same scope: `no_audio_analysis` means no fresh Stratum
-row, `no_enrichment` means neither Discogs nor Beatport has an actual result,
-and `no_data_at_all` means neither audio analyzer nor either metadata provider
-has usable data.
+row, `no_enrichment` means Discogs has no usable mapped genre, and
+`no_data_at_all` means neither audio analyzer nor Discogs has usable data.
+`gaps.discogs` separates `not_searched`, `searched_no_match`, and
+`matched_unmapped` work.
 
 <Aside type="caution">
-  For Discogs and Beatport, `searched` excludes errors but includes a legitimate
-  cached no-match. `has_result` counts only exact or fuzzy matches. Error rows
-  count as neither, remain incomplete, and can be retried. Use searched coverage
-  as a completion signal; do not require every searched track to have a match.
+  For Discogs, `searched` excludes errors but includes a legitimate cached
+  no-match. `has_result` counts exact or fuzzy payloads, while `usable_genre`
+  requires at least one canonical mapped style. Error rows count as neither and
+  can be retried. A row for another album does not satisfy classification
+  readiness.
 </Aside>

@@ -20,7 +20,7 @@ const metaY = 380;
 const stratumY = 100;
 const essentiaY = 220;
 const discogsY = 340;
-const beatportY = 440;
+const targetedProvidersY = 440;
 
 // Downstream positions
 const classifyY = 140;
@@ -52,7 +52,7 @@ function arrow(x1: number, y1: number, x2: number, y2: number) {
 const stratumOutputs = ['BPM', 'Key', 'Rhythm Regularity'];
 const essentiaOutputs = ['Danceability', 'Spectral Centroid', 'Loudness', 'Onset Rate', 'Dynamic Complexity'];
 const discogsOutputs = ['Genre', 'Style', 'Label', 'Year', 'Catalog #'];
-const beatportOutputs = ['Genre', 'Sub-genre', 'BPM', 'Key', 'Label'];
+const targetedProviderOutputs = ['Label', 'Year', 'Album', 'Cover Art'];
 
 // Output box heights (dynamic based on item count)
 function outputBoxH(items: string[]) { return 24 + items.length * 17; }
@@ -60,14 +60,14 @@ function outputBoxH(items: string[]) { return 24 + items.length * 17; }
 const stratumOutH = outputBoxH(stratumOutputs);
 const essentiaOutH = outputBoxH(essentiaOutputs);
 const discogsOutH = outputBoxH(discogsOutputs);
-const beatportOutH = outputBoxH(beatportOutputs);
+const targetedProviderOutH = outputBoxH(targetedProviderOutputs);
 
 // Connection definitions: input → processing
 const inputConnections = [
   { x1: col1 + inputW / 2, y1: audioY, x2: col2 - toolW / 2, y2: stratumY },
   { x1: col1 + inputW / 2, y1: audioY, x2: col2 - toolW / 2, y2: essentiaY },
   { x1: col1 + inputW / 2, y1: metaY, x2: col2 - toolW / 2, y2: discogsY },
-  { x1: col1 + inputW / 2, y1: metaY, x2: col2 - toolW / 2, y2: beatportY },
+  { x1: col1 + inputW / 2, y1: metaY, x2: col2 - toolW / 2, y2: targetedProvidersY },
 ];
 
 // Processing → output
@@ -75,7 +75,7 @@ const procOutputConnections = [
   { x1: col2 + toolW / 2, y1: stratumY, x2: col3 - outputW / 2, y2: stratumY },
   { x1: col2 + toolW / 2, y1: essentiaY, x2: col3 - outputW / 2, y2: essentiaY },
   { x1: col2 + toolW / 2, y1: discogsY, x2: col3 - outputW / 2, y2: discogsY },
-  { x1: col2 + toolW / 2, y1: beatportY, x2: col3 - outputW / 2, y2: beatportY },
+  { x1: col2 + toolW / 2, y1: targetedProvidersY, x2: col3 - outputW / 2, y2: targetedProvidersY },
 ];
 
 // Output → downstream. Audio analysis feeds classification and scoring;
@@ -87,8 +87,7 @@ const outputDownConnections = [
   { x1: col3 + outputW / 2, y1: essentiaY, x2: col4 - downW / 2, y2: scoringY, label: 'Essentia analysis to set and pool scoring' },
   { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: classifyY, label: 'Discogs metadata to genre classification' },
   { x1: col3 + outputW / 2, y1: discogsY, x2: col4 - downW / 2, y2: backfillY, label: 'Discogs metadata to metadata backfill' },
-  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: classifyY, label: 'Beatport metadata to genre classification' },
-  { x1: col3 + outputW / 2, y1: beatportY, x2: col4 - downW / 2, y2: backfillY, label: 'Beatport metadata to metadata backfill' },
+  { x1: col3 + outputW / 2, y1: targetedProvidersY, x2: col4 - downW / 2, y2: backfillY, label: 'Bandcamp and MusicBrainz metadata to metadata backfill' },
 ];
 ---
 
@@ -96,7 +95,7 @@ const outputDownConnections = [
   <p class="diagram-scroll-hint">Scroll horizontally to explore the full data flow.</p>
   <div class="diagram-scroll" role="region" aria-label="Scrollable data-flow diagram" tabindex="0">
     <svg viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" role="img"
-         aria-label="Data flow diagram: Stratum and Essentia analysis feed genre classification and set or pool scoring; Discogs and Beatport metadata feed genre classification and metadata backfill">
+         aria-label="Data flow diagram: Stratum and Essentia analysis feed genre classification and set or pool scoring; Discogs metadata feeds genre classification and metadata backfill; Bandcamp and MusicBrainz metadata feeds metadata backfill">
     <defs>
       <marker id="df-arrow" viewBox="0 0 10 7" refX="9" refY="3.5"
               markerWidth="8" markerHeight="6" orient="auto-start-reverse">
@@ -161,10 +160,10 @@ const outputDownConnections = [
     <text x={col2} y={discogsY - 4} text-anchor="middle" class="tool-name">Discogs</text>
     <text x={col2} y={discogsY + 12} text-anchor="middle" class="tool-note">via broker API</text>
 
-    <!-- Beatport -->
-    <rect {...box(col2, beatportY, toolW, toolH)} class="box-tool" />
-    <text x={col2} y={beatportY - 4} text-anchor="middle" class="tool-name">Beatport</text>
-    <text x={col2} y={beatportY + 12} text-anchor="middle" class="tool-note">HTML/JSON extraction</text>
+    <!-- Targeted metadata providers -->
+    <rect {...box(col2, targetedProvidersY, toolW, toolH)} class="box-tool" />
+    <text x={col2} y={targetedProvidersY - 4} text-anchor="middle" class="tool-name">Bandcamp + MB</text>
+    <text x={col2} y={targetedProvidersY + 12} text-anchor="middle" class="tool-note">targeted metadata lookups</text>
 
     <!-- ═══ OUTPUT ATTRIBUTE GROUPS ═══ -->
     <!-- stratum-dsp outputs -->
@@ -185,10 +184,10 @@ const outputDownConnections = [
       <text x={col3} y={discogsY - discogsOutH / 2 + 18 + i * 17} text-anchor="middle" class="output-item">{item}</text>
     ))}
 
-    <!-- Beatport outputs -->
-    <rect {...box(col3, beatportY, outputW, beatportOutH)} class="box-output" />
-    {beatportOutputs.map((item, i) => (
-      <text x={col3} y={beatportY - beatportOutH / 2 + 18 + i * 17} text-anchor="middle" class="output-item">{item}</text>
+    <!-- Targeted metadata provider outputs -->
+    <rect {...box(col3, targetedProvidersY, outputW, targetedProviderOutH)} class="box-output" />
+    {targetedProviderOutputs.map((item, i) => (
+      <text x={col3} y={targetedProvidersY - targetedProviderOutH / 2 + 18 + i * 17} text-anchor="middle" class="output-item">{item}</text>
     ))}
 
     <!-- ═══ DOWNSTREAM USES ═══ -->
@@ -213,8 +212,9 @@ const outputDownConnections = [
   </div>
   <figcaption>
     Audio analysis from Stratum and Essentia supports classification and
-    scoring. Discogs and Beatport metadata support classification and backfill,
-    but set and pool scoring reads Rekordbox metadata and audio caches instead.
+    scoring. Discogs metadata supports classification and backfill; Bandcamp and
+    MusicBrainz provide targeted backfill metadata. Set and pool scoring reads
+    Rekordbox metadata and audio caches instead.
   </figcaption>
 </figure>
 

@@ -10,9 +10,8 @@ pub(super) use cache::HasScore;
 pub(super) use core::auth_remediation_message;
 pub(super) use discogs_auth::lookup_discogs_remote;
 pub(super) use handlers::{
-    EnrichTracksOutput, handle_enrich_tracks, handle_lookup_bandcamp, handle_lookup_beatport,
-    handle_lookup_discogs, handle_lookup_musicbrainz, lookup_bandcamp_remote,
-    lookup_musicbrainz_remote,
+    EnrichTracksOutput, handle_enrich_tracks, handle_lookup_bandcamp, handle_lookup_discogs,
+    handle_lookup_musicbrainz, lookup_bandcamp_remote, lookup_musicbrainz_remote,
 };
 pub(super) use resolve::{
     BatchPage, OffsetPage, ResolveTracksOpts, apply_offset_limit, describe_resolve_scope,
@@ -23,8 +22,8 @@ pub(super) use resolve_handlers::{handle_resolve_track_data, handle_resolve_trac
 
 #[cfg(test)]
 pub(super) use core::{
-    lookup_output_with_cache_metadata, set_test_beatport_lookup_override,
-    set_test_discogs_lookup_override,
+    lookup_output_with_cache_metadata, set_test_bandcamp_lookup_override,
+    set_test_discogs_lookup_override, set_test_musicbrainz_lookup_override,
 };
 #[cfg(test)]
 pub(super) use discogs_auth::{
@@ -36,6 +35,6 @@ pub(super) use resolve::pending_batch_page;
 #[cfg(test)]
 pub(super) use resolve_handlers::resolve_single_track;
 pub(super) use transport::{
-    EnrichTracksParams, LookupBandcampParams, LookupBeatportParams, LookupDiscogsParams,
-    LookupMusicBrainzParams, ResolveFormat, ResolveTrackDataParams, ResolveTracksDataParams,
+    EnrichTracksParams, LookupBandcampParams, LookupDiscogsParams, LookupMusicBrainzParams,
+    ResolveFormat, ResolveTrackDataParams, ResolveTracksDataParams,
 };

@@ -1,9 +1,8 @@
 use crate::mcp::enrichment::{
     BatchPage, DiscogsAuthTestDependencies, EnrichTracksParams, InMemoryDiscogsSessionPersistence,
-    LookupBeatportParams, LookupDiscogsParams, ResolveFormat, ResolveTrackDataParams,
-    ResolveTracksDataParams, auth_remediation_message, lookup_discogs_remote,
-    lookup_output_with_cache_metadata, resolve_discogs_auth_transition_for_test,
-    resolve_pending_tracks, resolve_single_track, set_test_beatport_lookup_override,
+    LookupDiscogsParams, ResolveFormat, ResolveTrackDataParams, ResolveTracksDataParams,
+    auth_remediation_message, lookup_discogs_remote, lookup_output_with_cache_metadata,
+    resolve_discogs_auth_transition_for_test, resolve_pending_tracks, resolve_single_track,
     set_test_discogs_lookup_override,
 };
 use crate::mcp::library::SearchFilterParams;
@@ -619,7 +618,7 @@ fn assert_sanitized_discogs_transition_error(
     }
 }
 
-fn beatport_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
+fn discogs_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
     EnrichTracksParams {
         filters: SearchFilterParams::default(),
         track_ids: Some(
@@ -632,7 +631,7 @@ fn beatport_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
         max_tracks: Some(u32::try_from(track_ids.len()).expect("test track count should fit u32")),
         offset: None,
         providers: Some(vec![
-            crate::application::enrichment::model::EnrichmentProvider::Beatport,
+            crate::application::enrichment::model::EnrichmentProvider::Discogs,
         ]),
         skip_cached: Some(false),
         force_refresh: Some(true),
@@ -640,14 +639,14 @@ fn beatport_batch_params(track_ids: &[&str]) -> EnrichTracksParams {
     }
 }
 
-async fn run_beatport_batch_with_timeout(
+async fn run_discogs_batch_with_timeout(
     server: &ReklawdboxServer,
     track_ids: &[&str],
     context: &str,
 ) -> CallToolResult {
     tokio::time::timeout(
         Duration::from_secs(5),
-        server.enrich_tracks(Parameters(beatport_batch_params(track_ids))),
+        server.enrich_tracks(Parameters(discogs_batch_params(track_ids))),
     )
     .await
     .unwrap_or_else(|_| panic!("{context} should finish within five seconds"))
@@ -680,15 +679,15 @@ fn install_enrichment_insert_failure(server: &ReklawdboxServer, raw_title: &str)
         .expect("selective cache-write trigger should install");
 }
 
-fn beatport_match(title: &str) -> crate::adapters::providers::beatport::BeatportResult {
-    crate::adapters::providers::beatport::BeatportResult {
-        genre: "Techno".to_string(),
-        bpm: Some(128),
-        key: "A minor".to_string(),
-        track_name: title.to_string(),
-        artists: vec!["Aníbal".to_string()],
-        release_date: Some("2026-01-01".to_string()),
-        label: Some("Cache Ack Records".to_string()),
+fn discogs_match(title: &str) -> crate::adapters::providers::discogs::DiscogsResult {
+    crate::adapters::providers::discogs::DiscogsResult {
+        title: title.to_string(),
+        year: "2026".to_string(),
+        label: "Cache Ack Records".to_string(),
+        genres: vec!["Electronic".to_string()],
+        styles: vec!["Techno".to_string()],
+        url: "https://www.discogs.com/release/test".to_string(),
+        cover_image: String::new(),
         fuzzy_match: false,
     }
 }
@@ -719,7 +718,7 @@ fn assert_cache_write_failure_context(
         .unwrap_or_else(|| panic!("failure for {track_id} should be present"));
     assert_eq!(failure["artist"], "Aníbal");
     assert_eq!(failure["title"], title);
-    assert_eq!(failure["provider"], "beatport");
+    assert_eq!(failure["provider"], "discogs");
     assert!(
         failure["error"]
             .as_str()
@@ -1521,9 +1520,9 @@ async fn enrich_tracks_enrich_cache_writer_persists_no_match_before_skipped() {
     let title = "Ack No Match";
     set_enrich_test_track_title(&db_conn, "ack-no-match", title);
     let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
-    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+    set_test_discogs_lookup_override("Aníbal", title, Some("Encoded Paths"), Ok(None));
 
-    let result = run_beatport_batch_with_timeout(
+    let result = run_discogs_batch_with_timeout(
         &server,
         &["ack-no-match"],
         "acknowledged no-match enrichment",
@@ -1538,12 +1537,20 @@ async fn enrich_tracks_enrich_cache_writer_persists_no_match_before_skipped() {
 
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let norm_title = crate::domain::metadata::normalize_for_matching(title);
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
     let conn = server
         .cache_store_conn()
         .expect("internal store should be available");
-    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
-        .expect("cache read should succeed")
-        .expect("skipped no-match should have a durable negative cache row");
+    let entry = store::get_enrichment(
+        &conn,
+        "discogs",
+        &norm_artist,
+        &norm_title,
+        Some(&norm_album),
+        false,
+    )
+    .expect("cache read should succeed")
+    .expect("skipped no-match should have a durable negative cache row");
     assert_eq!(entry.match_quality.as_deref(), Some("none"));
     assert!(entry.response_json.is_none());
 }
@@ -1555,9 +1562,9 @@ async fn enrich_tracks_enrich_cache_writer_failed_no_match_counts_only_failed() 
     set_enrich_test_track_title(&db_conn, "ack-failed-no-match", title);
     let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
     install_enrichment_insert_failure(&server, title);
-    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+    set_test_discogs_lookup_override("Aníbal", title, Some("Encoded Paths"), Ok(None));
 
-    let result = run_beatport_batch_with_timeout(
+    let result = run_discogs_batch_with_timeout(
         &server,
         &["ack-failed-no-match"],
         "failed no-match cache write",
@@ -1578,13 +1585,21 @@ async fn enrich_tracks_enrich_cache_writer_failed_no_match_counts_only_failed() 
 
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let norm_title = crate::domain::metadata::normalize_for_matching(title);
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
     let conn = server
         .cache_store_conn()
         .expect("internal store should be available");
     assert!(
-        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
-            .expect("cache read should succeed")
-            .is_none()
+        store::get_enrichment(
+            &conn,
+            "discogs",
+            &norm_artist,
+            &norm_title,
+            Some(&norm_album),
+            false,
+        )
+        .expect("cache read should succeed")
+        .is_none()
     );
 }
 
@@ -1605,14 +1620,11 @@ async fn enrich_tracks_enrich_cache_writer_open_failure_is_per_attempt() {
         default_http_client_for_tests(),
         Some(writer_directory.path().to_string_lossy().to_string()),
     );
-    set_test_beatport_lookup_override("Aníbal", title, Ok(None));
+    set_test_discogs_lookup_override("Aníbal", title, Some("Encoded Paths"), Ok(None));
 
-    let result = run_beatport_batch_with_timeout(
-        &server,
-        &["ack-open-failure"],
-        "writer-open cache failure",
-    )
-    .await;
+    let result =
+        run_discogs_batch_with_timeout(&server, &["ack-open-failure"], "writer-open cache failure")
+            .await;
     let payload = extract_json(&result);
 
     assert_eq!(payload["summary"]["enriched"], 0);
@@ -1630,10 +1642,18 @@ async fn enrich_tracks_enrich_cache_writer_open_failure_is_per_attempt() {
         store::open(&initialized_store_path_str).expect("initialized store should remain readable");
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let norm_title = crate::domain::metadata::normalize_for_matching(title);
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
     assert!(
-        store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false,)
-            .expect("cache read should succeed")
-            .is_none()
+        store::get_enrichment(
+            &conn,
+            "discogs",
+            &norm_artist,
+            &norm_title,
+            Some(&norm_album),
+            false,
+        )
+        .expect("cache read should succeed")
+        .is_none()
     );
 }
 
@@ -1651,14 +1671,20 @@ async fn enrich_tracks_enrich_cache_writer_mixed_success_and_failure_are_exact()
     );
     let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
     install_enrichment_insert_failure(&server, "Matched But Uncached");
-    set_test_beatport_lookup_override("Aníbal", successful_raw_title, Ok(None));
-    set_test_beatport_lookup_override(
+    set_test_discogs_lookup_override(
+        "Aníbal",
+        successful_raw_title,
+        Some("Encoded Paths"),
+        Ok(None),
+    );
+    set_test_discogs_lookup_override(
         "Aníbal",
         "Matched But Uncached",
-        Ok(Some(beatport_match("Matched But Uncached"))),
+        Some("Encoded Paths"),
+        Ok(Some(discogs_match("Matched But Uncached"))),
     );
 
-    let result = run_beatport_batch_with_timeout(
+    let result = run_discogs_batch_with_timeout(
         &server,
         &["ack-mixed-success", "ack-mixed-failure"],
         "mixed cache-write outcomes",
@@ -1680,18 +1706,33 @@ async fn enrich_tracks_enrich_cache_writer_mixed_success_and_failure_are_exact()
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let success_title = crate::domain::metadata::normalize_for_matching(successful_raw_title);
     let failed_title = crate::domain::metadata::normalize_for_matching("Matched But Uncached");
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
     let conn = server
         .cache_store_conn()
         .expect("internal store should be available");
     assert!(
-        store::get_enrichment(&conn, "beatport", &norm_artist, &success_title, None, false,)
-            .expect("successful cache read should succeed")
-            .is_some()
+        store::get_enrichment(
+            &conn,
+            "discogs",
+            &norm_artist,
+            &success_title,
+            Some(&norm_album),
+            false,
+        )
+        .expect("successful cache read should succeed")
+        .is_some()
     );
     assert!(
-        store::get_enrichment(&conn, "beatport", &norm_artist, &failed_title, None, false,)
-            .expect("failed cache read should succeed")
-            .is_none()
+        store::get_enrichment(
+            &conn,
+            "discogs",
+            &norm_artist,
+            &failed_title,
+            Some(&norm_album),
+            false,
+        )
+        .expect("failed cache read should succeed")
+        .is_none()
     );
 }
 
@@ -1701,10 +1742,15 @@ async fn enrich_tracks_enrich_cache_writer_persists_match_before_enriched() {
     let title = "Ack Persisted Match";
     set_enrich_test_track_title(&db_conn, "ack-match", title);
     let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
-    set_test_beatport_lookup_override("Aníbal", title, Ok(Some(beatport_match(title))));
+    set_test_discogs_lookup_override(
+        "Aníbal",
+        title,
+        Some("Encoded Paths"),
+        Ok(Some(discogs_match(title))),
+    );
 
     let result =
-        run_beatport_batch_with_timeout(&server, &["ack-match"], "acknowledged match enrichment")
+        run_discogs_batch_with_timeout(&server, &["ack-match"], "acknowledged match enrichment")
             .await;
     let payload = extract_json(&result);
 
@@ -1715,12 +1761,20 @@ async fn enrich_tracks_enrich_cache_writer_persists_match_before_enriched() {
 
     let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
     let norm_title = crate::domain::metadata::normalize_for_matching(title);
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
     let conn = server
         .cache_store_conn()
         .expect("internal store should be available");
-    let entry = store::get_enrichment(&conn, "beatport", &norm_artist, &norm_title, None, false)
-        .expect("cache read should succeed")
-        .expect("enriched match should have a durable cache row");
+    let entry = store::get_enrichment(
+        &conn,
+        "discogs",
+        &norm_artist,
+        &norm_title,
+        Some(&norm_album),
+        false,
+    )
+    .expect("cache read should succeed")
+    .expect("enriched match should have a durable cache row");
     assert_eq!(entry.match_quality.as_deref(), Some("exact"));
     assert!(entry.response_json.is_some());
 }
@@ -1793,80 +1847,6 @@ async fn lookup_discogs_no_match_payload_is_consistent_across_live_and_cache_pat
     assert!(
         cache_entry.response_json.is_none(),
         "discogs no-match cache entry should store null response as no payload"
-    );
-    assert_eq!(
-        cache_hit_timestamp,
-        cache_entry.created_at.as_str(),
-        "cached_at should match persisted cache timestamp"
-    );
-}
-
-#[tokio::test]
-async fn lookup_beatport_no_match_payload_is_consistent_across_live_and_cache_paths() {
-    let db_conn =
-        create_single_track_test_db("beatport-no-match-track", "/tmp/beatport-no-match.flac");
-    let store_dir = tempfile::tempdir().expect("temp store dir should create");
-    let store_path = store_dir.path().join("internal.sqlite3");
-    let store_conn = store::open(
-        store_path
-            .to_str()
-            .expect("temp store path should be UTF-8"),
-    )
-    .expect("temp internal store should open");
-    let server =
-        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
-
-    let artist = "Beatport NoMatch Artist";
-    let title = "Beatport NoMatch Title";
-    set_test_beatport_lookup_override(artist, title, Ok(None));
-
-    let live_result = server
-        .lookup_beatport(Parameters(LookupBeatportParams {
-            track_id: None,
-            artist: Some(artist.to_string()),
-            title: Some(title.to_string()),
-            force_refresh: Some(true),
-        }))
-        .await
-        .expect("live beatport no-match should succeed");
-    let live_payload = extract_json(&live_result);
-    assert_eq!(live_payload["result"], serde_json::Value::Null);
-    assert_eq!(live_payload["cache_hit"], false);
-    assert!(
-        live_payload.get("cached_at").is_none(),
-        "live payload should omit cached_at"
-    );
-
-    let cache_result = server
-        .lookup_beatport(Parameters(LookupBeatportParams {
-            track_id: None,
-            artist: Some(artist.to_string()),
-            title: Some(title.to_string()),
-            force_refresh: Some(false),
-        }))
-        .await
-        .expect("cached beatport no-match should succeed");
-    let cache_payload = extract_json(&cache_result);
-    assert_eq!(cache_payload["result"], serde_json::Value::Null);
-    assert_eq!(cache_payload["cache_hit"], true);
-
-    let cache_hit_timestamp = cache_payload
-        .get("cached_at")
-        .and_then(serde_json::Value::as_str)
-        .expect("cached no-match payload should include cached_at");
-    let norm_artist = crate::domain::metadata::normalize_for_matching(artist);
-    let norm_title = crate::domain::metadata::normalize_for_matching(title);
-    let cache_entry = {
-        let store = server
-            .cache_store_conn()
-            .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
-            .expect("cache read should succeed")
-            .expect("beatport no-match lookup should create cache entry")
-    };
-    assert!(
-        cache_entry.response_json.is_none(),
-        "beatport no-match cache entry should store null response as no payload"
     );
     assert_eq!(
         cache_hit_timestamp,
@@ -2090,14 +2070,14 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
     .expect("discogs cache should seed");
     store::set_enrichment(
         &store_conn,
-        "beatport",
+        "bandcamp",
         &norm_artist,
         &norm_title,
         None,
         Some("exact"),
         Some(r#"{"genre":"Deep House"}"#),
     )
-    .expect("beatport cache should seed");
+    .expect("bandcamp cache should seed");
 
     let server = create_server_with_store_path(
         db_conn,
@@ -2114,7 +2094,7 @@ async fn enrich_tracks_summary_uses_provider_attempt_totals() {
             offset: None,
             providers: Some(vec![
                 crate::application::enrichment::model::EnrichmentProvider::Discogs,
-                crate::application::enrichment::model::EnrichmentProvider::Beatport,
+                crate::application::enrichment::model::EnrichmentProvider::Bandcamp,
             ]),
             skip_cached: Some(true),
             force_refresh: Some(false),
@@ -2378,228 +2358,6 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
 
 #[tokio::test]
 #[ignore]
-async fn force_refresh_bypasses_enrichment_cache() {
-    let offline_http = reqwest::Client::builder()
-        .user_agent("Reklawdbox/0.1")
-        .proxy(reqwest::Proxy::all("http://127.0.0.1:9").expect("offline proxy URL should parse"))
-        .build()
-        .expect("offline HTTP client should build");
-
-    let Some((server, _store_dir)) = create_real_server_with_temp_store(offline_http) else {
-        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
-        return;
-    };
-
-    let track = sample_real_tracks(&server, 1)
-        .into_iter()
-        .next()
-        .expect("integration test needs at least one real track");
-    let norm_artist = crate::domain::metadata::normalize_for_matching(&track.artist);
-    let norm_title = crate::domain::metadata::normalize_for_matching(&track.title);
-    let cached_json = serde_json::json!({"genre":"Sentinel Genre","key":"Am","bpm":128});
-    let cached_json_str = cached_json.to_string();
-
-    {
-        let store = server
-            .cache_store_conn()
-            .expect("internal store should be available");
-        store::set_enrichment(
-            &store,
-            "beatport",
-            &norm_artist,
-            &norm_title,
-            None,
-            Some("exact"),
-            Some(&cached_json_str),
-        )
-        .expect("sentinel cache entry should write");
-    }
-
-    let cache_hit = server
-        .lookup_beatport(Parameters(LookupBeatportParams {
-            track_id: None,
-            artist: Some(track.artist.clone()),
-            title: Some(track.title.clone()),
-            force_refresh: Some(false),
-        }))
-        .await
-        .expect("lookup_beatport(force_refresh=false) should return cache");
-    let cache_hit_json = extract_json(&cache_hit);
-    assert_eq!(cache_hit_json["cache_hit"], true);
-    assert_eq!(cache_hit_json["genre"], "Sentinel Genre");
-
-    let refresh_err = server
-        .lookup_beatport(Parameters(LookupBeatportParams {
-            track_id: None,
-            artist: Some(track.artist.clone()),
-            title: Some(track.title.clone()),
-            force_refresh: Some(true),
-        }))
-        .await
-        .expect_err("force_refresh=true should bypass cache and attempt HTTP call");
-    assert!(
-        format!("{refresh_err}").contains("Beatport error"),
-        "force refresh should fail via offline HTTP path, got: {refresh_err}"
-    );
-}
-
-#[tokio::test]
-#[ignore]
-async fn enrich_tracks_beatport_schema_matches_individual_lookup() {
-    let Some((server, _store_dir)) =
-        create_real_server_with_temp_store(default_http_client_for_tests())
-    else {
-        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
-        return;
-    };
-
-    let candidates = sample_real_tracks(&server, 30);
-    if candidates.is_empty() {
-        eprintln!("Skipping: integration test needs candidate tracks from real DB");
-        return;
-    }
-
-    let mut selected_track: Option<crate::domain::library::Track> = None;
-    for track in candidates.into_iter().take(10) {
-        let lookup = server
-            .lookup_beatport(Parameters(LookupBeatportParams {
-                track_id: None,
-                artist: Some(track.artist.clone()),
-                title: Some(track.title.clone()),
-                force_refresh: Some(true),
-            }))
-            .await;
-
-        let Ok(result) = lookup else {
-            continue;
-        };
-        let payload = extract_json(&result);
-        if payload
-            .get("genre")
-            .and_then(serde_json::Value::as_str)
-            .is_some()
-        {
-            selected_track = Some(track);
-            break;
-        }
-    }
-
-    let Some(track) = selected_track else {
-        eprintln!(
-            "Skipping: could not find a track with a successful Beatport match; \
-                 rerun when network/providers are available"
-        );
-        return;
-    };
-    let norm_artist = crate::domain::metadata::normalize_for_matching(&track.artist);
-    let norm_title = crate::domain::metadata::normalize_for_matching(&track.title);
-
-    let individual_cache = {
-        let store = server
-            .cache_store_conn()
-            .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
-            .expect("cache read should succeed")
-            .expect("individual lookup should have created cache entry")
-    };
-    let individual_json: serde_json::Value = serde_json::from_str(
-        individual_cache
-            .response_json
-            .as_deref()
-            .expect("individual beatport cache should contain JSON"),
-    )
-    .expect("individual beatport cache JSON should parse");
-    assert!(
-        individual_json
-            .get("genre")
-            .and_then(serde_json::Value::as_str)
-            .is_some(),
-        "individual beatport cache should have string 'genre'"
-    );
-    assert!(
-        individual_json.get("label").is_some(),
-        "individual beatport cache should include 'label' field"
-    );
-    let individual_fields: HashSet<String> = individual_json
-        .as_object()
-        .expect("individual beatport cache should be object")
-        .keys()
-        .cloned()
-        .collect();
-
-    {
-        let store = server
-            .cache_store_conn()
-            .expect("internal store should be available");
-        store
-            .execute(
-                "DELETE FROM enrichment_cache
-                     WHERE provider = ?1 AND query_artist = ?2 AND query_title = ?3",
-                params!["beatport", &norm_artist, &norm_title],
-            )
-            .expect("cache clear should succeed");
-    }
-
-    let enrich_result = server
-        .enrich_tracks(Parameters(EnrichTracksParams {
-            filters: SearchFilterParams::default(),
-            track_ids: Some(vec![track.id.clone()]),
-            playlist_id: None,
-            max_tracks: Some(1),
-            offset: None,
-            providers: Some(vec![
-                crate::application::enrichment::model::EnrichmentProvider::Beatport,
-            ]),
-            skip_cached: Some(false),
-            force_refresh: Some(true),
-            concurrency: None,
-        }))
-        .await
-        .expect("enrich_tracks should succeed for beatport provider");
-    let enrich_payload = extract_json(&enrich_result);
-    assert_eq!(enrich_payload["summary"]["total"], 1);
-
-    let batch_cache = {
-        let store = server
-            .cache_store_conn()
-            .expect("internal store should be available");
-        store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
-            .expect("cache read should succeed")
-            .expect("batch enrich should have created beatport cache entry")
-    };
-    let batch_json: serde_json::Value = serde_json::from_str(
-        batch_cache
-            .response_json
-            .as_deref()
-            .expect("batch beatport cache should contain JSON"),
-    )
-    .expect("batch beatport cache JSON should parse");
-    assert!(
-        batch_json
-            .get("genre")
-            .and_then(serde_json::Value::as_str)
-            .is_some(),
-        "batch beatport cache should have string 'genre'"
-    );
-    assert!(
-        batch_json.get("genres").is_none(),
-        "beatport cache should not be transformed into discogs-style 'genres' schema"
-    );
-
-    let batch_fields: HashSet<String> = batch_json
-        .as_object()
-        .expect("batch beatport cache should be object")
-        .keys()
-        .cloned()
-        .collect();
-    assert_eq!(
-        batch_fields, individual_fields,
-        "batch and individual beatport cache JSON should share the same schema"
-    );
-}
-
-#[tokio::test]
-#[ignore]
 async fn resolve_tracks_data_batch_consistency() {
     let Some((server, _store_dir)) =
         create_real_server_with_temp_store(default_http_client_for_tests())
@@ -2665,7 +2423,7 @@ async fn resolve_tracks_data_batch_consistency() {
 #[test]
 fn resolve_single_track_rekordbox_only() {
     let track = make_test_track("t1", "Deep House", 126.0, "Am");
-    let result = resolve_single_track(&track, None, None, None, None, false, None);
+    let result = resolve_single_track(&track, None, None, None, false, None);
 
     let rb = result
         .get("rekordbox")
@@ -2689,10 +2447,6 @@ fn resolve_single_track_rekordbox_only() {
         "discogs should be null without cache"
     );
     assert!(
-        result["beatport"].is_null(),
-        "beatport should be null without cache"
-    );
-    assert!(
         result["staged_changes"].is_null(),
         "staged_changes should be null without staged"
     );
@@ -2705,7 +2459,6 @@ fn resolve_single_track_rekordbox_only() {
     assert_eq!(dc["essentia"], false);
     assert_eq!(dc["essentia_installed"], false);
     assert_eq!(dc["discogs"], false);
-    assert_eq!(dc["beatport"], false);
 
     let gt = result
         .get("genre_taxonomy")
@@ -2726,7 +2479,7 @@ fn resolve_single_track_with_staged_changes() {
         year: None,
         album: None,
     };
-    let result = resolve_single_track(&track, None, None, None, None, false, Some(&staged));
+    let result = resolve_single_track(&track, None, None, None, false, Some(&staged));
 
     let sc = result
         .get("staged_changes")
@@ -2877,36 +2630,10 @@ fn resolve_single_track_taxonomy_mappings() {
         created_at: "2024-01-01".to_string(),
     };
 
-    let beatport_json = serde_json::json!({
-        "genre": "Techno",
-        "bpm": 130,
-        "key": "Fm",
-        "track_name": "Track t3",
-        "artists": ["Test Artist"],
-    });
-    let beatport_cache = store::EnrichmentCacheEntry {
-        provider: "beatport".to_string(),
-        query_artist: "test artist".to_string(),
-        query_title: "track t3".to_string(),
-        query_album: String::new(),
-        match_quality: Some("exact".to_string()),
-        response_json: Some(serde_json::to_string(&beatport_json).unwrap()),
-        created_at: "2024-01-01".to_string(),
-    };
-
-    let result = resolve_single_track(
-        &track,
-        Some(&discogs_cache),
-        Some(&beatport_cache),
-        None,
-        None,
-        false,
-        None,
-    );
+    let result = resolve_single_track(&track, Some(&discogs_cache), None, None, false, None);
 
     let dc = &result["data_completeness"];
     assert_eq!(dc["discogs"], true);
-    assert_eq!(dc["beatport"], true);
     assert_eq!(dc["stratum_dsp"], false);
 
     let gt = &result["genre_taxonomy"];
@@ -2938,25 +2665,16 @@ fn resolve_single_track_taxonomy_mappings() {
     assert_eq!(unknown["mapping_type"], "unknown");
     assert!(unknown["maps_to"].is_null());
 
-    let bgm = &gt["beatport_genre_mapping"];
-    assert_eq!(bgm["genre"], "Techno");
-    assert_eq!(bgm["mapping_type"], "exact");
-    assert_eq!(bgm["maps_to"], "Techno");
-
     assert!(
         result["discogs"].is_object(),
         "discogs should be parsed object"
-    );
-    assert!(
-        result["beatport"].is_object(),
-        "beatport should be parsed object"
     );
 }
 
 #[test]
 fn resolve_single_track_empty_genre_is_null() {
     let track = make_test_track("t4", "", 0.0, "");
-    let result = resolve_single_track(&track, None, None, None, None, false, None);
+    let result = resolve_single_track(&track, None, None, None, false, None);
 
     let gt = &result["genre_taxonomy"];
     assert!(
@@ -2968,7 +2686,7 @@ fn resolve_single_track_empty_genre_is_null() {
 #[test]
 fn resolve_single_track_unknown_genre_maps_to_null() {
     let track = make_test_track("t5", "Polka", 120.0, "C");
-    let result = resolve_single_track(&track, None, None, None, None, false, None);
+    let result = resolve_single_track(&track, None, None, None, false, None);
 
     let gt = &result["genre_taxonomy"];
     assert!(
@@ -2997,7 +2715,7 @@ fn resolve_single_track_with_stratum_agreement() {
         created_at: "2024-01-01".to_string(),
     };
 
-    let result = resolve_single_track(&track, None, None, Some(&stratum_cache), None, false, None);
+    let result = resolve_single_track(&track, None, Some(&stratum_cache), None, false, None);
 
     let aa = result
         .get("audio_analysis")
@@ -3044,7 +2762,7 @@ fn resolve_single_track_with_essentia_cache() {
         created_at: "2024-01-01".to_string(),
     };
 
-    let result = resolve_single_track(&track, None, None, None, Some(&essentia_cache), true, None);
+    let result = resolve_single_track(&track, None, None, Some(&essentia_cache), true, None);
 
     let aa = &result["audio_analysis"];
     assert!(
@@ -3086,7 +2804,7 @@ fn resolve_single_track_stratum_disagreement() {
         created_at: "2024-01-01".to_string(),
     };
 
-    let result = resolve_single_track(&track, None, None, Some(&stratum_cache), None, false, None);
+    let result = resolve_single_track(&track, None, Some(&stratum_cache), None, false, None);
 
     let aa = &result["audio_analysis"];
     assert_eq!(
@@ -3110,7 +2828,7 @@ fn resolve_single_track_enrichment_no_match_returns_null() {
         created_at: "2024-01-01".to_string(),
     };
 
-    let result = resolve_single_track(&track, Some(&discogs_cache), None, None, None, false, None);
+    let result = resolve_single_track(&track, Some(&discogs_cache), None, None, false, None);
 
     assert!(
         result["discogs"].is_null(),

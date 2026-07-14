@@ -43,7 +43,7 @@ Returns three sections:
 
 ### `classify_tracks`
 
-Apply the genre decision tree to ungenred tracks using cached enrichment and audio evidence. Returns recommendations grouped by confidence level (high/medium/low/insufficient). Cache-only — never triggers external calls.
+Apply the genre decision tree to ungenred tracks using cached enrichment and audio evidence. High confidence requires at least two independent source groups: Discogs, a distinct Rekordbox label, or audio. Discogs styles and a label copied from the same response remain one group. Current genre is only a low-confidence hint or unresolved-tie breaker. Cache-only — never triggers external calls.
 
 {/* doc-contract:mcp tool=classify_tracks schema=/ requiredness=global include=shared-search-filters */}
 
@@ -55,7 +55,7 @@ Apply the genre decision tree to ungenred tracks using cached enrichment and aud
 | `offset` | integer | | | | Skip first N tracks for pagination |
 | `genre_overrides` | array | | | | Remap genre strings before scoring (e.g., `[{"from": "Melodic House & Techno", "to": "Deep Techno"}]`) |
 | `format` | string | | `["full", "compact", "summary", "dispatch"]` | | Output format (`"full"` by default) |
-| `auto_stage` | string[] | | | `["high", "medium", "low", "insufficient"]` | Auto-stage results at these confidence levels |
+| `auto_stage` | string[] | | | `["high", "medium", "low", "insufficient"]` | Auto-stage real changes at these tiers; confirmations, genre-less results, and insufficient results are never staged |
 
 {/* /doc-contract:mcp */}
 
@@ -65,7 +65,7 @@ Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforce
 
 ### `audit_genres`
 
-Verify existing genre tags against enrichment and audio evidence. Returns only conflicts and manual-review tracks — confirmed tracks are counted in the summary but omitted. Cache-only.
+Verify existing genre tags against enrichment and audio evidence. High/medium confirmations are counted and omitted by default. Low/insufficient confirmations remain visible because confidence—not the `confirm` action—determines review eligibility. Cache-only.
 
 {/* doc-contract:mcp tool=audit_genres schema=/ requiredness=global include=shared-search-filters */}
 
@@ -75,7 +75,7 @@ Verify existing genre tags against enrichment and audio evidence. Returns only c
 | `playlist_id` | string | | Audit tracks in this playlist |
 | `max_tracks` | integer | | Max tracks (default: `50`, max: `200`) |
 | `offset` | integer | | Skip first N tracks for pagination |
-| `include_confirmed` | boolean | | Include confirmed tracks in results (default: `false`) |
+| `include_confirmed` | boolean | | Include every confirmation (default: `false`); weak confirmations are always visible |
 
 {/* /doc-contract:mcp */}
 
@@ -85,7 +85,7 @@ Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforce
 
 ### `calibration_coverage`
 
-Report per-genre readiness for audio-profile calibration from the verified playlist. Read-only — checks canonical genre counts, cached audio-feature availability, and stored prototype presence without recalibrating.
+Report per-genre readiness for audio-profile calibration from the verified playlist. It separates fresh cache rows, extracted audio, scorable optional features, candidate prototypes, and persisted profile compatibility without recalibrating.
 
 {/* doc-contract:mcp tool=calibration_coverage schema=/ requiredness=global */}
 
@@ -95,7 +95,7 @@ Report per-genre readiness for audio-profile calibration from the verified playl
 
 {/* /doc-contract:mcp */}
 
-Use this before `calibrate_audio_profiles` to see which genres are ready, which need more analyzed tracks, and which stored profiles no longer appear in the current verified playlist.
+Use this before `calibrate_audio_profiles`. `profile_state.status` is `missing`, `fresh`, `training_changed`, or `incompatible`. A training change requests recalibration but remains structurally usable; incompatible profiles are suppressed. BPM-only rows count as cached audio, not scorable calibration evidence.
 
 ---
 
@@ -111,20 +111,20 @@ Build Fisher-weighted audio prototypes from a playlist of ear-verified tracks an
 
 {/* /doc-contract:mcp */}
 
-Run `calibration_coverage` first. Calibration skips tracks with missing genre tags, unknown genres, or missing cached audio features, and only builds a prototype for genres with enough verified audio.
+Run `calibration_coverage` first. Calibration skips missing, unknown, and unscorable audio rows, dry-runs candidate scoring, and refuses to replace a usable registry when no candidate can score. Registry rows and classifier/analyzer/training metadata are saved atomically.
 
 ---
 
 ### `backfill_labels`
 
-Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, Beatport). Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.
+Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, and Bandcamp). Stages non-conflicting labels automatically; reports conflicts where the current label disagrees with enrichment.
 
 {/* doc-contract:mcp tool=backfill_labels schema=/ requiredness=global */}
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `dry_run` | boolean | | Preview without staging (default: `false`) |
-| `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
+| `auto_enrich` | boolean | | Fetch missing MusicBrainz and Bandcamp label keys, then re-scan with Discogs → MusicBrainz → Bandcamp precedence (default: `false`) |
 | `max_conflicts` | integer | | Cap on conflict entries in the response (default: `50`) |
 | `conflict_offset` | integer | | Offset into the stable ordered conflict list (default: `0`) |
 
@@ -141,7 +141,8 @@ Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, Bandcamp, B
 | `conflicts` | array | **yes** | Conflict entries returned on this page |
 | `conflict_page` | object | **yes** | Conflict continuation metadata |
 | `conflicts_truncated` | boolean | | Legacy alias present and true only when `conflict_page.has_more` is true |
-| `auto_enriched` | integer | | Bandcamp hits when `auto_enrich=true` |
+| `auto_enriched` | integer | | Total successful MusicBrainz and Bandcamp matches when `auto_enrich=true` |
+| `auto_enriched_by_provider` | object | | Successful-match counts for `musicbrainz` and `bandcamp` |
 | `research_queue` | object | | Remaining unlabeled-track research summary |
 
 {/* /doc-contract:mcp-output */}
@@ -168,7 +169,7 @@ terminal no-ops.
 
 ### `backfill_years`
 
-Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/Beatport/MusicBrainz/Bandcamp). Stages non-conflicting years automatically; reports conflicts where the current year disagrees with enrichment.
+Auto-fill missing years (year=0) from file tags, folder paths, and enrichment cache (Discogs/MusicBrainz/Bandcamp). Stages non-conflicting years automatically; reports conflicts where the current year disagrees with enrichment.
 
 {/* doc-contract:mcp tool=backfill_years schema=/ requiredness=global */}
 

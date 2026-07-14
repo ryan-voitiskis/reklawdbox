@@ -19,7 +19,7 @@ use analysis::{
 };
 use audit::AuditOperation;
 use enrichment::{
-    BatchPage, EnrichTracksParams, LookupBandcampParams, LookupBeatportParams, LookupDiscogsParams,
+    BatchPage, EnrichTracksParams, LookupBandcampParams, LookupDiscogsParams,
     LookupMusicBrainzParams, OffsetPage, ResolveFormat, ResolveTrackDataParams,
     ResolveTracksDataParams, ResolveTracksOpts, apply_offset_limit, auth_remediation_message,
     lookup_bandcamp_remote, lookup_discogs_remote, lookup_musicbrainz_remote, offset_page_bounds,

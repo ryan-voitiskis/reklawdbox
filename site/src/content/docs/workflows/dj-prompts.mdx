@@ -17,7 +17,7 @@ Choose the recipe that matches today's task, then paste its prompt:
 
 - [Gig Prep](#gig-prep) — local library and cached analysis only.
 - [Collection Gap Analysis](#collection-gap-analysis) — local analysis; an uncached Discogs lookup is optional only for a specific candidate you supply.
-- [Dig Session Partner](#dig-session-partner) — local directions; Discogs or Beatport may be used for a specific candidate you supply.
+- [Dig Session Partner](#dig-session-partner) — local directions; Discogs may be used for a specific candidate you supply.
 - [Post-Gig Debrief](#post-gig-debrief) — local Rekordbox session history.
 - [Harmonic Journey Planning](#harmonic-journey-planning) — local library and cached analysis only.
 - [Practice Session Design](#practice-session-design) — local library and cached analysis only.
@@ -148,12 +148,12 @@ candidate, a focused fit assessment rather than invented catalog suggestions.
    band, label already represented locally, or contrasting era. Do not claim
    specific new tracks are available.
 3. Ask the user for a concrete track or release candidate before provider
-   lookup. `lookup_discogs` and `lookup_beatport` match that specific candidate;
-   they do not search credits or explore a label's catalog.
+   lookup. `lookup_discogs` matches that specific candidate; it does not search
+   credits or explore a label's catalog.
 4. For a user-supplied candidate, report only the returned match fields and
-   compare its genre, BPM, key, and label/date with the local collection. Audio
-   evidence is available only if the candidate is already a local track with a
-   current cache entry.
+   compare its Discogs genres/styles, label, and year with the local collection.
+   BPM, key, and audio evidence are available only if the candidate is already
+   a local track with current Rekordbox or analysis data.
 5. Defer open-ended catalog and collaborator research. These tools do not
    provide it, and this recipe does not add an external-search prerequisite.
 

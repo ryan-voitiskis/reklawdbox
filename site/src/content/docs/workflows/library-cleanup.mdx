@@ -69,7 +69,7 @@ Run this in your terminal (not through the agent):
 reklawdbox hydrate --cpu overnight -y
 ```
 
-This warms Discogs, Beatport, built-in Stratum analysis, and optional Essentia
+This warms Discogs, built-in Stratum analysis, and optional Essentia
 analysis. Bandcamp and MusicBrainz are targeted sources used later for remaining
 metadata gaps. `--cpu overnight` uses most of your cores; `-y` skips the
 confirmation prompt.
@@ -151,8 +151,8 @@ Export to XML, import into Rekordbox. Spot-check the corrections.
 ## Skipping sessions
 
 - **Metadata already clean?** Start at Session 2.
-- **Already hydrated?** Re-run `reklawdbox hydrate` — if the selected Discogs,
-  Beatport, and analysis work has no pending failures, jump to Session 3.
+- **Already hydrated?** Re-run `reklawdbox hydrate` — if the selected Discogs
+  and analysis work has no pending failures, jump to Session 3.
 - **Labels and years present?** Skip Session 3.
 - **No ungenred tracks?** Skip Session 4.
 - **No existing genre tags?** Skip Session 5.

@@ -25,7 +25,7 @@ You can use it to:
 
 - understand your library, playlists, play history, and health;
 - fill missing labels, years, albums, and genres;
-- compare Discogs, Beatport, MusicBrainz, Bandcamp, and audio evidence;
+- compare Discogs, MusicBrainz, Bandcamp, label, and audio evidence;
 - find compatible tracks already in your library and build ordered sets;
 - prepare new downloads, tags, and artwork before Rekordbox import; and
 - export approved metadata changes and playlists as Rekordbox XML.
@@ -139,7 +139,7 @@ flowchart LR
     host["MCP host<br/>Claude Code · Claude Desktop<br/>ChatGPT desktop app · Codex CLI/IDE"] <-->|"MCP over stdio"| app["reklawdbox"]
 
     app -->|"read-only SQL"| db[("Rekordbox master.db")]
-    app --> providers["Discogs · Beatport<br/>MusicBrainz · Bandcamp"]
+    app --> providers["Discogs · MusicBrainz<br/>Bandcamp"]
     app --> analysis["Stratum + optional Essentia"]
     providers --> state[("Local state")]
     analysis --> state
@@ -178,7 +178,7 @@ setup, bulk processing, backups, and direct file work.
 | Subcommand          | Description                                                                |
 | ------------------- | -------------------------------------------------------------------------- |
 | `setup`             | Install Essentia, configure supported Claude hosts, and check the database |
-| `hydrate`           | Warm Discogs, Beatport, and audio-analysis caches in bulk                  |
+| `hydrate`           | Warm Discogs and audio-analysis caches in bulk                             |
 | `analyze`           | Run batch audio analysis only                                              |
 | `backup`            | Create, list, or explicitly restore Rekordbox backups                      |
 | `read-tags`         | Read metadata tags from audio files                                        |

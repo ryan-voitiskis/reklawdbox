@@ -10,7 +10,7 @@ use console::style;
 use crate::adapters::audio as audio_adapter;
 #[cfg(test)]
 use crate::adapters::audio;
-use crate::adapters::providers::{beatport, discogs};
+use crate::adapters::providers::discogs;
 use crate::adapters::{rekordbox as db, state as store};
 use crate::application::enrichment::hydrate::{
     EnrichmentCacheWrite, HydrationWorkerCompletion, acknowledge_enrichment_cache_write,
@@ -38,8 +38,8 @@ fn parse_providers(s: &str) -> Result<HydrationStages, String> {
 
 #[derive(clap::Args)]
 pub(crate) struct HydrateArgs {
-    /// Providers to run (comma-separated: discogs,beatport,analysis)
-    #[arg(long, default_value = "discogs,beatport,analysis", value_parser = parse_providers)]
+    /// Providers to run (comma-separated: discogs,analysis)
+    #[arg(long, default_value = "discogs,analysis", value_parser = parse_providers)]
     providers: HydrationStages,
     /// Filter by playlist ID
     #[arg(long)]
@@ -305,9 +305,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let want_discogs = args
         .providers
         .contains(HydrationStage::Lookup(EnrichmentProvider::Discogs));
-    let want_beatport = args
-        .providers
-        .contains(HydrationStage::Lookup(EnrichmentProvider::Beatport));
     let want_analysis = args.providers.contains(HydrationStage::Analysis);
 
     // 1. Bootstrap
@@ -375,9 +372,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     let mut discogs_pending = Vec::new();
     let mut discogs_cached: u32 = 0;
     let mut discogs_errors: u32 = 0;
-    let mut beatport_pending = Vec::new();
-    let mut beatport_cached: u32 = 0;
-    let mut beatport_errors: u32 = 0;
     let mut analysis_pending = Vec::new();
     let mut analysis_cached: u32 = 0;
 
@@ -412,31 +406,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
             }
         }
 
-        if want_beatport {
-            match store::get_enrichment(
-                &store_conn,
-                "beatport",
-                &norm_artist,
-                &norm_title,
-                None,
-                true,
-            )? {
-                Some(entry) => {
-                    if entry.match_quality.as_deref() == Some("error") {
-                        beatport_errors += 1;
-                        if retry_errors {
-                            beatport_pending.push(track.clone());
-                        }
-                    } else {
-                        beatport_cached += 1;
-                    }
-                }
-                None => {
-                    beatport_pending.push(track.clone());
-                }
-            }
-        }
-
         if want_analysis {
             let cache_probe = cache_probe_for_path(&track.file_path, true);
             let (has_stratum, has_essentia) = cache_status_for_track(
@@ -460,9 +429,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
 
     let total_tracks = tracks.len();
     let discogs_selected = discogs_pending.len();
-    let beatport_selected = beatport_pending.len();
     let analysis_selected = analysis_pending.len();
-    let total_work = discogs_selected + beatport_selected + analysis_selected;
+    let total_work = discogs_selected + analysis_selected;
 
     if total_work == 0 {
         println!("Found {total_tracks} tracks matching filters.");
@@ -491,21 +459,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
             discogs_pending.len()
         );
     }
-    if want_beatport {
-        let retry_note = if beatport_errors > 0 && retry_errors {
-            format!(", {beatport_errors} errors to retry")
-        } else if beatport_errors > 0 {
-            format!(", {beatport_errors} errors (skipped)")
-        } else {
-            String::new()
-        };
-        println!(
-            "  Beatport: {} cached{}, {} pending",
-            beatport_cached,
-            retry_note,
-            beatport_pending.len()
-        );
-    }
     if want_analysis {
         let essentia_note = match &essentia_python {
             Some(_) => "",
@@ -519,7 +472,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         );
     }
 
-    let beatport_secs = beatport_pending.len() as u64; // ~1 req/s rate limit
     let discogs_secs = discogs_pending.len() as u64; // ~1 req/1.1s rate limit (serialized by client)
     // stratum-dsp ≈ 18s/track, essentia subprocess adds ≈ 30s/track
     let secs_per_analysis: u64 = if essentia_python.is_some() { 48 } else { 18 };
@@ -539,7 +491,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     };
     let analysis_secs = (analysis_pending.len() as u64 * secs_per_analysis)
         / effective_analysis_concurrency.max(1) as u64;
-    let estimated_secs = beatport_secs.max(discogs_secs).max(analysis_secs);
+    let estimated_secs = discogs_secs.max(analysis_secs);
     if estimated_secs > 60 {
         let hours = estimated_secs / 3600;
         let mins = (estimated_secs % 3600) / 60;
@@ -592,7 +544,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     spawn_signal_handlers(&mp, &cancel, &cancellation_state);
 
     let discogs_counters = Arc::new(ProviderCounters::new());
-    let beatport_counters = Arc::new(ProviderCounters::new());
     let analysis_counters = Arc::new(ProviderCounters::new());
 
     // 8. Cache writer task
@@ -607,15 +558,12 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         run_hydrate_cache_writer(writer_store_path, cache_rx, writer_cancel)
     });
 
-    // 9. Spawn provider loops concurrently (each in its own task so serial
-    //    Beatport doesn't block analysis spawning)
+    // 9. Spawn provider loops concurrently.
     let dc = discogs_counters.clone();
-    let bc = beatport_counters.clone();
     let ac = analysis_counters.clone();
     let status_cancel = cancel.clone();
     let status_pb_clone = status_pb.clone();
     let want_d = want_discogs;
-    let want_b = want_beatport;
     let want_a = want_analysis;
     let status_task = tokio::spawn(async move {
         loop {
@@ -628,13 +576,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
                     "Discogs: {} enriched, {} errors",
                     dc.enriched.load(Ordering::Relaxed),
                     dc.errors.load(Ordering::Relaxed),
-                ));
-            }
-            if want_b {
-                parts.push(format!(
-                    "Beatport: {} enriched, {} errors",
-                    bc.enriched.load(Ordering::Relaxed),
-                    bc.errors.load(Ordering::Relaxed),
                 ));
             }
             if want_a {
@@ -794,137 +735,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         })
     };
 
-    // Beatport is serial (semaphore=1) due to rate limits
-    let beatport_task = {
-        let cancel = cancel.clone();
-        let client = client.clone();
-        let cache_tx = cache_tx.clone();
-        let counters = beatport_counters.clone();
-        let pb = pb.clone();
-        tokio::spawn(async move {
-            let report = ProviderTaskReport::new(beatport_selected);
-            if beatport_pending.is_empty() {
-                return report;
-            }
-            let worker_counters = counters.clone();
-            let workers = run_bounded_workers(
-                "beatport worker task",
-                beatport_pending,
-                1,
-                cancel.clone(),
-                |track| track.id.clone(),
-                move |track: crate::domain::library::Track| {
-                    let client = client.clone();
-                    let cache_tx = cache_tx.clone();
-                    let counters = worker_counters.clone();
-                    let pb = pb.clone();
-                    let cancel = cancel.clone();
-                    async move {
-                        if cancel.is_cancelled() {
-                            return HydrationWorkerCompletion::cancelled(());
-                        }
-
-                        let norm_artist = normalize::normalize_for_matching(&track.artist);
-                        let norm_title = normalize::normalize_for_matching(&track.title);
-
-                        let result =
-                            cli_beatport_lookup_with_retry(&client, &track.artist, &track.title)
-                                .await;
-
-                        match result {
-                            Ok(Some(ref r)) => {
-                                match serialize_cache_payload(r, "beatport enrichment") {
-                                    Ok(response_json) => {
-                                        if let Err(e) = acknowledge_enrichment_cache_write(
-                                            &cache_tx,
-                                            EnrichmentCacheWrite {
-                                                provider: EnrichmentProvider::Beatport,
-                                                norm_artist,
-                                                norm_title,
-                                                norm_album: None,
-                                                match_quality: Some(
-                                                    if r.fuzzy_match { "fuzzy" } else { "exact" }
-                                                        .to_string(),
-                                                ),
-                                                response_json: Some(response_json),
-                                            },
-                                            "beatport enrichment",
-                                        )
-                                        .await
-                                        {
-                                            tracing::error!("{e}");
-                                            counters.errors.fetch_add(1, Ordering::Relaxed);
-                                        } else {
-                                            counters.enriched.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("{e}");
-                                        counters.errors.fetch_add(1, Ordering::Relaxed);
-                                        counters.operation_errors.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                if let Err(e) = acknowledge_enrichment_cache_write(
-                                    &cache_tx,
-                                    EnrichmentCacheWrite {
-                                        provider: EnrichmentProvider::Beatport,
-                                        norm_artist,
-                                        norm_title,
-                                        norm_album: None,
-                                        match_quality: Some("none".to_string()),
-                                        response_json: None,
-                                    },
-                                    "beatport enrichment",
-                                )
-                                .await
-                                {
-                                    tracing::error!("{e}");
-                                    counters.errors.fetch_add(1, Ordering::Relaxed);
-                                } else {
-                                    counters.no_match.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                            Err(err) => {
-                                tracing::error!(
-                                    "Beatport hydrate lookup failed for {} - {}: {err}",
-                                    track.artist,
-                                    track.title
-                                );
-                                if let Err(error) = acknowledge_enrichment_cache_write(
-                                    &cache_tx,
-                                    EnrichmentCacheWrite {
-                                        provider: EnrichmentProvider::Beatport,
-                                        norm_artist,
-                                        norm_title,
-                                        norm_album: None,
-                                        match_quality: Some("error".to_string()),
-                                        response_json: None,
-                                    },
-                                    "beatport error",
-                                )
-                                .await
-                                {
-                                    tracing::error!("{error}");
-                                }
-                                counters.errors.fetch_add(1, Ordering::Relaxed);
-                                counters.operation_errors.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-
-                        counters.terminal.fetch_add(1, Ordering::Relaxed);
-                        pb.inc(1);
-                        HydrationWorkerCompletion::completed(())
-                    }
-                },
-            )
-            .await;
-
-            provider_task_report_from_workers(workers, &counters)
-        })
-    };
-
     let analysis_task = {
         let cancel = cancel.clone();
         let cache_tx = cache_tx.clone();
@@ -1004,12 +814,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         &discogs_counters,
         discogs_task.await,
     );
-    let beatport_report = resolve_provider_task_join(
-        "beatport",
-        beatport_selected,
-        &beatport_counters,
-        beatport_task.await,
-    );
     let analysis_report = resolve_provider_task_join(
         "analysis",
         analysis_selected,
@@ -1021,7 +825,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     cancel.cancel();
     let mut error_summaries = Vec::new();
     error_summaries.extend(discogs_report.error_summaries.iter().cloned());
-    error_summaries.extend(beatport_report.error_summaries.iter().cloned());
     error_summaries.extend(analysis_report.error_summaries.iter().cloned());
 
     let status_join_failures = match status_task.await {
@@ -1068,21 +871,6 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
             },
         );
     }
-    if want_beatport {
-        let enriched = beatport_counters.enriched.load(Ordering::Relaxed);
-        let no_match = beatport_counters.no_match.load(Ordering::Relaxed);
-        let errors = beatport_counters.errors.load(Ordering::Relaxed);
-        println!(
-            "  Beatport: {} enriched, {} no match, {} errors",
-            style(enriched).green(),
-            style(no_match).dim(),
-            if errors > 0 {
-                style(errors).red()
-            } else {
-                style(errors).dim()
-            },
-        );
-    }
     if want_analysis {
         let done = analysis_counters.enriched.load(Ordering::Relaxed);
         let errors = analysis_counters.errors.load(Ordering::Relaxed);
@@ -1112,8 +900,7 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         println!("  Cache writer task: {}", style("failed").red());
     }
 
-    let incomplete =
-        discogs_report.incomplete() + beatport_report.incomplete() + analysis_report.incomplete();
+    let incomplete = discogs_report.incomplete() + analysis_report.incomplete();
     if incomplete > 0 {
         println!("  Incomplete: {} selected tasks", style(incomplete).red());
     }
@@ -1122,11 +909,8 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
     }
 
     let provider_failures = discogs_counters.operation_errors.load(Ordering::Relaxed)
-        + beatport_counters.operation_errors.load(Ordering::Relaxed)
         + analysis_counters.operation_errors.load(Ordering::Relaxed);
-    let provider_join_failures = discogs_report.join_failures
-        + beatport_report.join_failures
-        + analysis_report.join_failures;
+    let provider_join_failures = discogs_report.join_failures + analysis_report.join_failures;
 
     hydrate_batch_outcome(
         provider_failures,
@@ -1284,50 +1068,6 @@ async fn cli_discogs_lookup_with_retry(
     unreachable!("loop always exits via return")
 }
 
-async fn cli_beatport_lookup_with_retry(
-    client: &reqwest::Client,
-    artist: &str,
-    title: &str,
-) -> Result<Option<beatport::BeatportResult>, String> {
-    const MAX_ATTEMPTS: u32 = 4;
-
-    for attempt in 0..MAX_ATTEMPTS {
-        match beatport::lookup(client, artist, title).await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                let backoff = match &e {
-                    beatport::BeatportError::Http {
-                        status,
-                        retry_after,
-                        ..
-                    } if status.as_u16() == 429 => {
-                        let wait = retry_after
-                            .as_deref()
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .unwrap_or(5)
-                            .min(120);
-                        Some(wait)
-                    }
-                    beatport::BeatportError::Http { status, .. } if status.is_server_error() => {
-                        Some(5 * 2u64.pow(attempt))
-                    }
-                    beatport::BeatportError::Request(_) => Some(5 * 2u64.pow(attempt)),
-                    _ => None,
-                };
-
-                match backoff {
-                    Some(secs) if attempt < MAX_ATTEMPTS - 1 => {
-                        tokio::time::sleep(Duration::from_secs(secs)).await;
-                    }
-                    _ => return Err(e.to_string()),
-                }
-            }
-        }
-    }
-
-    unreachable!("loop always exits via return")
-}
-
 #[cfg(test)]
 mod batch_tests {
     use super::*;
@@ -1336,9 +1076,8 @@ mod batch_tests {
     fn test_provider(provider: &str) -> EnrichmentProvider {
         match provider {
             "discogs" => EnrichmentProvider::Discogs,
-            "beatport" => EnrichmentProvider::Beatport,
             "bandcamp" => EnrichmentProvider::Bandcamp,
-            "fail" | "ok" => EnrichmentProvider::Beatport,
+            "fail" | "ok" => EnrichmentProvider::Bandcamp,
             other => panic!("unsupported test provider: {other}"),
         }
     }
@@ -1395,7 +1134,7 @@ mod batch_tests {
         conn.execute_batch(
             "CREATE TRIGGER reject_failed_enrichment
              BEFORE INSERT ON enrichment_cache
-             WHEN NEW.provider = 'beatport'
+             WHEN NEW.provider = 'bandcamp'
              BEGIN
                SELECT RAISE(FAIL, 'injected enrichment write failure');
              END;
@@ -1566,7 +1305,7 @@ mod batch_tests {
             drop(result);
             let send_result = bounded(
                 tx.send(CacheWriteRequest {
-                    payload: enrichment_message("beatport", 1),
+                    payload: enrichment_message("bandcamp", 1),
                     acknowledgement,
                 }),
                 "hydrate dropped-ack queue send",

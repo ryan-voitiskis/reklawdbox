@@ -1,42 +1,69 @@
-# CLAUDE.md
+# Repository guidance
 
-Reklawdbox is an MCP server for Rekordbox 7.x that gives an AI agent read-only
-SQLCipher DB access and stages metadata edits as Rekordbox XML for reimport
-while never writing directly to the DB; human approval is always required.
+Reklawdbox is a Rust MCP server and CLI for Rekordbox 7.x. It reads the
+encrypted library, stages metadata in memory, and exports XML for manual
+Rekordbox import.
 
-It provides tools for library search, audio analysis via stratum-dsp +
-Essentia, multi-provider enrichment (Discogs, Beatport, Bandcamp, MusicBrainz),
-genre classification, transition scoring, and greedy set sequencing with
-energy-curve shaping.
+## Boundaries
 
-- Workspace: two crates — `reklawdbox` (MCP server + CLI, edition 2024) and `stratum-dsp` (audio DSP, edition 2021).
-- Key deps: `rmcp`, `tokio`, `rusqlite` + bundled SQLCipher/OpenSSL, `reqwest` + `rustls`, `symphonia`, `serde`/`schemars`.
-- Rekordbox access: encrypted `master.db` opened read-only via SQLCipher. No write path exists.
-- Write path: in-memory staged changes exported as Rekordbox-compatible XML for manual reimport.
-- Local persistence: SQLite (WAL) for enrichment cache and audio-analysis cache. Broker session tokens are in macOS Keychain.
-- Enrichment: Discogs via broker API (`broker/` — Cloudflare Workers + D1); Beatport, Bandcamp, MusicBrainz via direct HTTP.
-- Audio analysis: `symphonia` decode → `stratum-dsp` (BPM, key); optional Essentia via Python subprocess (energy, timbre, rhythm).
-- SOPs: workflow `.mdx` files from `site/src/partials/sops/` are `include_str!`'d into the binary via `help_handler.rs` (not all files in that directory are embedded). SOP changes require a release to take effect.
-- Pre-commit hook: `cargo fmt --check`, `clippy -D warnings`, `dprint check`. Run `cargo fmt && dprint fmt` before committing.
+- Normal `master.db` access is SQLCipher read-only. Never add a SQL mutation
+  path. The confirmed `backup --restore` CLI flow may replace files for
+  disaster recovery; keep it isolated from MCP and normal library access.
+- Route user-visible Rekordbox metadata through `ChangeManager` and
+  `write_xml`. Reklawdbox-owned cache, analysis, audit, calibration, and broker
+  SQLite writes are allowed.
+- Audio tag and cover-art tools write directly to selected files. Preserve
+  preview, dry-run, backup, and confirmation behavior.
+- Preserve unrelated worktree changes and stage only files in scope. Use
+  Conventional Commits.
 
-## MCP Development Loop
+## Ownership
 
-This project IS the MCP server. The user's MCP config (`.mcp.json` in the repo root) normally resolves `reklawdbox` from PATH, which points to the Homebrew-installed binary in the Cellar. Claude Code ignores config file edits for running servers — `/mcp` always re-resolves the command from PATH. To test local changes:
+- `domain/` owns pure rules; `application/` owns reusable workflows;
+  `adapters/` owns I/O; `mcp/` and `cli/` own transport concerns. See
+  `src/README.md`.
+- MCP tool surfaces come from `#[tool(...)]` in `src/mcp/server.rs` and
+  `schemars` types/descriptions in `src/mcp/*/transport.rs`.
+- SOPs in `site/src/partials/sops/*.mdx` are embedded by `src/mcp/help.rs` with
+  `include_str!`; rebuild and deploy/release before a host can see edits.
+- `stratum-dsp/` owns DSP, `site/` owns Astro docs, and `broker/` owns the
+  Cloudflare/D1 Discogs broker. `dprint` intentionally excludes `docs/**`.
 
-1. `./scripts/deploy-local.sh` (builds release, copies to Cellar, re-signs to avoid macOS Gatekeeper block). Requires sudo.
-2. Ask the user to run `/mcp` to reconnect with the new binary.
-3. Smoke-test the changed functionality by calling the affected MCP tools. Include at least one happy-path call and one edge-case or error-path call per changed tool.
-4. The Cellar binary stays overwritten until the next `brew upgrade` or release, so no manual revert is needed.
+## Verify
 
-## Releasing
+Run the standard workspace gate:
 
-`./scripts/release.sh <version>` bumps `Cargo.toml`, updates the site homepage version,
-commits, tags, and pushes. The tag push triggers `.github/workflows/release.yml` which
-builds on ARM64 macOS, runs tests, creates a GitHub Release with the binary tarball,
-and auto-updates the Homebrew formula in `ryan-voitiskis/homebrew-reklawdbox`.
-
+```bash
+cargo fmt --check
+dprint check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+cargo build --release
+./target/release/reklawdbox --version
+./target/release/reklawdbox --help
 ```
-./scripts/release.sh 0.25.0
-```
 
-Requires `HOMEBREW_TAP_TOKEN` repo secret (PAT with `repo` scope for the tap repo).
+- Do not add mandatory tests that require private audio or Rekordbox data;
+  ignored tests are opt-in local or benchmark checks.
+- For docs/public-contract, broker, or research-corpus changes, run the exact
+  area gate in `CONTRIBUTING.md`. Public-surface changes also need the semantic
+  review in `docs/workflows/doc-drift/README.md`.
+- Audio output/schema changes usually require a cache-version bump in
+  `src/adapters/audio/mod.rs`.
+
+## MCP and releases
+
+- Claude Code `.mcp.json` runs `reklawdbox mcp` from `PATH`, usually the
+  Homebrew binary, and points Essentia at `.venvs/essentia/bin/python`. A repo
+  build does not refresh that host binary.
+- The ChatGPT desktop app, Codex CLI, and Codex IDE extension share Codex MCP
+  configuration rather than `.mcp.json`. Restart the app/extension or start a
+  new CLI task after changing the server or its tool schemas.
+- To test the current checkout directly, build release and run
+  `./scripts/mcp-smoke.mjs`; add `--skip-db` when the library is unavailable.
+  Pass `skip_cached: false` when testing fresh audio analysis.
+- For Claude Code host testing, run `./scripts/deploy-local.sh` (requires
+  `sudo`), reconnect with `/mcp`, then test a happy and an edge/error path. If
+  host deployment is unavailable, say so.
+- `./scripts/release.sh <version>` requires clean `main`, runs preflight,
+  commits/tags/pushes, and triggers release plus Homebrew formula publishing.

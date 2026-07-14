@@ -37,7 +37,7 @@ pub(in crate::mcp) fn handle_resolve_track_data(
 
     let essentia_installed = server.essentia_python_path().is_some();
 
-    let (discogs_cache, beatport_cache, stratum_cache, essentia_cache) = {
+    let (discogs_cache, stratum_cache, essentia_cache) = {
         let store = server.cache_store_conn()?;
         let discogs_cache = store::get_enrichment(
             &store,
@@ -48,9 +48,6 @@ pub(in crate::mcp) fn handle_resolve_track_data(
             false,
         )
         .map_err(cache_error)?;
-        let beatport_cache =
-            store::get_enrichment(&store, "beatport", &norm_artist, &norm_title, None, false)
-                .map_err(cache_error)?;
         let stratum_cache = get_fresh_analysis_entry(
             &store,
             &track.file_path,
@@ -65,7 +62,7 @@ pub(in crate::mcp) fn handle_resolve_track_data(
             audio::ESSENTIA_SCHEMA_VERSION,
         )
         .map_err(mcp_internal_error)?;
-        (discogs_cache, beatport_cache, stratum_cache, essentia_cache)
+        (discogs_cache, stratum_cache, essentia_cache)
     };
 
     let staged = server.context.mutation.changes.get(&track.id);
@@ -73,7 +70,6 @@ pub(in crate::mcp) fn handle_resolve_track_data(
     let result = resolve_single_track(
         &track,
         discogs_cache.as_ref(),
-        beatport_cache.as_ref(),
         stratum_cache.as_ref(),
         essentia_cache.as_ref(),
         essentia_installed,
@@ -133,7 +129,7 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
         .collect();
 
     // Build batch keys.
-    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len() * 2);
+    let mut enrich_keys: Vec<(&str, &str, &str, &str)> = Vec::with_capacity(tracks.len());
     let stratum_identities: Vec<_> = norm_keys
         .iter()
         .filter_map(|(_, _, _, _, identity)| identity.as_ref()?.as_stratum_store_identity())
@@ -149,7 +145,6 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
     for (a, t, al, _, _) in &norm_keys {
         let album = al.as_deref().unwrap_or("");
         enrich_keys.push(("discogs", a, t, album));
-        enrich_keys.push(("beatport", a, t, ""));
     }
 
     // Batch load — 3 queries total instead of 4N.
@@ -184,15 +179,7 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
             norm_title.clone(),
             album.to_string(),
         );
-        let beatport_key = (
-            "beatport".to_string(),
-            norm_artist.clone(),
-            norm_title.clone(),
-            String::new(),
-        );
-
         let discogs_cache = enrich_map.get(&discogs_key);
-        let beatport_cache = enrich_map.get(&beatport_key);
         let stratum_cache = stratum_map.get(audio_key);
         let essentia_cache = essentia_map.get(audio_key);
 
@@ -202,20 +189,15 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
                 resolve_single_track(
                     track,
                     discogs_cache,
-                    beatport_cache,
                     stratum_cache,
                     essentia_cache,
                     essentia_installed,
                     staged.as_ref(),
                 )
             }
-            ResolveFormat::Classification => resolve_single_track_compact(
-                track,
-                discogs_cache,
-                beatport_cache,
-                stratum_cache,
-                essentia_cache,
-            ),
+            ResolveFormat::Classification => {
+                resolve_single_track_compact(track, discogs_cache, stratum_cache, essentia_cache)
+            }
         };
         results.push(result);
     }
@@ -227,7 +209,6 @@ pub(in crate::mcp) fn handle_resolve_tracks_data(
 pub(crate) fn resolve_single_track(
     track: &crate::domain::library::Track,
     discogs_cache: Option<&store::EnrichmentCacheEntry>,
-    beatport_cache: Option<&store::EnrichmentCacheEntry>,
     stratum_cache: Option<&store::CachedAudioAnalysis>,
     essentia_cache: Option<&store::CachedAudioAnalysis>,
     essentia_installed: bool,
@@ -303,8 +284,7 @@ pub(crate) fn resolve_single_track(
         serde_json::Value::Null
     };
 
-    let provider_resolution =
-        resolve_cached_provider_data(&track.label, discogs_cache, beatport_cache);
+    let provider_resolution = resolve_cached_provider_data(&track.label, discogs_cache);
 
     let staged_val = staged.map(|s| {
         serde_json::json!({
@@ -324,7 +304,6 @@ pub(crate) fn resolve_single_track(
         "essentia": essentia_cache.is_some(),
         "essentia_installed": essentia_installed,
         "discogs": provider_resolution.completeness.discogs_cached,
-        "beatport": provider_resolution.completeness.beatport_cached,
     });
 
     let current_genre_canonical = canonical_current_genre(&track.genre)
@@ -344,25 +323,12 @@ pub(crate) fn resolve_single_track(
         })
         .collect();
 
-    let beatport_genre_mapping =
-        provider_resolution
-            .beatport_genre_mapping
-            .as_ref()
-            .map(|mapping| {
-                serde_json::json!({
-                    "genre": mapping.raw,
-                    "maps_to": mapping.maps_to,
-                    "mapping_type": mapping.mapping_type,
-                })
-            });
-
     let effective_label = provider_resolution.effective_label.as_deref();
     let label_inferred_genre = provider_resolution.label_genre;
 
     let genre_taxonomy = serde_json::json!({
         "current_genre_canonical": current_genre_canonical,
         "discogs_style_mappings": discogs_style_mappings,
-        "beatport_genre_mapping": beatport_genre_mapping,
         "label": effective_label,
         "label_genre": label_inferred_genre,
     });
@@ -372,7 +338,6 @@ pub(crate) fn resolve_single_track(
         "rekordbox": rekordbox,
         "audio_analysis": audio_analysis,
         "discogs": provider_resolution.discogs,
-        "beatport": provider_resolution.beatport,
         "staged_changes": staged_val,
         "data_completeness": data_completeness,
         "genre_taxonomy": genre_taxonomy,
@@ -384,7 +349,6 @@ pub(crate) fn resolve_single_track(
 fn resolve_single_track_compact(
     track: &crate::domain::library::Track,
     discogs_cache: Option<&store::EnrichmentCacheEntry>,
-    beatport_cache: Option<&store::EnrichmentCacheEntry>,
     stratum_cache: Option<&store::CachedAudioAnalysis>,
     essentia_cache: Option<&store::CachedAudioAnalysis>,
 ) -> serde_json::Value {
@@ -400,8 +364,7 @@ fn resolve_single_track_compact(
             |canonical| (serde_json::json!(canonical), bpm_range_json(canonical)),
         );
 
-    let provider_resolution =
-        resolve_cached_provider_data(&track.label, discogs_cache, beatport_cache);
+    let provider_resolution = resolve_cached_provider_data(&track.label, discogs_cache);
     let effective_label = provider_resolution.effective_label.as_deref();
     let label_inferred_genre = provider_resolution.label_genre;
 
@@ -421,20 +384,6 @@ fn resolve_single_track_compact(
             serde_json::json!(entries)
         }
     };
-
-    let beatport_genre_raw = provider_resolution
-        .beatport_genre_raw
-        .as_deref()
-        .map_or(serde_json::Value::Null, |genre| serde_json::json!(genre));
-
-    let beatport_mapped_genre = provider_resolution
-        .beatport_mapped_genre
-        .as_deref()
-        .map_or(serde_json::Value::Null, |genre| serde_json::json!(genre));
-    let beatport_mapped_genre_bpm_range = provider_resolution
-        .beatport_mapped_genre
-        .as_deref()
-        .map_or(serde_json::Value::Null, bpm_range_json);
 
     let stratum_json = stratum_cache
         .and_then(|sc| serde_json::from_str::<serde_json::Value>(&sc.features_json).ok());
@@ -492,9 +441,6 @@ fn resolve_single_track_compact(
         "key": track.key,
         "rating": track.rating,
         "discogs_mapped_genres": discogs_mapped_genres,
-        "beatport_mapped_genre": beatport_mapped_genre,
-        "beatport_mapped_genre_bpm_range": beatport_mapped_genre_bpm_range,
-        "beatport_genre_raw": beatport_genre_raw,
         "label": effective_label,
         "label_genre": label_inferred_genre,
         "audio": audio_obj,
@@ -502,7 +448,6 @@ fn resolve_single_track_compact(
             "stratum": stratum_cache.is_some(),
             "essentia": essentia_cache.is_some(),
             "discogs": provider_resolution.completeness.discogs_cached,
-            "beatport": provider_resolution.completeness.beatport_cached,
         },
     })
 }
