@@ -337,7 +337,7 @@ reklawdbox embed-art cover.jpg track1.flac track2.flac track3.flac
 
 ## `setup`
 
-Installs Essentia into a managed Python venv for audio analysis. Finds Python 3.9+, creates a venv at `~/.local/share/reklawdbox/essentia-venv`, and installs Essentia via pip.
+With no valid expert override, installs the optional Essentia audio-analysis runtime at the stable managed path `~/.local/share/reklawdbox/essentia-venv/bin/python`. Setup requires CPython 3.14 and validates the complete wheel-only manifest: Essentia 2.1b6.dev1438, NumPy 2.5.1, PyYAML 6.0.3, and six 1.17.0. Internal immutable generations are selected atomically and are not a path to configure manually. A valid `CRATE_DIG_ESSENTIA_PYTHON` is reused only when it matches that manifest. Essentia is external AGPL-3.0-only software, not bundled with Reklawdbox; the core server and Stratum analysis remain available without Python.
 
 ```bash
 reklawdbox setup [options]

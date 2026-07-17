@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock, Weak};
 
 use rusqlite::Connection;
@@ -22,6 +23,7 @@ pub(super) struct DatabaseContext {
 pub(super) struct AnalysisContext {
     pub(super) essentia_python: OnceLock<Option<String>>,
     pub(super) essentia_python_override: Mutex<Option<String>>,
+    pub(super) essentia_probe_invalidated: AtomicBool,
     pub(super) essentia_setup_lock: tokio::sync::Mutex<()>,
 }
 
@@ -61,6 +63,7 @@ impl ServerContext {
             analysis: AnalysisContext {
                 essentia_python: OnceLock::new(),
                 essentia_python_override: Mutex::new(None),
+                essentia_probe_invalidated: AtomicBool::new(false),
                 essentia_setup_lock: tokio::sync::Mutex::new(()),
             },
             enrichment: EnrichmentContext {

@@ -563,6 +563,79 @@ fn test_audio_analysis_cache_upsert() {
 }
 
 #[test]
+fn essentia_v2_cache_is_preserved_but_not_fresh_for_v3() {
+    let (_dir, conn) = open_temp_store();
+    let path = "/music/essentia-v2.flac";
+    set_audio_analysis_with_fingerprint(
+        &conn,
+        path,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        100,
+        200,
+        "2",
+        "",
+        r#"{"analyzer_version":"legacy"}"#,
+    )
+    .unwrap();
+
+    let identity = AudioAnalysisIdentity {
+        file_path: path,
+        file_size: 100,
+        file_mtime: 200,
+        input_fingerprint: "",
+    };
+    let fresh = batch_get_fresh_audio_analysis(
+        &conn,
+        &[identity],
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+    )
+    .unwrap();
+    assert!(fresh.is_empty());
+
+    let preserved = get_audio_analysis(&conn, path, crate::adapters::audio::ANALYZER_ESSENTIA)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.analysis_version, "2");
+    assert_eq!(crate::adapters::audio::ESSENTIA_SCHEMA_VERSION, "3");
+}
+
+#[test]
+fn essentia_v3_cache_round_trips_complete_runtime_manifest() {
+    let (_dir, conn) = open_temp_store();
+    let path = "/music/essentia-v3.flac";
+    let payload = serde_json::json!({
+        "analyzer_version": "2.1b6.dev1438",
+        "runtime_manifest": {
+            "python_version": "3.14.6",
+            "python_implementation": "cpython",
+            "essentia_version": "2.1b6.dev1438",
+            "numpy_version": "2.5.1",
+            "pyyaml_version": "6.0.3",
+            "six_version": "1.17.0",
+            "analyzer_contract": "essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14"
+        }
+    });
+    set_audio_analysis_with_fingerprint(
+        &conn,
+        path,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        100,
+        200,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        "",
+        &payload.to_string(),
+    )
+    .unwrap();
+
+    let stored = get_audio_analysis(&conn, path, crate::adapters::audio::ANALYZER_ESSENTIA)
+        .unwrap()
+        .unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&stored.features_json).unwrap();
+    assert_eq!(stored, payload);
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 fn test_broker_discogs_session_round_trip() {
     let (_dir, conn) = open_temp_store();

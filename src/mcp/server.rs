@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 
 use rmcp::handler::server::tool::ToolRouter;
@@ -145,11 +146,49 @@ impl ReklawdboxServer {
         {
             return Some(path.clone());
         }
+        if self
+            .context
+            .analysis
+            .essentia_probe_invalidated
+            .load(Ordering::Acquire)
+        {
+            return None;
+        }
         self.context
             .analysis
             .essentia_python
             .get_or_init(probe_essentia_python_path)
             .clone()
+    }
+
+    pub(super) fn activate_essentia_python_path(&self, python_path: String) -> Result<(), String> {
+        let mut guard = self
+            .context
+            .analysis
+            .essentia_python_override
+            .lock()
+            .map_err(|_| "essentia override lock poisoned".to_string())?;
+        *guard = Some(python_path);
+        self.context
+            .analysis
+            .essentia_probe_invalidated
+            .store(false, Ordering::Release);
+        Ok(())
+    }
+
+    pub(super) fn invalidate_essentia_python_path(&self) {
+        if let Ok(mut guard) = self.context.analysis.essentia_python_override.lock() {
+            *guard = None;
+            self.context
+                .analysis
+                .essentia_probe_invalidated
+                .store(true, Ordering::Release);
+            return;
+        }
+        self.context
+            .analysis
+            .essentia_probe_invalidated
+            .store(true, Ordering::Release);
     }
 
     pub(super) fn audio_file_mutation_lock(
@@ -433,7 +472,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Install Essentia into a managed Python venv. Call this when analyze_track_audio reports essentia_available: false. Creates a venv, installs essentia via pip, and makes it available immediately (no restart needed)."
+        description = "Install or validate the supported CPython 3.14 Essentia runtime. With no valid expert override, uses the stable managed path and the pinned binary-only Essentia, NumPy, PyYAML, and six manifest. Activates immediately without a restart. Call this when analyze_track_audio reports essentia_available: false."
     )]
     pub(super) async fn setup_essentia(&self) -> Result<CallToolResult, McpError> {
         handle_setup_essentia(self).await

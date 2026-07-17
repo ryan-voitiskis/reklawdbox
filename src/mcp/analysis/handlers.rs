@@ -1,12 +1,7 @@
-use std::process::Stdio;
-
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
-use crate::adapters::audio::{
-    self, ESSENTIA_IMPORT_CHECK_SCRIPT, essentia_setup_hint, essentia_venv_dir,
-    validate_essentia_python,
-};
+use crate::adapters::audio::{self, essentia_setup_hint};
 use crate::adapters::rekordbox as db;
 use crate::adapters::state as store;
 use crate::application::analysis::identity::{
@@ -1048,183 +1043,91 @@ mod pending_page_tests {
 pub(in crate::mcp) async fn handle_setup_essentia(
     server: &ReklawdboxServer,
 ) -> Result<CallToolResult, McpError> {
-    // Serialize concurrent setup calls - only one install at a time
+    handle_setup_essentia_with(server, |existing_candidate| {
+        crate::application::analysis::setup::setup_essentia_with_candidate(
+            existing_candidate.as_deref(),
+        )
+    })
+    .await
+}
+
+pub(in crate::mcp) async fn handle_setup_essentia_with<F>(
+    server: &ReklawdboxServer,
+    setup: F,
+) -> Result<CallToolResult, McpError>
+where
+    F: FnOnce(
+            Option<String>,
+        ) -> Result<
+            crate::application::analysis::setup::EssentiaSetupResult,
+            crate::adapters::audio::EssentiaSetupError,
+        > + Send
+        + 'static,
+{
+    // Keep in-process serialization; the shared workflow also takes a bounded
+    // interprocess lock before it can create or switch a generation.
     let _setup_guard = server.context.analysis.essentia_setup_lock.lock().await;
-
-    // Check if already available (validate to catch stale overrides)
-    if let Some(path) = server.essentia_python_path() {
-        let path_clone = path.clone();
-        let is_valid = match tokio::task::spawn_blocking(move || {
-            validate_essentia_python(&path_clone)
-        })
-        .await
-        {
-            Ok(valid) => valid,
-            Err(e) => {
-                tracing::warn!("Essentia validation task failed: {e}");
-                false
+    let existing_candidate = server.essentia_python_path();
+    let had_existing_candidate = existing_candidate.is_some();
+    let task = tokio::task::spawn_blocking(move || setup(existing_candidate)).await;
+    let result = match task {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            if had_existing_candidate {
+                server.invalidate_essentia_python_path();
             }
-        };
-        if is_valid {
-            let result = serde_json::json!({
-                "status": "already_installed",
-                "python_path": path,
-                "message": "Essentia is already available.",
-            });
-            return ok_json(&result);
+            return Err(McpError::internal_error(
+                error.message,
+                Some(serde_json::json!({ "kind": error.kind })),
+            ));
         }
-        // Stale override - clear it and proceed with fresh install
-        if let Ok(mut guard) = server.context.analysis.essentia_python_override.lock() {
-            *guard = None;
+        Err(error) => {
+            if had_existing_candidate {
+                server.invalidate_essentia_python_path();
+            }
+            return Err(mcp_internal_error(format!(
+                "Essentia setup task failed: {error}"
+            )));
         }
+    };
+    let python_path = result.runtime.python_path.clone();
+    server
+        .activate_essentia_python_path(python_path)
+        .map_err(mcp_internal_error)?;
+    ok_json(&setup_essentia_payload(&result))
+}
+
+pub(in crate::mcp) fn setup_essentia_payload(
+    result: &crate::application::analysis::setup::EssentiaSetupResult,
+) -> serde_json::Value {
+    let status = match result.status {
+        crate::application::analysis::setup::EssentiaSetupStatus::AlreadyInstalled => {
+            "already_installed"
+        }
+        crate::application::analysis::setup::EssentiaSetupStatus::Installed => "installed",
+    };
+    let mut payload = serde_json::json!({
+        "status": status,
+        "python_path": result.runtime.python_path,
+        "python_version": result.runtime.python_version,
+        "essentia_version": result.runtime.essentia_version,
+        "numpy_version": result.runtime.numpy_version,
+        "pyyaml_version": result.runtime.pyyaml_version,
+        "six_version": result.runtime.six_version,
+        "analyzer_contract": result.runtime.analyzer_contract,
+        "message": "Essentia is available immediately; no server restart is needed.",
+    });
+    if matches!(
+        result.status,
+        crate::application::analysis::setup::EssentiaSetupStatus::Installed
+    ) {
+        payload["python_bin_used"] = serde_json::json!(result.python_bin_used);
+        payload["venv_dir"] = serde_json::json!(
+            std::path::Path::new(&result.runtime.python_path)
+                .parent()
+                .and_then(std::path::Path::parent)
+                .map(|path| path.to_string_lossy().into_owned())
+        );
     }
-
-    let venv_dir = essentia_venv_dir().ok_or_else(|| {
-        mcp_internal_error("Cannot determine home directory for venv location".to_string())
-    })?;
-
-    // Try each Python candidate, falling through to the next on failure
-    let python_candidates: &[&str] = &[
-        "python3.13",
-        "python3.12",
-        "python3.11",
-        "python3.10",
-        "python3.9",
-        "python3",
-    ];
-
-    let mut last_error = String::new();
-
-    for &python_bin in python_candidates {
-        let bin_ok = tokio::task::spawn_blocking({
-            let bin = python_bin.to_string();
-            move || {
-                std::process::Command::new(&bin)
-                    .args(["--version"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-            }
-        })
-        .await
-        .unwrap_or(false);
-
-        if !bin_ok {
-            continue;
-        }
-
-        if let Some(parent) = venv_dir.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                mcp_internal_error(format!(
-                    "Failed to create directory {}: {e}",
-                    parent.display()
-                ))
-            })?;
-        }
-
-        // Create venv (--clear ensures a fresh start if a broken venv exists)
-        let venv_dir_str = venv_dir.to_string_lossy().to_string();
-        let venv_output = tokio::task::spawn_blocking({
-            let bin = python_bin.to_string();
-            let dir = venv_dir_str.clone();
-            move || {
-                std::process::Command::new(&bin)
-                    .args(["-m", "venv", "--clear", &dir])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-            }
-        })
-        .await
-        .map_err(|e| mcp_internal_error(format!("venv task failed: {e}")))?
-        .map_err(|e| mcp_internal_error(format!("Failed to run {python_bin} -m venv: {e}")))?;
-
-        if !venv_output.status.success() {
-            last_error = format!(
-                "{python_bin}: venv creation failed: {}",
-                String::from_utf8_lossy(&venv_output.stderr)
-            );
-            continue;
-        }
-
-        let venv_pip = venv_dir.join("bin/pip");
-        let venv_python = venv_dir.join("bin/python");
-
-        let pip_output = tokio::task::spawn_blocking({
-            let pip = venv_pip.clone();
-            move || {
-                std::process::Command::new(&pip)
-                    .args(["install", "--pre", "essentia"])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-            }
-        })
-        .await
-        .map_err(|e| mcp_internal_error(format!("pip task failed: {e}")))?
-        .map_err(|e| mcp_internal_error(format!("Failed to run pip install: {e}")))?;
-
-        if !pip_output.status.success() {
-            last_error = format!(
-                "{python_bin}: pip install essentia failed: {}",
-                String::from_utf8_lossy(&pip_output.stderr)
-            );
-            continue;
-        }
-
-        let venv_python_str = venv_python.to_string_lossy().to_string();
-        let validate_output = tokio::task::spawn_blocking({
-            let py = venv_python_str.clone();
-            move || {
-                std::process::Command::new(&py)
-                    .args(["-c", ESSENTIA_IMPORT_CHECK_SCRIPT])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-            }
-        })
-        .await
-        .map_err(|e| mcp_internal_error(format!("validate task failed: {e}")))?
-        .map_err(|e| {
-            mcp_internal_error(format!("Failed to validate essentia installation: {e}"))
-        })?;
-
-        if !validate_output.status.success() {
-            last_error = format!(
-                "{python_bin}: Essentia installed but import validation failed: {}",
-                String::from_utf8_lossy(&validate_output.stderr)
-            );
-            continue;
-        }
-
-        let version = String::from_utf8_lossy(&validate_output.stdout)
-            .trim()
-            .to_string();
-
-        // Available immediately without restart
-        let mut guard = server
-            .context
-            .analysis
-            .essentia_python_override
-            .lock()
-            .map_err(|_| mcp_internal_error("essentia override lock poisoned".to_string()))?;
-        *guard = Some(venv_python_str.clone());
-        drop(guard);
-
-        let result = serde_json::json!({
-            "status": "installed",
-            "python_path": venv_python_str,
-            "python_bin_used": python_bin,
-            "essentia_version": version,
-            "venv_dir": venv_dir.to_string_lossy(),
-            "message": "Essentia installed successfully. Audio analysis will now include Essentia features — no restart needed.",
-        });
-        return ok_json(&result);
-    }
-
-    Err(mcp_internal_error(format!(
-        "All Python candidates failed. Last error: {last_error}"
-    )))
+    payload
 }

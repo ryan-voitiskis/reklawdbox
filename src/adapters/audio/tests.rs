@@ -218,6 +218,37 @@ fn parse_essentia_stdout_trims_whitespace() {
 }
 
 #[test]
+fn essentia_v3_runtime_manifest_rejects_mismatch_before_cache_write() {
+    let exact = br#"{
+        "analyzer_version":"2.1b6.dev1438",
+        "runtime_manifest":{
+            "python_version":"3.14.6",
+            "python_implementation":"cpython",
+            "essentia_version":"2.1b6.dev1438",
+            "numpy_version":"2.5.1",
+            "pyyaml_version":"6.0.3",
+            "six_version":"1.17.0",
+            "analyzer_contract":"essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14"
+        }
+    }"#;
+    let parsed = parse_essentia_stdout(exact).unwrap();
+    validate_runtime_manifest(&parsed).unwrap();
+
+    let mut mismatched: serde_json::Value = serde_json::from_slice(exact).unwrap();
+    mismatched["runtime_manifest"]["numpy_version"] = serde_json::json!("2.5.2");
+    let mismatched = parse_essentia_stdout(&serde_json::to_vec(&mismatched).unwrap()).unwrap();
+    let error = validate_runtime_manifest(&mismatched).unwrap_err();
+    assert!(
+        matches!(error, AudioError::Analysis(message) if message.contains("refusing schema-v3 cache write"))
+    );
+
+    let mut non_cpython: serde_json::Value = serde_json::from_slice(exact).unwrap();
+    non_cpython["runtime_manifest"]["python_implementation"] = serde_json::json!("pypy");
+    let non_cpython = parse_essentia_stdout(&serde_json::to_vec(&non_cpython).unwrap()).unwrap();
+    assert!(validate_runtime_manifest(&non_cpython).is_err());
+}
+
+#[test]
 fn parse_essentia_stdout_rejects_empty_output() {
     let err =
         parse_essentia_stdout(b"   \n").expect_err("empty output should produce a parse error");
@@ -261,8 +292,32 @@ async fn run_essentia_handles_non_scalar_outputs_via_stereo_fallback() {
     std::fs::create_dir_all(&essentia_pkg).expect("essentia package dir should be created");
 
     std::fs::write(
+        tmp.path().join("platform.py"),
+        "def python_version():\n    return '3.14.6'\n",
+    )
+    .expect("fake platform module should be written");
+    for (distribution_dir, name, version) in [
+        (
+            "essentia-2.1b6.dev1438.dist-info",
+            "essentia",
+            "2.1b6.dev1438",
+        ),
+        ("numpy-2.5.1.dist-info", "numpy", "2.5.1"),
+        ("PyYAML-6.0.3.dist-info", "PyYAML", "6.0.3"),
+        ("six-1.17.0.dist-info", "six", "1.17.0"),
+    ] {
+        let distribution = tmp.path().join(distribution_dir);
+        std::fs::create_dir(&distribution).expect("fake distribution should be created");
+        std::fs::write(
+            distribution.join("METADATA"),
+            format!("Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"),
+        )
+        .expect("fake distribution metadata should be written");
+    }
+
+    std::fs::write(
         essentia_pkg.join("__init__.py"),
-        "__version__ = '2.1-test'\n",
+        "__version__ = '2.1b6.dev1438'\n",
     )
     .expect("fake essentia __init__ should be written");
 
@@ -377,6 +432,8 @@ class Intensity:
             r#"
 import builtins as _builtins
 
+__version__ = "2.5.1"
+
 class _FakeArray:
     def __init__(self, value):
         self._flat = []
@@ -484,6 +541,11 @@ def percentile(arr, p):
         )
         .expect("fake numpy module should be written");
 
+    std::fs::write(tmp.path().join("yaml.py"), "__version__ = '6.0.3'\n")
+        .expect("fake yaml module should be written");
+    std::fs::write(tmp.path().join("six.py"), "__version__ = '1.17.0'\n")
+        .expect("fake six module should be written");
+
     let wrapper = tmp.path().join("fake-python");
     std::fs::write(
         &wrapper,
@@ -509,7 +571,19 @@ def percentile(arr, p):
     .await
     .expect("run_essentia should succeed with fake modules");
 
-    assert_eq!(result.analyzer_version, "2.1-test");
+    assert_eq!(result.analyzer_version, "2.1b6.dev1438");
+    assert_eq!(
+        result
+            .runtime_manifest
+            .as_ref()
+            .expect("runtime manifest should be emitted")
+            .analyzer_contract,
+        crate::adapters::audio::essentia_environment::ESSENTIA_CONTRACT_ID
+    );
+    assert_eq!(
+        result.runtime_manifest.unwrap().python_implementation,
+        "cpython"
+    );
     assert!((result.danceability.unwrap() - 2.46).abs() < 1e-6);
     assert!((result.loudness_integrated.unwrap() - (-14.5)).abs() < 1e-6);
     assert!((result.loudness_range.unwrap() - 4.2).abs() < 1e-6);

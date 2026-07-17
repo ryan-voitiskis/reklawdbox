@@ -54,8 +54,9 @@ cargo build --release
 ## MCP and releases
 
 - Claude Code `.mcp.json` runs `reklawdbox mcp` from `PATH`, usually the
-  Homebrew binary, and points Essentia at `.venvs/essentia/bin/python`. A repo
-  build does not refresh that host binary.
+  Homebrew binary. Standard Essentia setup uses the managed runtime at
+  `~/.local/share/reklawdbox/essentia-venv/bin/python`; a repo build does not
+  refresh that host binary.
 - The ChatGPT desktop app, Codex CLI, and Codex IDE extension share Codex MCP
   configuration rather than `.mcp.json`. Restart the app/extension or start a
   new CLI task after changing the server or its tool schemas.

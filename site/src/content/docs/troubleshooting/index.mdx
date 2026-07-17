@@ -92,11 +92,25 @@ Device flow expired before browser authorization completed. Call `lookup_discogs
 
 ### "Essentia not available"
 
-No installation found. Either call `setup_essentia` through your agent (installs and activates without restart), or run `reklawdbox setup` from the CLI.
+No matching managed runtime was found. Either call `setup_essentia` through your agent (installs and activates without restart), or run `reklawdbox setup` from the CLI. Standard setup requires CPython 3.14 and installs the locked wheel-only manifest at `~/.local/share/reklawdbox/essentia-venv/bin/python`; do not point normal configuration at a repository-local venv.
+
+Verify the interpreter first:
+
+```bash
+brew install python@3.14
+python3.14 --version
+```
+
+- **No supported CPython 3.14** — ensure Homebrew's `python3.14` is on `PATH`, then retry setup.
+- **Binary wheel unavailable or pip failed** — managed Essentia setup currently supports macOS 15 or newer on Apple Silicon. Check the OS, network, and the full error before retrying; setup never falls back to a source build.
+- **Setup lock timed out** — another CLI or MCP process is setting up the runtime. Let it finish, then retry. The lock file may remain on disk; the kernel lock, not file existence, controls ownership.
+- **Manifest mismatch** — remove an obsolete `CRATE_DIG_ESSENTIA_PYTHON` override and rerun setup. Expert overrides must match the documented Python and package versions exactly.
+
+Each new generation is validated before activation. Ordinary venv, pip, import, or switch failures remove only the incomplete generation and leave the prior stable runtime in place. If stable-path validation fails, setup attempts an atomic restoration; if that restoration itself fails, setup reports the rollback failure and preserves the directly validated generation instead of deleting it.
 
 ### Essentia stopped after config change
 
-The probe is memoized per process. Restart the MCP server, or call `setup_essentia` to force a re-probe.
+The probe is memoized per process. Restart the MCP server after changing host configuration or environment variables. Use `setup_essentia` to install or recover a missing or invalid runtime; it does not reload a changed environment variable into an already-running process.
 
 ### Audio analysis fails for specific tracks
 

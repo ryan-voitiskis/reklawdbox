@@ -34,11 +34,11 @@ You can use it to:
 
 ### Requirements
 
-- macOS on Apple Silicon (M1 or later)
+- macOS 15 or newer on Apple Silicon (M1 or later) for managed Essentia setup
 - Rekordbox 7.x with at least one collection imported
 - An MCP host for conversational use: Claude Code, Claude Desktop, the ChatGPT
   desktop app, Codex CLI, or the Codex IDE extension
-- Python 3.9 or newer for `reklawdbox setup` and optional Essentia analysis
+- CPython 3.14 for `reklawdbox setup` and optional Essentia analysis
 
 Python is not required for the built-in Stratum analysis or a manual MCP
 configuration without Essentia.
@@ -51,7 +51,20 @@ brew install reklawdbox
 reklawdbox setup
 ```
 
-`setup` installs and validates the optional Essentia analysis backend,
+With no valid expert override, `setup` installs and validates the optional
+Essentia analysis backend at the managed stable path
+`~/.local/share/reklawdbox/essentia-venv/bin/python`.
+It uses the wheel-only runtime manifest Essentia 2.1b6.dev1438, NumPy 2.5.1,
+PyYAML 6.0.3, and six 1.17.0; internal immutable generations are not a
+user-facing path. Essentia is an externally installed AGPL-3.0-only package
+and is not bundled with Reklawdbox. The core server and Stratum analysis work
+without Python.
+
+Standard use needs no environment variable. A valid
+`CRATE_DIG_ESSENTIA_PYTHON` remains an expert override and is reused only when
+it matches the same complete runtime manifest.
+
+`setup` also
 configures Claude Code at `~/Music/.mcp.json`, configures Claude Desktop when
 detected, and checks the Rekordbox database connection. Then reconnect your
 host:

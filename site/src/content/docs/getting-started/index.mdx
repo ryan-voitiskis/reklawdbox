@@ -9,9 +9,9 @@ import { Steps, Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/compon
 
 ## Prerequisites
 
-- **macOS on Apple Silicon** — M1 or later
+- **macOS 15 or newer on Apple Silicon** — M1 or later, for managed Essentia setup
 - **Rekordbox 7.x** installed with at least one collection imported
-- **Python 3.9 or newer** for the automatic setup path
+- **CPython 3.14** for the automatic Essentia setup path
 - **An MCP host:**
   - Claude Code — configured automatically at the `~/Music` scope;
   - Claude Desktop — configured automatically when its installation is detected;
@@ -60,8 +60,13 @@ import { Steps, Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/compon
   </TabItem>
 </Tabs>
 
-The setup command first installs and validates the optional Essentia audio
-analysis environment. It then writes Claude Code configuration to
+With no valid expert override, the setup command first installs and validates
+the optional Essentia audio analysis environment at
+`~/.local/share/reklawdbox/essentia-venv/bin/python`.
+It requires CPython 3.14 and the locked wheel-only Essentia, NumPy, PyYAML, and
+six manifest; the internal generations are managed automatically. A valid
+`CRATE_DIG_ESSENTIA_PYTHON` is reused only when it matches the same manifest.
+Setup then writes Claude Code configuration to
 `~/Music/.mcp.json` and configures Claude Desktop when that app is detected.
 
 <Aside type="note" title="Want to skip Essentia?">

@@ -60,8 +60,9 @@ The broker is open-source and self-hostable if you prefer. See [Environment Vari
 Two analysis backends are cached per track and reused while their schema,
 audio-file identity, and analyzer-specific inputs remain current. An audio-file
 identity change invalidates both backends. A Stratum schema change invalidates
-only Stratum, and an Essentia schema change invalidates only Essentia. A
-Rekordbox grid change also invalidates only Stratum.
+only Stratum, and an Essentia schema change invalidates only Essentia. Changing
+the managed analyzer contract requires an Essentia schema/cache/profile review
+and version bump. A Rekordbox grid change also invalidates only Stratum.
 
 **Built-in (stratum-dsp)** — BPM/key confidence, grid provenance and stability,
 decay, dub-stab and kick-pattern evidence, and structural sections in Rust.
@@ -71,7 +72,10 @@ Always available, no setup needed.
 onset evidence, brightness, and other spectral/timbral features via a Python
 subprocess. It has no returned `energy` field. Transition and pool scoring
 derive energy from danceability, integrated loudness, and onset rate only when
-all three are present. Installed by `reklawdbox setup`.
+all three are present. Installed by `reklawdbox setup` into a managed CPython
+3.14 runtime. Its exact Essentia/NumPy/PyYAML/six manifest governs analyzer
+compatibility; updates require cache-version, profile, and real-audio review.
+Essentia is an external AGPL-3.0-only package, not bundled with the MIT binary.
 
 Without complete Essentia energy inputs, scoring falls back to a BPM-based
 estimate; unavailable brightness/rhythm axes are excluded from the transition

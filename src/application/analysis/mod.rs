@@ -7,3 +7,4 @@ pub(crate) mod batch;
 pub(crate) mod identity;
 pub(crate) mod job;
 pub(crate) mod model;
+pub(crate) mod setup;

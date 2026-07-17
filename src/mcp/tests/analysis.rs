@@ -188,7 +188,7 @@ fn probe_essentia_python_prefers_env_override_when_valid() {
 
     let dir = tempfile::tempdir().expect("temp dir should create");
     let fake_python = dir.path().join("fake-python");
-    std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
+    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
         .expect("fake python script should be written");
     let mut perms = std::fs::metadata(&fake_python)
         .expect("fake python metadata should be readable")
@@ -683,7 +683,7 @@ async fn setup_essentia_returns_already_installed_when_override_is_valid() {
 
     let dir = tempfile::tempdir().expect("temp dir should create");
     let fake_python = dir.path().join("fake-python");
-    std::fs::write(&fake_python, "#!/bin/sh\necho '2.1b6.dev1389'\nexit 0\n")
+    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
         .expect("fake python script should be written");
     let mut perms = std::fs::metadata(&fake_python)
         .expect("metadata should be readable")
@@ -711,6 +711,153 @@ async fn setup_essentia_returns_already_installed_when_override_is_valid() {
 
     assert_eq!(payload["status"], "already_installed");
     assert_eq!(payload["python_path"], fake_path.as_str());
+    assert_eq!(payload["python_version"], "3.14.6");
+    assert_eq!(payload["essentia_version"], "2.1b6.dev1438");
+    assert_eq!(payload["numpy_version"], "2.5.1");
+    assert_eq!(payload["pyyaml_version"], "6.0.3");
+    assert_eq!(payload["six_version"], "1.17.0");
+    assert_eq!(
+        payload["analyzer_contract"],
+        "essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14"
+    );
+}
+
+#[test]
+fn setup_essentia_installed_and_reused_shapes_share_runtime_manifest() {
+    use crate::adapters::audio::EssentiaRuntime;
+    use crate::application::analysis::setup::{EssentiaSetupResult, EssentiaSetupStatus};
+
+    let runtime = EssentiaRuntime {
+        python_path: "/managed/essentia-venv/bin/python".into(),
+        python_version: "3.14.6".into(),
+        essentia_version: "2.1b6.dev1438".into(),
+        numpy_version: "2.5.1".into(),
+        pyyaml_version: "6.0.3".into(),
+        six_version: "1.17.0".into(),
+        analyzer_contract:
+            "essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14".into(),
+    };
+    let installed = crate::mcp::analysis::setup_essentia_payload(&EssentiaSetupResult {
+        status: EssentiaSetupStatus::Installed,
+        runtime: runtime.clone(),
+        python_bin_used: Some("python3.14".into()),
+    });
+    let reused = crate::mcp::analysis::setup_essentia_payload(&EssentiaSetupResult {
+        status: EssentiaSetupStatus::AlreadyInstalled,
+        runtime,
+        python_bin_used: None,
+    });
+
+    assert_eq!(installed["status"], "installed");
+    assert_eq!(reused["status"], "already_installed");
+    assert_eq!(installed["python_version"], "3.14.6");
+    assert_eq!(installed["six_version"], "1.17.0");
+    assert_eq!(installed["python_bin_used"], "python3.14");
+    assert_eq!(installed["venv_dir"], "/managed/essentia-venv");
+    assert!(reused.get("python_bin_used").is_none());
+    assert!(reused.get("venv_dir").is_none());
+}
+
+#[tokio::test]
+async fn setup_essentia_failure_invalidates_stale_memoized_runtime() {
+    use crate::adapters::audio::{EssentiaSetupError, EssentiaSetupErrorKind};
+    use crate::application::analysis::setup::EssentiaSetupResult;
+
+    let server = ReklawdboxServer::new(None);
+    server
+        .context
+        .analysis
+        .essentia_python
+        .set(Some("/stale/essentia/bin/python".into()))
+        .unwrap();
+    assert!(server.essentia_python_path().is_some());
+
+    let error = crate::mcp::analysis::handle_setup_essentia_with(&server, |_| {
+        Err::<EssentiaSetupResult, _>(EssentiaSetupError::new(
+            EssentiaSetupErrorKind::PipFailure,
+            "forced offline install failure",
+        ))
+    })
+    .await
+    .expect_err("forced setup failure should surface");
+
+    assert!(error.message.contains("forced offline install failure"));
+    assert_eq!(error.data.as_ref().unwrap()["kind"], "pip_failure");
+    assert!(server.essentia_python_path().is_none());
+    server
+        .activate_essentia_python_path("/fresh/essentia-venv/bin/python".into())
+        .unwrap();
+    assert_eq!(
+        server.essentia_python_path().as_deref(),
+        Some("/fresh/essentia-venv/bin/python")
+    );
+
+    let override_server = ReklawdboxServer::new(None);
+    *override_server
+        .context
+        .analysis
+        .essentia_python_override
+        .lock()
+        .unwrap() = Some("/stale/override/bin/python".into());
+    crate::mcp::analysis::handle_setup_essentia_with(&override_server, |_| {
+        Err::<EssentiaSetupResult, _>(EssentiaSetupError::new(
+            EssentiaSetupErrorKind::ManifestMismatch,
+            "forced override install failure",
+        ))
+    })
+    .await
+    .expect_err("forced override setup failure should surface");
+    assert!(override_server.essentia_python_path().is_none());
+}
+
+#[tokio::test]
+async fn setup_essentia_concurrent_mcp_calls_remain_serialized() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::adapters::audio::EssentiaRuntime;
+    use crate::application::analysis::setup::{EssentiaSetupResult, EssentiaSetupStatus};
+
+    let server = ReklawdboxServer::new(None);
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+    let setup = |active: Arc<AtomicUsize>, max_active: Arc<AtomicUsize>| {
+        move |_existing: Option<String>| {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            max_active.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            active.fetch_sub(1, Ordering::SeqCst);
+            Ok(EssentiaSetupResult {
+                status: EssentiaSetupStatus::AlreadyInstalled,
+                runtime: EssentiaRuntime {
+                    python_path: "/managed/essentia-venv/bin/python".into(),
+                    python_version: "3.14.6".into(),
+                    essentia_version: "2.1b6.dev1438".into(),
+                    numpy_version: "2.5.1".into(),
+                    pyyaml_version: "6.0.3".into(),
+                    six_version: "1.17.0".into(),
+                    analyzer_contract:
+                        "essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14"
+                            .into(),
+                },
+                python_bin_used: None,
+            })
+        }
+    };
+
+    let first = crate::mcp::analysis::handle_setup_essentia_with(
+        &server,
+        setup(active.clone(), max_active.clone()),
+    );
+    let second = crate::mcp::analysis::handle_setup_essentia_with(
+        &server,
+        setup(active.clone(), max_active.clone()),
+    );
+    let (first, second) = tokio::join!(first, second);
+
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(max_active.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

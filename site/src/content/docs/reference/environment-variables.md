@@ -28,14 +28,14 @@ The broker is a Cloudflare Workers service that handles Discogs OAuth and rate l
 
 ## Audio analysis
 
-| Variable                    | Description                                   | Default                                                     |
-| --------------------------- | --------------------------------------------- | ----------------------------------------------------------- |
-| `CRATE_DIG_ESSENTIA_PYTHON` | Path to Python binary with Essentia installed | Probes `~/.local/share/reklawdbox/essentia-venv/bin/python` |
+| Variable                    | Description                                                        | Default                                                     |
+| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `CRATE_DIG_ESSENTIA_PYTHON` | Expert override: path to a matching managed-manifest Python binary | Probes `~/.local/share/reklawdbox/essentia-venv/bin/python` |
 
 Probe behavior:
 
 - The server probes `CRATE_DIG_ESSENTIA_PYTHON` and the default venv path **lazily on first use** (not at startup). The first tool call that needs Essentia triggers the probe.
-- If neither imports Essentia successfully, tools report Essentia as unavailable and continue with stratum-dsp only.
+- A candidate must be CPython 3.14 with the exact Essentia 2.1b6.dev1438, NumPy 2.5.1, PyYAML 6.0.3, and six 1.17.0 manifest. If neither candidate matches, tools report Essentia as unavailable and continue with stratum-dsp only.
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
 

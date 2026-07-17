@@ -498,6 +498,32 @@ mod tests {
     }
 
     #[test]
+    fn essentia_v2_profile_metadata_is_incompatible_and_preserved() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut metadata = test_metadata("essentia-v2");
+        metadata.essentia_schema_version = "2".into();
+        save_to_db(&conn, &test_registry(), &metadata).unwrap();
+
+        let loaded = load_from_db(&conn, None).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Incompatible);
+        assert!(loaded.registry.is_none());
+        assert!(loaded.reason.unwrap().contains("Essentia schema 2 != 3"));
+        let profile_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM genre_audio_profiles", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let metadata_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM genre_profile_metadata", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(profile_rows > 0);
+        assert_eq!(metadata_rows, 1);
+    }
+
+    #[test]
     fn v9_profile_rows_migrate_as_incompatible_and_are_preserved() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();

@@ -200,7 +200,7 @@ authority.
 
 | Essentia family | Returned fields | Notes |
 |-----------------|-----------------|-------|
-| Analysis metadata | `analyzer_version` | Cache freshness also requires the current Essentia schema version and audio-file identity; grid changes do not invalidate Essentia. |
+| Analysis metadata | `analyzer_version`, `runtime_manifest` | Cache freshness requires the current Essentia schema and audio-file identity. The schema represents the supported analyzer contract, and a manifest change requires a cache-version review and bump; grid changes do not invalidate Essentia. |
 | Dynamics and loudness | `danceability`, `loudness_integrated`, `loudness_range`, `dynamic_complexity`, `average_loudness` | Optional descriptors. There is no returned `energy` field. |
 | Tempo and rhythm | `bpm_essentia`, `onset_rate`, `rhythm_regularity` | Optional independent tempo and onset evidence. |
 | Brightness, dissonance, and intensity | `spectral_centroid_mean`, `dissonance_mean`, `intensity_mean`, `intensity_var` | Optional scalar spectral/timbral evidence. |
@@ -317,4 +317,6 @@ no-op.
 
 {/* doc-contract:mcp tool=setup_essentia schema=/ surface=none requiredness=global */}
 
-Install or validate Essentia in a local Python venv. Creates a venv at `~/.local/share/reklawdbox/essentia-venv/` if needed. Activation takes effect immediately — no server restart needed.
+With no valid expert override, install or validate the managed CPython 3.14 Essentia runtime at `~/.local/share/reklawdbox/essentia-venv/`. It validates the exact wheel-only Essentia/NumPy/PyYAML/six manifest and activates immediately — no server restart needed. `CRATE_DIG_ESSENTIA_PYTHON` remains an expert override only and is reused only when it matches the same manifest.
+
+Success returns `status` (`installed` or `already_installed`), the validated `python_path`, the complete package-version fields, and `analyzer_contract`. Managed reuse and new installation return the stable managed path; expert reuse returns the validated override path. A new installation also returns `python_bin_used` and the stable `venv_dir`; internal generation paths are never returned.
