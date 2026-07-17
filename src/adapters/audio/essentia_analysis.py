@@ -1,6 +1,7 @@
 import json
 import sys
 import platform
+import importlib.metadata as metadata
 import essentia
 import essentia.standard as es
 import numpy as np
@@ -9,11 +10,12 @@ import six
 
 audio = es.MonoLoader(filename=sys.argv[1], sampleRate=44100)()
 features = {}
-features["analyzer_version"] = essentia.__version__
+features["analyzer_version"] = metadata.version("essentia")
 features["runtime_manifest"] = {
     "python_version": platform.python_version(),
     "python_implementation": sys.implementation.name,
-    "essentia_version": essentia.__version__,
+    "essentia_version": metadata.version("essentia"),
+    "essentia_module_version": essentia.__version__,
     "numpy_version": np.__version__,
     "pyyaml_version": yaml.__version__,
     "six_version": six.__version__,

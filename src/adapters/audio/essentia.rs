@@ -5,9 +5,9 @@ use tokio::time::{Duration as TokioDuration, timeout};
 use super::{
     AudioError,
     essentia_environment::{
-        ESSENTIA_CONTRACT_ID, ESSENTIA_PYTHON_ENV_VAR, SUPPORTED_ESSENTIA_VERSION,
-        SUPPORTED_NUMPY_VERSION, SUPPORTED_PYTHON_PREFIX, SUPPORTED_PYYAML_VERSION,
-        SUPPORTED_SIX_VERSION, essentia_venv_dir,
+        ESSENTIA_CONTRACT_ID, ESSENTIA_PYTHON_ENV_VAR, SUPPORTED_ESSENTIA_MODULE_VERSION,
+        SUPPORTED_ESSENTIA_VERSION, SUPPORTED_NUMPY_VERSION, SUPPORTED_PYTHON_PREFIX,
+        SUPPORTED_PYYAML_VERSION, SUPPORTED_SIX_VERSION, essentia_venv_dir,
     },
 };
 
@@ -47,6 +47,7 @@ pub struct EssentiaRuntimeManifest {
     pub python_version: String,
     pub python_implementation: String,
     pub essentia_version: String,
+    pub essentia_module_version: String,
     pub numpy_version: String,
     pub pyyaml_version: String,
     pub six_version: String,
@@ -74,6 +75,7 @@ pub(crate) fn validate_runtime_manifest(output: &EssentiaOutput) -> Result<(), A
         && manifest.python_implementation == "cpython"
         && manifest.python_version.starts_with(SUPPORTED_PYTHON_PREFIX)
         && manifest.essentia_version == SUPPORTED_ESSENTIA_VERSION
+        && manifest.essentia_module_version == SUPPORTED_ESSENTIA_MODULE_VERSION
         && manifest.numpy_version == SUPPORTED_NUMPY_VERSION
         && manifest.pyyaml_version == SUPPORTED_PYYAML_VERSION
         && manifest.six_version == SUPPORTED_SIX_VERSION
@@ -82,11 +84,12 @@ pub(crate) fn validate_runtime_manifest(output: &EssentiaOutput) -> Result<(), A
         return Ok(());
     }
     Err(AudioError::Analysis(format!(
-        "Essentia runtime changed after setup; refusing schema-v3 cache write (analyzer={}, implementation={}, python={}, essentia={}, numpy={}, pyyaml={}, six={}, contract={})",
+        "Essentia runtime changed after setup; refusing schema-v3 cache write (analyzer={}, implementation={}, python={}, essentia_distribution={}, essentia_module={}, numpy={}, pyyaml={}, six={}, contract={})",
         output.analyzer_version,
         manifest.python_implementation,
         manifest.python_version,
         manifest.essentia_version,
+        manifest.essentia_module_version,
         manifest.numpy_version,
         manifest.pyyaml_version,
         manifest.six_version,

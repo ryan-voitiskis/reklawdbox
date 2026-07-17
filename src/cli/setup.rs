@@ -34,9 +34,10 @@ pub(crate) fn run_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error
         setup.runtime.analyzer_contract
     );
     println!(
-        "Runtime manifest: CPython {}; Essentia {}; NumPy {}; PyYAML {}; six {}",
+        "Runtime manifest: CPython {}; Essentia distribution {} (module {}); NumPy {}; PyYAML {}; six {}",
         setup.runtime.python_version,
         setup.runtime.essentia_version,
+        setup.runtime.essentia_module_version,
         setup.runtime.numpy_version,
         setup.runtime.pyyaml_version,
         setup.runtime.six_version,

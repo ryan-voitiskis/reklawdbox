@@ -1111,6 +1111,7 @@ pub(in crate::mcp) fn setup_essentia_payload(
         "python_path": result.runtime.python_path,
         "python_version": result.runtime.python_version,
         "essentia_version": result.runtime.essentia_version,
+        "essentia_module_version": result.runtime.essentia_module_version,
         "numpy_version": result.runtime.numpy_version,
         "pyyaml_version": result.runtime.pyyaml_version,
         "six_version": result.runtime.six_version,

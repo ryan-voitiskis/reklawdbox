@@ -14,11 +14,12 @@ use serde::{Deserialize, Serialize};
 pub(crate) const ESSENTIA_PYTHON_ENV_VAR: &str = "CRATE_DIG_ESSENTIA_PYTHON";
 pub(crate) const ESSENTIA_VENV_RELPATH: &str = ".local/share/reklawdbox/essentia-venv";
 pub(crate) const ESSENTIA_VENV_GENERATIONS: &str = "essentia-venv.generations";
-pub(crate) const ESSENTIA_PROBE_TIMEOUT_SECS: u64 = 5;
+pub(crate) const ESSENTIA_PROBE_TIMEOUT_SECS: u64 = 30;
 pub(crate) const ESSENTIA_CONTRACT_ID: &str =
     "essentia:2.1b6.dev1438:numpy:2.5.1:pyyaml:6.0.3:six:1.17.0:cpython:3.14";
 pub(crate) const SUPPORTED_PYTHON_PREFIX: &str = "3.14.";
 pub(crate) const SUPPORTED_ESSENTIA_VERSION: &str = "2.1b6.dev1438";
+pub(crate) const SUPPORTED_ESSENTIA_MODULE_VERSION: &str = "2.1-beta6-dev";
 pub(crate) const SUPPORTED_NUMPY_VERSION: &str = "2.5.1";
 pub(crate) const SUPPORTED_PYYAML_VERSION: &str = "6.0.3";
 pub(crate) const SUPPORTED_SIX_VERSION: &str = "1.17.0";
@@ -37,15 +38,16 @@ const PACKAGE_SPECS: &[&str] = &[
 
 /// Emits a single JSON object so a probe cannot mistake arbitrary version text
 /// for a compatible analyzer runtime.
-pub(crate) const ESSENTIA_IMPORT_CHECK_SCRIPT: &str = r#"import json, platform, sys
+pub(crate) const ESSENTIA_IMPORT_CHECK_SCRIPT: &str = r#"import importlib.metadata as metadata, json, platform, sys
 import essentia, numpy, yaml, six
-print(json.dumps({"python": platform.python_version(), "implementation": sys.implementation.name, "essentia": essentia.__version__, "numpy": numpy.__version__, "pyyaml": yaml.__version__, "six": six.__version__}))"#;
+print(json.dumps({"python": platform.python_version(), "implementation": sys.implementation.name, "essentia": metadata.version("essentia"), "essentia_module": essentia.__version__, "numpy": numpy.__version__, "pyyaml": yaml.__version__, "six": six.__version__}))"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct EssentiaRuntime {
     pub python_path: String,
     pub python_version: String,
     pub essentia_version: String,
+    pub essentia_module_version: String,
     pub numpy_version: String,
     pub pyyaml_version: String,
     pub six_version: String,
@@ -115,6 +117,7 @@ struct ProbeOutput {
     python: String,
     implementation: String,
     essentia: String,
+    essentia_module: String,
     numpy: String,
     pyyaml: String,
     six: String,
@@ -236,6 +239,7 @@ fn inspect_essentia_python_with_timeout_result(
     if probe.implementation != "cpython"
         || !probe.python.starts_with(SUPPORTED_PYTHON_PREFIX)
         || probe.essentia != SUPPORTED_ESSENTIA_VERSION
+        || probe.essentia_module != SUPPORTED_ESSENTIA_MODULE_VERSION
         || probe.numpy != SUPPORTED_NUMPY_VERSION
         || probe.pyyaml != SUPPORTED_PYYAML_VERSION
         || probe.six != SUPPORTED_SIX_VERSION
@@ -243,10 +247,11 @@ fn inspect_essentia_python_with_timeout_result(
         return Err(EssentiaSetupError::new(
             EssentiaSetupErrorKind::ManifestMismatch,
             format!(
-                "runtime at {path} does not match the supported manifest (implementation={}, python={}, essentia={}, numpy={}, pyyaml={}, six={})",
+                "runtime at {path} does not match the supported manifest (implementation={}, python={}, essentia_distribution={}, essentia_module={}, numpy={}, pyyaml={}, six={})",
                 probe.implementation,
                 probe.python,
                 probe.essentia,
+                probe.essentia_module,
                 probe.numpy,
                 probe.pyyaml,
                 probe.six
@@ -257,6 +262,7 @@ fn inspect_essentia_python_with_timeout_result(
         python_path: path.to_string(),
         python_version: probe.python,
         essentia_version: probe.essentia,
+        essentia_module_version: probe.essentia_module,
         numpy_version: probe.numpy,
         pyyaml_version: probe.pyyaml,
         six_version: probe.six,
@@ -1133,6 +1139,7 @@ mod tests {
             python_path: python_path.to_string_lossy().into_owned(),
             python_version: "3.14.6".into(),
             essentia_version: "2.1b6.dev1438".into(),
+            essentia_module_version: "2.1-beta6-dev".into(),
             numpy_version: "2.5.1".into(),
             pyyaml_version: "6.0.3".into(),
             six_version: "1.17.0".into(),
@@ -1209,7 +1216,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = fake_python(
             dir.path(),
-            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
+            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
         );
         let output = Command::new(&path)
             .args(["-c", "ignored"])
@@ -1222,7 +1229,7 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
-            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#
+            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#
         );
         let runtime =
             inspect_essentia_python_with_timeout(&path.to_string_lossy(), Duration::from_secs(1))
@@ -1236,7 +1243,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mismatch = fake_python(
             dir.path(),
-            r#"{"python":"3.14.6","implementation":"pypy","essentia":"2.1b6.dev1438","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
+            r#"{"python":"3.14.6","implementation":"pypy","essentia":"2.1b6.dev1438","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
         );
         let mismatch = inspect_essentia_python_with_timeout_result(
             &mismatch.to_string_lossy(),
@@ -1272,13 +1279,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bad = fake_python(
             dir.path(),
-            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1389","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
+            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1389","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
         );
         let good = dir.path().join("good");
         fs::create_dir(&good).unwrap();
         let good = fake_python(
             &good,
-            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
+            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
         );
         assert_eq!(
             probe_essentia_runtime_from_sources(Some(&bad.to_string_lossy()), Some(good.clone()))
@@ -1296,7 +1303,7 @@ mod tests {
         fs::create_dir(&valid_dir).unwrap();
         let valid = fake_python(
             &valid_dir,
-            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
+            r#"{"python":"3.14.6","implementation":"cpython","essentia":"2.1b6.dev1438","essentia_module":"2.1-beta6-dev","numpy":"2.5.1","pyyaml":"6.0.3","six":"1.17.0"}"#,
         );
         assert_eq!(
             probe_essentia_runtime_from_sources(Some(&valid.to_string_lossy()), None)
@@ -1316,7 +1323,7 @@ mod tests {
             ("non-numeric", "echo unsupported"),
             (
                 "non-zero",
-                "echo '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'; exit 7",
+                "echo '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"essentia_module\":\"2.1-beta6-dev\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'; exit 7",
             ),
         ] {
             let script_dir = dir.path().join(name);
@@ -1387,6 +1394,7 @@ mod tests {
 
     #[test]
     fn essentia_environment_uses_exact_candidate_order_and_wheel_only_manifest() {
+        assert_eq!(ESSENTIA_PROBE_TIMEOUT_SECS, 30);
         assert_eq!(PYTHON_CANDIDATES, &["python3.14", "python3"]);
         assert_eq!(
             pip_install_args(),

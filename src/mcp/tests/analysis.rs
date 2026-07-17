@@ -188,7 +188,7 @@ fn probe_essentia_python_prefers_env_override_when_valid() {
 
     let dir = tempfile::tempdir().expect("temp dir should create");
     let fake_python = dir.path().join("fake-python");
-    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
+    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"essentia_module\":\"2.1-beta6-dev\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
         .expect("fake python script should be written");
     let mut perms = std::fs::metadata(&fake_python)
         .expect("fake python metadata should be readable")
@@ -683,7 +683,7 @@ async fn setup_essentia_returns_already_installed_when_override_is_valid() {
 
     let dir = tempfile::tempdir().expect("temp dir should create");
     let fake_python = dir.path().join("fake-python");
-    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
+    std::fs::write(&fake_python, "#!/bin/sh\necho '{\"python\":\"3.14.6\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"essentia_module\":\"2.1-beta6-dev\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'\nexit 0\n")
         .expect("fake python script should be written");
     let mut perms = std::fs::metadata(&fake_python)
         .expect("metadata should be readable")
@@ -713,6 +713,7 @@ async fn setup_essentia_returns_already_installed_when_override_is_valid() {
     assert_eq!(payload["python_path"], fake_path.as_str());
     assert_eq!(payload["python_version"], "3.14.6");
     assert_eq!(payload["essentia_version"], "2.1b6.dev1438");
+    assert_eq!(payload["essentia_module_version"], "2.1-beta6-dev");
     assert_eq!(payload["numpy_version"], "2.5.1");
     assert_eq!(payload["pyyaml_version"], "6.0.3");
     assert_eq!(payload["six_version"], "1.17.0");
@@ -731,6 +732,7 @@ fn setup_essentia_installed_and_reused_shapes_share_runtime_manifest() {
         python_path: "/managed/essentia-venv/bin/python".into(),
         python_version: "3.14.6".into(),
         essentia_version: "2.1b6.dev1438".into(),
+        essentia_module_version: "2.1-beta6-dev".into(),
         numpy_version: "2.5.1".into(),
         pyyaml_version: "6.0.3".into(),
         six_version: "1.17.0".into(),
@@ -751,6 +753,7 @@ fn setup_essentia_installed_and_reused_shapes_share_runtime_manifest() {
     assert_eq!(installed["status"], "installed");
     assert_eq!(reused["status"], "already_installed");
     assert_eq!(installed["python_version"], "3.14.6");
+    assert_eq!(installed["essentia_module_version"], "2.1-beta6-dev");
     assert_eq!(installed["six_version"], "1.17.0");
     assert_eq!(installed["python_bin_used"], "python3.14");
     assert_eq!(installed["venv_dir"], "/managed/essentia-venv");
@@ -833,6 +836,7 @@ async fn setup_essentia_concurrent_mcp_calls_remain_serialized() {
                     python_path: "/managed/essentia-venv/bin/python".into(),
                     python_version: "3.14.6".into(),
                     essentia_version: "2.1b6.dev1438".into(),
+                    essentia_module_version: "2.1-beta6-dev".into(),
                     numpy_version: "2.5.1".into(),
                     pyyaml_version: "6.0.3".into(),
                     six_version: "1.17.0".into(),

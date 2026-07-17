@@ -610,6 +610,7 @@ fn essentia_v3_cache_round_trips_complete_runtime_manifest() {
             "python_version": "3.14.6",
             "python_implementation": "cpython",
             "essentia_version": "2.1b6.dev1438",
+            "essentia_module_version": "2.1-beta6-dev",
             "numpy_version": "2.5.1",
             "pyyaml_version": "6.0.3",
             "six_version": "1.17.0",

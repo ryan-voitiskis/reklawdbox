@@ -225,6 +225,7 @@ fn essentia_v3_runtime_manifest_rejects_mismatch_before_cache_write() {
             "python_version":"3.14.6",
             "python_implementation":"cpython",
             "essentia_version":"2.1b6.dev1438",
+            "essentia_module_version":"2.1-beta6-dev",
             "numpy_version":"2.5.1",
             "pyyaml_version":"6.0.3",
             "six_version":"1.17.0",
@@ -317,7 +318,7 @@ async fn run_essentia_handles_non_scalar_outputs_via_stereo_fallback() {
 
     std::fs::write(
         essentia_pkg.join("__init__.py"),
-        "__version__ = '2.1b6.dev1438'\n",
+        "__version__ = '2.1-beta6-dev'\n",
     )
     .expect("fake essentia __init__ should be written");
 
