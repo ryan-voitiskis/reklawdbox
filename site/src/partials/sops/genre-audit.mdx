@@ -29,20 +29,22 @@ successes and identity-bearing failures, then continue with
 underlying stable selector, so cached/current prefixes do not consume work
 slots. After traversing the scope, retry failed explicit `track_ids` separately
 and re-run `cache_coverage(has_genre=true)`. Stop only when the core searched
-and Stratum readiness is sufficient for the audit, or report the unresolved
-failures. A cached no-match is searched, not matched. If the library or selector
+and Stratum/Essentia readiness matches the intended audit mode, or report the
+unresolved failures. A cached no-match is searched, not matched. If the library or selector
 order changes mid-run, discard the cursor and restart at zero. Keep each
 enrichment traversal's `providers`, `skip_cached`, and `force_refresh` values
 fixed. Keep Essentia availability fixed for an audio traversal; if Essentia is
 installed or becomes newly available, or if `skip_cached` changes, restart that
 audio scope at zero.
 
-Essentia improves energy and timbral evidence but is not a hard gate. Proceed
-when coverage is incomplete; missing evidence may lower confidence, but it can
-also appear as flags on high- or medium-confidence results. Inspect those flags
-before bulk approval and review tracks without independent supporting evidence
-individually. Retry actual errors, but do not require a match for a legitimately
-searched release.
+Full classification and audit recommendations require fresh, valid Stratum and
+Essentia cache rows for each track. Missing, stale, or invalid analyzer evidence
+produces Degraded mode, caps confidence at Low, requires review, and is never
+auto-staged. A valid sparse payload counts as present while its null detector
+fields remain unknown. Use `cache_coverage` and `calibration_coverage` to see
+the remaining work. Explicit `--stratum-only` CLI analysis remains supported
+but cannot produce Full classification readiness by itself. Retry actual
+errors, but do not require a Discogs match for a legitimately searched release.
 
 **Recommended:** run `suggest_normalizations()` and stage alias fixes before auditing. This ensures the audit compares against canonical genre names, not aliases that inflate conflict counts.
 

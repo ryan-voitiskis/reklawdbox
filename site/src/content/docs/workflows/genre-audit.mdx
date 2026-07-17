@@ -25,9 +25,10 @@ Audit my existing genre tags.
 1. **Choose the audit scope.** Start after classification, after importing a
    differently tagged collection, when a genre seems over-applied, or when
    newer evidence warrants a review.
-2. **Measure and prepare evidence.** Check whether enough evidence is ready for
-   genred tracks, then fill core Discogs and Stratum gaps where
-   practical. Essentia is useful but optional.
+2. **Measure and prepare evidence.** Check Full/Degraded readiness for genred
+   tracks, then fill Discogs and analyzer gaps where practical. Missing, stale,
+   or invalid Stratum/Essentia evidence produces Degraded mode, maximum Low
+   confidence, required review, and no auto-staging.
 3. **Compare rather than refill.** Use the same evidence model as
    classification, but surface only conflicts and uncertain existing tags.
 4. **Review and export.** Decide each conflict group, preview the staged
@@ -43,6 +44,13 @@ Audit my existing genre tags.
   confirmations too.
 - Use [Genre Classification](/workflows/genre-classification/) for blank genres;
   this workflow verifies tags that already exist.
+
+A valid sparse analyzer payload counts as present while its null detector
+fields remain unknown. Use the cache and calibration coverage reports to
+identify work needed for Full recommendations and calibration. Explicit CLI
+`--stratum-only` analysis remains supported, but cannot produce Full readiness
+by itself. Essentia remains optional for startup and unrelated transition,
+pool, metadata, and export workflows.
 
 ## What changes and how to recover
 

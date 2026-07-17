@@ -2240,6 +2240,113 @@ export function validateWorkflowTechnicalContracts({
   if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
 }
 
+export function validateClassificationReadinessContract({
+  workflows,
+  documents,
+}) {
+  const issues = []
+  for (const id of ['genre-classification', 'genre-audit']) {
+    const workflow = workflows.find((entry) => entry.id === id)
+    const facts = workflow
+      ? workflowContractFacts(workflow, null).join(' ')
+      : ''
+    for (
+      const [label, pattern] of [
+        [
+          'Full classification requirement',
+          /Full (?:classification|recommendations?)/,
+        ],
+        ['Degraded mode', /Degraded/],
+        ['Low confidence cap', /(?:capped at|maximum) Low/],
+        ['no auto-stage rule', /never auto-stage(?:d)?/],
+      ]
+    ) {
+      if (!pattern.test(facts)) {
+        issues.push(`site/src/data/workflows.mjs: ${id} is missing ${label}`)
+      }
+    }
+  }
+
+  const sopSuffixes = [
+    '/partials/sops/genre-classification.mdx',
+    '/partials/sops/genre-audit.mdx',
+  ]
+  for (const suffix of sopSuffixes) {
+    const document = documents.find((entry) => entry.file.endsWith(suffix))
+    if (!document) {
+      issues.push(`classification readiness source is missing: ${suffix}`)
+      continue
+    }
+    for (
+      const [label, pattern] of [
+        [
+          'fresh Stratum and Essentia requirement',
+          /fresh, valid Stratum and\s+Essentia/,
+        ],
+        ['Degraded mode', /Degraded mode/],
+        ['Low confidence cap', /caps confidence at Low/],
+        ['no auto-stage rule', /never\s+auto-staged/],
+      ]
+    ) {
+      if (!pattern.test(document.content)) {
+        issues.push(`${document.file}: missing ${label}`)
+      }
+    }
+  }
+
+  const fieldDocument = documents.find((entry) =>
+    entry.file.endsWith('/mcp-tools/classification-staging.mdx')
+  )
+  if (!fieldDocument) {
+    issues.push('classification readiness field contract source is missing')
+  } else {
+    for (
+      const field of [
+        '`mode`',
+        '`degraded_reasons`',
+        '`by_mode`',
+        '`auto_stage_skipped_degraded`',
+        '`staging.skipped_degraded`',
+      ]
+    ) {
+      if (!fieldDocument.content.includes(field)) {
+        issues.push(
+          `${fieldDocument.file}: missing exact readiness field ${field}`,
+        )
+      }
+    }
+    if (!/Otherwise-stageable Degraded/.test(fieldDocument.content)) {
+      issues.push(
+        `${fieldDocument.file}: skipped Degraded count semantics are missing`,
+      )
+    }
+  }
+
+  const combined = documents.map((entry) => entry.content).join('\n')
+  for (
+    const [label, pattern] of [
+      ['valid sparse payload behavior', /valid sparse (?:analyzer )?payload/],
+      ['Stratum-only boundary', /--stratum-only/],
+      ['cache coverage readiness', /cache_coverage/],
+      ['calibration coverage readiness', /calibration_coverage/],
+      [
+        'startup optionality',
+        /(?:not required|optional) for (?:server )?startup/,
+      ],
+      [
+        'transition and pool graceful degradation',
+        /transition[^\n]{0,120}pool/,
+      ],
+    ]
+  ) {
+    if (!pattern.test(combined)) {
+      issues.push(`classification readiness documentation is missing ${label}`)
+    }
+  }
+
+  if (issues.length) throw new Error([...new Set(issues)].sort().join('\n'))
+}
+
 function workflowContractFacts(workflow, presentation) {
   const effects = [
     ...workflow.sideEffects.directUserFiles,
@@ -4601,6 +4708,11 @@ async function main() {
     'site/src/components/WorkflowQuickStart.astro',
     'site/src/components/WorkflowCatalog.astro',
   ])
+  const classificationReadinessDocuments = await readDocuments(root, [
+    'README.md',
+    'site/src/content/docs/concepts/architecture.mdx',
+    'site/src/content/docs/reference/environment-variables.md',
+  ])
   const cargoToml = await fs.readFile(path.join(root, 'Cargo.toml'), 'utf8')
   const docsWorkflow = await fs.readFile(
     path.join(root, '.github/workflows/docs-pages.yml'),
@@ -4735,6 +4847,18 @@ async function main() {
     workflows.map((workflow) =>
       `site/src/content/docs${workflow.route.replace(/\/$/, '')}.mdx`
     ),
+  )
+  check(() =>
+    validateClassificationReadinessContract({
+      workflows,
+      documents: [
+        ...classificationReadinessDocuments,
+        installDocument,
+        ...sopDocuments,
+        ...mcpDocuments,
+        ...workflowSourceDocuments,
+      ],
+    })
   )
   const libraryHealthPage = workflowSourceDocuments.find((document) =>
     document.file.endsWith('/workflows/library-health.mdx')

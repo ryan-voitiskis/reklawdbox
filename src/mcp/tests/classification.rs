@@ -1,4 +1,6 @@
 use crate::application::classification::evaluate::{self, EvaluationCase};
+use crate::application::{analysis::identity, classification as classification_workflow};
+use crate::mcp::analysis::CacheCoverageParams;
 use crate::mcp::classification;
 use crate::mcp::classification::{
     AuditGenresParams, CalibrationCoverageParams, ClassifyFormat, ClassifyTracksParams,
@@ -16,7 +18,7 @@ use crate::domain::classification::taxonomy as genre;
 use super::common::{
     call_tool_via_router, create_server_with_connections, create_single_track_test_db,
     default_http_client_for_tests, extract_json, insert_test_track, set_test_audio_analysis,
-    write_test_audio_file,
+    valid_test_essentia_payload, write_test_audio_file,
 };
 
 const GOLDEN_GENRES_FIXTURE_PATH: &str = "src/mcp/classification/fixtures/golden_genres.json";
@@ -75,6 +77,8 @@ fn make_result(
         genre,
         confidence,
         action,
+        mode: crate::domain::classification::ClassificationMode::Full,
+        degraded_reasons: vec![],
         evidence: vec![],
         candidates: vec![],
         flags: vec![],
@@ -152,6 +156,135 @@ async fn classify_tracks_does_not_auto_stage_stratum_only_audio() {
     assert_eq!(payload["staging"]["total_pending"], 0);
     assert_eq!(payload["results"][0]["genre"], serde_json::Value::Null);
     assert_eq!(payload["results"][0]["confidence"], "insufficient");
+}
+
+#[tokio::test]
+async fn auto_stage_degraded_low_is_skipped_even_when_low_is_requested() {
+    let db_conn = create_single_track_test_db("degraded-stage", "/missing/degraded-stage.flac");
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET GenreID = '' WHERE ID = 'degraded-stage'",
+            [],
+        )
+        .unwrap();
+    let store_dir = tempfile::tempdir().unwrap();
+    let store_conn = store::open(store_dir.path().join("store.sqlite3").to_str().unwrap()).unwrap();
+    let artist = crate::domain::metadata::normalize_for_matching("Aníbal");
+    let title = crate::domain::metadata::normalize_for_matching("Señorita");
+    let album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &artist,
+        &title,
+        Some(&album),
+        Some("exact"),
+        Some(r#"{"styles":["Techno"]}"#),
+    )
+    .unwrap();
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let payload = extract_json(
+        &server
+            .classify_tracks(Parameters(ClassifyTracksParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["degraded-stage".into()]),
+                playlist_id: None,
+                max_tracks: Some(1),
+                offset: None,
+                genre_overrides: None,
+                format: Some(ClassifyFormat::Full),
+                auto_stage: Some(vec![crate::mcp::classification::StageLevel::Low]),
+            }))
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(payload["results"][0]["mode"], "degraded");
+    assert_eq!(payload["results"][0]["confidence"], "low");
+    assert_eq!(payload["summary"]["auto_stage_skipped_degraded"], 1);
+    assert_eq!(payload["staging"]["skipped_degraded"], 1);
+    assert_eq!(payload["staging"]["staged"], 0);
+    assert_eq!(payload["staging"]["total_pending"], 0);
+}
+
+#[tokio::test]
+async fn auto_stage_full_keeps_existing_action_and_confidence_filters() {
+    let audio_dir = tempfile::tempdir().unwrap();
+    let audio_path = audio_dir.path().join("full-stage.flac");
+    let (file_size, file_mtime) = write_test_audio_file(&audio_path, 2048);
+    let audio_path = audio_path.to_string_lossy().to_string();
+    let db_conn = create_single_track_test_db("full-stage", &audio_path);
+    db_conn
+        .execute(
+            "UPDATE djmdContent SET GenreID = '' WHERE ID = 'full-stage'",
+            [],
+        )
+        .unwrap();
+    let store_dir = tempfile::tempdir().unwrap();
+    let store_conn = store::open(store_dir.path().join("store.sqlite3").to_str().unwrap()).unwrap();
+    let artist = crate::domain::metadata::normalize_for_matching("Aníbal");
+    let title = crate::domain::metadata::normalize_for_matching("Señorita");
+    let album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
+    store::set_enrichment(
+        &store_conn,
+        "discogs",
+        &artist,
+        &title,
+        Some(&album),
+        Some("exact"),
+        Some(r#"{"styles":["Techno"]}"#),
+    )
+    .unwrap();
+    let essentia_payload = valid_test_essentia_payload(serde_json::json!({}));
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        file_size,
+        file_mtime,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        "{}",
+    )
+    .unwrap();
+    set_test_audio_analysis(
+        &store_conn,
+        &audio_path,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        file_size,
+        file_mtime,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        &essentia_payload,
+    )
+    .unwrap();
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+
+    let payload = extract_json(
+        &server
+            .classify_tracks(Parameters(ClassifyTracksParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["full-stage".into()]),
+                playlist_id: None,
+                max_tracks: Some(1),
+                offset: None,
+                genre_overrides: None,
+                format: Some(ClassifyFormat::Full),
+                auto_stage: Some(vec![
+                    crate::mcp::classification::StageLevel::High,
+                    crate::mcp::classification::StageLevel::Medium,
+                    crate::mcp::classification::StageLevel::Low,
+                ]),
+            }))
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(payload["results"][0]["mode"], "full");
+    assert_eq!(payload["staging"]["skipped_degraded"], 0);
+    assert_eq!(payload["staging"]["staged"], 1);
+    assert_eq!(payload["staging"]["total_pending"], 1);
 }
 
 #[tokio::test]
@@ -235,7 +368,7 @@ async fn weak_confirmations_remain_visible_on_every_review_surface() {
 }
 
 #[tokio::test]
-async fn calibration_coverage_reports_verified_playlist_readiness() {
+async fn classification_calibration_coverage_reports_verified_playlist_readiness() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let mut deep_paths = Vec::new();
     for i in 1..=5 {
@@ -339,6 +472,10 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     .expect("temp internal store should open");
 
     for (path, file_size, file_mtime) in &deep_paths {
+        let essentia_payload = valid_test_essentia_payload(serde_json::json!({
+            "danceability": 0.71,
+            "onset_rate": 4.2,
+        }));
         set_test_audio_analysis(
             &store_conn,
             path,
@@ -349,6 +486,16 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
             r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
         )
         .expect("stratum analysis should be seeded");
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::adapters::audio::ANALYZER_ESSENTIA,
+            *file_size,
+            *file_mtime,
+            crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+            &essentia_payload,
+        )
+        .expect("essentia analysis should be seeded");
     }
     set_test_audio_analysis(
         &store_conn,
@@ -380,8 +527,11 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(payload["missing_scorable_features"], 1);
     assert_eq!(payload["tracks_with_stratum_features"], 5);
     assert_eq!(payload["missing_stratum_features"], 1);
-    assert_eq!(payload["tracks_with_essentia_features"], 0);
-    assert_eq!(payload["missing_essentia_features"], 6);
+    assert_eq!(payload["tracks_with_essentia_features"], 5);
+    assert_eq!(payload["missing_essentia_features"], 1);
+    assert_eq!(payload["tracks_with_complete_classification_audio"], 5);
+    assert_eq!(payload["missing_required_stratum"], 1);
+    assert_eq!(payload["missing_required_essentia"], 1);
     assert_eq!(payload["skipped_no_genre"], 1);
     assert_eq!(payload["skipped_unknown_genre"], 1);
     assert_eq!(
@@ -402,9 +552,11 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(deep_house["tracks_with_audio_features"], 5);
     assert_eq!(deep_house["tracks_with_scorable_features"], 5);
     assert_eq!(deep_house["tracks_with_stratum_features"], 5);
-    assert_eq!(deep_house["tracks_with_essentia_features"], 0);
+    assert_eq!(deep_house["tracks_with_essentia_features"], 5);
+    assert_eq!(deep_house["tracks_with_complete_classification_audio"], 5);
     assert_eq!(deep_house["prototype_ready"], false);
     assert_eq!(deep_house["status"], "candidate_not_scorable");
+    assert_eq!(deep_house["readiness_reason"], "candidate_not_scorable");
 
     let techno = genres
         .iter()
@@ -416,10 +568,67 @@ async fn calibration_coverage_reports_verified_playlist_readiness() {
     assert_eq!(techno["tracks_with_stratum_features"], 0);
     assert_eq!(techno["missing_stratum_features"], 1);
     assert_eq!(techno["status"], "needs_more_verified_audio");
+    assert_eq!(
+        techno["readiness_reason"],
+        "incomplete_classification_audio"
+    );
+
+    let cache_payload = extract_json(
+        &server
+            .cache_coverage(Parameters(CacheCoverageParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["cal-deep-1".into(), "cal-tech-1".into()]),
+                playlist_id: None,
+                max_tracks: None,
+            }))
+            .await
+            .expect("shared-fixture cache coverage should succeed"),
+    );
+    assert_eq!(cache_payload["classification_readiness"]["full"], 1);
+    assert_eq!(cache_payload["classification_readiness"]["degraded"], 1);
+    assert_eq!(
+        cache_payload["classification_readiness"]["degraded_reasons"]["missing_stratum"],
+        1
+    );
+    assert_eq!(
+        cache_payload["classification_readiness"]["degraded_reasons"]["missing_essentia"],
+        1
+    );
+
+    let classification_payload = extract_json(
+        &server
+            .classify_tracks(Parameters(ClassifyTracksParams {
+                filters: SearchFilterParams::default(),
+                track_ids: Some(vec!["cal-deep-1".into(), "cal-tech-1".into()]),
+                playlist_id: None,
+                max_tracks: Some(2),
+                offset: None,
+                genre_overrides: None,
+                format: Some(ClassifyFormat::Full),
+                auto_stage: None,
+            }))
+            .await
+            .expect("shared-fixture classification should succeed"),
+    );
+    let results = classification_payload["results"].as_array().unwrap();
+    let deep_result = results
+        .iter()
+        .find(|result| result["track_id"] == "cal-deep-1")
+        .unwrap();
+    let tech_result = results
+        .iter()
+        .find(|result| result["track_id"] == "cal-tech-1")
+        .unwrap();
+    assert_eq!(deep_result["mode"], "full");
+    assert_eq!(tech_result["mode"], "degraded");
+    assert_eq!(
+        tech_result["degraded_reasons"],
+        serde_json::json!(["missing_stratum", "missing_essentia"])
+    );
 }
 
 #[tokio::test]
-async fn calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
+async fn classification_calibration_coverage_reads_verified_playlist_without_ordinary_limit() {
     let db_conn = create_single_track_test_db("cal-cap-1", "/music/cal-cap-1.flac");
     db_conn
         .execute_batch(
@@ -573,10 +782,18 @@ fn golden_dataset_genre_accuracy() {
         "classifier benchmark must evaluate at least one fixture track"
     );
 
-    let (rules_results, _) = crate::application::classification::classify_batch_rules_only(
+    let audio_identities = identity::audio_cache_identities_with_rekordbox_connection(
+        predictive_tracks
+            .iter()
+            .map(|track| track.file_path.as_str()),
+        &conn,
+    );
+    let (rules_results, _) = classification_workflow::classify_batch_with_audio_identities(
         &store_conn,
         &predictive_tracks,
         &[],
+        false,
+        audio_identities.clone(),
     )
     .expect("rules-only benchmark classification should succeed");
     let rules_cases: Vec<_> = truths
@@ -594,9 +811,14 @@ fn golden_dataset_genre_accuracy() {
         .expect("profile registry diagnostic should load")
         .registry
         .is_some();
-    let (deployed_results, _) =
-        crate::application::classification::classify_batch(&store_conn, &predictive_tracks, &[])
-            .expect("deployed-registry diagnostic classification should succeed");
+    let (deployed_results, _) = classification_workflow::classify_batch_with_audio_identities(
+        &store_conn,
+        &predictive_tracks,
+        &[],
+        true,
+        audio_identities,
+    )
+    .expect("deployed-registry diagnostic classification should succeed");
     let deployed_cases: Vec<_> = truths
         .iter()
         .zip(&deployed_results)

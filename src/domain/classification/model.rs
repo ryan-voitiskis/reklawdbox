@@ -22,6 +22,54 @@ pub(crate) enum ClassificationAction {
     Manual,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AudioBackendStatus {
+    Fresh,
+    Missing,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ClassificationMode {
+    Full,
+    Degraded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ClassificationDegradedReason {
+    MissingStratum,
+    InvalidStratum,
+    MissingEssentia,
+    InvalidEssentia,
+}
+
+/// Derive the public readiness contract in stable backend order.
+pub(crate) fn classification_readiness(
+    stratum: AudioBackendStatus,
+    essentia: AudioBackendStatus,
+) -> (ClassificationMode, Vec<ClassificationDegradedReason>) {
+    let mut reasons = Vec::new();
+    match stratum {
+        AudioBackendStatus::Fresh => {}
+        AudioBackendStatus::Missing => reasons.push(ClassificationDegradedReason::MissingStratum),
+        AudioBackendStatus::Invalid => reasons.push(ClassificationDegradedReason::InvalidStratum),
+    }
+    match essentia {
+        AudioBackendStatus::Fresh => {}
+        AudioBackendStatus::Missing => reasons.push(ClassificationDegradedReason::MissingEssentia),
+        AudioBackendStatus::Invalid => reasons.push(ClassificationDegradedReason::InvalidEssentia),
+    }
+    let mode = if reasons.is_empty() {
+        ClassificationMode::Full
+    } else {
+        ClassificationMode::Degraded
+    };
+    (mode, reasons)
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -45,6 +93,8 @@ pub(crate) struct ClassificationResult {
     pub(crate) genre: Option<&'static str>,
     pub(crate) confidence: ClassificationConfidence,
     pub(crate) action: ClassificationAction,
+    pub(crate) mode: ClassificationMode,
+    pub(crate) degraded_reasons: Vec<ClassificationDegradedReason>,
     pub(crate) evidence: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) candidates: Vec<GenreCandidate>,
@@ -66,16 +116,23 @@ pub(crate) struct CompactClassificationResult {
     pub(crate) genre: Option<&'static str>,
     pub(crate) confidence: ClassificationConfidence,
     pub(crate) action: ClassificationAction,
+    pub(crate) mode: ClassificationMode,
+    pub(crate) degraded_reasons: Vec<ClassificationDegradedReason>,
 }
 
 impl ClassificationResult {
     /// Confidence, rather than action, determines whether a result still needs
     /// human review. A weak confirmation is not silently complete.
     pub(crate) fn review_required(&self) -> bool {
-        matches!(
-            self.confidence,
-            ClassificationConfidence::Low | ClassificationConfidence::Insufficient
-        )
+        self.mode == ClassificationMode::Degraded
+            || matches!(
+                self.confidence,
+                ClassificationConfidence::Low | ClassificationConfidence::Insufficient
+            )
+    }
+
+    pub(crate) fn is_auto_stage_eligible(&self) -> bool {
+        self.mode == ClassificationMode::Full
     }
 
     /// Destructured so adding a field to [`ClassificationResult`] produces a
@@ -89,6 +146,8 @@ impl ClassificationResult {
             genre,
             confidence,
             action,
+            mode,
+            ref degraded_reasons,
             evidence: _,
             candidates: _,
             flags: _,
@@ -102,6 +161,8 @@ impl ClassificationResult {
             genre,
             confidence,
             action,
+            mode,
+            degraded_reasons: degraded_reasons.clone(),
         }
     }
 }
@@ -209,6 +270,8 @@ pub(crate) struct TrackEvidence {
     pub(crate) has_discogs: bool,
     pub(crate) discogs_match_quality: Option<DiscogsMatchQuality>,
     pub(crate) has_audio: bool,
+    pub(crate) stratum_status: AudioBackendStatus,
+    pub(crate) essentia_status: AudioBackendStatus,
 }
 
 impl TrackEvidence {
@@ -246,6 +309,8 @@ mod tests {
             genre: Some("Techno"),
             confidence: ClassificationConfidence::High,
             action: ClassificationAction::Conflict,
+            mode: ClassificationMode::Full,
+            degraded_reasons: Vec::new(),
             evidence: vec!["discogs: Techno(x1)".into()],
             candidates: vec![GenreCandidate {
                 genre: "Techno",
@@ -267,6 +332,8 @@ mod tests {
                 "genre": "Techno",
                 "confidence": "high",
                 "action": "conflict",
+                "mode": "full",
+                "degraded_reasons": [],
                 "evidence": ["discogs: Techno(x1)"],
                 "candidates": [{
                     "genre": "Techno",
@@ -275,5 +342,63 @@ mod tests {
                 }]
             })
         );
+    }
+
+    #[test]
+    fn classification_mode_derivation_is_stable_and_auto_stage_is_full_only() {
+        let (mode, reasons) =
+            classification_readiness(AudioBackendStatus::Invalid, AudioBackendStatus::Missing);
+        assert_eq!(mode, ClassificationMode::Degraded);
+        assert_eq!(
+            reasons,
+            vec![
+                ClassificationDegradedReason::InvalidStratum,
+                ClassificationDegradedReason::MissingEssentia,
+            ]
+        );
+
+        let (mode, reasons) =
+            classification_readiness(AudioBackendStatus::Fresh, AudioBackendStatus::Fresh);
+        assert_eq!(mode, ClassificationMode::Full);
+        assert!(reasons.is_empty());
+    }
+
+    #[test]
+    fn classification_mode_compact_degraded_wire_shape_is_exact() {
+        let result = ClassificationResult {
+            track_id: "track-2".into(),
+            artist: "Artist".into(),
+            title: "Title".into(),
+            current_genre: String::new(),
+            genre: Some("Techno"),
+            confidence: ClassificationConfidence::Low,
+            action: ClassificationAction::Suggest,
+            mode: ClassificationMode::Degraded,
+            degraded_reasons: vec![
+                ClassificationDegradedReason::InvalidStratum,
+                ClassificationDegradedReason::MissingEssentia,
+            ],
+            evidence: vec!["discogs: Techno(x1)".into()],
+            candidates: Vec::new(),
+            flags: vec!["degraded-classification".into()],
+            review_hint: Some("review".into()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(result.to_compact()).unwrap(),
+            serde_json::json!({
+                "track_id": "track-2",
+                "artist": "Artist",
+                "title": "Title",
+                "current_genre": "",
+                "genre": "Techno",
+                "confidence": "low",
+                "action": "suggest",
+                "mode": "degraded",
+                "degraded_reasons": ["invalid_stratum", "missing_essentia"],
+            })
+        );
+        assert!(!result.is_auto_stage_eligible());
+        assert!(result.review_required());
     }
 }

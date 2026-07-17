@@ -29,7 +29,8 @@ Traverse each bounded enrichment or audio scope explicitly: begin at
 `offset=page.next_offset` while `page.has_more` is true. Cached/current tracks
 do not spend work slots. After the traversal, retry failed explicit
 `track_ids`, then re-run `cache_coverage(has_genre=false)`. Continue until core
-searched and Stratum readiness is sufficient, or report unresolved failures;
+searched and Stratum/Essentia readiness matches the intended classification
+mode, or report unresolved failures;
 do not turn a searched no-match into a required match. Offsets are valid only
 while the selector and library ordering stay unchanged, so restart from zero
 after imports, deletions, or reordering. Keep `providers`, `skip_cached`, and
@@ -37,12 +38,15 @@ after imports, deletions, or reordering. Keep `providers`, `skip_cached`, and
 or `skip_cached` changes during audio traversal, restart that audio scope at
 zero because earlier tracks may become pending.
 
-Essentia improves energy and timbral evidence but is not a hard gate. Proceed
-when coverage is incomplete; missing evidence may lower confidence, but it can
-also appear as flags on high- or medium-confidence results. Inspect those flags
-before bulk approval and review tracks without independent supporting evidence
-individually. Retry actual errors, but do not require a match for a legitimately
-searched release.
+Full classification requires fresh, valid Stratum and Essentia cache rows for
+each track. Missing, stale, or invalid analyzer evidence produces Degraded mode,
+caps confidence at Low, requires review, and is never auto-staged—even when Low
+is requested. A valid sparse analyzer payload still counts as present; its null
+detector fields remain unknown rather than becoming zero. Use
+`cache_coverage` and `calibration_coverage` to see the remaining work. Explicit
+`--stratum-only` CLI analysis remains supported, but cannot by itself produce
+Full classification readiness. Retry actual errors, but do not require a
+Discogs match for a legitimately searched release.
 
 All `classify_tracks` calls support `max_tracks` (default 50, max 200) and their
 own explicit `offset` pagination. Continue until all tracks are covered; this
@@ -100,7 +104,10 @@ classify_tracks(max_tracks=200, format="summary", auto_stage=["high", "medium"],
 classify_tracks(has_unknown_genre=true, max_tracks=200, format="summary", auto_stage=["high", "medium"], genre_overrides=[...])
 ```
 
-The response includes a `staging` field with the staged count. No separate `update_tracks` call is needed.
+The response includes a `staging` field with staged and skipped-Degraded
+counts. No separate `update_tracks` call is needed. Degraded recommendations
+remain available for manual review and explicit staging through the normal
+`ChangeManager`/XML path.
 
 For medium-confidence tracks that are NOT auto-approved, use `format="compact"` to get the per-track list for review:
 

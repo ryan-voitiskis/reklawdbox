@@ -43,7 +43,7 @@ Returns three sections:
 
 ### `classify_tracks`
 
-Apply the genre decision tree to ungenred tracks using cached enrichment and audio evidence. High confidence requires at least two independent source groups: Discogs, a distinct Rekordbox label, or audio. Discogs styles and a label copied from the same response remain one group. Current genre is only a low-confidence hint or unresolved-tie breaker. Cache-only — never triggers external calls.
+Apply the genre decision tree to ungenred tracks using cached enrichment and audio evidence. Full mode requires fresh, valid Stratum and Essentia rows. Missing, stale, or invalid analyzer evidence produces Degraded mode, caps confidence at Low, requires review, and never auto-stages. High confidence additionally requires at least two independent source groups: Discogs, a distinct Rekordbox label, or audio. Discogs styles and a label copied from the same response remain one group. Current genre is only a low-confidence hint or unresolved-tie breaker. Cache-only — never triggers external calls.
 
 {/* doc-contract:mcp tool=classify_tracks schema=/ requiredness=global include=shared-search-filters */}
 
@@ -55,17 +55,30 @@ Apply the genre decision tree to ungenred tracks using cached enrichment and aud
 | `offset` | integer | | | | Skip first N tracks for pagination |
 | `genre_overrides` | array | | | | Remap genre strings before scoring (e.g., `[{"from": "Melodic House & Techno", "to": "Deep Techno"}]`) |
 | `format` | string | | `["full", "compact", "summary", "dispatch"]` | | Output format (`"full"` by default) |
-| `auto_stage` | string[] | | | `["high", "medium", "low", "insufficient"]` | Auto-stage real changes at these tiers; confirmations, genre-less results, and insufficient results are never staged |
+| `auto_stage` | string[] | | | `["high", "medium", "low", "insufficient"]` | Auto-stage eligible Full-mode changes at these tiers; Degraded, confirmations, genre-less, and insufficient results are never staged |
 
 {/* /doc-contract:mcp */}
 
 Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforces `has_genre=false` when using filters (bypassed when `track_ids` are provided explicitly).
 
+Additive readiness output is stable across formats:
+
+| Surface | Fields | Meaning |
+|---------|--------|---------|
+| Full, compact, and dispatch track entries | `mode`, `degraded_reasons` | `mode` is `full` or `degraded`; reasons are ordered Stratum first, then Essentia |
+| Classification and audit summaries | `by_mode`, `degraded_reasons` | Counts by mode and by missing/invalid backend reason |
+| Classification summary when `auto_stage` is requested | `auto_stage_skipped_degraded` | Otherwise-stageable Degraded recommendations blocked by the Full-only guard |
+| Staging output when `auto_stage` is requested | `staging.skipped_degraded` | The same blocked count alongside `staged` and `total_pending` |
+
+Existing result and summary fields retain their meanings. The skipped count is
+not every Degraded result: it counts only a real recommendation that matched
+the requested confidence/action filters and was then rejected by mode.
+
 ---
 
 ### `audit_genres`
 
-Verify existing genre tags against enrichment and audio evidence. High/medium confirmations are counted and omitted by default. Low/insufficient confirmations remain visible because confidence—not the `confirm` action—determines review eligibility. Cache-only.
+Verify existing genre tags against enrichment and audio evidence with the same Full/Degraded readiness contract. High/medium Full confirmations are counted and omitted by default. Degraded and Low/insufficient confirmations remain visible because readiness and confidence—not the `confirm` action—determine review eligibility. Cache-only.
 
 {/* doc-contract:mcp tool=audit_genres schema=/ requiredness=global include=shared-search-filters */}
 
@@ -85,7 +98,7 @@ Also accepts [shared search filters](/mcp-tools/#shared-search-filters). Enforce
 
 ### `calibration_coverage`
 
-Report per-genre readiness for audio-profile calibration from the verified playlist. It separates fresh cache rows, extracted audio, scorable optional features, candidate prototypes, and persisted profile compatibility without recalibrating.
+Report per-genre readiness for audio-profile calibration from the verified playlist. It separates raw analyzer rows, complete Full-classification audio, missing/invalid analyzer evidence, scorable optional features, candidate prototypes, and persisted profile compatibility without recalibrating.
 
 {/* doc-contract:mcp tool=calibration_coverage schema=/ requiredness=global */}
 
@@ -95,7 +108,7 @@ Report per-genre readiness for audio-profile calibration from the verified playl
 
 {/* /doc-contract:mcp */}
 
-Use this before `calibrate_audio_profiles`. `profile_state.status` is `missing`, `fresh`, `training_changed`, or `incompatible`. A training change requests recalibration but remains structurally usable; incompatible profiles are suppressed. BPM-only rows count as cached audio, not scorable calibration evidence.
+Use this before `calibrate_audio_profiles`. Per-genre `readiness_reason` explains incomplete analyzer coverage, insufficient complete/scorable samples, candidate scoring, or stored readiness. `profile_state.status` is `missing`, `fresh`, `training_changed`, or `incompatible`. A training change requests recalibration but remains structurally usable; incompatible v1 profiles remain stored but are suppressed. BPM-only and partial rows count toward raw coverage, not v2 calibration evidence.
 
 ---
 
@@ -111,7 +124,7 @@ Build Fisher-weighted audio prototypes from a playlist of ear-verified tracks an
 
 {/* /doc-contract:mcp */}
 
-Run `calibration_coverage` first. Calibration skips missing, unknown, and unscorable audio rows, dry-runs candidate scoring, and refuses to replace a usable registry when no candidate can score. Registry rows and classifier/analyzer/training metadata are saved atomically.
+Run `calibration_coverage` first. Calibration requires fresh, valid Stratum and Essentia rows, then applies the existing scorable-feature and candidate checks. Missing, partial, unknown, and unscorable rows cannot train a v2 profile. A failed or empty recalibration leaves the compatible registry untouched; successful profile rows and classifier/analyzer/training metadata are replaced atomically.
 
 ---
 

@@ -39,6 +39,18 @@ Probe behavior:
 - The probe result is memoized for the process lifetime — restart the server after changing your Essentia config.
 - The `setup_essentia` tool can install and activate Essentia without a restart.
 
+A live Essentia runtime is not required for server startup or cache-only
+classification/calibration once current rows exist. It is needed to create or
+refresh Essentia evidence. **Full classification** and profile calibration
+require fresh, valid cached Stratum and Essentia rows. Missing, stale, or
+invalid analyzer evidence produces **Degraded** classification, maximum Low
+confidence, required review, and no auto-staging. A valid sparse payload counts
+as present while its null detector fields remain unknown. `cache_coverage` and
+`calibration_coverage` report the remaining readiness work. Explicit CLI
+`--stratum-only` analysis remains supported but cannot provide Full
+classification readiness by itself. Library, metadata, export, transition, and
+pool workflows retain their existing availability without Essentia.
+
 stratum-dsp always runs regardless of Essentia availability. It returns BPM/key
 with confidence, grid provenance and stability, decay, dub-stab and kick
 evidence, and structural sections when available. Essentia adds optional

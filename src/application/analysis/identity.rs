@@ -176,6 +176,25 @@ pub(crate) fn audio_cache_identities_with_fingerprint_loader<'a>(
         .collect()
 }
 
+/// Build the same grid-aware identities as production from a connection the
+/// caller opened explicitly. This keeps ordinary tests isolated from the
+/// user's library while allowing opt-in real-data benchmarks to validate
+/// fresh Rekordbox-grid-backed cache rows.
+#[cfg(test)]
+pub(crate) fn audio_cache_identities_with_rekordbox_connection<'a>(
+    raw_file_paths: impl IntoIterator<Item = &'a str>,
+    conn: &Connection,
+) -> Vec<Option<AudioCacheIdentity>> {
+    audio_cache_identities_with_fingerprint_loader(raw_file_paths, |cache_key| {
+        RekordboxGridInput::from_grid(
+            crate::adapters::rekordbox::anlz::load_rekordbox_grid_for_path_with_conn(
+                conn, cache_key,
+            ),
+        )
+        .fingerprint
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn audio_cache_identity_with_stratum_input_fingerprint(
     raw_file_path: &str,

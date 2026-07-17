@@ -20,27 +20,53 @@ pub(crate) fn classify_batch(
     classify_batch_inner(store_conn, tracks, overrides, true)
 }
 
-/// Classify from cached metadata and rule-based audio evidence without loading
-/// a persisted profile registry. Used by non-leaky benchmark baselines.
-#[cfg(test)]
-pub(crate) fn classify_batch_rules_only(
-    store_conn: &Connection,
-    tracks: &[Track],
-    overrides: &[(String, String)],
-) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
-    classify_batch_inner(store_conn, tracks, overrides, false)
-}
-
 fn classify_batch_inner(
     store_conn: &Connection,
     tracks: &[Track],
     overrides: &[(String, String)],
     load_profiles: bool,
 ) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
-    // Pre-compute normalized keys and resolved audio paths.
     let current_audio_identities = audio_cache_identities_with_current_stratum_input(
         tracks.iter().map(|track| track.file_path.as_str()),
     );
+    classify_batch_with_resolved_audio_identities(
+        store_conn,
+        tracks,
+        overrides,
+        load_profiles,
+        current_audio_identities,
+    )
+}
+
+/// Use identities derived from an explicitly opened Rekordbox connection for
+/// the opt-in real-data benchmark. Normal unit tests continue through the
+/// no-private-library identity seam.
+#[cfg(test)]
+pub(crate) fn classify_batch_with_audio_identities(
+    store_conn: &Connection,
+    tracks: &[Track],
+    overrides: &[(String, String)],
+    load_profiles: bool,
+    current_audio_identities: Vec<Option<AudioCacheIdentity>>,
+) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
+    assert_eq!(tracks.len(), current_audio_identities.len());
+    classify_batch_with_resolved_audio_identities(
+        store_conn,
+        tracks,
+        overrides,
+        load_profiles,
+        current_audio_identities,
+    )
+}
+
+fn classify_batch_with_resolved_audio_identities(
+    store_conn: &Connection,
+    tracks: &[Track],
+    overrides: &[(String, String)],
+    load_profiles: bool,
+    current_audio_identities: Vec<Option<AudioCacheIdentity>>,
+) -> Result<(Vec<ClassificationResult>, u32), rusqlite::Error> {
+    // Pre-compute normalized enrichment keys and resolved audio paths.
     let norm_keys: Vec<_> = tracks
         .iter()
         .zip(current_audio_identities)
@@ -139,7 +165,10 @@ fn classify_batch_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::classification::{ClassificationAction, ClassificationConfidence};
+    use crate::domain::classification::{
+        ClassificationAction, ClassificationConfidence, ClassificationDegradedReason,
+        ClassificationMode,
+    };
     use crate::domain::library::FileKind;
 
     fn track() -> Track {
@@ -202,6 +231,58 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("discogs") && line.contains("Techno")),
             "provider evidence should survive state loading and evidence construction"
+        );
+    }
+
+    #[test]
+    fn classification_audio_readiness_stale_identity_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stale-classification.flac");
+        std::fs::write(&path, b"classification identity fixture").unwrap();
+        let path = path.to_string_lossy().to_string();
+        let mut track = track();
+        track.file_path = path.clone();
+
+        let identity = audio_cache_identities_with_current_stratum_input([path.as_str()])
+            .into_iter()
+            .next()
+            .flatten()
+            .unwrap();
+        let stratum_fingerprint = identity.stratum_input_fingerprint.as_deref().unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        state::migrate(&conn).unwrap();
+        state::set_audio_analysis_with_fingerprint(
+            &conn,
+            &identity.cache_key,
+            audio::ANALYZER_STRATUM,
+            identity.file_size,
+            identity.file_mtime,
+            "stale-version",
+            stratum_fingerprint,
+            r#"{"bpm":132.0}"#,
+        )
+        .unwrap();
+        state::set_audio_analysis_with_fingerprint(
+            &conn,
+            &identity.cache_key,
+            audio::ANALYZER_ESSENTIA,
+            identity.file_size,
+            identity.file_mtime,
+            "stale-version",
+            "",
+            r#"{"danceability":0.8}"#,
+        )
+        .unwrap();
+
+        let (results, _) = classify_batch(&conn, &[track], &[]).unwrap();
+        assert_eq!(results[0].mode, ClassificationMode::Degraded);
+        assert_eq!(
+            results[0].degraded_reasons,
+            vec![
+                ClassificationDegradedReason::MissingStratum,
+                ClassificationDegradedReason::MissingEssentia,
+            ]
         );
     }
 }

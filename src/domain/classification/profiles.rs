@@ -18,7 +18,7 @@ use super::AudioFeatures;
 /// Maximum vote weight for audio-profile votes (below label votes at 0.6).
 const AFFINITY_CAP: f32 = 0.5;
 /// Compatibility version for persisted classifier-profile representation and scoring.
-pub(crate) const PROFILE_SCHEMA_VERSION: &str = "1";
+pub(crate) const PROFILE_SCHEMA_VERSION: &str = "2";
 /// Tracks beyond this many weighted stddev from prototype score 0.
 const SCALE: f64 = 2.5;
 /// Minimum verified tracks to generate a prototype.

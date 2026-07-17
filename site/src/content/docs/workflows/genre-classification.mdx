@@ -22,11 +22,12 @@ Classify genres for my ungenred tracks.
 
 ## What happens next
 
-1. **Measure readiness.** Check whether enough evidence is ready for ungenred
-   tracks. A searched no-match counts as complete, and optional evidence may
-   remain unavailable.
-2. **Prepare evidence.** Fill core Discogs and Stratum gaps where
-   practical. Essentia adds richer audio evidence but is not a hard gate.
+1. **Measure readiness.** Check Full/Degraded classification readiness for
+   ungenred tracks. A searched Discogs no-match counts as complete provider
+   work, but Full mode requires current valid Stratum and Essentia rows.
+2. **Prepare evidence.** Fill Discogs and analyzer gaps where practical.
+   Missing, stale, or invalid analyzer evidence produces Degraded mode,
+   maximum Low confidence, required review, and no auto-staging.
 3. **Classify by confidence.** Compare Discogs styles, label
    associations, BPM, and audio features against the DJ-oriented taxonomy.
 4. **Review and stage.** Apply the chosen confidence policy, inspect low or
@@ -45,6 +46,14 @@ Choose which tiers, if any, may be staged in bulk. Low and insufficient tracks,
 including confirmations, need individual judgment. The built-in taxonomy has roughly 50 DJ-oriented genres
 and is a starting point, not a closed list; add a genre only when the evidence
 and your collection vocabulary support it.
+
+A valid sparse analyzer payload counts as present even when individual detector
+fields are `null`; those fields remain unknown. The cache and calibration
+coverage reports show the work needed for Full classification and
+profile calibration. CLI `--stratum-only` remains supported for explicit
+Stratum analysis, but cannot produce Full readiness by itself. Essentia is not
+required for server startup, transition scoring, pool scoring, metadata, or
+export workflows.
 
 ## What changes and how to recover
 

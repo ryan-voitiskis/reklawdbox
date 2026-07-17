@@ -7,8 +7,12 @@ use crate::adapters::state as store;
 use crate::application::analysis::identity::{
     AudioCacheIdentity, audio_cache_identities_with_current_stratum_input, resolved_audio_cache_key,
 };
-use crate::application::classification::evidence::interpret_discogs;
-use crate::domain::classification::{DiscogsMatchQuality, DiscogsReadiness};
+use crate::application::classification::evidence::{
+    extract_classification_audio, interpret_discogs,
+};
+use crate::domain::classification::{
+    ClassificationDegradedReason, ClassificationMode, DiscogsMatchQuality, DiscogsReadiness,
+};
 use crate::mcp::enrichment::{
     ResolveTracksOpts, describe_resolve_scope, resolve_tracks, to_percent,
 };
@@ -67,6 +71,12 @@ pub(in crate::mcp) fn handle_cache_coverage(
     let mut has_label = 0usize;
     let mut no_label = 0usize;
     let mut enrichment_has_label = 0usize;
+    let mut classification_full = 0usize;
+    let mut classification_degraded = 0usize;
+    let mut missing_stratum = 0usize;
+    let mut invalid_stratum = 0usize;
+    let mut missing_essentia = 0usize;
+    let mut invalid_essentia = 0usize;
 
     {
         let current_audio_identities = audio_cache_identities_with_current_stratum_input(
@@ -117,14 +127,14 @@ pub(in crate::mcp) fn handle_cache_coverage(
 
         let discogs_map =
             store::batch_get_enrichment(&store, &discogs_keys).map_err(cache_error)?;
-        let stratum_set = store::batch_fresh_audio_analysis_existence(
+        let stratum_map = store::batch_get_fresh_audio_analysis(
             &store,
             &stratum_identities,
             audio::ANALYZER_STRATUM,
             audio::STRATUM_SCHEMA_VERSION,
         )
         .map_err(cache_error)?;
-        let essentia_set = store::batch_fresh_audio_analysis_existence(
+        let essentia_map = store::batch_get_fresh_audio_analysis(
             &store,
             &essentia_identities,
             audio::ANALYZER_ESSENTIA,
@@ -151,8 +161,24 @@ pub(in crate::mcp) fn handle_cache_coverage(
             if discogs.diagnostic.is_some() {
                 discogs_diagnostics += 1;
             }
-            let has_stratum = stratum_set.contains(audio_key);
-            let has_essentia = essentia_set.contains(audio_key);
+            let stratum = stratum_map.get(audio_key);
+            let essentia = essentia_map.get(audio_key);
+            let has_stratum = stratum.is_some();
+            let has_essentia = essentia.is_some();
+            let audio_evidence = extract_classification_audio(&tracks[idx], stratum, essentia);
+            let (classification_mode, degraded_reasons) = audio_evidence.readiness();
+            match classification_mode {
+                ClassificationMode::Full => classification_full += 1,
+                ClassificationMode::Degraded => classification_degraded += 1,
+            }
+            for reason in degraded_reasons {
+                match reason {
+                    ClassificationDegradedReason::MissingStratum => missing_stratum += 1,
+                    ClassificationDegradedReason::InvalidStratum => invalid_stratum += 1,
+                    ClassificationDegradedReason::MissingEssentia => missing_essentia += 1,
+                    ClassificationDegradedReason::InvalidEssentia => invalid_essentia += 1,
+                }
+            }
 
             if has_stratum {
                 stratum_cached += 1;
@@ -220,6 +246,17 @@ pub(in crate::mcp) fn handle_cache_coverage(
                 "matched_unmapped": discogs_matched_unmapped,
                 "diagnostics": discogs_diagnostics,
             },
+        },
+        "classification_readiness": {
+            "full": classification_full,
+            "degraded": classification_degraded,
+            "degraded_reasons": {
+                "missing_stratum": missing_stratum,
+                "invalid_stratum": invalid_stratum,
+                "missing_essentia": missing_essentia,
+                "invalid_essentia": invalid_essentia,
+            },
+            "essentia_runtime_available": essentia_installed,
         },
         "label": {
             "has_label": has_label,

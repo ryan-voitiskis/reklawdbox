@@ -46,6 +46,26 @@ pub(super) fn set_test_audio_analysis(
     )
 }
 
+pub(super) fn valid_test_essentia_payload(extra: serde_json::Value) -> String {
+    let mut payload = serde_json::json!({
+        "analyzer_version": crate::adapters::audio::SUPPORTED_ESSENTIA_VERSION,
+        "runtime_manifest": {
+            "python_version": "3.14.6",
+            "python_implementation": "cpython",
+            "essentia_version": crate::adapters::audio::SUPPORTED_ESSENTIA_VERSION,
+            "essentia_module_version": crate::adapters::audio::SUPPORTED_ESSENTIA_MODULE_VERSION,
+            "numpy_version": crate::adapters::audio::SUPPORTED_NUMPY_VERSION,
+            "pyyaml_version": crate::adapters::audio::SUPPORTED_PYYAML_VERSION,
+            "six_version": crate::adapters::audio::SUPPORTED_SIX_VERSION,
+            "analyzer_contract": crate::adapters::audio::ESSENTIA_CONTRACT_ID,
+        },
+    });
+    if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        payload.extend(extra.clone());
+    }
+    serde_json::to_string(&payload).expect("test Essentia payload should serialize")
+}
+
 pub(super) async fn call_tool_via_router(
     tool_name: &str,
     arguments: Option<serde_json::Map<String, serde_json::Value>>,

@@ -457,7 +457,7 @@ export const workflows = [
           kind: 'audio-cache',
           mode: 'conditional',
           condition:
-            'Preparation fills missing Stratum or optional Essentia analysis.',
+            'Preparation fills missing Stratum and Essentia analysis for Full classification; partial evidence remains Degraded.',
         },
         {
           kind: 'provider-session',
@@ -483,7 +483,7 @@ export const workflows = [
     runtimeHelp: { topic: 'genre', menuOrder: 3, recommendedOrder: 3 },
     prerequisites: [
       'A scoped cache_coverage baseline for ungenred tracks.',
-      'Core Discogs and Stratum gaps filled where practical; incomplete evidence is allowed.',
+      'Fresh valid Stratum and Essentia rows are required for Full classification; missing, stale, or invalid evidence is Degraded, capped at Low, requires review, and is never auto-staged.',
       'A user-selected confidence approval policy.',
     ],
     scope:
@@ -542,7 +542,7 @@ export const workflows = [
           kind: 'audio-cache',
           mode: 'conditional',
           condition:
-            'Preparation fills missing Stratum or optional Essentia analysis.',
+            'Preparation fills missing Stratum and Essentia analysis for Full audit recommendations; partial evidence remains Degraded.',
         },
         {
           kind: 'provider-session',
@@ -569,7 +569,7 @@ export const workflows = [
     prerequisites: [
       'Existing genre tags to audit.',
       'A scoped cache_coverage baseline for genred tracks.',
-      'Core evidence gaps filled where practical; incomplete evidence is allowed but needs individual review.',
+      'Fresh valid Stratum and Essentia rows are required for Full recommendations; Degraded evidence is capped at Low, requires individual review, and is never auto-staged.',
     ],
     scope:
       'Genred tracks, paginated with caller-managed max_tracks and offset values.',

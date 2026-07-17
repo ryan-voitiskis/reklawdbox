@@ -597,7 +597,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Report cache completeness for a filtered track scope. Discogs readiness uses the same exact album-aware key and genre mapping as classification, distinguishing searched, matched, mapped, and usable rows. Cache-only — no external calls."
+        description = "Report cache completeness for a filtered track scope, including Full/Degraded classification readiness from current Stratum and Essentia rows. Discogs readiness uses the same exact album-aware key and genre mapping as classification, distinguishing searched, matched, mapped, and usable rows. Cache-only — no external calls."
     )]
     pub(super) async fn cache_coverage(
         &self,
@@ -607,7 +607,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Apply the genre decision tree to ungenred tracks. High confidence requires agreement from at least two independent source groups (Discogs, a distinct Rekordbox label, or audio); Discogs styles and its fallback label count once. Current genre is only a low-confidence hint or unresolved-tie breaker. Low/insufficient confirmations remain reviewable even when the recommendation matches the current tag. Use format=\"compact\", \"summary\", or \"dispatch\" for bounded workflows. auto_stage never stages confirmations, genre-less results, or insufficient results. Cache-only — never triggers external calls."
+        description = "Apply the genre decision tree to ungenred tracks. Full mode requires fresh valid Stratum and Essentia rows. Missing, stale, or invalid analyzer evidence produces Degraded mode, caps confidence at Low, requires review, and never auto-stages. High confidence additionally requires agreement from at least two independent source groups (Discogs, a distinct Rekordbox label, or audio); Discogs styles and its fallback label count once. Current genre is only a low-confidence hint or unresolved-tie breaker. Use format=\"compact\", \"summary\", or \"dispatch\" for bounded workflows. Cache-only — never triggers external calls."
     )]
     pub(super) async fn classify_tracks(
         &self,
@@ -617,7 +617,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Verify existing genre tags against enrichment and audio evidence. Strong high/medium confirmations are counted but omitted by default; low/insufficient confirmations remain visible because confidence determines review eligibility. Set include_confirmed=true to return every confirmation. Cache-only — never triggers external calls."
+        description = "Verify existing genre tags against enrichment and audio evidence using the same Full/Degraded readiness contract as classification. Degraded results require review. Strong Full high/medium confirmations are counted but omitted by default; low/insufficient confirmations remain visible because confidence determines review eligibility. Set include_confirmed=true to return every confirmation. Cache-only — never triggers external calls."
     )]
     pub(super) async fn audit_genres(
         &self,
@@ -627,7 +627,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Calibrate genre audio profiles from a playlist of verified tracks. Only scorable optional-feature rows can build candidates; BPM-only rows cannot qualify or replace a usable registry. Stores prototypes atomically with classifier/analyzer versions and a privacy-safe training fingerprint."
+        description = "Calibrate genre audio profiles from a playlist of verified tracks. Only rows with fresh valid Stratum and Essentia evidence plus scorable optional features can build candidates; partial or BPM-only rows cannot qualify or replace a usable registry. Stores profiles atomically with classifier/analyzer versions and a privacy-safe training fingerprint."
     )]
     pub(super) async fn calibrate_audio_profiles(
         &self,
@@ -637,7 +637,7 @@ impl ReklawdboxServer {
     }
 
     #[tool(
-        description = "Report per-genre verified-playlist calibration readiness. Distinguishes cached audio rows, extracted features, scorable optional features, candidate prototypes, and stored profile state: missing, fresh, training_changed, or incompatible. Read-only — never recalibrates."
+        description = "Report per-genre verified-playlist calibration readiness. Distinguishes raw analyzer rows, complete Full-classification audio, missing or invalid Stratum/Essentia evidence, scorable optional features, candidate prototypes, and stored profile state: missing, fresh, training_changed, or incompatible. Read-only — never recalibrates."
     )]
     pub(super) async fn calibration_coverage(
         &self,

@@ -190,13 +190,24 @@ Report cache completeness for a track scope. Accepts [shared search filters](/mc
 
 {/* /doc-contract:mcp */}
 
-Returns exactly three coverage entries for the selected scope:
+Returns three raw backend/provider coverage entries for the selected scope:
 
 | Entry | What coverage means |
 |-------|---------------------|
 | `stratum_dsp` | Fresh built-in audio-analysis cache rows |
 | `essentia` | Fresh optional Essentia cache rows, plus whether Essentia is installed |
 | `discogs` | Exact album-aware `searched`, `has_result`, `matched_unmapped`, and `usable_genre` counts using the classifier's taxonomy mapping |
+
+The additive `classification_readiness` block reports Full and Degraded track
+counts, deterministic missing/invalid Stratum and Essentia reasons, and
+compatible detected Essentia runtime availability. Full requires fresh, valid rows from both
+analyzers; Degraded results are capped at Low, require review, and never
+auto-stage. `essentia_runtime_available` means any compatible detected runtime,
+including a valid expert override. Raw current-row counts remain separate from
+typed readiness so invalid payloads remain visible. A missing readiness reason
+conflates a row that was never analyzed with one omitted by the freshness query
+because its schema or exact file/grid identity is stale; refresh analysis to
+resolve either case.
 
 Bandcamp and MusicBrainz are targeted metadata paths and are not reported by
 this tool.

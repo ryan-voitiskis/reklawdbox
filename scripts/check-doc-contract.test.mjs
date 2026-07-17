@@ -34,6 +34,7 @@ import {
   runtimeHelpTopics,
   validateBatchAudioExtensionsContract,
   validateBuiltLinkSet,
+  validateClassificationReadinessContract,
   validateCliContracts,
   validateColorPaletteContract,
   validateDocsGatePathInventories,
@@ -62,6 +63,56 @@ function tool(name, properties = {}, required = []) {
 function document(content, file = 'fixture.mdx') {
   return { file, content }
 }
+
+test('classification readiness contract stays capability-specific and fail-closed', () => {
+  const files = [
+    'README.md',
+    'site/src/partials/sops/genre-classification.mdx',
+    'site/src/partials/sops/genre-audit.mdx',
+    'site/src/content/docs/mcp-tools/classification-staging.mdx',
+    'site/src/content/docs/mcp-tools/enrichment-analysis.mdx',
+    'site/src/content/docs/reference/environment-variables.md',
+  ]
+  const documents = files.map((file) =>
+    document(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), file)
+  )
+  const options = { workflows, documents }
+  assert.doesNotThrow(() => validateClassificationReadinessContract(options))
+
+  const broken = documents.map((entry) =>
+    entry.file.endsWith('/partials/sops/genre-classification.mdx')
+      ? {
+        ...entry,
+        content: entry.content.replace(/never\s+auto-staged/, 'may auto-stage'),
+      }
+      : entry
+  )
+  assert.throws(
+    () =>
+      validateClassificationReadinessContract({ workflows, documents: broken }),
+    /no auto-stage rule/,
+  )
+
+  const missingField = documents.map((entry) =>
+    entry.file.endsWith('/mcp-tools/classification-staging.mdx')
+      ? {
+        ...entry,
+        content: entry.content.replace(
+          '`auto_stage_skipped_degraded`',
+          '`renamed_field`',
+        ),
+      }
+      : entry
+  )
+  assert.throws(
+    () =>
+      validateClassificationReadinessContract({
+        workflows,
+        documents: missingField,
+      }),
+    /missing exact readiness field/,
+  )
+})
 
 function table(
   rows,

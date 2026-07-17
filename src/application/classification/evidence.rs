@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use tracing::warn;
 
 use crate::adapters::{
@@ -11,8 +12,9 @@ use crate::adapters::{
 use crate::domain::classification::taxonomy::map_genre_through_taxonomy;
 use crate::domain::{
     classification::{
-        AudioFeatures, DiscogsMatchQuality, DiscogsReadiness, LabelProvenance, MappedGenre,
-        TrackEvidence, taxonomy as genre,
+        AudioBackendStatus, AudioFeatures, ClassificationDegradedReason, ClassificationMode,
+        DiscogsMatchQuality, DiscogsReadiness, LabelProvenance, MappedGenre, TrackEvidence,
+        classification_readiness, taxonomy as genre,
     },
     library::Track,
     metadata as normalize,
@@ -25,6 +27,49 @@ pub(crate) struct DiscogsInterpretation {
     pub(crate) mapped_genres: Vec<MappedGenre>,
     pub(crate) label: Option<String>,
     pub(crate) diagnostic: Option<String>,
+}
+
+pub(crate) struct ClassificationAudioEvidence {
+    pub(crate) features: Option<AudioFeatures>,
+    pub(crate) stratum_status: AudioBackendStatus,
+    pub(crate) essentia_status: AudioBackendStatus,
+}
+
+/// Classification-local Stratum view. Optional fields preserve a valid sparse
+/// payload, while serde still rejects wrong field types instead of silently
+/// erasing them as missing evidence.
+#[derive(Debug, Deserialize)]
+struct ClassificationStratumOutput {
+    #[serde(default)]
+    bpm: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    decay_mid_tau: Option<f64>,
+    #[serde(default)]
+    decay_high_tau: Option<f64>,
+    #[serde(default)]
+    key_clarity: Option<f64>,
+    #[serde(default)]
+    key_confidence: Option<f64>,
+    #[serde(default)]
+    kick_pattern: Option<String>,
+    #[serde(default)]
+    kick_pattern_confidence: Option<f64>,
+    #[serde(default)]
+    kick_kicks_per_bar: Option<f64>,
+    #[serde(default)]
+    kick_onset_count: Option<u32>,
+    #[serde(default)]
+    kick_rate_basis: Option<String>,
+    #[serde(default)]
+    kick_histogram: Option<Vec<f64>>,
+}
+
+impl ClassificationAudioEvidence {
+    pub(crate) fn readiness(&self) -> (ClassificationMode, Vec<ClassificationDegradedReason>) {
+        classification_readiness(self.stratum_status, self.essentia_status)
+    }
 }
 
 pub(crate) fn build_track_evidence(
@@ -56,8 +101,8 @@ pub(crate) fn build_track_evidence(
     };
     let label_genre_val = effective_label.as_deref().and_then(genre::label_genre);
 
-    let audio = extract_audio_features(track, stratum_cache, essentia_cache);
-    let has_audio = audio.is_some();
+    let audio_evidence = extract_classification_audio(track, stratum_cache, essentia_cache);
+    let has_audio = audio_evidence.features.is_some();
 
     TrackEvidence {
         track_id: track.id.clone(),
@@ -69,10 +114,12 @@ pub(crate) fn build_track_evidence(
         label: effective_label,
         label_genre: label_genre_val,
         label_provenance,
-        audio,
+        audio: audio_evidence.features,
         has_discogs: !matches!(discogs.readiness, DiscogsReadiness::NotSearched),
         discogs_match_quality: discogs.match_quality,
         has_audio,
+        stratum_status: audio_evidence.stratum_status,
+        essentia_status: audio_evidence.essentia_status,
     }
 }
 
@@ -234,55 +281,66 @@ fn extract_discogs_genres(
         .collect()
 }
 
-pub(crate) fn extract_audio_features(
+pub(crate) fn extract_classification_audio(
     track: &Track,
     stratum_cache: Option<&CachedAudioAnalysis>,
     essentia_cache: Option<&CachedAudioAnalysis>,
-) -> Option<AudioFeatures> {
-    let stratum_json = stratum_cache.and_then(|sc| {
-        match serde_json::from_str::<serde_json::Value>(&sc.features_json) {
-            Ok(val) => Some(val),
-            Err(e) => {
-                warn!(
-                    file = track.file_path.as_str(),
-                    "Stratum features_json failed to parse: {e}"
-                );
-                None
+) -> ClassificationAudioEvidence {
+    let (stratum_data, stratum_status) = match stratum_cache {
+        None => (None, AudioBackendStatus::Missing),
+        Some(cache) => {
+            match serde_json::from_str::<ClassificationStratumOutput>(&cache.features_json) {
+                Ok(value) => (Some(value), AudioBackendStatus::Fresh),
+                Err(error) => {
+                    warn!(
+                        file = track.file_path.as_str(),
+                        "Stratum features_json failed to parse: {error}"
+                    );
+                    (None, AudioBackendStatus::Invalid)
+                }
             }
         }
-    });
-    let essentia_data = essentia_cache.and_then(|ec| {
-        match serde_json::from_str::<audio::EssentiaOutput>(&ec.features_json) {
-            Ok(val) => Some(val),
-            Err(e) => {
+    };
+    let (essentia_data, essentia_status) = match essentia_cache {
+        None => (None, AudioBackendStatus::Missing),
+        Some(cache) => match serde_json::from_str::<audio::EssentiaOutput>(&cache.features_json) {
+            Ok(value) => match audio::validate_runtime_manifest(&value) {
+                Ok(()) => (Some(value), AudioBackendStatus::Fresh),
+                Err(error) => {
+                    warn!(
+                        file = track.file_path.as_str(),
+                        "Essentia features_json failed runtime validation: {error}"
+                    );
+                    (None, AudioBackendStatus::Invalid)
+                }
+            },
+            Err(error) => {
                 warn!(
                     file = track.file_path.as_str(),
-                    "Essentia features_json failed to parse: {e}"
+                    "Essentia features_json failed to parse: {error}"
                 );
-                None
+                (None, AudioBackendStatus::Invalid)
             }
-        }
-    });
+        },
+    };
 
-    if stratum_json.is_none() && essentia_data.is_none() {
-        return None;
+    if stratum_data.is_none() && essentia_data.is_none() {
+        return ClassificationAudioEvidence {
+            features: None,
+            stratum_status,
+            essentia_status,
+        };
     }
 
-    let stratum_bpm = stratum_json
-        .as_ref()
-        .and_then(|sj| sj.get("bpm"))
-        .and_then(serde_json::Value::as_f64);
+    let stratum_bpm = stratum_data.as_ref().and_then(|data| data.bpm);
     let bpm_agreement = stratum_bpm.map(|sb| (sb - track.bpm).abs() <= 2.0);
 
-    Some(AudioFeatures {
+    let features = AudioFeatures {
         rekordbox_bpm: track.bpm,
         stratum_bpm,
         bpm_agreement,
         essentia_bpm: essentia_data.as_ref().and_then(|e| e.bpm_essentia),
-        duration_seconds: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("duration_seconds"))
-            .and_then(serde_json::Value::as_f64),
+        duration_seconds: stratum_data.as_ref().and_then(|data| data.duration_seconds),
         danceability: essentia_data.as_ref().and_then(|e| e.danceability),
         dynamic_complexity: essentia_data.as_ref().and_then(|e| e.dynamic_complexity),
         rhythm_regularity: essentia_data.as_ref().and_then(|e| e.rhythm_regularity),
@@ -290,55 +348,26 @@ pub(crate) fn extract_audio_features(
             .as_ref()
             .and_then(|e| e.spectral_centroid_mean),
         // Scalar features from Stratum
-        decay_mid_tau: stratum_json
+        decay_mid_tau: stratum_data.as_ref().and_then(|data| data.decay_mid_tau),
+        decay_high_tau: stratum_data.as_ref().and_then(|data| data.decay_high_tau),
+        key_clarity: stratum_data.as_ref().and_then(|data| data.key_clarity),
+        key_confidence: stratum_data.as_ref().and_then(|data| data.key_confidence),
+        kick_pattern: stratum_data
             .as_ref()
-            .and_then(|sj| sj.get("decay_mid_tau"))
-            .and_then(serde_json::Value::as_f64),
-        decay_high_tau: stratum_json
+            .and_then(|data| data.kick_pattern.clone()),
+        kick_pattern_confidence: stratum_data
             .as_ref()
-            .and_then(|sj| sj.get("decay_high_tau"))
-            .and_then(serde_json::Value::as_f64),
-        key_clarity: stratum_json
+            .and_then(|data| data.kick_pattern_confidence),
+        kick_kicks_per_bar: stratum_data
             .as_ref()
-            .and_then(|sj| sj.get("key_clarity"))
-            .and_then(serde_json::Value::as_f64),
-        key_confidence: stratum_json
+            .and_then(|data| data.kick_kicks_per_bar),
+        kick_onset_count: stratum_data.as_ref().and_then(|data| data.kick_onset_count),
+        kick_rate_basis: stratum_data
             .as_ref()
-            .and_then(|sj| sj.get("key_confidence"))
-            .and_then(serde_json::Value::as_f64),
-        kick_pattern: stratum_json
+            .and_then(|data| data.kick_rate_basis.clone()),
+        kick_histogram: stratum_data
             .as_ref()
-            .and_then(|sj| sj.get("kick_pattern"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        kick_pattern_confidence: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_pattern_confidence"))
-            .and_then(serde_json::Value::as_f64),
-        kick_kicks_per_bar: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_kicks_per_bar"))
-            .and_then(serde_json::Value::as_f64),
-        kick_onset_count: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_onset_count"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok()),
-        kick_rate_basis: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_rate_basis"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        kick_histogram: stratum_json
-            .as_ref()
-            .and_then(|sj| sj.get("kick_histogram"))
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_f64)
-                    .collect()
-            }),
+            .and_then(|data| data.kick_histogram.clone()),
         // Scalar features from Essentia
         onset_rate: essentia_data.as_ref().and_then(|e| e.onset_rate),
         loudness_integrated: essentia_data.as_ref().and_then(|e| e.loudness_integrated),
@@ -352,12 +381,18 @@ pub(crate) fn extract_audio_features(
         spectral_contrast_mean: essentia_data
             .as_ref()
             .and_then(|e| e.spectral_contrast_mean.clone()),
-    })
+    };
+    ClassificationAudioEvidence {
+        features: Some(features),
+        stratum_status,
+        essentia_status,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::classification::{ClassificationDegradedReason, ClassificationMode};
     use crate::domain::library::FileKind;
 
     fn entry(quality: Option<&str>, response: Option<&str>) -> EnrichmentCacheEntry {
@@ -398,6 +433,43 @@ mod tests {
             position: None,
             played_at: None,
         }
+    }
+
+    fn audio_entry(analyzer: &str, features_json: impl Into<String>) -> CachedAudioAnalysis {
+        CachedAudioAnalysis {
+            file_path: "/missing/evidence.flac".into(),
+            analyzer: analyzer.into(),
+            file_size: 1,
+            file_mtime: 2,
+            analysis_version: "current".into(),
+            input_fingerprint: String::new(),
+            features_json: features_json.into(),
+            created_at: String::new(),
+        }
+    }
+
+    fn valid_essentia_entry(extra: serde_json::Value) -> CachedAudioAnalysis {
+        let mut payload = serde_json::json!({
+            "analyzer_version": audio::SUPPORTED_ESSENTIA_VERSION,
+            "runtime_manifest": {
+                "python_version": "3.14.6",
+                "python_implementation": "cpython",
+                "essentia_version": audio::SUPPORTED_ESSENTIA_VERSION,
+                "essentia_module_version": audio::SUPPORTED_ESSENTIA_MODULE_VERSION,
+                "numpy_version": audio::SUPPORTED_NUMPY_VERSION,
+                "pyyaml_version": audio::SUPPORTED_PYYAML_VERSION,
+                "six_version": audio::SUPPORTED_SIX_VERSION,
+                "analyzer_contract": audio::ESSENTIA_CONTRACT_ID,
+            },
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        audio_entry(
+            audio::ANALYZER_ESSENTIA,
+            serde_json::to_string(&payload).unwrap(),
+        )
     }
 
     #[test]
@@ -462,5 +534,98 @@ mod tests {
 
         let fallback = build_track_evidence(&track(""), Some(&cached), None, None, &[]);
         assert_eq!(fallback.label_provenance, Some(LabelProvenance::Discogs));
+    }
+
+    #[test]
+    fn classification_audio_readiness_combination_matrix() {
+        let track = track("");
+        let stratum = audio_entry(audio::ANALYZER_STRATUM, r#"{"bpm":128.0}"#);
+        let sparse_stratum = audio_entry(audio::ANALYZER_STRATUM, "{}");
+        let essentia = valid_essentia_entry(serde_json::json!({"danceability": 2.0}));
+        let sparse_essentia = valid_essentia_entry(serde_json::json!({
+            "danceability": null,
+            "onset_rate": null,
+        }));
+        let invalid_stratum = audio_entry(audio::ANALYZER_STRATUM, r#"{"bpm":"invalid"}"#);
+        let invalid_essentia = audio_entry(audio::ANALYZER_ESSENTIA, "not-json");
+        let mismatched_essentia = audio_entry(
+            audio::ANALYZER_ESSENTIA,
+            r#"{"analyzer_version":"wrong","runtime_manifest":{}}"#,
+        );
+
+        let cases = [
+            (
+                None,
+                None,
+                AudioBackendStatus::Missing,
+                AudioBackendStatus::Missing,
+                vec![
+                    ClassificationDegradedReason::MissingStratum,
+                    ClassificationDegradedReason::MissingEssentia,
+                ],
+            ),
+            (
+                Some(&stratum),
+                None,
+                AudioBackendStatus::Fresh,
+                AudioBackendStatus::Missing,
+                vec![ClassificationDegradedReason::MissingEssentia],
+            ),
+            (
+                None,
+                Some(&essentia),
+                AudioBackendStatus::Missing,
+                AudioBackendStatus::Fresh,
+                vec![ClassificationDegradedReason::MissingStratum],
+            ),
+            (
+                Some(&invalid_stratum),
+                Some(&essentia),
+                AudioBackendStatus::Invalid,
+                AudioBackendStatus::Fresh,
+                vec![ClassificationDegradedReason::InvalidStratum],
+            ),
+            (
+                Some(&stratum),
+                Some(&invalid_essentia),
+                AudioBackendStatus::Fresh,
+                AudioBackendStatus::Invalid,
+                vec![ClassificationDegradedReason::InvalidEssentia],
+            ),
+            (
+                Some(&invalid_stratum),
+                Some(&invalid_essentia),
+                AudioBackendStatus::Invalid,
+                AudioBackendStatus::Invalid,
+                vec![
+                    ClassificationDegradedReason::InvalidStratum,
+                    ClassificationDegradedReason::InvalidEssentia,
+                ],
+            ),
+        ];
+
+        for (stratum, essentia, expected_stratum, expected_essentia, expected_reasons) in cases {
+            let extracted = extract_classification_audio(&track, stratum, essentia);
+            assert_eq!(extracted.stratum_status, expected_stratum);
+            assert_eq!(extracted.essentia_status, expected_essentia);
+            assert_eq!(extracted.readiness().0, ClassificationMode::Degraded);
+            assert_eq!(extracted.readiness().1, expected_reasons);
+        }
+
+        let complete = extract_classification_audio(&track, Some(&stratum), Some(&essentia));
+        assert_eq!(complete.readiness().0, ClassificationMode::Full);
+        assert!(complete.features.is_some());
+
+        let sparse =
+            extract_classification_audio(&track, Some(&sparse_stratum), Some(&sparse_essentia));
+        assert_eq!(sparse.readiness().0, ClassificationMode::Full);
+        let features = sparse.features.expect("sparse valid rows remain present");
+        assert!(features.danceability.is_none());
+        assert!(features.stratum_bpm.is_none());
+
+        let mismatched =
+            extract_classification_audio(&track, Some(&stratum), Some(&mismatched_essentia));
+        assert_eq!(mismatched.essentia_status, AudioBackendStatus::Invalid);
+        assert_eq!(mismatched.readiness().0, ClassificationMode::Degraded);
     }
 }

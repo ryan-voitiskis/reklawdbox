@@ -176,9 +176,11 @@ provider context, and is never also reported as enriched or skipped.
 ## Audio analysis tools
 
 The two backends return separate evidence and are cached independently.
-Stratum is compiled in; Essentia is optional. Neither backend returns a field
-named `energy`: scoring derives energy from three Essentia fields when all are
-present, otherwise it uses a BPM proxy.
+Stratum is compiled in. Essentia is optional for server startup and unrelated
+workflows, but required with Stratum for Full classification and profile
+calibration. Neither backend returns a field named `energy`: transition and
+pool scoring derive energy from three Essentia fields when all are present,
+otherwise they use a BPM proxy.
 
 ### Returned and cached evidence
 
@@ -219,6 +221,16 @@ available for inspection but do not directly alter transition or pool scores.
 | Transition scoring and `build_set` | Stratum key (preferred) and BPM (fallback); derived energy; Essentia brightness, rhythm regularity, and loudness range. Only `build_set` adds sequence-context modifiers. |
 | Pool scoring and discovery | Key, BPM, derived energy, canonical genre/family, Essentia brightness, and rhythm regularity. When every required timbral family is available, an optional distance axis uses MFCC mean/std, spectral contrast mean, spectral centroid variability, and dissonance. Pool scoring does not consume `loudness_range`. |
 | Cache/audit coverage | Analyzer freshness and presence counts; coverage does not imply that every returned field is consumed. |
+
+Full classification requires a fresh, valid row from both analyzers. Missing,
+stale, or invalid evidence produces `degraded` mode, caps High or Medium at
+Low, requires review, and never auto-stages. Row validity is structural: a
+sparse payload that parses counts as present, while individual `null` detector
+fields remain unknown rather than becoming zero. `cache_coverage` and
+`calibration_coverage` use the same contract. Calibration accepts only Full,
+scorable samples. Explicit CLI `--stratum-only` analysis remains supported but
+cannot create Full classification readiness by itself. Transition and pool
+scoring preserve their existing graceful-degradation behavior.
 
 **Derived energy** is calculated only when Essentia has `danceability`,
 `loudness_integrated`, and `onset_rate`: the normalized inputs are weighted
@@ -270,7 +282,7 @@ Batch audio analysis. Accepts [shared search filters](/mcp-tools/#shared-search-
 Current Stratum results are skipped before work slots are assigned. When
 Essentia is available, a track is complete only when both current analyzer
 results exist; when it is unavailable, missing Essentia does not keep the track
-pending.
+pending in this batch tool. Such a track is still Degraded for classification.
 
 {/* doc-contract:mcp-output tool=analyze_audio_batch schema=/ requiredness=global */}
 

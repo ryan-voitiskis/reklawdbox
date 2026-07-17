@@ -20,11 +20,11 @@ pub struct ClassifyTracksParams {
     )]
     pub genre_overrides: Option<Vec<GenreOverrideInput>>,
     #[schemars(
-        description = "Response format: 'full' (default) returns evidence, candidates, flags, and review hints. 'compact' returns only track_id, artist, title, genre, confidence, action. 'summary' returns confidence distribution and genre-grouped counts. 'dispatch' returns low/insufficient tracks grouped by artist. Weak confirmations remain visible in review formats."
+        description = "Response format: 'full' (default) returns evidence, candidates, flags, review hints, mode, and degraded reasons. 'compact' returns the roster fields plus mode and degraded reasons. 'summary' returns confidence/mode distributions and genre-grouped counts. 'dispatch' returns review-required tracks grouped by artist. Weak confirmations and every Degraded result remain visible in review formats."
     )]
     pub format: Option<ClassifyFormat>,
     #[schemars(
-        description = "Auto-stage real genre changes at these confidence levels after classification. Confirmations, genre-less results, and insufficient results are never staged. Example: [\"high\", \"medium\"]. Omit for classification only."
+        description = "Auto-stage eligible Full-mode genre changes at these confidence levels after classification. Degraded results, confirmations, genre-less results, and insufficient results are never staged. Example: [\"high\", \"medium\"]. Omit for classification only."
     )]
     pub auto_stage: Option<Vec<StageLevel>>,
 }
@@ -98,7 +98,7 @@ pub struct AuditGenresParams {
     #[schemars(description = "Offset for pagination (skip first N tracks)")]
     pub offset: Option<u32>,
     #[schemars(
-        description = "Include every confirmed track (default false). Low/insufficient confirmations are always included because they require review."
+        description = "Include every confirmed track (default false). Degraded and Low/insufficient confirmations are always included because they require review."
     )]
     pub include_confirmed: Option<bool>,
 }

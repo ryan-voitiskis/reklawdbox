@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::domain::classification::taxonomy;
-use crate::domain::classification::{ClassificationConfidence, ClassificationResult};
+use crate::domain::classification::{
+    ClassificationConfidence, ClassificationMode, ClassificationResult,
+};
 
 #[derive(Debug)]
 pub(crate) struct EvaluationCase<'a> {
@@ -66,6 +68,7 @@ pub(crate) struct EvaluationSummary {
     pub(crate) confusion_pairs: Vec<ConfusionPair>,
     pub(crate) by_source_stratum: BTreeMap<String, StratumMetrics>,
     pub(crate) by_discogs_match_quality: BTreeMap<String, StratumMetrics>,
+    pub(crate) by_classification_mode: BTreeMap<String, StratumMetrics>,
 }
 
 fn rate(count: usize, denominator: usize) -> RateMetric {
@@ -93,6 +96,13 @@ fn confidence_name(confidence: ClassificationConfidence) -> &'static str {
     }
 }
 
+fn classification_mode_name(mode: ClassificationMode) -> &'static str {
+    match mode {
+        ClassificationMode::Full => "full",
+        ClassificationMode::Degraded => "degraded",
+    }
+}
+
 pub(crate) fn evaluate(cases: &[EvaluationCase<'_>], skipped: usize) -> EvaluationSummary {
     let evaluated = cases.len();
     let mut labels = BTreeMap::new();
@@ -105,13 +115,11 @@ pub(crate) fn evaluate(cases: &[EvaluationCase<'_>], skipped: usize) -> Evaluati
     let mut confusion: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut sources: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
     let mut qualities: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
+    let mut modes: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
 
     for case in cases {
         *labels.entry(case.truth.to_string()).or_insert(0) += 1;
-        if matches!(
-            case.result.confidence,
-            ClassificationConfidence::Low | ClassificationConfidence::Insufficient
-        ) {
+        if case.result.review_required() {
             manual_review += 1;
         }
 
@@ -123,6 +131,10 @@ pub(crate) fn evaluate(cases: &[EvaluationCase<'_>], skipped: usize) -> Evaluati
             .entry(case.discogs_match_quality.to_string())
             .or_insert((0, 0, 0));
         quality.0 += 1;
+        let mode = modes
+            .entry(classification_mode_name(case.result.mode).to_string())
+            .or_insert((0, 0, 0));
+        mode.0 += 1;
 
         let Some(recommended) = case.result.genre else {
             abstentions += 1;
@@ -131,12 +143,14 @@ pub(crate) fn evaluate(cases: &[EvaluationCase<'_>], skipped: usize) -> Evaluati
         recommendations += 1;
         source.1 += 1;
         quality.1 += 1;
+        mode.1 += 1;
 
         let is_exact = recommended.eq_ignore_ascii_case(case.truth);
         if is_exact {
             exact += 1;
             source.2 += 1;
             quality.2 += 1;
+            mode.2 += 1;
         } else {
             *confusion
                 .entry((case.truth.to_string(), recommended.to_string()))
@@ -214,13 +228,14 @@ pub(crate) fn evaluate(cases: &[EvaluationCase<'_>], skipped: usize) -> Evaluati
         confusion_pairs,
         by_source_stratum: to_strata(sources),
         by_discogs_match_quality: to_strata(qualities),
+        by_classification_mode: to_strata(modes),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::classification::ClassificationAction;
+    use crate::domain::classification::{ClassificationAction, ClassificationMode};
 
     fn result(
         genre: Option<&'static str>,
@@ -234,6 +249,8 @@ mod tests {
             genre,
             confidence,
             action: ClassificationAction::Suggest,
+            mode: ClassificationMode::Full,
+            degraded_reasons: Vec::new(),
             evidence: Vec::new(),
             candidates: Vec::new(),
             flags: Vec::new(),
@@ -278,6 +295,7 @@ mod tests {
         assert_eq!(summary.manual_review.count, 2);
         assert_eq!(summary.confidence_precision["high"].exact_percent, 100.0);
         assert_eq!(summary.confusion_pairs[0].recommended, "Deep Techno");
+        assert_eq!(summary.by_classification_mode["full"].evaluated, 3);
     }
 
     #[test]
@@ -288,5 +306,22 @@ mod tests {
         assert_eq!(summary.accuracy.exact.percent, 0.0);
         assert_eq!(summary.abstention.percent, 0.0);
         assert!(summary.confusion_pairs.is_empty());
+    }
+
+    #[test]
+    fn evaluation_stratifies_mode_and_uses_domain_review_policy() {
+        let mut degraded = result(Some("Techno"), ClassificationConfidence::High);
+        degraded.mode = ClassificationMode::Degraded;
+        let cases = [EvaluationCase {
+            truth: "Techno",
+            result: &degraded,
+            source_stratum: "discogs",
+            discogs_match_quality: "exact",
+        }];
+
+        let summary = evaluate(&cases, 0);
+        assert_eq!(summary.manual_review.count, 1);
+        assert_eq!(summary.by_classification_mode["degraded"].evaluated, 1);
+        assert_eq!(summary.by_classification_mode["degraded"].exact, 1);
     }
 }

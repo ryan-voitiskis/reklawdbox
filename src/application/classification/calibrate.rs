@@ -11,14 +11,14 @@ use crate::application::analysis::identity::{
 };
 use crate::domain::{
     classification::{
-        AudioFeatures,
+        AudioBackendStatus, AudioFeatures, ClassificationMode,
         profiles::{self, ProfileMetadata},
         taxonomy as genre,
     },
     library::Track,
 };
 
-use super::evidence::extract_audio_features;
+use super::evidence::extract_classification_audio;
 
 #[derive(Debug)]
 pub(crate) enum CalibrationError {
@@ -57,7 +57,7 @@ fn training_fingerprint(rows: &[TrainingFingerprintRow]) -> String {
             })
     });
     let mut hasher = Sha256::new();
-    hash_field(&mut hasher, b"reklawdbox:genre-profile-training:v1");
+    hash_field(&mut hasher, b"reklawdbox:genre-profile-training:v2");
     hash_field(&mut hasher, audio::STRATUM_SCHEMA_VERSION.as_bytes());
     hash_field(&mut hasher, audio::ESSENTIA_SCHEMA_VERSION.as_bytes());
     for row in rows {
@@ -79,8 +79,14 @@ pub(crate) fn calibrate_audio_profiles(
     let mut samples: Vec<(&'static str, AudioFeatures)> = Vec::new();
     let mut fingerprint_rows = Vec::new();
     let mut tracks_with_audio_features = 0u32;
+    let mut tracks_with_complete_classification_audio = 0u32;
+    let mut missing_required_stratum = 0u32;
+    let mut invalid_required_stratum = 0u32;
+    let mut missing_required_essentia = 0u32;
+    let mut invalid_required_essentia = 0u32;
     let mut skipped_no_genre = 0u32;
     let mut skipped_no_audio = 0u32;
+    let mut skipped_incomplete_classification_audio = 0u32;
     let mut skipped_unscorable_audio = 0u32;
     let mut skipped_unknown_genre = 0u32;
     let mut eligible_tracks = Vec::new();
@@ -148,9 +154,30 @@ pub(crate) fn calibrate_audio_profiles(
         let stratum_cache = audio_key.and_then(|key| stratum_map.get(key));
         let essentia_cache = audio_key.and_then(|key| essentia_map.get(key));
 
-        match extract_audio_features(track, stratum_cache, essentia_cache) {
+        let extracted = extract_classification_audio(track, stratum_cache, essentia_cache);
+        match extracted.stratum_status {
+            AudioBackendStatus::Fresh => {}
+            AudioBackendStatus::Missing => missing_required_stratum += 1,
+            AudioBackendStatus::Invalid => invalid_required_stratum += 1,
+        }
+        match extracted.essentia_status {
+            AudioBackendStatus::Fresh => {}
+            AudioBackendStatus::Missing => missing_required_essentia += 1,
+            AudioBackendStatus::Invalid => invalid_required_essentia += 1,
+        }
+        if extracted.features.is_some() {
+            tracks_with_audio_features += 1;
+        } else {
+            skipped_no_audio += 1;
+        }
+        let (mode, _) = extracted.readiness();
+        if mode != ClassificationMode::Full {
+            skipped_incomplete_classification_audio += 1;
+            continue;
+        }
+        tracks_with_complete_classification_audio += 1;
+        match extracted.features {
             Some(features) => {
-                tracks_with_audio_features += 1;
                 if !profiles::has_scorable_optional_features(&features) {
                     skipped_unscorable_audio += 1;
                     continue;
@@ -171,12 +198,15 @@ pub(crate) fn calibrate_audio_profiles(
                 samples.push((canonical, features));
             }
             None => {
-                skipped_no_audio += 1;
+                // Full readiness guarantees that both payloads parsed, but a
+                // valid pair may still be sparse enough to contribute no
+                // merged feature values.
+                skipped_unscorable_audio += 1;
             }
         }
     }
 
-    if tracks_with_audio_features == 0 {
+    if tracks_with_complete_classification_audio == 0 {
         return Err(CalibrationError::NoSamples);
     }
     if samples.is_empty() {
@@ -255,10 +285,16 @@ pub(crate) fn calibrate_audio_profiles(
         "playlist": playlist_name,
         "total_tracks": tracks.len(),
         "tracks_with_features": tracks_with_audio_features,
+        "tracks_with_complete_classification_audio": tracks_with_complete_classification_audio,
         "tracks_with_scorable_features": samples.len(),
+        "missing_required_stratum": missing_required_stratum,
+        "invalid_required_stratum": invalid_required_stratum,
+        "missing_required_essentia": missing_required_essentia,
+        "invalid_required_essentia": invalid_required_essentia,
         "skipped_no_genre": skipped_no_genre,
         "skipped_unknown_genre": skipped_unknown_genre,
         "skipped_no_audio": skipped_no_audio,
+        "skipped_incomplete_classification_audio": skipped_incomplete_classification_audio,
         "skipped_unscorable_audio": skipped_unscorable_audio,
         "prototypes_built": registry.prototypes.len(),
         "profile_metadata": metadata,
@@ -279,6 +315,11 @@ struct CalibrationGenreStats {
     missing_stratum_features: u32,
     tracks_with_essentia_features: u32,
     missing_essentia_features: u32,
+    tracks_with_complete_classification_audio: u32,
+    missing_required_stratum: u32,
+    invalid_required_stratum: u32,
+    missing_required_essentia: u32,
+    invalid_required_essentia: u32,
 }
 
 pub(crate) fn calibration_coverage(
@@ -366,9 +407,31 @@ pub(crate) fn calibration_coverage(
             stats.missing_essentia_features += 1;
         }
 
-        match extract_audio_features(track, stratum, essentia) {
+        let extracted = extract_classification_audio(track, stratum, essentia);
+        match extracted.stratum_status {
+            AudioBackendStatus::Fresh => {}
+            AudioBackendStatus::Missing => stats.missing_required_stratum += 1,
+            AudioBackendStatus::Invalid => stats.invalid_required_stratum += 1,
+        }
+        match extracted.essentia_status {
+            AudioBackendStatus::Fresh => {}
+            AudioBackendStatus::Missing => stats.missing_required_essentia += 1,
+            AudioBackendStatus::Invalid => stats.invalid_required_essentia += 1,
+        }
+        if extracted.features.is_some() {
+            stats.tracks_with_audio_features += 1;
+        } else {
+            stats.missing_audio_features += 1;
+        }
+        let (mode, _) = extracted.readiness();
+        if mode == ClassificationMode::Full {
+            stats.tracks_with_complete_classification_audio += 1;
+        } else {
+            stats.missing_scorable_features += 1;
+            continue;
+        }
+        match extracted.features {
             Some(features) => {
-                stats.tracks_with_audio_features += 1;
                 if profiles::has_scorable_optional_features(&features) {
                     stats.tracks_with_scorable_features += 1;
                     let identity = audio_identity
@@ -390,7 +453,6 @@ pub(crate) fn calibration_coverage(
                 }
             }
             None => {
-                stats.missing_audio_features += 1;
                 stats.missing_scorable_features += 1;
             }
         }
@@ -438,6 +500,11 @@ pub(crate) fn calibration_coverage(
     let mut total_missing_stratum_features = 0u32;
     let mut total_with_essentia_features = 0u32;
     let mut total_missing_essentia_features = 0u32;
+    let mut total_complete_classification_audio = 0u32;
+    let mut total_missing_required_stratum = 0u32;
+    let mut total_invalid_required_stratum = 0u32;
+    let mut total_missing_required_essentia = 0u32;
+    let mut total_invalid_required_essentia = 0u32;
 
     let genres: Vec<serde_json::Value> = by_genre
         .iter()
@@ -461,6 +528,12 @@ pub(crate) fn calibration_coverage(
             total_missing_stratum_features += stats.missing_stratum_features;
             total_with_essentia_features += stats.tracks_with_essentia_features;
             total_missing_essentia_features += stats.missing_essentia_features;
+            total_complete_classification_audio +=
+                stats.tracks_with_complete_classification_audio;
+            total_missing_required_stratum += stats.missing_required_stratum;
+            total_invalid_required_stratum += stats.invalid_required_stratum;
+            total_missing_required_essentia += stats.missing_required_essentia;
+            total_invalid_required_essentia += stats.invalid_required_essentia;
 
             let status = if prototype_ready && stored_n.is_some() {
                 "profile_present"
@@ -470,6 +543,17 @@ pub(crate) fn calibration_coverage(
                 "candidate_not_scorable"
             } else {
                 "needs_more_verified_audio"
+            };
+            let readiness_reason = if stats.tracks_with_complete_classification_audio == 0 {
+                "incomplete_classification_audio"
+            } else if stats.tracks_with_scorable_features < profiles::MIN_TRACKS {
+                "insufficient_complete_scorable_samples"
+            } else if !prototype_ready {
+                "candidate_not_scorable"
+            } else if stored_n.is_some() {
+                "profile_present"
+            } else {
+                "ready_to_calibrate"
             };
 
             serde_json::json!({
@@ -483,12 +567,18 @@ pub(crate) fn calibration_coverage(
                 "missing_stratum_features": stats.missing_stratum_features,
                 "tracks_with_essentia_features": stats.tracks_with_essentia_features,
                 "missing_essentia_features": stats.missing_essentia_features,
+                "tracks_with_complete_classification_audio": stats.tracks_with_complete_classification_audio,
+                "missing_required_stratum": stats.missing_required_stratum,
+                "invalid_required_stratum": stats.invalid_required_stratum,
+                "missing_required_essentia": stats.missing_required_essentia,
+                "invalid_required_essentia": stats.invalid_required_essentia,
                 "prototype_ready": prototype_ready,
                 "profile": {
                     "stored": stored_n.is_some(),
                     "n_verified": stored_n,
                 },
                 "status": status,
+                "readiness_reason": readiness_reason,
             })
         })
         .collect();
@@ -514,6 +604,11 @@ pub(crate) fn calibration_coverage(
         "missing_stratum_features": total_missing_stratum_features,
         "tracks_with_essentia_features": total_with_essentia_features,
         "missing_essentia_features": total_missing_essentia_features,
+        "tracks_with_complete_classification_audio": total_complete_classification_audio,
+        "missing_required_stratum": total_missing_required_stratum,
+        "invalid_required_stratum": total_invalid_required_stratum,
+        "missing_required_essentia": total_missing_required_essentia,
+        "invalid_required_essentia": total_invalid_required_essentia,
         "skipped_no_genre": skipped_no_genre,
         "skipped_unknown_genre": skipped_unknown_genre,
         "min_tracks_per_genre": profiles::MIN_TRACKS,
@@ -537,6 +632,9 @@ pub(crate) fn calibration_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::classification::profiles::{
+        FeatureStat, GenrePrototype, ProfileLoadStatus, ProfileRegistry,
+    };
 
     fn row(track_id: &str, genre: &'static str) -> TrainingFingerprintRow {
         TrainingFingerprintRow {
@@ -567,5 +665,56 @@ mod tests {
         let mut changed_audio = row("track-a", "Techno");
         changed_audio.file_mtime += 1;
         assert_ne!(baseline, training_fingerprint(&[changed_audio]));
+    }
+
+    #[test]
+    fn classification_calibration_failed_empty_run_preserves_v2_registry() {
+        let conn = Connection::open_in_memory().unwrap();
+        state::migrate(&conn).unwrap();
+        let registry = ProfileRegistry {
+            prototypes: HashMap::from([(
+                "Techno",
+                GenrePrototype {
+                    genre: "Techno",
+                    features: HashMap::from([(
+                        "rekordbox_bpm",
+                        FeatureStat {
+                            mean: 132.0,
+                            stddev: 2.0,
+                            fisher_weight: 0.4,
+                            n: 5,
+                        },
+                    )]),
+                    mfcc_centroid: None,
+                    mfcc_std_centroid: None,
+                    contrast_centroid: None,
+                    mfcc_mean_dist: None,
+                    mfcc_std_mean_dist: None,
+                    contrast_mean_dist: None,
+                    total_n: 5,
+                },
+            )]),
+            global_stats: HashMap::from([("rekordbox_bpm", (128.0, 8.0))]),
+        };
+        let metadata = ProfileMetadata {
+            classifier_profile_schema_version: profiles::PROFILE_SCHEMA_VERSION.into(),
+            stratum_schema_version: audio::STRATUM_SCHEMA_VERSION.into(),
+            essentia_schema_version: audio::ESSENTIA_SCHEMA_VERSION.into(),
+            playlist_name: "genre_verified".into(),
+            training_fingerprint: "existing-v2".into(),
+            scorable_sample_count: 5,
+            calibrated_at: "2026-07-17T00:00:00Z".into(),
+        };
+        state::classification::save_to_db(&conn, &registry, &metadata).unwrap();
+
+        assert!(matches!(
+            calibrate_audio_profiles(&conn, &[], "genre_verified"),
+            Err(CalibrationError::NoSamples)
+        ));
+
+        let loaded = state::classification::load_from_db(&conn, Some("existing-v2")).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Fresh);
+        assert_eq!(loaded.metadata, Some(metadata));
+        assert!(loaded.registry.unwrap().prototypes.contains_key("Techno"));
     }
 }

@@ -61,7 +61,7 @@ import { Steps, Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/compon
 </Tabs>
 
 With no valid expert override, the setup command first installs and validates
-the optional Essentia audio analysis environment at
+the managed Essentia audio analysis environment at
 `~/.local/share/reklawdbox/essentia-venv/bin/python`.
 It requires CPython 3.14 and the locked wheel-only Essentia, NumPy, PyYAML, and
 six manifest; the internal generations are managed automatically. A valid
@@ -73,7 +73,11 @@ Setup then writes Claude Code configuration to
   Essentia is not used by the first session. If Python, virtual-environment, or
   Essentia installation is unavailable—or you simply do not want it—skip the
   automatic setup command and use [Manual configuration](#manual-configuration)
-  with the absolute path to the installed or source-built binary.
+  with the absolute path to the installed or source-built binary. The server,
+  library/export tools, transition and pool scoring, and explicit Stratum-only
+  analysis still work. Genre classification remains Degraded, capped at Low,
+  review-only, and unable to auto-stage until both analyzer caches are current;
+  profile calibration also requires both analyzers.
 </Aside>
 
 ## Reconnect your host

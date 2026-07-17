@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::application::classification;
 use crate::domain::classification::taxonomy as genre;
 use crate::domain::classification::{
-    ClassificationAction, ClassificationConfidence, ClassificationResult,
+    ClassificationAction, ClassificationConfidence, ClassificationDegradedReason,
+    ClassificationMode, ClassificationResult,
 };
 use crate::domain::metadata::TrackChange;
 use crate::mcp::classification::{
@@ -83,6 +84,8 @@ pub(in crate::mcp) fn handle_classify_tracks(
     let mut summary = serde_json::json!({
         "total": results.len(),
         "review_required": results.iter().filter(|result| result.review_required()).count(),
+        "by_mode": count_by_mode(&results),
+        "degraded_reasons": count_degraded_reasons(&results),
         "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
         "by_action": { "suggest": suggest, "conflict": conflict, "confirm": confirm, "manual": manual },
     });
@@ -93,14 +96,23 @@ pub(in crate::mcp) fn handle_classify_tracks(
     // --- Auto-staging ---
     let mut staging_info = serde_json::Value::Null;
     if let Some(ref levels) = params.auto_stage {
+        let otherwise_stageable = |r: &&ClassificationResult| {
+            r.genre.is_some()
+                && !matches!(r.action, ClassificationAction::Confirm)
+                && !matches!(r.confidence, ClassificationConfidence::Insufficient)
+                && levels
+                    .iter()
+                    .any(|level| level.matches_confidence(&r.confidence))
+        };
+        let auto_stage_skipped_degraded = results
+            .iter()
+            .filter(otherwise_stageable)
+            .filter(|result| !result.is_auto_stage_eligible())
+            .count();
         let track_changes: Vec<TrackChange> = results
             .iter()
-            .filter(|r| {
-                r.genre.is_some()
-                    && !matches!(r.action, ClassificationAction::Confirm)
-                    && !matches!(r.confidence, ClassificationConfidence::Insufficient)
-                    && levels.iter().any(|l| l.matches_confidence(&r.confidence))
-            })
+            .filter(otherwise_stageable)
+            .filter(|result| result.is_auto_stage_eligible())
             .map(|r| TrackChange {
                 track_id: r.track_id.clone(),
                 genre: r.genre.map(String::from),
@@ -112,7 +124,9 @@ pub(in crate::mcp) fn handle_classify_tracks(
         staging_info = serde_json::json!({
             "staged": staged,
             "total_pending": total_pending,
+            "skipped_degraded": auto_stage_skipped_degraded,
         });
+        summary["auto_stage_skipped_degraded"] = serde_json::json!(auto_stage_skipped_degraded);
     }
 
     // --- Format output ---
@@ -232,6 +246,8 @@ pub(in crate::mcp) fn handle_audit_genres(
         "conflicts": conflict_count,
         "manual_review": results.iter().filter(|r| matches!(r.action, ClassificationAction::Manual)).count(),
         "review_required": results.iter().filter(|r| r.review_required()).count(),
+        "by_mode": count_by_mode(&results),
+        "degraded_reasons": count_degraded_reasons(&results),
         "by_confidence": { "high": high, "medium": medium, "low": low, "insufficient": insufficient },
     });
     if cache_errors > 0 {
@@ -270,6 +286,41 @@ fn count_by_action(results: &[ClassificationResult]) -> (u32, u32, u32, u32) {
         }
     }
     (suggest, conflict, confirm, manual)
+}
+
+fn count_by_mode(results: &[ClassificationResult]) -> serde_json::Value {
+    let full = results
+        .iter()
+        .filter(|result| result.mode == ClassificationMode::Full)
+        .count();
+    serde_json::json!({
+        "full": full,
+        "degraded": results.len() - full,
+    })
+}
+
+fn count_degraded_reasons(results: &[ClassificationResult]) -> serde_json::Value {
+    let mut missing_stratum = 0usize;
+    let mut invalid_stratum = 0usize;
+    let mut missing_essentia = 0usize;
+    let mut invalid_essentia = 0usize;
+    for reason in results
+        .iter()
+        .flat_map(|result| result.degraded_reasons.iter())
+    {
+        match reason {
+            ClassificationDegradedReason::MissingStratum => missing_stratum += 1,
+            ClassificationDegradedReason::InvalidStratum => invalid_stratum += 1,
+            ClassificationDegradedReason::MissingEssentia => missing_essentia += 1,
+            ClassificationDegradedReason::InvalidEssentia => invalid_essentia += 1,
+        }
+    }
+    serde_json::json!({
+        "missing_stratum": missing_stratum,
+        "invalid_stratum": invalid_stratum,
+        "missing_essentia": missing_essentia,
+        "invalid_essentia": invalid_essentia,
+    })
 }
 
 /// Build a genre-grouped distribution for the summary format.
@@ -377,6 +428,8 @@ fn build_dispatch_groups(
                 "title": r.title,
                 "genre": r.genre,
                 "confidence": conf,
+                "mode": r.mode,
+                "degraded_reasons": r.degraded_reasons,
                 "evidence": r.evidence,
                 "candidates": r.candidates,
                 "flags": r.flags,
@@ -453,7 +506,7 @@ pub(in crate::mcp) fn handle_calibrate_audio_profiles(
             Ok(result) => result,
             Err(classification::CalibrationError::NoSamples) => {
                 return Err(McpError::internal_error(
-                    "No tracks with both genre tags and audio features found.",
+                    "No verified tracks have complete Full-classification audio. Run cache_coverage/calibration_coverage, then analyze the playlist with current Stratum and Essentia.",
                     None,
                 ));
             }

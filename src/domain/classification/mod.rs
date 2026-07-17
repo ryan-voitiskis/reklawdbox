@@ -8,7 +8,8 @@ pub(crate) mod profiles;
 pub(crate) mod taxonomy;
 
 pub(crate) use model::{
-    AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    DiscogsMatchQuality, DiscogsReadiness, GenreCandidate, LabelProvenance, MappedGenre,
-    TrackEvidence,
+    AudioBackendStatus, AudioFeatures, ClassificationAction, ClassificationConfidence,
+    ClassificationDegradedReason, ClassificationMode, ClassificationResult, DiscogsMatchQuality,
+    DiscogsReadiness, GenreCandidate, LabelProvenance, MappedGenre, TrackEvidence,
+    classification_readiness,
 };

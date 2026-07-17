@@ -9,7 +9,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 ## Overview
 
-reklawdbox is a single binary that talks to your AI agent over stdio. It reads your Rekordbox database, fetches metadata from external services, analyzes audio, and exports XML. No runtime dependencies beyond an optional Python install for Essentia.
+reklawdbox is a single binary that talks to your AI agent over stdio. It reads your Rekordbox database, fetches metadata from external services, analyzes audio, and exports XML. Python/Essentia is not a startup dependency. A compatible runtime is needed to create or refresh Essentia evidence; Full genre classification and profile calibration consume current cached evidence and do not launch Python themselves.
 
 ## Data flow
 
@@ -68,7 +68,7 @@ and version bump. A Rekordbox grid change also invalidates only Stratum.
 decay, dub-stab and kick-pattern evidence, and structural sections in Rust.
 Always available, no setup needed.
 
-**Essentia (optional)** — adds integrated loudness, danceability, rhythm and
+**Essentia (capability-specific)** — adds integrated loudness, danceability, rhythm and
 onset evidence, brightness, and other spectral/timbral features via a Python
 subprocess. It has no returned `energy` field. Transition and pool scoring
 derive energy from danceability, integrated loudness, and onset rate only when
@@ -76,12 +76,17 @@ all three are present. Installed by `reklawdbox setup` into a managed CPython
 3.14 runtime. Its exact Essentia/NumPy/PyYAML/six manifest governs analyzer
 compatibility; updates require cache-version, profile, and real-audio review.
 Essentia is an external AGPL-3.0-only package, not bundled with the MIT binary.
+Full classification requires fresh, valid Stratum and Essentia rows. Missing,
+stale, or invalid rows produce Degraded mode, cap confidence at Low, require
+review, and never auto-stage. A sparse payload that parses is still current;
+individual null detector values remain unknown. Profile calibration uses only
+complete Full-mode samples.
 
-Without complete Essentia energy inputs, scoring falls back to a BPM-based
-estimate; unavailable brightness/rhythm axes are excluded from the transition
-composite. Classification, transition scoring, pool scoring, audit,
-calibration, and audio-profile summaries each use only a subset of the returned
-evidence. See the canonical [audio evidence and consumers table](/mcp-tools/enrichment-analysis/#returned-and-cached-evidence).
+Without complete Essentia energy inputs, transition and pool scoring fall back
+to a BPM-based estimate; unavailable brightness/rhythm axes are excluded from
+their composites. Those workflows, metadata/export tools, explicit
+`--stratum-only` analysis, and server startup remain available without
+Essentia. See the canonical [audio evidence and consumers table](/mcp-tools/enrichment-analysis/#returned-and-cached-evidence).
 
 ## CLI
 

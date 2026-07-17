@@ -38,7 +38,7 @@ You can use it to:
 - Rekordbox 7.x with at least one collection imported
 - An MCP host for conversational use: Claude Code, Claude Desktop, the ChatGPT
   desktop app, Codex CLI, or the Codex IDE extension
-- CPython 3.14 for `reklawdbox setup` and optional Essentia analysis
+- CPython 3.14 for `reklawdbox setup` and creating or refreshing Essentia evidence
 
 Python is not required for the built-in Stratum analysis or a manual MCP
 configuration without Essentia.
@@ -51,14 +51,20 @@ brew install reklawdbox
 reklawdbox setup
 ```
 
-With no valid expert override, `setup` installs and validates the optional
-Essentia analysis backend at the managed stable path
+With no valid expert override, `setup` installs and validates the managed
+Essentia analysis backend at the stable path
 `~/.local/share/reklawdbox/essentia-venv/bin/python`.
 It uses the wheel-only runtime manifest Essentia 2.1b6.dev1438, NumPy 2.5.1,
 PyYAML 6.0.3, and six 1.17.0; internal immutable generations are not a
 user-facing path. Essentia is an externally installed AGPL-3.0-only package
-and is not bundled with Reklawdbox. The core server and Stratum analysis work
-without Python.
+and is not bundled with Reklawdbox. The core server, library/export tools,
+Stratum analysis, transition scoring, and pool scoring work without Python.
+Fresh, valid cached Stratum and Essentia evidence is required for **Full
+classification** and profile calibration. Those cache-only operations do not
+require a live Python process once current rows exist; Python is needed to
+create or refresh the Essentia row. Without both current rows, classification
+is **Degraded**: confidence is capped at Low, review is required, and the
+result is never auto-staged.
 
 Standard use needs no environment variable. A valid
 `CRATE_DIG_ESSENTIA_PYTHON` remains an expert override and is reused only when
@@ -85,7 +91,7 @@ host:
 
 If you built from source, run `./target/release/reklawdbox setup` and use that
 binary's absolute path in your host configuration. To use reklawdbox without
-Essentia, skip `setup` and follow the [manual configuration guide](https://reklawdbox.com/getting-started/#manual-configuration).
+Essentia, skip `setup` and follow the [manual configuration guide](https://reklawdbox.com/getting-started/#manual-configuration); classification will remain Degraded and cannot auto-stage until both analyzer caches are current.
 
 ### Verify with one read-only request
 
@@ -153,7 +159,7 @@ flowchart LR
 
     app -->|"read-only SQL"| db[("Rekordbox master.db")]
     app --> providers["Discogs · MusicBrainz<br/>Bandcamp"]
-    app --> analysis["Stratum + optional Essentia"]
+    app --> analysis["Stratum + capability-specific Essentia"]
     providers --> state[("Local state")]
     analysis --> state
 
@@ -166,9 +172,11 @@ flowchart LR
 
 - **Audio analysis:** the built-in [stratum-dsp](stratum-dsp/) backend provides
   tempo/key confidence, beat-grid, rhythm, decay, and structure evidence.
-  Optional [Essentia](https://essentia.upf.edu/) adds loudness, danceability,
-  onset, timbral, and spectral evidence. Scoring derives energy only when the
-  required Essentia inputs exist; otherwise it uses a BPM-based proxy.
+  [Essentia](https://essentia.upf.edu/) adds loudness, danceability, onset,
+  timbral, and spectral evidence. It is optional for startup and unrelated
+  workflows, but required alongside fresh Stratum evidence for Full
+  classification and calibration. Transition and pool scoring continue to
+  exclude unavailable axes or use their existing BPM-based energy proxy.
 - **Enrichment:** Discogs access goes through the open-source
   [broker](broker/), which handles OAuth, rate limiting, and response caching
   without putting Discogs consumer secrets in the Rust binary. Other providers

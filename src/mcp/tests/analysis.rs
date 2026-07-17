@@ -28,7 +28,7 @@ use super::common::{
     create_real_server_with_temp_store, create_server_with_connections,
     create_server_with_store_path, create_single_track_test_db, default_http_client_for_tests,
     extract_json, insert_test_track, make_test_track, sample_real_tracks, set_test_audio_analysis,
-    write_test_audio_file,
+    valid_test_essentia_payload, write_test_audio_file,
 };
 
 fn create_fully_current_audio_batch_server(
@@ -1109,6 +1109,9 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         r#"{"bpm":127.1,"key":"Am"}"#,
     )
     .expect("stratum cache should be seeded");
+    let fresh_essentia_payload = valid_test_essentia_payload(serde_json::json!({
+        "danceability": 0.81,
+    }));
     set_test_audio_analysis(
         &store_conn,
         &fresh_path_str,
@@ -1116,7 +1119,7 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         fresh_size,
         fresh_mtime,
         crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
-        r#"{"danceability":0.81}"#,
+        &fresh_essentia_payload,
     )
     .expect("essentia cache should be seeded");
     set_test_audio_analysis(
@@ -1125,20 +1128,20 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
         "stratum-dsp",
         stale_schema_size,
         stale_schema_mtime,
-        "outdated",
-        r#"{"bpm":128.0,"key":"Am"}"#,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":"invalid"}"#,
     )
-    .expect("stale-schema stratum cache should be seeded");
+    .expect("invalid current stratum cache should be seeded");
     set_test_audio_analysis(
         &store_conn,
         &stale_schema_path_str,
         "essentia",
         stale_schema_size,
         stale_schema_mtime,
-        "outdated",
-        r#"{"danceability":0.70}"#,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        "not-json",
     )
-    .expect("stale-schema essentia cache should be seeded");
+    .expect("invalid current Essentia cache should be seeded");
     set_test_audio_analysis(
         &store_conn,
         &stale_identity_path_str,
@@ -1227,12 +1230,35 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     assert_eq!(payload["scope"]["matched_tracks"], 4);
     assert_eq!(payload["scope"]["filter_description"], "has_genre = false");
 
-    assert_eq!(payload["coverage"]["stratum_dsp"]["cached"], 1);
-    assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 25.0);
+    assert_eq!(payload["coverage"]["stratum_dsp"]["cached"], 2);
+    assert_eq!(payload["coverage"]["stratum_dsp"]["percent"], 50.0);
 
-    assert_eq!(payload["coverage"]["essentia"]["cached"], 1);
-    assert_eq!(payload["coverage"]["essentia"]["percent"], 25.0);
+    assert_eq!(payload["coverage"]["essentia"]["cached"], 2);
+    assert_eq!(payload["coverage"]["essentia"]["percent"], 50.0);
     assert_eq!(payload["coverage"]["essentia"]["installed"], true);
+
+    assert_eq!(payload["classification_readiness"]["full"], 1);
+    assert_eq!(payload["classification_readiness"]["degraded"], 3);
+    assert_eq!(
+        payload["classification_readiness"]["degraded_reasons"]["missing_stratum"],
+        2
+    );
+    assert_eq!(
+        payload["classification_readiness"]["degraded_reasons"]["invalid_stratum"],
+        1
+    );
+    assert_eq!(
+        payload["classification_readiness"]["degraded_reasons"]["missing_essentia"],
+        2
+    );
+    assert_eq!(
+        payload["classification_readiness"]["degraded_reasons"]["invalid_essentia"],
+        1
+    );
+    assert_eq!(
+        payload["classification_readiness"]["essentia_runtime_available"],
+        true
+    );
 
     assert_eq!(payload["coverage"]["discogs"]["searched"], 3);
     assert_eq!(payload["coverage"]["discogs"]["searched_percent"], 75.0);
@@ -1241,9 +1267,9 @@ async fn cache_coverage_reports_provider_coverage_and_gap_counts() {
     assert_eq!(payload["coverage"]["discogs"]["usable_genre"], 1);
     assert_eq!(payload["coverage"]["discogs"]["matched_unmapped"], 1);
 
-    assert_eq!(payload["gaps"]["no_audio_analysis"], 3);
+    assert_eq!(payload["gaps"]["no_audio_analysis"], 2);
     assert_eq!(payload["gaps"]["no_enrichment"], 3);
-    assert_eq!(payload["gaps"]["no_data_at_all"], 3);
+    assert_eq!(payload["gaps"]["no_data_at_all"], 2);
     assert_eq!(payload["gaps"]["discogs"]["not_searched"], 1);
     assert_eq!(payload["gaps"]["discogs"]["searched_no_match"], 1);
     assert_eq!(payload["gaps"]["discogs"]["matched_unmapped"], 1);
@@ -1334,7 +1360,7 @@ async fn cache_coverage_excludes_sampler_tracks_for_id_and_playlist_scopes() {
 }
 
 #[tokio::test]
-async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
+async fn classification_calibration_ignores_stale_and_partial_audio_identity() {
     let audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let mut deep_paths = Vec::new();
     for i in 1..=5 {
@@ -1348,6 +1374,9 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     let techno_fresh_path = audio_dir.path().join("calibrate-techno-fresh.flac");
     let (techno_fresh_size, techno_fresh_mtime) = write_test_audio_file(&techno_fresh_path, 1201);
     let techno_fresh_path_str = techno_fresh_path.to_string_lossy().to_string();
+    let deep_invalid_path = audio_dir.path().join("calibrate-deep-invalid.flac");
+    let (deep_invalid_size, deep_invalid_mtime) = write_test_audio_file(&deep_invalid_path, 1202);
+    let deep_invalid_path_str = deep_invalid_path.to_string_lossy().to_string();
 
     let db_conn = create_single_track_test_db("calibrate-deep-1", &deep_paths[0].0);
     db_conn
@@ -1395,6 +1424,13 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         "g2",
         &techno_fresh_path_str,
     );
+    insert_test_track(
+        &db_conn,
+        "calibrate-deep-invalid",
+        "Calibrate Deep Invalid",
+        "g1",
+        &deep_invalid_path_str,
+    );
 
     for (track_no, track_id) in [
         "calibrate-deep-1",
@@ -1404,6 +1440,7 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         "calibrate-deep-5",
         "calibrate-techno-stale",
         "calibrate-techno-fresh",
+        "calibrate-deep-invalid",
     ]
     .iter()
     .enumerate()
@@ -1426,6 +1463,17 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     .expect("temp internal store should open");
 
     for (path, file_size, file_mtime) in &deep_paths {
+        let essentia_payload = if path == &deep_paths[0].0 {
+            valid_test_essentia_payload(serde_json::json!({
+                "danceability": null,
+                "onset_rate": null,
+            }))
+        } else {
+            valid_test_essentia_payload(serde_json::json!({
+                "danceability": 0.72,
+                "onset_rate": 4.1,
+            }))
+        };
         set_test_audio_analysis(
             &store_conn,
             path,
@@ -1436,7 +1484,45 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
             r#"{"bpm":127.0,"decay_mid_tau":0.21,"key_clarity":0.72}"#,
         )
         .expect("fresh stratum analysis should seed");
+        set_test_audio_analysis(
+            &store_conn,
+            path,
+            crate::adapters::audio::ANALYZER_ESSENTIA,
+            *file_size,
+            *file_mtime,
+            crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+            &essentia_payload,
+        )
+        .expect("fresh Essentia analysis should seed");
     }
+    set_test_audio_analysis(
+        &store_conn,
+        &deep_invalid_path_str,
+        crate::adapters::audio::ANALYZER_STRATUM,
+        deep_invalid_size,
+        deep_invalid_mtime,
+        crate::adapters::audio::STRATUM_SCHEMA_VERSION,
+        r#"{"bpm":"invalid"}"#,
+    )
+    .expect("current malformed Stratum analysis should seed");
+    let invalid_pair_essentia_payload = valid_test_essentia_payload(serde_json::json!({
+        "danceability": 0.70,
+        "onset_rate": 4.0,
+    }));
+    set_test_audio_analysis(
+        &store_conn,
+        &deep_invalid_path_str,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        deep_invalid_size,
+        deep_invalid_mtime,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        &invalid_pair_essentia_payload,
+    )
+    .expect("valid Essentia pair for malformed Stratum should seed");
+    let partial_essentia_payload = valid_test_essentia_payload(serde_json::json!({
+        "danceability": 0.61,
+        "onset_rate": 4.8,
+    }));
     set_test_audio_analysis(
         &store_conn,
         &techno_path_str,
@@ -1449,6 +1535,20 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     .expect("stale-identity stratum analysis should seed");
     set_test_audio_analysis(
         &store_conn,
+        &techno_path_str,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        techno_size,
+        techno_mtime,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        &partial_essentia_payload,
+    )
+    .expect("fresh Essentia analysis should seed for partial sample");
+    let contrast_essentia_payload = valid_test_essentia_payload(serde_json::json!({
+        "danceability": 0.62,
+        "onset_rate": 4.9,
+    }));
+    set_test_audio_analysis(
+        &store_conn,
         &techno_fresh_path_str,
         crate::adapters::audio::ANALYZER_STRATUM,
         techno_fresh_size,
@@ -1457,6 +1557,16 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
         r#"{"bpm":132.0,"decay_mid_tau":240.0,"key_clarity":0.40}"#,
     )
     .expect("fresh contrast sample should seed");
+    set_test_audio_analysis(
+        &store_conn,
+        &techno_fresh_path_str,
+        crate::adapters::audio::ANALYZER_ESSENTIA,
+        techno_fresh_size,
+        techno_fresh_mtime,
+        crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
+        &contrast_essentia_payload,
+    )
+    .expect("fresh Essentia contrast sample should seed");
 
     let server =
         create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
@@ -1469,8 +1579,13 @@ async fn calibrate_audio_profiles_audio_cache_ignores_stale_file_identity() {
     let payload = extract_json(&result);
 
     assert_eq!(payload["status"], "calibrated");
-    assert_eq!(payload["total_tracks"], 7);
-    assert_eq!(payload["tracks_with_features"], 6);
+    assert_eq!(payload["total_tracks"], 8);
+    assert_eq!(payload["tracks_with_features"], 8);
+    assert_eq!(payload["tracks_with_complete_classification_audio"], 6);
     assert_eq!(payload["tracks_with_scorable_features"], 6);
-    assert_eq!(payload["skipped_no_audio"], 1);
+    assert_eq!(payload["missing_required_stratum"], 1);
+    assert_eq!(payload["invalid_required_stratum"], 1);
+    assert_eq!(payload["missing_required_essentia"], 0);
+    assert_eq!(payload["skipped_no_audio"], 0);
+    assert_eq!(payload["skipped_incomplete_classification_audio"], 2);
 }

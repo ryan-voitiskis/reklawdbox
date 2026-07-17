@@ -5,13 +5,14 @@
 
 use std::collections::HashMap;
 
-#[cfg(test)]
-use super::MappedGenre;
 use super::profiles::{self as audio_profile, ProfileRegistry};
 use super::taxonomy::{self as genre, GenreFamily};
+#[cfg(test)]
+use super::{AudioBackendStatus, MappedGenre};
 use super::{
-    AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationResult,
-    DiscogsMatchQuality, DiscogsReadiness, GenreCandidate, LabelProvenance, TrackEvidence,
+    AudioFeatures, ClassificationAction, ClassificationConfidence, ClassificationDegradedReason,
+    ClassificationMode, ClassificationResult, DiscogsMatchQuality, DiscogsReadiness,
+    GenreCandidate, LabelProvenance, TrackEvidence, classification_readiness,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +113,7 @@ pub(crate) fn classify_track_with_profiles(
         && let Some(mut result) = check_audio_vetoes(evidence, profile)
     {
         add_missing_audio_flags(evidence, &mut result.flags);
-        return result;
+        return finalize_classification_result(evidence, result);
     }
 
     let (votes, affinities, calibrated_coverage_missing) = gather_votes(
@@ -187,19 +188,67 @@ pub(crate) fn classify_track_with_profiles(
         _ => None,
     };
 
-    ClassificationResult {
-        track_id: evidence.track_id.clone(),
-        artist: evidence.artist.clone(),
-        title: evidence.title.clone(),
-        current_genre: evidence.current_genre.clone(),
-        genre,
-        confidence,
-        action,
-        evidence: ev_lines,
-        candidates,
-        flags,
-        review_hint,
+    finalize_classification_result(
+        evidence,
+        ClassificationResult {
+            track_id: evidence.track_id.clone(),
+            artist: evidence.artist.clone(),
+            title: evidence.title.clone(),
+            current_genre: evidence.current_genre.clone(),
+            genre,
+            confidence,
+            action,
+            mode: ClassificationMode::Full,
+            degraded_reasons: Vec::new(),
+            evidence: ev_lines,
+            candidates,
+            flags,
+            review_hint,
+        },
+    )
+}
+
+fn finalize_classification_result(
+    evidence: &TrackEvidence,
+    mut result: ClassificationResult,
+) -> ClassificationResult {
+    let (mode, reasons) =
+        classification_readiness(evidence.stratum_status, evidence.essentia_status);
+    result.mode = mode;
+    result.degraded_reasons = reasons;
+
+    if mode == ClassificationMode::Degraded {
+        if matches!(
+            result.confidence,
+            ClassificationConfidence::High | ClassificationConfidence::Medium
+        ) {
+            result.confidence = ClassificationConfidence::Low;
+        }
+        push_unique_flag(&mut result.flags, "degraded-classification");
+        let degraded_hint = degraded_review_hint(&result.degraded_reasons);
+        result.review_hint = Some(match result.review_hint.take() {
+            Some(existing) if !existing.is_empty() => format!("{degraded_hint} {existing}"),
+            _ => degraded_hint,
+        });
     }
+
+    result
+}
+
+fn degraded_review_hint(reasons: &[ClassificationDegradedReason]) -> String {
+    let labels: Vec<&str> = reasons
+        .iter()
+        .map(|reason| match reason {
+            ClassificationDegradedReason::MissingStratum => "Stratum missing",
+            ClassificationDegradedReason::InvalidStratum => "Stratum invalid",
+            ClassificationDegradedReason::MissingEssentia => "Essentia missing",
+            ClassificationDegradedReason::InvalidEssentia => "Essentia invalid",
+        })
+        .collect();
+    format!(
+        "Degraded classification ({}) requires review and cannot be auto-staged.",
+        labels.join(", ")
+    )
 }
 
 fn compute_audio_profile(audio: &AudioFeatures) -> AudioProfile {
@@ -384,6 +433,8 @@ fn veto_result(
         genre: Some(genre),
         confidence,
         action,
+        mode: ClassificationMode::Full,
+        degraded_reasons: Vec::new(),
         evidence: ev_lines,
         candidates: vec![],
         flags: vec!["audio-vetoed".into()],
@@ -1503,6 +1554,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         }
     }
 
@@ -1513,6 +1566,75 @@ mod tests {
         assert_eq!(result.confidence, ClassificationConfidence::Insufficient);
         assert_eq!(result.action, ClassificationAction::Manual);
         assert!(result.genre.is_none());
+    }
+
+    #[test]
+    fn classification_mode_caps_confidence_without_reordering_recommendations() {
+        let mut full = make_evidence("");
+        full.discogs_mapped = vec![MappedGenre {
+            genre: "Techno",
+            style_count: 2,
+        }];
+        full.has_discogs = true;
+        full.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
+
+        let full_result = classify_track(&full);
+        let mut degraded = full;
+        degraded.essentia_status = AudioBackendStatus::Missing;
+        let degraded_result = classify_track(&degraded);
+
+        assert_eq!(full_result.mode, ClassificationMode::Full);
+        assert_eq!(degraded_result.mode, ClassificationMode::Degraded);
+        assert_eq!(degraded_result.confidence, ClassificationConfidence::Low);
+        assert_eq!(degraded_result.genre, full_result.genre);
+        assert_eq!(degraded_result.action, full_result.action);
+        assert_eq!(
+            degraded_result
+                .candidates
+                .iter()
+                .map(|candidate| candidate.genre)
+                .collect::<Vec<_>>(),
+            full_result
+                .candidates
+                .iter()
+                .map(|candidate| candidate.genre)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            degraded_result.degraded_reasons,
+            vec![ClassificationDegradedReason::MissingEssentia]
+        );
+        assert!(degraded_result.review_required());
+        assert!(!degraded_result.is_auto_stage_eligible());
+        assert!(full_result.is_auto_stage_eligible());
+    }
+
+    #[test]
+    fn classification_mode_finalizes_the_audio_veto_exit() {
+        let mut full = make_evidence("");
+        full.audio = Some(make_audio(90.0, 0.5, 12.0, 0.3, 500.0));
+        full.has_audio = true;
+        let full_result = classify_track(&full);
+        assert!(full_result.flags.contains(&"audio-vetoed".to_string()));
+        assert_eq!(full_result.confidence, ClassificationConfidence::Medium);
+
+        let mut degraded = full;
+        degraded.stratum_status = AudioBackendStatus::Invalid;
+        let degraded_result = classify_track(&degraded);
+        assert_eq!(degraded_result.genre, full_result.genre);
+        assert!(degraded_result.flags.contains(&"audio-vetoed".to_string()));
+        assert!(
+            degraded_result
+                .flags
+                .contains(&"degraded-classification".to_string())
+        );
+        assert_eq!(degraded_result.confidence, ClassificationConfidence::Low);
+        assert!(
+            degraded_result
+                .review_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Stratum invalid"))
+        );
     }
 
     #[test]
@@ -2403,6 +2525,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -2430,6 +2554,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert!(
@@ -2460,6 +2586,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Breakbeat"));
@@ -2486,6 +2614,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -2515,6 +2645,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -2542,6 +2674,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Techno"));
@@ -2582,6 +2716,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert!(
@@ -2611,6 +2747,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.action, ClassificationAction::Manual);
@@ -2647,6 +2785,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_ne!(
@@ -2692,6 +2832,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_ne!(
@@ -2728,6 +2870,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("Downtempo"));
@@ -2764,6 +2908,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("House"));
@@ -2789,6 +2935,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_ne!(
@@ -2822,6 +2970,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(result.genre, Some("House"));
@@ -2845,6 +2995,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -2882,6 +3034,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -2943,6 +3097,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -2984,6 +3140,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let result = classify_track(&ev);
         assert_eq!(
@@ -3019,6 +3177,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: false,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
         let first_result = classify_track(&ev);
         for _ in 0..10 {
@@ -3105,6 +3265,8 @@ mod tests {
             discogs_match_quality: None,
             label_provenance: None,
             has_audio: true,
+            stratum_status: AudioBackendStatus::Fresh,
+            essentia_status: AudioBackendStatus::Fresh,
         };
 
         // Without profiles: Ambient or Minimal wins

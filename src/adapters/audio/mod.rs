@@ -15,17 +15,21 @@ pub(crate) mod tags;
 pub(crate) use decode::downmix_to_mono;
 pub(crate) use decode::{decode_to_samples, resolve_audio_path};
 pub(crate) use error::AudioError;
-pub(crate) use essentia::{EssentiaOutput, essentia_setup_hint, run_essentia};
 #[cfg(test)]
-pub(crate) use essentia::{parse_essentia_stdout, validate_runtime_manifest};
-pub(crate) use essentia_environment::{
-    EssentiaRuntime, EssentiaSetupError, inspect_essentia_python, install_managed_essentia,
-    probe_essentia_python_path, probe_essentia_runtime_path,
+pub(crate) use essentia::parse_essentia_stdout;
+pub(crate) use essentia::{
+    EssentiaOutput, essentia_setup_hint, run_essentia, validate_runtime_manifest,
 };
 #[cfg(test)]
 pub(crate) use essentia_environment::{
-    EssentiaSetupErrorKind, probe_essentia_python_from_sources,
+    ESSENTIA_CONTRACT_ID, EssentiaSetupErrorKind, SUPPORTED_ESSENTIA_MODULE_VERSION,
+    SUPPORTED_ESSENTIA_VERSION, SUPPORTED_NUMPY_VERSION, SUPPORTED_PYYAML_VERSION,
+    SUPPORTED_SIX_VERSION, probe_essentia_python_from_sources,
     validate_essentia_python_with_timeout,
+};
+pub(crate) use essentia_environment::{
+    EssentiaRuntime, EssentiaSetupError, inspect_essentia_python, install_managed_essentia,
+    probe_essentia_python_path, probe_essentia_runtime_path,
 };
 pub(crate) use scan::scan_audio_directory;
 #[cfg(test)]
