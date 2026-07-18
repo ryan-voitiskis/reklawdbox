@@ -144,7 +144,8 @@ fn inspect_essentia_python_with_timeout_result(
     path: &str,
     timeout: Duration,
 ) -> Result<EssentiaRuntime, EssentiaSetupError> {
-    let mut child = Command::new(path)
+    let mut command = isolated_command(path);
+    let mut child = command
         .args(["-c", ESSENTIA_IMPORT_CHECK_SCRIPT])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -185,8 +186,7 @@ fn inspect_essentia_python_with_timeout_result(
                 std::thread::sleep(Duration::from_millis(25))
             }
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_command_tree(&mut child);
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 return Err(EssentiaSetupError::new(
@@ -198,8 +198,7 @@ fn inspect_essentia_python_with_timeout_result(
                 ));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_command_tree(&mut child);
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 return Err(EssentiaSetupError::new(
@@ -340,6 +339,30 @@ trait EnvironmentOps {
 
 struct SystemEnvironmentOps;
 
+fn isolated_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    command
+}
+
+fn terminate_command_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let process_group = -(child.id() as i32);
+        // SAFETY: the child was spawned into its own process group above, so
+        // this signal cannot target the parent process group.
+        unsafe {
+            libc::kill(process_group, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl EnvironmentOps for SystemEnvironmentOps {
     fn run(
         &self,
@@ -347,7 +370,8 @@ impl EnvironmentOps for SystemEnvironmentOps {
         args: &[String],
         timeout: Duration,
     ) -> Result<CommandResult, EssentiaSetupError> {
-        let mut child = Command::new(program)
+        let mut command = isolated_command(program);
+        let mut child = command
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -388,8 +412,7 @@ impl EnvironmentOps for SystemEnvironmentOps {
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate_command_tree(&mut child);
                     let _ = stdout_handle.join();
                     let _ = stderr_handle.join();
                     return Err(EssentiaSetupError::new(
@@ -401,8 +424,7 @@ impl EnvironmentOps for SystemEnvironmentOps {
                     ));
                 }
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate_command_tree(&mut child);
                     let _ = stdout_handle.join();
                     let _ = stderr_handle.join();
                     return Err(EssentiaSetupError::new(

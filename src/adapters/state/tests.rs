@@ -1,7 +1,9 @@
 use super::*;
 use std::path::PathBuf;
 
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
+#[cfg(target_os = "macos")]
+use rusqlite::params;
 
 use crate::domain::audit::Resolution;
 
