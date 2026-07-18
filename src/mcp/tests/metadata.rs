@@ -68,6 +68,202 @@ fn write_executable_script(path: &std::path::Path, contents: &str) {
 }
 
 #[cfg(unix)]
+struct HangingBackupFixture {
+    script: std::path::PathBuf,
+    ready: std::path::PathBuf,
+    parent_pid: std::path::PathBuf,
+    descendant_pid: Option<std::path::PathBuf>,
+    delayed_sentinel: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+fn shell_single_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn write_hanging_backup_fixture(
+    directory: &std::path::Path,
+    with_descendant: bool,
+) -> HangingBackupFixture {
+    let script = directory.join(if with_descendant {
+        "descendant-hang.sh"
+    } else {
+        "direct-hang.sh"
+    });
+    let ready = directory.join("ready");
+    let parent_pid = directory.join("parent.pid");
+    let descendant_pid = with_descendant.then(|| directory.join("descendant.pid"));
+    let delayed_sentinel = directory.join("survived-timeout");
+    let block_fifo = directory.join("block.fifo");
+    let ready_fifo = directory.join("ready.fifo");
+
+    let contents = if let Some(descendant_pid) = descendant_pid.as_ref() {
+        format!(
+            "#!/bin/bash\n\
+             set -eu\n\
+             mkfifo {block_fifo} {ready_fifo}\n\
+             exec 3<> {block_fifo}\n\
+             exec 4<> {ready_fifo}\n\
+             (\n\
+               printf '%s\\n' \"$BASHPID\" > {descendant_pid}\n\
+               printf 'descendant-ready\\n'\n\
+               printf 'descendant-stderr-ready\\n' >&2\n\
+               printf 'ready\\n' >&4\n\
+               IFS= read -r -t 1 _ <&3 || true\n\
+               printf 'descendant survived timeout\\n' > {delayed_sentinel}\n\
+               while :; do IFS= read -r -t 60 _ <&3 || true; done\n\
+             ) &\n\
+             descendant=$!\n\
+             printf '%s\\n' \"$$\" > {parent_pid}\n\
+             IFS= read -r _ <&4\n\
+             printf 'ready\\n' > {ready}\n\
+             wait \"$descendant\"\n",
+            block_fifo = shell_single_quote(&block_fifo),
+            ready_fifo = shell_single_quote(&ready_fifo),
+            descendant_pid = shell_single_quote(descendant_pid),
+            delayed_sentinel = shell_single_quote(&delayed_sentinel),
+            parent_pid = shell_single_quote(&parent_pid),
+            ready = shell_single_quote(&ready),
+        )
+    } else {
+        format!(
+            "#!/bin/bash\n\
+             set -eu\n\
+             mkfifo {block_fifo}\n\
+             exec 3<> {block_fifo}\n\
+             printf '%s\\n' \"$$\" > {parent_pid}\n\
+             printf 'parent-ready\\n'\n\
+             printf 'parent-stderr-ready\\n' >&2\n\
+             printf 'ready\\n' > {ready}\n\
+             IFS= read -r -t 1 _ <&3 || true\n\
+             printf 'parent survived timeout\\n' > {delayed_sentinel}\n\
+             while :; do IFS= read -r -t 60 _ <&3 || true; done\n",
+            block_fifo = shell_single_quote(&block_fifo),
+            parent_pid = shell_single_quote(&parent_pid),
+            ready = shell_single_quote(&ready),
+            delayed_sentinel = shell_single_quote(&delayed_sentinel),
+        )
+    };
+    write_executable_script(&script, &contents);
+    HangingBackupFixture {
+        script,
+        ready,
+        parent_pid,
+        descendant_pid,
+        delayed_sentinel,
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_nonempty_file(path: &std::path::Path, label: &str) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path)
+                && !contents.trim().is_empty()
+            {
+                return contents;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {label}: {}", path.display()))
+}
+
+#[cfg(unix)]
+fn fixture_pid(path: &std::path::Path, label: &str) -> i32 {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {label} {}: {error}", path.display()))
+        .trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("invalid {label} in {}: {error}", path.display()))
+}
+
+#[cfg(unix)]
+fn pid_exists(pid: i32) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn kill_fixture_pid(pid: i32) {
+    if pid_exists(pid) {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_pid_exit(pid: i32, label: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pid_exists(pid) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{label} PID {pid} remained alive"));
+}
+
+#[cfg(unix)]
+async fn assert_path_remains_absent(path: &std::path::Path) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1_200);
+    while tokio::time::Instant::now() < deadline {
+        assert!(
+            !path.exists(),
+            "delayed survival sentinel appeared: {}",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[cfg(unix)]
+async fn assert_pre_op_backup_timeout_terminates_fixture(with_descendant: bool) {
+    let temp = tempfile::tempdir().expect("hanging backup fixture directory should create");
+    let fixture = write_hanging_backup_fixture(temp.path(), with_descendant);
+    let script = fixture.script.clone();
+    let mut backup_task = tokio::spawn(async move {
+        crate::adapters::rekordbox::backup::execute_script_with_timeout_for_test(
+            &script,
+            Duration::from_millis(250),
+        )
+        .await
+    });
+
+    wait_for_nonempty_file(&fixture.ready, "backup ready marker").await;
+    let parent_pid = fixture_pid(&fixture.parent_pid, "parent PID");
+    let descendant_pid = fixture
+        .descendant_pid
+        .as_deref()
+        .map(|path| fixture_pid(path, "descendant PID"));
+
+    let result = match tokio::time::timeout(Duration::from_secs(5), &mut backup_task).await {
+        Ok(joined) => joined.expect("backup timeout task should join"),
+        Err(_) => {
+            if let Some(pid) = descendant_pid {
+                kill_fixture_pid(pid);
+            }
+            kill_fixture_pid(parent_pid);
+            let _ = tokio::time::timeout(Duration::from_secs(5), &mut backup_task).await;
+            panic!("pre-operation backup ignored its injected 250ms timeout");
+        }
+    };
+    let error = result.expect_err("hanging pre-operation backup should time out");
+    assert!(
+        error.starts_with("pre-operation backup timed out after"),
+        "unexpected timeout error: {error}"
+    );
+
+    wait_for_pid_exit(parent_pid, "backup parent").await;
+    if let Some(pid) = descendant_pid {
+        wait_for_pid_exit(pid, "backup descendant").await;
+    }
+    assert_path_remains_absent(&fixture.delayed_sentinel).await;
+}
+
+#[cfg(unix)]
 fn run_embedded_backup_script(
     args: &[&str],
     home: &std::path::Path,
@@ -1352,6 +1548,134 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
     );
 }
 
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let db_conn =
+        create_single_track_test_db("backup-timeout-track", "/tmp/backup-timeout-track.flac");
+    let store_dir = tempfile::tempdir().expect("temp store dir should create");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(
+        store_path
+            .to_str()
+            .expect("temp store path should be UTF-8"),
+    )
+    .expect("temp internal store should open");
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    server.context.mutation.changes.stage(vec![TrackChange {
+        track_id: "backup-timeout-track".to_string(),
+        genre: Some("Techno".to_string()),
+        comments: Some("restored after timeout".to_string()),
+        rating: Some(5),
+        ..Default::default()
+    }]);
+    let staged_before = serde_json::to_value(
+        server
+            .context
+            .mutation
+            .changes
+            .get("backup-timeout-track")
+            .expect("staged change should exist before export"),
+    )
+    .expect("staged change should serialize");
+
+    let backup_dir = tempfile::tempdir().expect("hanging backup fixture should create");
+    let fixture = write_hanging_backup_fixture(backup_dir.path(), true);
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &fixture.script);
+    let timeout_override =
+        crate::adapters::rekordbox::backup::override_pre_op_backup_timeout_for_test(
+            Duration::from_millis(250),
+        );
+    let output_dir = tempfile::tempdir().expect("temp output dir should create");
+    let timed_out_path = output_dir.path().join("must-not-exist.xml");
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(timed_out_path.to_string_lossy().to_string()),
+            playlists: None,
+        })),
+    )
+    .await
+    .expect("timed-out write_xml should return within five seconds")
+    .expect_err("timed-out backup must fail XML export");
+    assert!(
+        error
+            .message
+            .contains("pre-op pre-operation backup timed out after 250ms"),
+        "unexpected timeout error: {}",
+        error.message
+    );
+    assert!(!timed_out_path.exists(), "timed-out XML must not exist");
+    assert_eq!(
+        std::fs::read_dir(output_dir.path())
+            .expect("output directory should be readable")
+            .count(),
+        0,
+        "timed-out export must leave no target or temporary output"
+    );
+    let staged_after = serde_json::to_value(
+        server
+            .context
+            .mutation
+            .changes
+            .get("backup-timeout-track")
+            .expect("staged change should be restored after timeout"),
+    )
+    .expect("restored staged change should serialize");
+    assert_eq!(staged_after, staged_before);
+    assert_eq!(
+        server.context.mutation.changes.pending_ids(),
+        vec!["backup-timeout-track".to_string()],
+        "snapshot should be restored exactly once"
+    );
+    let parent_pid = fixture_pid(&fixture.parent_pid, "parent PID");
+    let descendant_pid = fixture_pid(
+        fixture
+            .descendant_pid
+            .as_deref()
+            .expect("descendant fixture should record a PID"),
+        "descendant PID",
+    );
+    wait_for_pid_exit(parent_pid, "write_xml backup parent").await;
+    wait_for_pid_exit(descendant_pid, "write_xml backup descendant").await;
+    assert!(
+        !fixture.delayed_sentinel.exists(),
+        "timeout fixture must not survive long enough to write its sentinel"
+    );
+
+    drop(timeout_override);
+    write_executable_script(
+        &fixture.script,
+        "#!/bin/sh\necho 'fast backup succeeded'\nexit 0\n",
+    );
+    let retry_path = output_dir.path().join("retry.xml");
+    let retry = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.write_xml(Parameters(WriteXmlParams {
+            skip_label_gate: Some(true),
+            output_path: Some(retry_path.to_string_lossy().to_string()),
+            playlists: None,
+        })),
+    )
+    .await
+    .expect("same-server retry should not deadlock")
+    .expect("same-server retry should succeed");
+    let payload = extract_json(&retry);
+    assert_eq!(payload["changes_applied"], 1);
+    assert_eq!(server.context.mutation.changes.pending_count(), 0);
+    let xml = std::fs::read_to_string(&retry_path).expect("retry XML should be readable");
+    assert!(xml.contains("Genre=\"Techno\""));
+    assert!(xml.contains("Comments=\"restored after timeout\""));
+    assert!(xml.contains("Rating=\"255\""));
+}
+
 #[test]
 #[cfg(unix)]
 #[allow(clippy::await_holding_lock)]
@@ -1423,7 +1747,7 @@ fn effective_db_path_shared_with_backup_and_rejects_unsafe_paths() {
 #[tokio::test]
 #[cfg(unix)]
 #[allow(clippy::await_holding_lock)]
-async fn pre_op_backup_path_env_preserves_first_argument_and_parent_env() {
+async fn pre_op_backup_success_path_env_preserves_first_argument_and_parent_env() {
     let _env_guard = backup_script_env_lock()
         .lock()
         .expect("backup env mutex should not be poisoned");
@@ -1470,7 +1794,7 @@ async fn pre_op_backup_path_env_preserves_first_argument_and_parent_env() {
 #[tokio::test]
 #[cfg(unix)]
 #[allow(clippy::await_holding_lock)]
-async fn pre_op_backup_failure_output_is_bounded() {
+async fn pre_op_backup_output_is_bounded() {
     let _env_guard = backup_script_env_lock()
         .lock()
         .expect("backup env mutex should not be poisoned");
@@ -1490,6 +1814,39 @@ async fn pre_op_backup_failure_output_is_bounded() {
     assert!(error.contains("exit status 17"));
     assert!(error.contains("[truncated]"));
     assert!(error.len() < 8_500, "failure output should remain bounded");
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_nonzero_exit_is_reported() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("nonzero.sh");
+    write_executable_script(&script, "#!/bin/sh\necho 'nonzero backup' >&2\nexit 19\n");
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("nonzero custom script should fail");
+    assert!(error.contains("exit status 19"));
+    assert!(error.contains("nonzero backup"));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_timeout_reaps_direct_hung_child() {
+    assert_pre_op_backup_timeout_terminates_fixture(false).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_timeout_reaps_descendant_holding_output_pipes() {
+    assert_pre_op_backup_timeout_terminates_fixture(true).await;
 }
 
 #[test]
