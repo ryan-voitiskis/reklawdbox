@@ -235,14 +235,6 @@ const GENRE_META: &[(&str, GenreMeta)] = &[
             bpm: Some(BpmRange::new(110.0, 130.0)),
         },
     ),
-    (
-        "Drone Techno",
-        GenreMeta {
-            family: GenreFamily::Techno,
-            depth: 8,
-            bpm: Some(BpmRange::new(115.0, 135.0)),
-        },
-    ),
     // ── Hardcore family (1 = most commercial/euphoric, 5 = most raw/aggressive) ──
     (
         "Hardstyle",

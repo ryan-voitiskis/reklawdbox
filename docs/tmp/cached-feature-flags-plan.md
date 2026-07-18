@@ -81,8 +81,7 @@ Each check is a single `if let` — under 10 lines added.
 ### B2 — `LongTail` rules
 
 1. **In `resolve_same_family_specificity`:** `LongTail` reinforces the existing `Atmospheric || LowEnergy` deep-preference branch at line 936 — add it to the OR.
-2. **Conjunctive (used here, expanded in C templates later):** `LongTail + Atonal` → boost Drone Techno candidate weight if Drone Techno is in the candidate list (in `gather_votes` post-pass, weight up to AFFINITY_CAP = 0.5).
-3. **In `audio_clearly_favors_family` for Techno:** `LongTail` joins `dark_timbre` as an alternative qualifier in the LowEnergy branch (line 989-993) — currently only `dark_timbre` qualifies.
+2. **In `audio_clearly_favors_family` for Techno:** `LongTail` joins `dark_timbre` as an alternative qualifier in the LowEnergy branch (line 989-993) — currently only `dark_timbre` qualifies.
 
 ### B3 — `Compressed` rules
 
@@ -143,10 +142,9 @@ Add new test cases:
 
 1. **`atonal_house_demotes_to_house_or_tech_house`** — Atonal flag set, House-family votes, asserts result is not Deep House. (Covers the parent doc's pilot Untitled 42433 misclassification.)
 2. **`atonal_techno_prefers_deep_techno`** — Atonal + Dancefloor + Techno-family votes, asserts Deep Techno wins over Techno.
-3. **`long_tail_atonal_boosts_drone_techno`** — both flags + Drone Techno candidate, asserts Drone Techno wins.
-4. **`compressed_dancefloor_prefers_deep_techno`** — Compressed + Dancefloor + Techno-family ties, asserts Deep Techno over Techno.
-5. **`bpm_disagreement_uses_detector_consensus`** — Rekordbox 130.77, stratum 125, Essentia 125, genre with BPM range 118–132. Without fallback the genre is BPM-implausible; with fallback it is plausible. Asserts `"bpm-rekordbox-disagrees"` flag set.
-6. **`bpm_disagreement_no_consensus_uses_rekordbox`** — Rekordbox 130, stratum 125, Essentia 130. Detectors disagree with each other → fall back to Rekordbox (no flag).
+3. **`compressed_dancefloor_prefers_deep_techno`** — Compressed + Dancefloor + Techno-family ties, asserts Deep Techno over Techno.
+4. **`bpm_disagreement_uses_detector_consensus`** — Rekordbox 130.77, stratum 125, Essentia 125, genre with BPM range 118–132. Without fallback the genre is BPM-implausible; with fallback it is plausible. Asserts `"bpm-rekordbox-disagrees"` flag set.
+5. **`bpm_disagreement_no_consensus_uses_rekordbox`** — Rekordbox 130, stratum 125, Essentia 130. Detectors disagree with each other → fall back to Rekordbox (no flag).
 7. **`compressed_atmospheric_skips_ambient_veto`** — verifies the negative B3 rule that Compressed+Atmospheric is not silently routed to Ambient by the expanded veto at `classify.rs:373-387`.
 
 Tests in `src/tools/tests.rs` (e.g. line 3023, 3104, 3335, 3654) using `loudness_range: None` and `bpm_agreement: ...` already exercise the surrounding paths; verify they still pass after struct additions.
@@ -168,8 +166,8 @@ For these threshold-based features, validation is cheaper than for new DSP. Step
 
 1. Run `classify_tracks` (or the audit equivalent) over the existing 574-track verified playlist (memory: `genre_verified` Rekordbox playlist).
 2. For each new flag, count flag-fire rate per genre bucket. Expected:
-   - **Atonal**: ~near-100% in Drone Techno / Deep Techno / Dub Techno / Ambient; near-0% in Deep House / Disco / Soul / Trance. Fires in House would mean threshold too lenient.
-   - **LongTail**: highest in Dub Techno / Drone Techno / Deep Techno; low in Tech House / Hardcore / DnB. Should not fire on most Downtempo (per pilot data, Downtempo had 102 ms — well below threshold).
+   - **Atonal**: highest in Deep Techno / Dub Techno / Ambient; near-0% in Deep House / Disco / Soul / Trance. Fires in House would mean threshold too lenient.
+   - **LongTail**: highest in Dub Techno / Ambient Techno / Deep Techno; low in Tech House / Hardcore / DnB. Should not fire on most Downtempo (per pilot data, Downtempo had 102 ms — well below threshold).
    - **Compressed**: highest in Deep Techno / Tech House / Hardcore; low in Ambient / Trip-Hop / Downtempo. If it fires on >40% of Downtempo, threshold is wrong.
 3. Manual spot-check 5 unexpected fires per flag (e.g. "fired on a House track" for Atonal). If unexpected fires represent a genre-distribution issue rather than a threshold issue, accept and move on; if the flag is firing on most of an unrelated genre bucket, retune.
 4. For B4: count tracks where the fallback fires (i.e. Rekordbox disagrees with detector consensus). Expected to be small (single-digit percent of library); large fire-rate suggests detector calibration is the problem, not the fallback.

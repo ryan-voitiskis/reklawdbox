@@ -62,12 +62,7 @@ pub(crate) fn classify_track_with_profiles(
         return finalize_classification_result(evidence, result);
     }
 
-    let vote_collection = votes::gather(
-        evidence,
-        audio_profile.as_ref(),
-        profile_registry,
-        bpm_context,
-    );
+    let vote_collection = votes::gather(evidence, profile_registry, bpm_context);
 
     let mut decision = if vote_collection.votes.is_empty() {
         audio_only::resolve(evidence, audio_profile.as_ref())

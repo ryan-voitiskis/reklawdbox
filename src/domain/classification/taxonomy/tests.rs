@@ -41,6 +41,8 @@ fn known_genre_case_insensitive() {
     assert!(is_known_genre("TECHNO"));
     assert!(is_known_genre("uk funky"));
     assert!(is_known_genre("R&B"));
+    let removed_genre = ["Drone", "Techno"].join(" ");
+    assert!(!is_known_genre(&removed_genre));
     assert!(!is_known_genre("Polka"));
 }
 
@@ -229,6 +231,15 @@ fn token_extraction_multi_word() {
 }
 
 #[test]
+fn removed_genre_descriptor_decomposes_to_live_genres() {
+    let removed_genre = ["Drone", "Techno"].join(" ");
+    assert_eq!(
+        extract_genre_tokens(&removed_genre),
+        vec!["Ambient", "Techno"]
+    );
+}
+
+#[test]
 fn token_extraction_vague_returns_empty() {
     assert!(extract_genre_tokens("Electronica").is_empty());
     assert!(extract_genre_tokens("Electronic").is_empty());
@@ -385,7 +396,6 @@ fn depth_ordering_house() {
 
 #[test]
 fn depth_ordering_techno() {
-    assert!(genre_depth("Drone Techno") > genre_depth("Deep Techno"));
     assert!(genre_depth("Deep Techno") > genre_depth("Techno"));
     assert!(genre_depth("Techno") > genre_depth("Hard Techno"));
     assert!(genre_depth("Ambient Techno") > genre_depth("Dub Techno"));

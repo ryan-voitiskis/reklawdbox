@@ -107,13 +107,6 @@ pub(super) fn resolve(
         ));
     }
 
-    if votes
-        .iter()
-        .any(|vote| vote.source == "audio-long-tail-atonal")
-    {
-        evidence_lines.push("audio rule: long-tail+atonal → Drone Techno".into());
-    }
-
     if let Some(profile) = audio_profile {
         let bucket_name = match profile.bucket {
             Some(EnergyBucket::NonDancefloor) => "non-dancefloor",
@@ -423,7 +416,7 @@ fn resolve_same_family_specificity(
 
 fn shallower_alternative(genre_name: &str) -> Option<&'static str> {
     match genre_name {
-        "Deep Techno" | "Dub Techno" | "Ambient Techno" | "Drone Techno" => Some("Techno"),
+        "Deep Techno" | "Dub Techno" | "Ambient Techno" => Some("Techno"),
         "Deep House" => Some("House"),
         _ => None,
     }

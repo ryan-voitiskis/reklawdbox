@@ -126,13 +126,11 @@ and fast.
       Techno family.
 - [x] **B2. `LongTail` CharFlag from `decay_mid_tau`** — threshold
       `decay_mid_tau > 200 ms`. Reinforces deep-preference branch in
-      Techno-family. Conjunctive `LongTail + Atonal` boosts Drone Techno.
-      Value already extracted; tree-side only. ~20 LOC.
+      Techno-family. Value already extracted; tree-side only. ~20 LOC.
 
       **Status:** implemented with tree-side flagging, reviewable `long-tail`
-      evidence, same-family Techno depth preference, LowEnergy Techno-family
-      tiebreak support, and the `LongTail + Atonal` Drone Techno candidate
-      boost. HighEnergy still demotes deep Techno variants. Real-library MCP
+      evidence, same-family Techno depth preference, and LowEnergy
+      Techno-family tiebreak support. HighEnergy still demotes deep Techno variants. Real-library MCP
       validation found `decay_mid_tau` on only 4 current-schema verified tracks
       after the schema 11 bump; 3/4 fired LongTail (Dub Techno, Techno,
       Ambient). Treat this as wired but mostly dormant until the verified
@@ -323,7 +321,8 @@ After F0, B1–B4, A2, A4, A5 ship, do **one** classifier-tuning pass:
 
 - **A3 band-split spectral flux.** Overlaps with `detect_band_onsets`
   already in stratum-dsp. Reconsider only if A2/A4/A5 turn out insufficient.
-- **C1–C5 conjunctive templates** (`conjunctive-templates-plan.md`). Gated
+- **C1, C2, C4, and C5 conjunctive templates**
+  (`conjunctive-templates-plan.md`). Gated
   on at least 3 of A1–A5 shipping AND validation. Defer to a later milestone.
 - **D1–D2 training improvements**
   (`prototype-training-improvements-plan.md`). The current Fisher pipeline

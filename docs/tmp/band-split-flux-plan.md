@@ -130,9 +130,9 @@ Lighter than the chord-stab plan — this is a band split of an existing computa
 
 ### Method
 
-1. Reuse the chord-stab plan's 32-track fixture set (Dub Techno × 8, Deep Techno × 8, Drone Techno × 4, Tech House × 4, off-beat hat × 4, sustained-pad × 4). It already covers the tonal range where flux discrimination matters most.
+1. Reuse the chord-stab plan's 28-track fixture set (Dub Techno × 8, Deep Techno × 8, Tech House × 4, off-beat hat × 4, sustained-pad × 4). It already covers the tonal range where flux discrimination matters most.
 2. Compute `flux_low`, `flux_mid`, `flux_high`, and the existing `spectral_flux_mean` for each fixture.
-3. For each pair of (positive, negative) buckets relevant to A3's stated discriminations (Deep Techno vs Drone Techno; Deep Techno vs Tech House; Deep Techno vs Dub Techno):
+3. For each pair of (positive, negative) buckets relevant to A3's stated discriminations (Deep Techno vs Tech House; Deep Techno vs Dub Techno):
    - Compute Fisher's between/within-class variance ratio for the global mean alone.
    - Compute the same ratio for the three-band features used jointly.
 4. Plot per-bucket scatter of `flux_low` vs `flux_high` (the most discriminating pair, by hypothesis from the parent doc).
@@ -140,9 +140,9 @@ Lighter than the chord-stab plan — this is a band split of an existing computa
 
 ### Acceptance criteria
 
-- **Three-band Fisher ratio beats global Fisher ratio by ≥ 1.5×** on at least 2 of the 3 named discriminations (Deep vs Drone, Deep vs Dub, Deep vs Tech House).
+- **Three-band Fisher ratio beats global Fisher ratio by ≥ 1.5×** on both named discriminations (Deep vs Dub and Deep vs Tech House).
 - **No band ends up zero-variance across all genres** (would indicate the band is too narrow or the bin alignment is off).
-- **Untitled 27037 specifically** has `flux_high > median(flux_high across Drone Techno bucket)` by a clear margin. This was the originating motivation; if the feature can't discriminate this case, it isn't worth the schema bump.
+- **Untitled 27037 specifically** has `flux_high > median(flux_high across the sustained-pad bucket)` by a clear margin. This was the originating motivation; if the feature cannot distinguish its upper-band activity from static texture, it is not worth the schema bump.
 
 If criteria fail: iterate on band edges (try 100–300 Hz / 300–2500 Hz / 2500–8000 Hz; or perceptual mel-style edges) before declaring the approach broken.
 

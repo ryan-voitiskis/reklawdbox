@@ -68,7 +68,7 @@ verify_tracks(verifications: Vec<{track_id, genre}>, source: Option<String>) -> 
     "staged_changes": <count>,        // genre changes added to ChangeManager
     "coverage_delta": {                // optional, just-crossed-threshold summary
       "newly_eligible": ["Deep Techno"],
-      "still_blocked": ["Drone Techno (3/5)"]
+      "still_blocked": ["Ambient Techno (3/5)"]
     }
   }
   ```
@@ -156,7 +156,7 @@ Sorted to surface the most actionable items first. Three sections:
     {"genre": "Deep Techno", "verified_n": 5, "delta": "+1 since last calibration", "prototype": null}
   ],
   "blocked": [
-    {"genre": "Drone Techno", "verified_n": 3, "needed": 2, "hint": "2 more verifications to build prototype"},
+    {"genre": "Ambient Techno", "verified_n": 3, "needed": 2, "hint": "2 more verifications to build prototype"},
     {"genre": "Tech House", "verified_n": 0, "needed": 5, "hint": "no verified tracks — start tagging or skip in classification"}
   ],
   "trained": [

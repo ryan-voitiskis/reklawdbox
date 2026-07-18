@@ -460,6 +460,36 @@ mod tests {
     }
 
     #[test]
+    fn removed_genre_profile_rows_are_ignored_and_preserved() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_to_db(&conn, &test_registry(), &test_metadata("fingerprint-a")).unwrap();
+
+        let removed_genre = ["Drone", "Techno"].join(" ");
+        conn.execute(
+            "UPDATE genre_audio_profiles SET genre = ?1",
+            rusqlite::params![removed_genre],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE genre_timbral_centroids SET genre = ?1",
+            rusqlite::params![removed_genre],
+        )
+        .unwrap();
+
+        let loaded = load_from_db(&conn, Some("fingerprint-a")).unwrap();
+        assert_eq!(loaded.status, ProfileLoadStatus::Fresh);
+        assert!(loaded.registry.unwrap().prototypes.is_empty());
+
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM genre_audio_profiles", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(rows > 0);
+    }
+
+    #[test]
     fn compatible_training_change_remains_usable_and_reported() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();

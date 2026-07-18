@@ -76,7 +76,7 @@ A track has high sub-rumble if there is sustained low-frequency energy *between*
 2. **Kick band**: 60–100 Hz — kick-drum fundamental and second harmonic.
 3. The metric is the **ratio of sub-band RMS in the off-kick portion of each beat to kick-band RMS in the kick portion**, averaged over beats.
 
-This separates Deep Techno's signature "rumble between kicks" (high ratio) from Tech House (sidechain ducks both the sub and the mids during the kick recovery, so the off-kick sub is near zero). Drone Techno without a kick will have undefined kick-band reference; handle as edge case.
+This separates Deep Techno's signature "rumble between kicks" (high ratio) from Tech House (sidechain ducks both the sub and the mids during the kick recovery, so the off-kick sub is near zero). Sparse Ambient Techno without a kick will have undefined kick-band reference; handle it as an edge case.
 
 ### Algorithm
 
@@ -116,7 +116,7 @@ Median rather than mean to resist transient outliers (snare fills, breakdowns).
 
 1. **Off-beat / broken-beat kicks (Electro)**: Kicks don't land in the first 50 ms of the beat window. Mitigation: detect this via the kick-pattern classifier (A2 from parent doc) when it lands; for now, also report `sub_rumble_proportion = None` if `kick_band_alignment_score` (computed inline: fraction of beats with kick_rms[i] > 2 × median kick_rms) is below 0.5. Without good kick alignment the metric is noise.
 
-2. **No kick at all (Drone Techno)**: `kick_ref` falls below `KICK_PRESENCE_FLOOR`. Return `None`. Drone Techno is correctly characterised by *absence* of this feature, not by a numeric value. The classifier should handle the `None` case as "feature inapplicable" rather than "feature is zero."
+2. **No kick at all (Ambient or sparse Ambient Techno)**: `kick_ref` falls below `KICK_PRESENCE_FLOOR`. Return `None`. The classifier should handle the `None` case as "feature inapplicable" rather than "feature is zero."
 
 3. **Very low BPM**: At 60 BPM, beat interval is 1000 ms; the 50 ms kick window is only 5 % of the beat. The off-kick window is 950 ms of mostly tail — actually a *better* signal for rumble. No mitigation needed beyond the existing `kick_window_ms` clamp in S2.
 
@@ -208,7 +208,7 @@ If primary and time-domain depths disagree by more than 0.3, flag the track as a
 
 2. **Tremolo at non-beat rates** (synth LFO at 4 Hz on a 125 BPM track ≈ 1.92× beat rate): No peak at beat_bin, so `sidechain_depth` is correctly low. The double_beat check avoids confusion with deliberate 8th-note tremolo.
 
-3. **Manual envelope shaping in Drone Techno / Ambient**: Slow, irregular envelope changes that don't lock to the beat grid. Will not produce a peak at the beat rate. Correctly scored zero.
+3. **Manual envelope shaping in Ambient Techno / Ambient**: Slow, irregular envelope changes that don't lock to the beat grid. Will not produce a peak at the beat rate. Correctly scored zero.
 
 4. **Strong synth tremolo that mimics sidechain at the beat rate**: Genuine ambiguity. Acoustically these *do* sound like sidechain. Acceptable to score them as sidechain — Tech House producers also use beat-rate tremolo intentionally; the genre signature is the audible pumping, not the production technique.
 
@@ -275,7 +275,7 @@ A combined set serves both detectors. ~40 tracks total.
 | Modern House | 4 | low–mid | mid–high (>0.3) |
 | Deep House | 4 | mid (~0.3) | low–mid (~0.3) |
 | Dub Techno | 4 | mid (chord stab is mid-band, sub is sustained but not always rumbling) | zero |
-| Drone Techno (no kick) | 4 | None (kick_ref below floor) | None or zero |
+| Ambient Techno (no kick) | 4 | None (kick_ref below floor) | None or zero |
 | Electro (broken beat) | 4 | None (kick_alignment < 0.5) | zero (no sidechain) |
 | Minimal | 4 | low | zero–low |
 

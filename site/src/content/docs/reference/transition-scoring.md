@@ -138,7 +138,7 @@ Genres are grouped into families. Compatibility depends on whether two genres sh
 | Family    | Genres                                                                                                                                                    |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | House     | House, Deep House, Tech House, Afro House, Gospel House, Progressive House, Garage, Speed Garage, Disco, Italo Disco, Italodance, 2-Step Garage, UK Funky |
-| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Drone Techno, Acid, EBM, Electro, Trance, Psytrance                                |
+| Techno    | Techno, Deep Techno, Minimal, Dub Techno, Ambient Techno, Hard Techno, Acid, EBM, Electro, Trance, Psytrance                                              |
 | Bass      | Drum & Bass, Jungle, Dubstep, Breakbeat, Footwork, Future Garage, Grime, Bassline, Broken Beat                                                            |
 | Hardcore  | Hardstyle, Happy Hardcore, Hard Trance, Hardcore, Gabber                                                                                                  |
 | Downtempo | Ambient, Downtempo, Trip-Hop, Dub, Dub Reggae, IDM, Experimental                                                                                          |

@@ -10,7 +10,7 @@
 
 Add a stratum-dsp feature that detects the periodic mid-band chord stab/wash pattern characteristic of Dub Techno. Output `dub_stab_score: f32 ∈ [0, 1]` and `dub_stab_period: Option<u8>` (period in 16th notes). Cost target: under 5% of total analysis time, reusing the existing shared STFT.
 
-This is the single discriminator that genuinely cannot be derived from any currently-cached feature. It's what cleanly separates Dub Techno from Deep Techno and Drone Techno — three sonically and DJ-context distinct genres that the current pipeline frequently confuses.
+This is the single discriminator that genuinely cannot be derived from any currently-cached feature. It cleanly separates Dub Techno from Deep Techno and sparse atmospheric techno that lacks the defining chord pattern.
 
 ## Signal Definition
 
@@ -255,7 +255,7 @@ Build a small ear-verified WAV fixture set for offline validation. Stored separa
 |---|---|---|
 | Dub Techno (positive) | 10 | Basic Channel, Vladislav Delay, Echocord roster, Deepchord, Convextion, Burger/Ink "Elvism" (already a known case study). **Must include ≥3 canonical reverb-soaked positives (Basic Channel / Echocord) to lock the decay upper bound at 3000 ms.** |
 | Deep Techno (negative) | 10 | Marcel Dettmann era, Klockworks, Norman Nodge, Sandwell District, Prologue |
-| Drone Techno (negative) | 10 | Voices From The Lake, Donato Dozzy reductive, Spazio Disponibile |
+| Sparse atmospheric techno (negative) | 10 | Voices From The Lake, Donato Dozzy reductive, Spazio Disponibile |
 | Tech House (negative) | 10 | Hot Creations roster, Solid Grooves, Cuttin' Headz |
 | Off-beat hi-hat tracks (negative) | 10 | Any House track with prominent off-beat hats but no chord stab |
 | Sustained-pad tracks (negative) | 10 | Ambient Techno, Future Sound of London, anything with long pads |

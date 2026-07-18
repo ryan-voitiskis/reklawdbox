@@ -1,6 +1,7 @@
 # Electronic Genre Taxonomy Research
 
-**Date:** 2026-06-14
+**Originally researched:** 2026-06-14
+**Taxonomy audit:** 2026-07-18
 **Scope:** Canonical genres in `src/domain/classification/taxonomy/catalog.rs`, with emphasis on claims that can
 inform `genre_classification` rules, DSP feature design, calibration review, and
 metadata weighting.
@@ -140,8 +141,8 @@ Potential review items:
 |---|---|---|---|
 | Kick pattern: four-on-floor vs broken vs half-time vs sparse | Electro, Breakbeat, 2-Step, Garage, Dubstep, D&B, Jungle, Footwork, House/Techno | Strong | Prioritize the existing kick-pattern plan. It encodes major rhythm distinctions, but 4/4 is not a clean family separator by itself. |
 | Dub chord/stab detector | Dub Techno; Tech House false-positive analysis | Strong for Dub Techno; weak/contextual for Tech House | Supported by Ableton and Attack Magazine dub-techno material. Must remain conjunctive because some Tech House/House uses stabs too. |
-| Long-tail reverb/delay decay | Dub Techno, Ambient Techno, Dub, Ambient, Drone Techno | Strong | Useful positive signal when combined with tempo/rhythm/family evidence. |
-| Band-split flux / sustained drone detection | Drone Techno vs Deep Techno vs Ambient | Moderate source support; deferred/speculative implementation | Drone sources support sustained tones and slow harmonic change; band-split flux is a practical DSP proxy, but the current roadmap defers it until nearer-term features are validated. |
+| Long-tail reverb/delay decay | Dub Techno, Ambient Techno, Dub, Ambient | Strong | Useful positive signal when combined with tempo/rhythm/family evidence. |
+| Band-split flux / sustained texture detection | Deep Techno vs Ambient | Moderate source support; deferred/speculative implementation | Drone sources support sustained tones and slow harmonic change; band-split flux is a practical DSP proxy, but the current roadmap defers it until nearer-term features are validated. |
 | Sub-bass prominence | Dubstep, D&B, Jungle, Footwork, Dub, Dub Reggae | Strong | Use with rhythm pattern; bass alone collides across many genres. |
 | Half-time or snare-on-3 feel | Dubstep; some Footwork and 140-adjacent bass cases | Strong for Dubstep; contextual elsewhere | Do not count half-time feel as positive D&B/Jungle/Dub evidence by itself. |
 | Distorted/pitched kick profile | Hard Techno, Hardcore, Gabber, Hardstyle | Strong | Consider a hard-dance kick feature before adding more hard-dance rules. |
@@ -432,29 +433,6 @@ Classifier implications:
 Sources:
 [Ambient techno overview](https://en.wikipedia.org/wiki/Ambient_techno),
 [Berklee ambient](https://www.berklee.edu/berklee-now/news/electronic-music-genres-a-guide-to-the-most-influential-styles).
-
-### Drone Techno
-
-Supported traits:
-
-- Drone music is built around long continuous tones or chords with gradual
-  harmonic/textural shifts. Drone Techno should therefore require a techno pulse
-  or techno metadata layered with drone-like sustained material.
-
-Classifier implications:
-
-- Future candidate pattern: long duration, low band-split flux across much of
-  the spectrum, sustained low/mid energy, sparse harmonic change, long-tail
-  decay, low key confidence, and a detectable but restrained techno kick/pulse.
-  Treat band-split flux as deferred/speculative until nearer-term features are
-  validated.
-- If `Sparse` or no kick and non-dancefloor, classify as Ambient/Drone-like
-  only if taxonomy later adds non-techno Drone; with current taxonomy, avoid
-  overusing Drone Techno for beatless ambient.
-
-Sources:
-[Thom Holmes on electronic drone music](https://www.thomholmes.com/post/electronic-drone-music),
-[Ambient techno overview](https://en.wikipedia.org/wiki/Ambient_techno).
 
 ### Acid
 

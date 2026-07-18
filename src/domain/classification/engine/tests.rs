@@ -400,26 +400,6 @@ fn fuzzy_discogs_only_evidence_cannot_be_high() {
 }
 
 #[test]
-fn discogs_and_independent_audio_rule_can_reach_high_confidence() {
-    let mut ev = make_evidence("");
-    ev.bpm = 128.0;
-    ev.discogs_mapped = vec![MappedGenre {
-        genre: "Drone Techno",
-        style_count: 2,
-    }];
-    ev.has_discogs = true;
-    ev.discogs_match_quality = Some(DiscogsMatchQuality::Exact);
-    let mut audio = make_audio_with_key_conf_and_decay(128.0, 2.0, 3.0, 0.92, 900.0, 0.05, 250.0);
-    audio.rekordbox_bpm = 128.0;
-    ev.audio = Some(audio);
-    ev.has_audio = true;
-
-    let result = classify_track(&ev);
-    assert_eq!(result.genre, Some("Drone Techno"));
-    assert_eq!(result.confidence, ClassificationConfidence::High);
-}
-
-#[test]
 fn invalid_discogs_match_cannot_create_provider_evidence() {
     let mut ev = make_evidence("");
     ev.has_discogs = true;
@@ -513,20 +493,6 @@ fn make_audio_with_decay(
     decay_mid_tau: f64,
 ) -> AudioFeatures {
     let mut a = make_audio(bpm, danceability, dc, rr, centroid);
-    a.decay_mid_tau = Some(decay_mid_tau);
-    a
-}
-
-fn make_audio_with_key_conf_and_decay(
-    bpm: f64,
-    danceability: f64,
-    dc: f64,
-    rr: f64,
-    centroid: f64,
-    key_conf: f64,
-    decay_mid_tau: f64,
-) -> AudioFeatures {
-    let mut a = make_audio_with_key_conf(bpm, danceability, dc, rr, centroid, key_conf);
     a.decay_mid_tau = Some(decay_mid_tau);
     a
 }
@@ -751,30 +717,6 @@ fn long_tail_techno_prefers_deep_techno() {
     assert!(
         result.evidence.iter().any(|e| e.contains("long-tail")),
         "evidence should mention long-tail: {:?}",
-        result.evidence
-    );
-}
-
-#[test]
-fn long_tail_atonal_boosts_drone_techno_candidate() {
-    let mut ev = make_evidence("");
-    ev.discogs_mapped = vec![MappedGenre {
-        genre: "Drone Techno",
-        style_count: 1,
-    }];
-    ev.has_discogs = true;
-    ev.audio = Some(make_audio_with_key_conf_and_decay(
-        126.0, 2.0, 3.0, 0.92, 1000.0, 0.05, 275.0,
-    ));
-    ev.has_audio = true;
-    let result = classify_track(&ev);
-    assert_eq!(result.genre, Some("Drone Techno"));
-    assert!(
-        result
-            .evidence
-            .iter()
-            .any(|e| e.contains("long-tail+atonal")),
-        "evidence should mention conjunctive boost: {:?}",
         result.evidence
     );
 }

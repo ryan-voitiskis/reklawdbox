@@ -2,18 +2,14 @@ use std::collections::HashMap;
 
 use super::super::profiles::{self as audio_profile, ProfileRegistry};
 use super::super::{GenreCandidate, LabelProvenance, TrackEvidence, taxonomy as genre};
-use super::audio::{AudioProfile, BpmContext, CharFlag, has_flag};
+use super::audio::BpmContext;
 
 /// BPM tolerance: +/-5 BPM around the defined genre range.
 const BPM_TOLERANCE: f64 = 5.0;
-/// Low-weight conjunctive boost, aligned with the audio-profile vote cap.
-const AUDIO_RULE_BOOST: f32 = 0.5;
-
 /// A single vote for a genre from one evidence source.
 pub(super) struct GenreVote {
     pub(super) genre: &'static str,
     pub(super) weight: f32,
-    pub(super) source: &'static str,
     pub(super) group: EvidenceSourceGroup,
     pub(super) bpm_plausible: bool,
 }
@@ -33,7 +29,6 @@ pub(super) struct VoteCollection {
 
 pub(super) fn gather(
     evidence: &TrackEvidence,
-    audio_profile: Option<&AudioProfile>,
     profile_registry: Option<&ProfileRegistry>,
     bpm_context: BpmContext,
 ) -> VoteCollection {
@@ -64,7 +59,6 @@ pub(super) fn gather(
             } else {
                 base_weight * 0.5
             },
-            source: "discogs",
             group: EvidenceSourceGroup::Discogs,
             bpm_plausible: plausible,
         });
@@ -78,7 +72,6 @@ pub(super) fn gather(
         votes.push(GenreVote {
             genre: label_genre,
             weight: if plausible { weight } else { weight * 0.5 },
-            source: "label",
             group: match evidence.label_provenance {
                 Some(LabelProvenance::Discogs | LabelProvenance::CorrelatedDiscogs) => {
                     EvidenceSourceGroup::Discogs
@@ -101,7 +94,6 @@ pub(super) fn gather(
                 votes.push(GenreVote {
                     genre: affinity.genre,
                     weight: affinity.vote_weight,
-                    source: "audio-profile",
                     group: EvidenceSourceGroup::Audio,
                     bpm_plausible: bpm_plausible(affinity.genre, effective_bpm),
                 });
@@ -113,20 +105,6 @@ pub(super) fn gather(
         } else {
             (vec![], false)
         };
-
-    if let Some(profile) = audio_profile
-        && has_flag(profile, CharFlag::LongTail)
-        && has_flag(profile, CharFlag::Atonal)
-        && votes.iter().any(|vote| vote.genre == "Drone Techno")
-    {
-        votes.push(GenreVote {
-            genre: "Drone Techno",
-            weight: AUDIO_RULE_BOOST,
-            source: "audio-long-tail-atonal",
-            group: EvidenceSourceGroup::Audio,
-            bpm_plausible: bpm_plausible("Drone Techno", effective_bpm),
-        });
-    }
 
     VoteCollection {
         votes,

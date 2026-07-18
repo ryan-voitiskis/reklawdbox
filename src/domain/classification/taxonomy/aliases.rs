@@ -231,7 +231,7 @@ pub(super) const GENRE_TOKENS: &[(&str, &[&str])] = &[
     ("dancehall", &["Dancehall"]),
     ("disco", &["Disco"]),
     ("downtempo", &["Downtempo"]),
-    ("drone", &["Drone Techno", "Ambient"]),
+    ("drone", &["Ambient"]),
     ("dubstep", &["Dubstep"]),
     ("ebm", &["EBM"]),
     ("electro", &["Electro"]),

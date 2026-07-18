@@ -16,7 +16,6 @@ pub const GENRES: &[&str] = &[
     "Deep Techno",
     "Disco",
     "Downtempo",
-    "Drone Techno",
     "Drum & Bass",
     "Dub",
     "Dub Reggae",

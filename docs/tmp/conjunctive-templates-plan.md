@@ -8,17 +8,16 @@
 
 **Date:** 2026-04-26
 **Status:** Design proposal. Depends on B1/B2/B3 (cached-feature wiring) and A1/A2/A3/A5 (new stratum-dsp features) shipping first. No template work begins until at least one of A1–A5 has passed validation.
-**Related:** [deep-techno-classification-ideas.md](deep-techno-classification-ideas.md) sections C1–C5; [chord-stab-detector-plan.md](chord-stab-detector-plan.md) (A1, gates C2); [genre-classification-improvements.md](genre-classification-improvements.md), [genre-classification-implementation.md](genre-classification-implementation.md) (current consensus + Fisher behaviour).
+**Related:** [deep-techno-classification-ideas.md](deep-techno-classification-ideas.md) sections C1, C2, C4, and C5; [chord-stab-detector-plan.md](chord-stab-detector-plan.md) (A1, gates C2); [genre-classification-improvements.md](genre-classification-improvements.md), [genre-classification-implementation.md](genre-classification-implementation.md) (current consensus + Fisher behaviour).
 
 ## Goal
 
 Five conjunctive per-genre rules ("templates") that fire only when several independent audio signals agree. Each template is a stronger override than any single-feature signal — the audio-profile Fisher layer caps any one genre's vote at `AFFINITY_CAP = 0.5` (`src/audio_profile.rs:20`), and individual `CharFlag`s influence only the same-family resolver. Templates produce confident decisions by requiring 4–6 independent flags to align before they fire.
 
-The five templates from `deep-techno-classification-ideas.md`:
+The four remaining templates from `deep-techno-classification-ideas.md`:
 
 - **C1 — Deep Techno (Berghain template)**: `Atonal` + Techno-family votes + `LongTail` + `rhythm_regularity > 0.9` + `Compressed` + `Dancefloor` (not `HighEnergy`) + `kick_pattern == FourOnFloor`
 - **C2 — Dub Techno**: C1 base + `dub_stab_score > 0.5`
-- **C3 — Drone Techno**: `Atonal` + `LongTail` + `flux_high < 30` + `flux_low` low + `duration > 7 min`
 - **C4 — Electro veto**: `kick_pattern == BrokenBeat` → veto Techno-family / House-family, propose Electro
 - **C5 — Tech House**: `sidechain_depth > 0.4` + `Dancefloor` + `kick_pattern == FourOnFloor`
 
@@ -38,7 +37,7 @@ Templates need to slot **between (4) consensus tally and (5) same-family resolve
 
 **Recommended placement: a `apply_templates` pre-pass called from `find_consensus` after the `ranked` vector exists but before any same-family resolution or confidence-tier assignment.** A template that fires:
 
-- replaces `top_genre` with its target genre (C1, C2, C3, C5)
+- replaces `top_genre` with its target genre (C1, C2, C5)
 - vetoes the current `top_genre` and forces a re-rank without the vetoed family (C4)
 - floors confidence at High (subject to gating in §3 and §4)
 - skips the same-family resolver call at `src/classify.rs:784` and `:796`
@@ -58,8 +57,6 @@ C2 (Dub Techno specific)      — strictly extends C1; if both fire, C2 wins
 C5 (Tech House specific)      — sidechain is incompatible with C1's Compressed deep-Techno signature
   ↓
 C1 (Deep Techno generic)      — base template
-  ↓
-C3 (Drone Techno specific)    — runs LAST so its kick-light criteria don't accidentally pre-empt C1
 ```
 
 Justifications:
@@ -75,11 +72,11 @@ Implementation: a single `apply_templates` function that returns `Option<Templat
 
 A template firing on pure audio with zero supporting provider evidence is risky: the providers may know the track is something completely different (e.g. an experimental Ambient track that happens to tick the Berghain audio boxes). The audio-profile Fisher layer already caps its influence at 0.5 (`src/audio_profile.rs:20`) precisely for this reason.
 
-**Gating rule for C1, C2, C3, C5:** the template fires only if **the target genre's family has at least one supporting non-audio vote** in the `votes` vector (Beatport, Discogs, label, or current-genre tokens — anything except `source == "audio-profile"`). For C1/C2: at least one Techno-family vote. For C5: at least one House-family or Techno-family vote (Tech House sits on the boundary). For C3: at least one Techno-family vote.
+**Gating rule for C1, C2, C5:** the template fires only if **the target genre's family has at least one supporting non-audio vote** in the `votes` vector (Beatport, Discogs, label, or current-genre tokens — anything except `source == "audio-profile"`). For C1/C2: at least one Techno-family vote. For C5: at least one House-family or Techno-family vote (Tech House sits on the boundary).
 
 **C4 is the exception.** A `BrokenBeat` kick pattern is a hard structural fact about the audio that cannot coexist with a 4/4 Techno or House track regardless of provider claims — providers regularly mis-tag Electro as Tech House or Deep Techno. So C4 fires on audio alone and **vetoes** Techno-family / House-family votes outright, then re-ranks. If the second-rank candidate after vetoing is itself Techno- or House-family, C4 falls back to proposing "Electro" as a Low-confidence candidate (since we have no positive Electro evidence, only a veto). This is a deliberate downgrade from "high-confidence Electro" to "review-needed: probably Electro" when the providers offered no Electro signal at all.
 
-**Contradiction handling for C1/C2/C3/C5:** if the template's target genre has supporting evidence but a **different non-target genre** has *strictly higher* total provider vote weight (Discogs + Beatport + label, audio votes excluded), the template still fires but with confidence floored at Medium rather than High (§4). This handles the case where Beatport says "Tech House" with weight 1.0 but C1 fires for "Deep Techno" — we shouldn't blindly override Beatport.
+**Contradiction handling for C1/C2/C5:** if the template's target genre has supporting evidence but a **different non-target genre** has *strictly higher* total provider vote weight (Discogs + Beatport + label, audio votes excluded), the template still fires but with confidence floored at Medium rather than High (§4). This handles the case where Beatport says "Tech House" with weight 1.0 but C1 fires for "Deep Techno" — we shouldn't blindly override Beatport.
 
 ## 4. Confidence Tier Implications
 
@@ -111,20 +108,20 @@ For each template, choose between three mechanics:
 **Recommendation:**
 
 - **C2, C5: mechanic (b) — direct override.** These are *specific* templates that flip a previously-chosen genre to a more specific neighbour (Deep Techno → Dub Techno, Deep Techno → Tech House). A direct override is the cleanest expression of "we know better than the vote tally here." The vote audit trail is preserved in `ev_lines` via an explicit "template C2 fired: dub\_stab\_score=0.74, …" entry.
-- **C1, C3: mechanic (b) — direct override.** Originally I considered (c) for these "generic" templates so they'd compose with the resolver, but the resolver's only job is depth selection within a family (Techno → Deep Techno). C1 and C3 are doing exactly that — selecting Deep Techno or Drone Techno from a Techno-family vote bag — so they should *replace* the resolver, not feed into it. Mechanic (c) would create two parallel decision paths for the same problem.
+- **C1: mechanic (b) — direct override.** The resolver's only job is depth selection within a family (Techno → Deep Techno), so C1 should replace the resolver rather than feed a parallel decision path.
 - **C4: mechanic (a) variant — veto-then-rerank.** C4 doesn't pick a winner; it eliminates a class. Implement as: drop all Techno-family and House-family votes from the tally, re-rank, and if the resulting top candidate is below a confidence floor (no positive Electro evidence), propose "Electro" as a Low-confidence candidate with the `kick-pattern-broken` flag set.
 
-This means **only C4 modifies the vote vector**; C1/C2/C3/C5 leave votes intact and override the consensus result. The vote bag remains the input to `gather_votes`'s caller and any downstream debugging.
+This means **only C4 modifies the vote vector**; C1/C2/C5 leave votes intact and override the consensus result. The vote bag remains the input to `gather_votes`'s caller and any downstream debugging.
 
 ## 6. Implementation Structure
 
 **Recommendation: new module `src/classify/templates.rs`.**
 
-`src/classify.rs` is already 1000+ lines and adding 5 templates plus dispatch logic to it inline would push it past 1500. Splitting into a sub-module:
+`src/classify.rs` is already 1000+ lines and adding four templates plus dispatch logic to it inline would push it past 1500. Splitting into a sub-module:
 
 ```
 src/classify.rs                  (existing — orchestration)
-src/classify/templates.rs        (new — 5 templates + dispatcher)
+src/classify/templates.rs        (new — 4 templates + dispatcher)
 ```
 
 To convert `classify.rs` from a flat module to a directory module, rename `src/classify.rs` to `src/classify/mod.rs` and add `mod templates;`. This is a mechanical change but it does affect every existing `use crate::classify::*` site, so audit those before splitting.
@@ -193,7 +190,6 @@ Templates by dependencies:
   C5 Tech House        ← A2 + A5
   C2 Dub Techno        ← A1 + A2 + B1 + B2 + B3
   C1 Deep Techno       ← A2 + B1 + B2 + B3
-  C3 Drone Techno      ← A3 + B1 + B2
 ```
 
 **Staging:**
@@ -205,25 +201,22 @@ Templates by dependencies:
 5. **Stage 4 — C2 (Dub Techno)**: requires A1 + A2 + B-flags. Highest-leverage template (Dub Techno↔Deep Techno is the most consequential confusion).
 6. **Stage 5 — A5 sidechain depth + C5 (Tech House)**: bundle together; A5 only feeds C5 and one same-family resolver hint, not worth a separate PR.
 7. **Stage 6 — C1 (Deep Techno)**: requires A2 + B-flags only. Drops in cleanly because C2 has already proven the template-dispatch pattern, and C1's dispatch-order spot is already wired up by C2 (C2 short-circuits before C1 runs).
-8. **Stage 7 — A3 band-split flux + C3 (Drone Techno)**: bundle together; A3 only feeds C3 in the immediate roadmap.
-
-Total: ~8 PRs over the templates infrastructure (some bundled with their dependency PRs). At any stage, partial deployment is meaningful — e.g. shipping just C4 already prevents a real class of misclassification.
+Total: ~7 PRs over the templates infrastructure (some bundled with their dependency PRs). At any stage, partial deployment is meaningful — e.g. shipping just C4 already prevents a real class of misclassification.
 
 ## 9. Validation
 
 Validation per template, mirroring the methodology in `genre-classification-improvements.md`:
 
 1. **Curate 4–6 ear-verified positive tracks per template** (genre matches the template's target, audio meets all conjunction conditions).
-2. **Curate 4–6 ear-verified negative tracks per template** (genre is something the template should *not* fire for, but tracks share some audio characteristics with the positive set — e.g. for C1, include atonal Drone Techno and atonal Tech House).
+2. **Curate 4–6 ear-verified negative tracks per template** (genre is something the template should *not* fire for, but tracks share some audio characteristics with the positive set — e.g. for C1, include atonal Ambient Techno and atonal Tech House).
 3. **Run the classifier on positives and negatives** and record (a) whether the template fired, (b) the final genre, (c) the final confidence.
 4. **Acceptance criteria**: precision ≥ 0.8 (of tracks the template fires on, ≥80% are correctly classified) **and** recall ≥ 0.8 (of canonical positive tracks, ≥80% have the template fire). Lower than chord-stab's 6/8 + 7/8 thresholds because templates combine multiple signals and small misses on individual flags cumulate.
 5. **Threshold-sweep audit**: for each numeric threshold in the template (e.g. `dub_stab_score > 0.5`, `flux_high < 30`), produce a small table of how the precision/recall figures shift at ±20% threshold. Documents the tuning surface.
 
 Per-template fixture sets:
 
-- **C1 Deep Techno**: positives — Marcel Dettmann, Klockworks, Norman Nodge, Sandwell District. Negatives — atonal Tech House (Hot Creations), atonal Drone Techno (Voices From The Lake), atonal Dub Techno (Basic Channel — should fire C2 not C1).
+- **C1 Deep Techno**: positives — Marcel Dettmann, Klockworks, Norman Nodge, Sandwell District. Negatives — atonal Tech House (Hot Creations), sparse Ambient Techno (Voices From The Lake), atonal Dub Techno (Basic Channel — should fire C2 not C1).
 - **C2 Dub Techno**: positives — Basic Channel, Echocord, Convextion, Burger/Ink. Negatives — Deep Techno (no chord stab), Tech House with off-beat hats, ambient pads.
-- **C3 Drone Techno**: positives — Voices From The Lake, Donato Dozzy reductive, Spazio Disponibile. Negatives — Deep Techno (kick-bearing), Ambient Techno (lower BPM, often non-dancefloor).
 - **C4 Electro veto**: positives (where veto should fire) — DMX Krew, Drexciya, Anthony Rother, Helena Hauff. Negatives (where veto should NOT fire) — straight 4/4 Detroit Techno, Tech House. Also include Drum-and-Bass and Halftime Dubstep to confirm the veto doesn't over-extend (those should already be caught by `check_audio_vetoes` upstream).
 - **C5 Tech House**: positives — Hot Creations roster, Solid Grooves, Cuttin' Headz. Negatives — Deep Techno (no sidechain), straight House (sidechain present but typically lighter), Disco-influenced House.
 
@@ -254,7 +247,6 @@ In dependency order, smallest first:
 3. **PR T2 — C2 (Dub Techno).** Highest leverage. Depends on chord-stab classification wiring landing first (PR 6 in chord-stab-detector-plan.md).
 4. **PR T3 — C5 (Tech House).** Depends on A5 sidechain depth.
 5. **PR T4 — C1 (Deep Techno).** Comes after C2 because C2 supersedes C1; if C1 ships first, every Dub Techno track classifies as Deep Techno until C2 lands.
-6. **PR T5 — C3 (Drone Techno).** Depends on A3 band-split flux. Lowest-frequency genre (least common in collections), so least urgent.
 
 Each PR is independently revertable. Each PR ships with its fixture set and validation report committed alongside.
 
@@ -267,9 +259,8 @@ Each PR is independently revertable. Each PR ships with its fixture set and vali
 | PR T2 (C2 Dub Techno) | 0.5 day (after A1 + B-flags land) |
 | PR T3 (C5 Tech House) | 0.5 day (after A5 lands) |
 | PR T4 (C1 Deep Techno) | 0.5 day |
-| PR T5 (C3 Drone Techno) | 0.5 day (after A3 lands) |
-| Per-template fixture curation + validation | 0.5 day each = ~2.5 days |
-| **Total** | ~6 days, spread across A/B feature landings |
+| Per-template fixture curation + validation | 0.5 day each = ~2 days |
+| **Total** | ~5 days, spread across A/B feature landings |
 
 Templates themselves are cheap — almost all the cost is in their dependencies (A1–A5 stratum-dsp work and validation-set curation per template).
 

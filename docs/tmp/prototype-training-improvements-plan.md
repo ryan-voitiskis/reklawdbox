@@ -73,7 +73,7 @@ for each family F with n_F >= MIN_FAMILY_TRACKS (recommend 20):
 families with n_F < 20 fall through to one-vs-all (current behaviour)
 ```
 
-Recommend `MIN_FAMILY_TRACKS = 20` based on the verified-set distribution in `genre-classification-implementation.md`: Techno-family pool (Techno 50 + Deep Techno 20 + Dub Techno 17 + Minimal ~7 + Drone Techno + Ambient Techno) clears 20 trivially; House-family clears it heavily; Hardcore is borderline (~5-10) and should fall through; Bass-family and Downtempo similarly fall through.
+Recommend `MIN_FAMILY_TRACKS = 20` based on the verified-set distribution in `genre-classification-implementation.md`: Techno-family pool (Techno 50 + Deep Techno 20 + Dub Techno 17 + Minimal ~7 + Ambient Techno) clears 20 trivially; House-family clears it heavily; Hardcore is borderline (~5-10) and should fall through; Bass-family and Downtempo similarly fall through.
 
 ### Per-genre Fisher weights against family rest — modified (D1)
 
@@ -206,7 +206,7 @@ The same harness used for the existing dry-run in `genre-classification-implemen
    - Most genres retain 70-90% of features post-prune.
    - Drum & Bass (`168-180 BPM`, distinctive): retains ~all features.
    - Hardcore (`160+`): retains ~all.
-   - Atonal genres (Drone Techno, Ambient): prune `key_clarity` (and possibly `dissonance_mean`).
+   - Atonal genres such as Ambient: prune `key_clarity` (and possibly `dissonance_mean`).
 5. **Pruning false-prune check.** No genre with `n >= 10` should drop below `n / 5` active features (the `max_features` floor). If pruning + truncation would push below that, raise `SEPARATION_THRESHOLD` for that genre adaptively (or accept the smaller feature set; the truncation rule is already conservative).
 
 The dry-run output (committed alongside the PR) is a Markdown report listing per-genre old/new within-genre distance, between-sibling distance, n_active_features, top-3 features by intra-family Fisher weight.

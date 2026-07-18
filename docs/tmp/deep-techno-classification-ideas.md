@@ -24,7 +24,6 @@ The boundaries between Deep Techno and its sonic neighbours hinge on signals the
 | Boundary | Discriminator | Currently measured? |
 |---|---|---|
 | Deep Techno vs Dub Techno | Periodic chord-stab/wash event | No |
-| Deep Techno vs Drone Techno | Kick presence/weight vs drone-as-foundation | No |
 | Deep Techno vs Electro | 4/4 kick vs broken/syncopated kick | No |
 | Deep Techno vs Tech House | Sidechain pumping | No |
 | Deep Techno vs Deep House | Tonality (atonal vs chord-progression) | Partially (key_clarity in Fisher only) |
@@ -44,7 +43,7 @@ These are signals that genuinely don't exist anywhere in the cache today. New wo
 - **What:** Detect periodic transient events in the 200–800 Hz band, with off-beat (8th-note offset) periodicity. Output `dub_stab_score: f32` (0.0–1.0) and `dub_stab_period: Option<u8>` (in 16th notes).
 - **Why:** This is the *defining* feature of Dub Techno and is currently invisible. It's also what tonight's Untitled 26596 turned on — the audio descriptors all looked Deep-Techno-like, but the user heard the chord stab and the genre flipped.
 - **Implementation sketch:** Onset detection in mid-band; cluster onsets by inter-onset interval; if dominant period aligns to off-beat 8th and persists across most of the track, report high score. Beat grid is already detected for `grid_stability`, so the alignment check is cheap.
-- **Discriminates:** Dub Techno vs Deep Techno vs Drone Techno (definitively). Also useful for Tech House (if syncopated stabs exist with sidechain).
+- **Discriminates:** Dub Techno vs Deep Techno. Also useful for Tech House (if syncopated stabs exist with sidechain).
 
 #### A2. Kick-pattern classifier
 
@@ -56,9 +55,9 @@ These are signals that genuinely don't exist anywhere in the cache today. New wo
 #### A3. Band-split spectral flux
 
 - **What:** Replace single `spectral_flux_mean` with three: `flux_low` (60–250 Hz), `flux_mid` (250–2000 Hz), `flux_high` (2–8 kHz).
-- **Why:** Tonight's Untitled 27037 had `spectral_flux_mean = 18` (extraordinarily low) and read as Drone Techno from descriptors. The user heard "warped synth messy melodies create rhythm" in upper bands — i.e. the rhythmic activity was concentrated in 2–8 kHz, drowned out in the global average by static lows. The Berghain Deep Techno template *requires* high upper-band flux over a static low-mid floor; the global mean conceals it.
+- **Why:** Tonight's Untitled 27037 had `spectral_flux_mean = 18` (extraordinarily low) and read as nearly static atmospheric material from descriptors. The user heard "warped synth messy melodies create rhythm" in upper bands — i.e. the rhythmic activity was concentrated in 2–8 kHz, drowned out in the global average by static lows. The Berghain Deep Techno template *requires* high upper-band flux over a static low-mid floor; the global mean conceals it.
 - **Implementation sketch:** Same FFT pipeline, just sum spectral flux in three bands separately. Cheap.
-- **Discriminates:** Deep Techno (high flux_high, low flux_low) from Drone Techno (low everywhere) from Dub Techno (mid flux from chord stabs) from Tech House (flux_low from sidechain pumping).
+- **Discriminates:** Deep Techno (high flux_high, low flux_low) from sustained-pad Ambient Techno (low everywhere), Dub Techno (mid flux from chord stabs), and Tech House (flux_low from sidechain pumping).
 
 #### A4. Sub-rumble vs kick separation
 
@@ -89,7 +88,7 @@ These are already computed and cached — the work is purely wiring them into `c
 #### B2. `LongTail` flag from `decay_mid_tau`
 
 - **What:** Add `CharFlag::LongTail` when `decay_mid_tau > 200ms`. Already in the Fisher input set, but not in the tree-side flag set.
-- **Why:** Long mid-decay is a strong dub/atmospheric tell. Combined with chord-stab presence (A1) it nails Dub Techno; without chord-stab and with low flux_high (A3) it nails Drone Techno; with high flux_high it's Deep Techno.
+- **Why:** Long mid-decay is a strong dub/atmospheric tell. Combined with chord-stab presence (A1) it supports Dub Techno; without chord stabs and with low `flux_high` (A3) it supports Ambient Techno; with high `flux_high` it supports Deep Techno.
 - **Where it slots:** `compute_audio_profile`. Consume in same-family resolver and in the per-genre conjunctive templates (section C).
 
 #### B3. `Compressed` flag from `loudness_range`
@@ -129,17 +128,6 @@ Atonal (B1)
 Template C1 base
   + dub_stab_score > 0.5 (A1)
   → Dub Techno, high confidence (overrides C1)
-```
-
-#### C3. Drone Techno
-
-```
-Atonal (B1)
-  + LongTail (B2)
-  + flux_high < 30 (A3, very-low upper-band flux)
-  + flux_low low (A3, no kick activity dominating)
-  + duration > 7 minutes (existing)
-  → Drone Techno, high confidence
 ```
 
 #### C4. Electro (negative for Deep Techno)
@@ -199,8 +187,8 @@ Suggested implementation order:
 1. **B1, B2, B3** — wire cached features into the tree (low cost, immediate accuracy gains)
 2. **A2 (kick-pattern)** — pulls Electro out cleanly; clears noise from Techno-family decisions
 3. **A1 (chord-stab)** — Dub Techno discrimination
-4. **A3 (band-split flux)** — Drone Techno vs Deep Techno discrimination
-5. **C1–C5 (conjunctive templates)** — assemble the above into per-genre rules
+4. **A3 (band-split flux)** — distinguish active Deep Techno from static ambient texture
+5. **C1, C2, C4, C5 (conjunctive templates)** — assemble the above into per-genre rules
 6. **A4, A5** — round out the feature set
 7. **D1–D4** — prototype pipeline improvements (long-running, but D3 unblocks faster verification)
 
@@ -208,7 +196,7 @@ Suggested implementation order:
 
 Each new feature should be checked against a small ear-verified set before being relied on, mirroring the methodology in [genre-classification-improvements.md](genre-classification-improvements.md). Specifically:
 
-1. Pick 5–10 verified tracks per genre across Deep Techno, Dub Techno, Drone Techno, Tech House, Electro.
+1. Pick 5–10 verified tracks per genre across Deep Techno, Dub Techno, Ambient Techno, Tech House, and Electro.
 2. Compute the proposed feature for each.
 3. Check for between-genre separation (no total overlap, like the four invalidated features).
 4. Only wire into the decision tree if separation is real.
@@ -217,7 +205,7 @@ Features that look obvious from theory have failed this test before (`harmonic_p
 
 ## Open Questions
 
-- Does the existing 574-track verified set include enough Deep Techno / Dub Techno / Drone Techno / Tech House samples to validate A1–A5 against, or does the verification feedback loop (D3) need to land first?
+- Does the existing 574-track verified set include enough Deep Techno / Dub Techno / Ambient Techno / Tech House samples to validate A1–A5 against, or does the verification feedback loop (D3) need to land first?
 - Is band-split spectral flux a stratum-dsp addition, or could it be derived post-hoc from cached spectral data?
-- For the conjunctive templates (C1–C5), what's the right confidence boost — a single flag-vote at weight 0.5 (matching AFFINITY_CAP), or a bigger override that short-circuits the same-family resolver?
+- For the remaining conjunctive templates, what's the right confidence boost — a single flag-vote at weight 0.5 (matching AFFINITY_CAP), or a bigger override that short-circuits the same-family resolver?
 - Should `verify_track` (D3) gate on user-confirmed-via-conversation only, or auto-verify any track the user has manually genre-tagged in Rekordbox post-XML-import?
