@@ -49,7 +49,8 @@ coverage.
 
 This plan creates a cited candidate corpus of recordings that are historically
 or contemporarily representative of every current canonical genre except the
-explicitly excluded anti-genre `Experimental`. Every candidate must be
+explicitly excluded anti-genre `Experimental`. `Dub Reggae` is a compatibility
+alias for canonical `Dub`, not a second research target. Every candidate must be
 independently supported as a genre exemplar and currently obtainable as a
 legal digital purchase. The corpus feeds a human listening queue named
 `genre_reference_candidates`; it does not become ground truth until the user
@@ -90,9 +91,9 @@ the executor:
 
 ### Canonical scope
 
-`src/domain/classification/taxonomy/catalog.rs:5-61` is the source of truth. It
-contains 54 canonical names. This plan covers exactly 53 after excluding
-`Experimental`; aliases and arbitrary user genres do not expand the research
+`src/domain/classification/taxonomy/catalog.rs` is the source of truth. It
+contains 53 canonical names. This plan covers exactly 52 after excluding
+`Experimental`; aliases, including `Dub Reggae`, and arbitrary user genres do not expand the research
 scope.
 
 Use the current classifier-family groupings only to organize work and expose
@@ -107,8 +108,8 @@ boundary cases. They are implementation metadata, not musicological truth:
   `Hardstyle`.
 - **Bass (9)**: `Bassline`, `Breakbeat`, `Broken Beat`, `Drum & Bass`,
   `Dubstep`, `Footwork`, `Future Garage`, `Grime`, `Jungle`.
-- **Downtempo (6 after exclusion)**: `Ambient`, `Downtempo`, `Dub`,
-  `Dub Reggae`, `IDM`, `Trip-Hop`.
+- **Downtempo (5 after exclusion)**: `Ambient`, `Downtempo`, `Dub`, `IDM`,
+  `Trip-Hop`.
 - **Other/metadata-led (9)**: `Dancehall`, `Highlife`, `Hip Hop`, `Jazz`,
   `Pop`, `R&B`, `Reggae`, `Rock`, `Synth-pop`.
 
@@ -124,8 +125,9 @@ include:
 - `Hardcore` — electronic hardcore/hardcore techno, not punk/hardcore rock.
 - `Acid` — a cross-style TB-303-derived sound marker that may not behave like a
   single genre.
-- `Dub` versus `Dub Reggae` — justify why both labels can have distinct
-  positive examples rather than duplicating the same recordings.
+- `Dub` — keep Jamaican reggae-derived Dub distinct from `Reggae`, `Dub Techno`,
+  and the generic use of “dub” for a remix/version. Inputs tagged `Dub Reggae`
+  or `Reggae Dub` normalize to `Dub`.
 - `Tech House`, `Trance`, `IDM`, and `Downtempo` — document
   historical shifts, contested boundaries, or broadness before selecting
   tracks.
@@ -194,7 +196,7 @@ versioned reference set. Do not modify or repurpose v1 in this plan.
   expect all tests to pass.
 - Corpus validation:
   `python3 scripts/validate_genre_reference_corpus.py docs/genre-classification/genre-reference-candidates.json`;
-  expect exit 0 and a 53-genre summary.
+  expect exit 0 and a 52-genre summary.
 - Whitespace: `git diff --check`; expect no errors.
 - Scope: `git status --short`; expect only in-scope files.
 
@@ -304,7 +306,7 @@ Use this top-level shape:
 }
 ```
 
-Each of the 53 genre records must contain:
+Each of the 52 genre records must contain:
 
 ```json
 {
@@ -428,13 +430,14 @@ that would make it unrepresentatively hard.
 2. Read `AGENTS.md`, `CONTRIBUTING.md`, this plan, the canonical catalog,
    taxonomy metadata, Plans 034 and 037, the existing taxonomy research, and
    the real-audio-v1 README before researching tracks.
-3. Extract the 54 canonical names from `catalog.rs`; assert that removing only
-   `Experimental` leaves the exact 53 names grouped above.
+3. Extract the 53 canonical names from `catalog.rs`; assert that removing only
+   `Experimental` leaves the exact 52 names grouped above. Confirm that
+   `Dub Reggae` resolves to canonical `Dub` as an alias.
 4. Run the focused taxonomy tests.
 5. If a private library connection is available, call
    `calibration_coverage(playlist="genre_verified")` only to record aggregate
    per-genre counts in local working notes. Do not commit track-level results.
-   The research scope remains all 53 genres regardless of current counts.
+   The research scope remains all 52 genres regardless of current counts.
 6. Record the taxonomy commit in the JSON. Do not copy runtime aliases into the
    candidate corpus.
 
@@ -444,9 +447,9 @@ that would make it unrepresentatively hard.
 cargo test -p reklawdbox taxonomy -- --nocapture
 ```
 
-Expected: the taxonomy-filtered tests pass; the live catalog contains 54
-canonical names; the in-scope set contains exactly 53 and excludes only
-`Experimental`.
+Expected: the taxonomy-filtered tests pass; the live catalog contains 53
+canonical names; the in-scope set contains exactly 52 and excludes only
+`Experimental`; `Dub Reggae` resolves to `Dub` through the alias layer.
 
 ### Step 2: Audit the existing taxonomy research before using it
 
@@ -492,12 +495,12 @@ formatting errors are reported.
    - the source hierarchy and candidate mix above;
    - the distinction between genre fact, canonicality, availability, and
      classifier suitability;
-   - the complete 53-genre coverage matrix;
+   - the complete 52-genre coverage matrix;
    - per-genre counts, disposition, caveats, and research status derived from
      the JSON; and
    - explicit statements that the repository does not contain audio and the
      corpus is not automatically training truth.
-2. Create the JSON skeleton with the required top-level metadata and 53 empty
+2. Create the JSON skeleton with the required top-level metadata and 52 empty
    genre records.
 3. Implement `validate_genre_reference_corpus.py` using only the Python standard
    library. It must parse the canonical names from `catalog.rs`, enforce the
@@ -538,7 +541,7 @@ python3 scripts/validate_genre_reference_corpus.py \
 ```
 
 Expected: all synthetic tests pass; JSON parses; incomplete validation reports
-53 expected genre records, exactly one exclusion (`Experimental`), and no
+52 expected genre records, exactly one exclusion (`Experimental`), and no
 structural errors.
 
 ### Step 4: Pilot the hardest definitions before scaling to all genres
@@ -550,7 +553,8 @@ Research these ambiguity-heavy cases first:
 - `Electro`;
 - `Hardcore`;
 - `IDM`;
-- the paired boundary `Dub` / `Dub Reggae`; and
+- `Dub`, including its boundaries with `Reggae`, `Dub Techno`, and generic dub
+  mix/version naming; and
 - historically shifting `Tech House`.
 
 For each pilot genre:
@@ -586,10 +590,10 @@ Complete the corpus in this order so adjacent genres can be compared while
 evidence is fresh:
 
 1. House family (13).
-2. Techno family (12).
+2. Techno family (11).
 3. Bass family (9).
 4. Hardcore family (5).
-5. Downtempo family (6 after exclusion).
+5. Downtempo family (5 after exclusion).
 6. Other/metadata-led controls (9).
 
 For each genre, follow one repeatable research loop:
@@ -662,7 +666,7 @@ python3 scripts/validate_genre_reference_corpus.py \
   docs/genre-classification/genre-reference-candidates.json
 ```
 
-Expected: exit 0; summary reports exactly 53 populated genres, at least 636
+Expected: exit 0; summary reports exactly 52 populated genres, at least 624
 candidates, zero duplicate identities, zero cross-pool leakage groups, and all
 source/diversity/acquisition requirements satisfied.
 
@@ -706,7 +710,7 @@ Re-read the corpus as if none of the research notes were trusted:
 5. Remove or replace failures. Do not mark a dead link verified because an
    archived snippet exists.
 6. In `genre-reference-corpus.md`, summarize:
-   - 53-genre completion and per-family candidate totals;
+   - 52-genre completion and per-family candidate totals;
    - high/medium-confidence counts;
    - genres marked `taxonomy_review` or `metadata_led`;
    - unavoidable source or acquisition limitations;
@@ -732,8 +736,8 @@ git diff --check
 git status --short
 ```
 
-Expected: all commands exit 0; the validator reports a complete 53-genre corpus
-and at least 636 candidates; only in-scope tracked files are modified.
+Expected: all commands exit 0; the validator reports a complete 52-genre corpus
+and at least 624 candidates; only in-scope tracked files are modified.
 
 ### Step 9: Run repository gates and prepare the reviewable commit
 
@@ -799,13 +803,13 @@ All conditions must hold:
       user-approval queue.
 - [ ] The future destinations are named `genre_verified` and
       `genre_reference_holdout`, with no track automatically assigned as truth.
-- [ ] The JSON contains exactly all 53 current canonical genres other than
+- [ ] The JSON contains exactly all 52 current canonical genres other than
       `Experimental`.
 - [ ] `Experimental` has no candidate records and is documented as the sole
       operator-excluded anti-genre.
 - [ ] Every genre has a bounded definition, exclusions, boundary genres,
       disposition, caveats, and at least three definition sources.
-- [ ] Every genre has at least 12 candidates, for at least 636 total.
+- [ ] Every genre has at least 12 candidates, for at least 624 total.
 - [ ] Every candidate has two independent canonicality sources, exact version
       metadata, a current legitimate digital-purchase route, an access date,
       confidence, leakage group, and recommended pool role.
@@ -822,7 +826,7 @@ All conditions must hold:
       ownership privacy, listening approval, and future benchmark separation.
 - [ ] `CONTRIBUTING.md` contains the deterministic corpus validation gate.
 - [ ] Validator tests cover every named structural failure and pass.
-- [ ] The complete validator reports 53 genres, at least 636 candidates, and no
+- [ ] The complete validator reports 52 genres, at least 624 candidates, and no
       errors.
 - [ ] No audio, private library identity/path, ownership status, fingerprint,
       purchase/account information, or price is committed.
@@ -839,8 +843,8 @@ All conditions must hold:
 
 Stop and report; do not improvise if:
 
-- The live canonical catalog no longer contains exactly the 54 names captured
-  by this plan, or removing only `Experimental` does not yield the listed 53.
+- The live canonical catalog no longer contains exactly the 53 names captured
+  by this plan, or removing only `Experimental` does not yield the listed 52.
 - Any current in-scope file has semantic drift that invalidates this plan's
   assumptions.
 - Source disagreement makes a catalog label impossible to bound without a

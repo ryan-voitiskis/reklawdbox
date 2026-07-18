@@ -11,6 +11,57 @@ is intentionally not a closed list, but the classifier currently treats the
 canonical genres as consistency targets and attaches family, depth, and BPM
 metadata to many of them.
 
+## Verification And Evidence Status (2026-07-18)
+
+The direct pages in the source index were reopened on 2026-07-18. This audit
+does not promote this genre-level note into track-level evidence. The structured
+reference corpus must independently cite each candidate and exact release, and
+must not treat a retailer category, artist reputation, or this document itself
+as proof that a recording is canonical.
+
+The audit separates four claim types used below:
+
+- **Externally sourced genre fact:** a history, scene, instrument, rhythm, or
+  production claim supported by the linked page.
+- **Current classifier behavior:** a statement checked against the live
+  taxonomy metadata, evidence extraction, or engine at commit `b65333d`.
+- **Research hypothesis:** a proposed future feature or conjunction that is not
+  current classifier behavior and requires real-audio validation.
+- **Contested taxonomy judgment:** a bounded working interpretation that must
+  remain visible to the listening reviewer rather than being presented as
+  settled musicological truth.
+
+Corrections and qualifications from this audit:
+
+- **Corrected:** `Drone Techno` was removed from the canonical catalog and its
+  dedicated section and code-facing recommendations were retired. It remains a
+  useful descriptive phrase in external research, not a live target.
+- **Corrected:** source review found no stable distinction between `Dub` and
+  `Dub Reggae`. The operator retained canonical `Dub`; `Dub Reggae` and
+  `Reggae Dub` now normalize to it as compatibility aliases.
+- **Corrected:** `kick_pattern` is no longer a wholly missing descriptor. The
+  current evidence pipeline carries the Stratum value and confidence, but the
+  classification engine does not yet use it as a direct genre vote. References
+  below to kick pattern are therefore future rule/template hypotheses.
+- **Qualified:** the older broad guide and production-tutorial links are useful
+  leads, but several individual genre sections have fewer than the three
+  independent definition sources required by the reference corpus. Those
+  sections must not drive candidate selection until the JSON dossier supplies
+  stronger independent evidence.
+- **Qualified:** Wikipedia links for Ambient Techno and Hardstyle are retained
+  only as lead-generating background and cannot be the sole support for a
+  definition or candidate.
+- **Contested:** `Minimal`, UK `Garage`, canonical `Electro`, cross-style
+  `Acid`, `Tech House`, `Trance`, `Downtempo`, and `IDM` need bounded corpus
+  definitions. Canonical `Dub` still needs a clear boundary from `Reggae`,
+  `Dub Techno`, and generic dub mix/version naming. The reference dossier must preserve
+  exclusions and boundary cases rather than silently choosing a retailer's
+  current category meaning.
+- **Unresolved:** the note's classifier-facing production hypotheses remain
+  proposals unless the current-code statements explicitly say otherwise. No
+  absence of correction should be read as fresh verification of every 2026-06
+  sentence.
+
 ## Research Method
 
 I treated sources differently depending on what kind of claim they support:
@@ -46,16 +97,17 @@ and the current
    Sources: [Ableton tempo and genre](https://learningmusic.ableton.com/make-beats/tempo-and-genre.html),
    [Berklee electronic genre guide](https://www.berklee.edu/berklee-now/news/electronic-music-genres-a-guide-to-the-most-influential-styles).
 
-2. **Kick pattern is the highest-leverage missing discriminator.** Four-on-floor
+2. **Kick pattern is the highest-leverage underused discriminator.** Four-on-floor
    versus broken, two-step, half-time, sparse, and irregular patterns strongly
    helps separate House/Techno/Trance/Hard Dance from Electro, Breakbeat,
    Dubstep, Jungle, D&B, Footwork, Trip-Hop, and much of UKG. It is not binary:
    Bassline/Niche, Speed Garage, Electro House, and some hard-dance forms are
-   also 4/4. Existing plans for
-   `KickPattern::{FourOnFloor, BrokenBeat, Halftime, Sparse, Irregular}` are
-   strongly supported, but should combine with tempo, metadata, and timbre.
+   also 4/4. Stratum now supplies `kick_pattern` and
+   `kick_pattern_confidence`, but the current classification engine does not
+   convert them into genre votes. Any future rule should combine pattern with
+   tempo, metadata, and timbre.
 
-3. **Dub lineage is not enough by itself.** Dub, Dub Reggae, Dub Techno,
+3. **Dub lineage is not enough by itself.** Dub, Dub Techno,
    Dubstep, Future Garage, Ambient Techno, and Trip-Hop all share echo, reverb,
    bass, space, or dub production lineage. Tempo and rhythm must split them:
    slow reggae/dub riddim, 4/4 techno pulse, 140 half-time dubstep, 2-step/UKG
@@ -143,7 +195,7 @@ Potential review items:
 | Dub chord/stab detector | Dub Techno; Tech House false-positive analysis | Strong for Dub Techno; weak/contextual for Tech House | Supported by Ableton and Attack Magazine dub-techno material. Must remain conjunctive because some Tech House/House uses stabs too. |
 | Long-tail reverb/delay decay | Dub Techno, Ambient Techno, Dub, Ambient | Strong | Useful positive signal when combined with tempo/rhythm/family evidence. |
 | Band-split flux / sustained texture detection | Deep Techno vs Ambient | Moderate source support; deferred/speculative implementation | Drone sources support sustained tones and slow harmonic change; band-split flux is a practical DSP proxy, but the current roadmap defers it until nearer-term features are validated. |
-| Sub-bass prominence | Dubstep, D&B, Jungle, Footwork, Dub, Dub Reggae | Strong | Use with rhythm pattern; bass alone collides across many genres. |
+| Sub-bass prominence | Dubstep, D&B, Jungle, Footwork, Dub | Strong | Use with rhythm pattern; bass alone collides across many genres. |
 | Half-time or snare-on-3 feel | Dubstep; some Footwork and 140-adjacent bass cases | Strong for Dubstep; contextual elsewhere | Do not count half-time feel as positive D&B/Jungle/Dub evidence by itself. |
 | Distorted/pitched kick profile | Hard Techno, Hardcore, Gabber, Hardstyle | Strong | Consider a hard-dance kick feature before adding more hard-dance rules. |
 | TB-303 / acid pattern proxy | Acid | Moderate | Audio detection is difficult but metadata and label/source terms are highly diagnostic. Treat direct `acid` token matches as weak until corroborated. |
@@ -154,7 +206,7 @@ Potential review items:
 |---|---|
 | Generic "dark" timbre | Collides across Dub Techno, Deep Techno, Ambient, Drone, EBM, Dubstep, Trip-Hop. |
 | BPM alone inside House/Techno | Sources give overlapping 120-140/150 ranges. |
-| "Dub" text alone | Could mean Dub, Dub Reggae, Dub Techno, Dubstep, Future Garage, or just dub mix/version. |
+| "Dub" text alone | Could mean canonical Dub, Dub Techno, Dubstep, Future Garage, or just dub mix/version. |
 | Broad "Electronic/Electronica" provider tags | Beatport/Discogs often use these as umbrella/listening categories. The repo correctly omits vague tokens like "electronic". |
 | Single vocal presence | Gospel House, House, Dancehall, Grime, Hip Hop, R&B, Pop, Trance, Happy Hardcore all may feature vocals. |
 
@@ -405,7 +457,7 @@ Classifier implications:
   genre-wide rule.
 - Dub Techno should beat Deep Techno when chord/stab/delay evidence is present.
 - Dub Techno should lose to Dubstep when half-time/sparse 140 rhythm and wobble
-  sub-bass are present, and to Dub/Dub Reggae at 60-90 with reggae riddim.
+  sub-bass are present, and to Dub at 60-90 with reggae riddim.
 
 Sources:
 [Ableton dub chords](https://www.ableton.com/en/blog/designing-dub-chords-in-ableton-live-with-el-chooppizza-hotline/),
@@ -779,7 +831,21 @@ Classifier implications:
 Sources:
 [LSA Trip Hop](https://www.londonsoundacademy.com/blog/list-of-electronic-dance-music-genres).
 
-### Dub and Dub Reggae
+### Dub
+
+**Taxonomy decision (2026-07-18):** the reopened sources do not establish `Dub`
+and `Dub Reggae` as two independently selectable genres. The
+[London Museum](https://www.londonmuseum.org.uk/collections/london-stories/dub-london-shops-sound-systems-legends/)
+uses “dub” and “dub reggae” as alternative names. The
+[Jamaica Information Service](https://jis.gov.jm/jamaica/dub/) and
+[Wesleyan University Press](https://www.weslpress.org/9780819565723/dub/)
+define Dub as a style or subgenre that grew from Jamaican reggae. A
+[peer-reviewed history indexed by Lancaster University](https://research.lancaster-university.uk/en/publications/king-tubby-meets-the-upsetter-at-the-grass-roots-of-dub-some-thou/)
+uses “dub reggae” in its title while defining “Dub” as the same deconstructive
+studio practice. These sources support a Reggae-versus-Dub boundary, but not a
+Dub-versus-Dub-Reggae split. The operator retained `Dub` as canonical and made
+`Dub Reggae` and `Reggae Dub` compatibility aliases. This keeps one coherent
+candidate dossier without erasing existing input terminology.
 
 Supported traits:
 
@@ -790,7 +856,7 @@ Supported traits:
 Classifier implications:
 
 - `60-90 BPM + reggae/dub rhythm + echo/reverb + bass-heavy + vocal/instrumental
-  fragments` supports Dub/Dub Reggae.
+  fragments` supports Dub.
 - Dub Techno and Dubstep should be excluded by rhythm/BPM first.
 
 Sources:
@@ -832,7 +898,7 @@ Classifier implications:
 
 - Use metadata/vocal cues strongly.
 - BPM 90-108 and riddim rhythm can support Dancehall; avoid classifying slow
-  Dub/Dub Reggae or Hip Hop as Dancehall without provider/current-tag support.
+  Dub or Hip Hop as Dancehall without provider/current-tag support.
 
 Sources:
 [LSA Dancehall](https://www.londonsoundacademy.com/blog/list-of-electronic-dance-music-genres),
@@ -864,11 +930,13 @@ Sources:
    from provider metadata, BPM plausibility, rhythm pattern, timbre, or a
    conjunctive template.
 
-2. **Prioritize `kick_pattern`.** It will unlock the cleanest decisions:
-   Electro vs Deep Techno/Deep House, Dubstep vs Dub Techno, D&B/Jungle vs fast
-   Techno/Hardcore, UKG/2-Step/Garage vs House, Footwork vs Jungle/D&B. Treat
-   it as high-leverage evidence, not a binary family separator, because some UKG,
-   Bassline, Electro House, and hard-dance material is also 4/4.
+2. **Prioritize validated use of `kick_pattern`.** The descriptor is present in
+   current evidence but is not a direct genre rule. It could unlock the cleanest
+   decisions: Electro vs Deep Techno/Deep House, Dubstep vs Dub Techno,
+   D&B/Jungle vs fast Techno/Hardcore, UKG/2-Step/Garage vs House, and Footwork
+   vs Jungle/D&B. Treat any future use as high-leverage evidence, not a binary
+   family separator, because some UKG, Bassline, Electro House, and hard-dance
+   material is also 4/4.
 
 3. **Treat dub-stab outputs as future conjunctive template ingredients.** The
    current cache exposes `dub_stab_onset_rate`, `dub_stab_template`, and
