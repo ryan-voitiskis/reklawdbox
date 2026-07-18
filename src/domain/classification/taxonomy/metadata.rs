@@ -391,14 +391,6 @@ const GENRE_META: &[(&str, GenreMeta)] = &[
         },
     ),
     (
-        "Dub Reggae",
-        GenreMeta {
-            family: GenreFamily::Downtempo,
-            depth: 4,
-            bpm: Some(BpmRange::new(60.0, 90.0)),
-        },
-    ),
-    (
         "Ambient",
         GenreMeta {
             family: GenreFamily::Downtempo,

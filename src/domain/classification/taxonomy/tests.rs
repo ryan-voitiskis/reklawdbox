@@ -41,6 +41,8 @@ fn known_genre_case_insensitive() {
     assert!(is_known_genre("TECHNO"));
     assert!(is_known_genre("uk funky"));
     assert!(is_known_genre("R&B"));
+    assert!(is_known_genre("Dub"));
+    assert!(!is_known_genre("Dub Reggae"));
     let removed_genre = ["Drone", "Techno"].join(" ");
     assert!(!is_known_genre(&removed_genre));
     assert!(!is_known_genre("Polka"));
@@ -57,6 +59,8 @@ fn known_genre_trims_whitespace() {
 fn normalize_known_aliases() {
     assert_eq!(canonical_genre_from_alias("Hip-Hop"), Some("Hip Hop"));
     assert_eq!(canonical_genre_from_alias("DnB"), Some("Drum & Bass"));
+    assert_eq!(canonical_genre_from_alias("Dub Reggae"), Some("Dub"));
+    assert_eq!(canonical_genre_from_alias("Reggae Dub"), Some("Dub"));
     assert_eq!(canonical_genre_from_alias("Terror"), Some("Hardcore"));
     assert_eq!(canonical_genre_from_alias("Uptempo"), Some("Hardcore"));
     assert_eq!(
@@ -244,6 +248,7 @@ fn token_extraction_vague_returns_empty() {
     assert!(extract_genre_tokens("Electronica").is_empty());
     assert!(extract_genre_tokens("Electronic").is_empty());
     assert!(extract_genre_tokens("Anti-music").is_empty());
+    assert!(extract_genre_tokens("Dub Mix").is_empty());
     assert!(extract_genre_tokens("").is_empty());
 }
 
@@ -257,6 +262,7 @@ fn token_extraction_skips_canonical() {
 fn token_extraction_skips_aliases() {
     assert!(extract_genre_tokens("Hip-Hop").is_empty());
     assert!(extract_genre_tokens("DnB").is_empty());
+    assert!(extract_genre_tokens("Dub Reggae").is_empty());
 }
 
 #[test]
@@ -334,6 +340,7 @@ fn label_genre_exact_match() {
     assert_eq!(label_genre("mord"), Some("Hard Techno"));
     assert_eq!(label_genre("hospital"), Some("Drum & Bass"));
     assert_eq!(label_genre("kompakt"), Some("Minimal"));
+    assert_eq!(label_genre("south london hi-fi"), Some("Dub"));
 }
 
 #[test]

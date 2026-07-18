@@ -246,7 +246,7 @@ Cross-validation set (selected for stylistic diversity within Dub Techno):
 | cv313 — Analogue Oceans [Divergent] | Modern Dub Techno |
 | Deepchord — Immersion I | Atmospheric / pad-heavy |
 | Monolake — Gobi (Long Edit) | Reduced / abstract |
-| Rhythm & Sound — See Mi Yah | Dub-reggae fusion |
+| Rhythm & Sound — See Mi Yah | Dub/reggae fusion |
 
 **Onset counts (per 60 s):**
 

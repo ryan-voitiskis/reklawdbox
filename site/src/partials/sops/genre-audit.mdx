@@ -1,6 +1,6 @@
 ## Constraints
 
-- **Taxonomy is compiled.** The alias map in `genre.rs` cannot be changed at runtime. If the user disagrees with a mapping, the agent works around it by using the user's preferred genre directly.
+- **Taxonomy is compiled.** The alias map in `src/domain/classification/taxonomy/aliases.rs` cannot be changed at runtime. If the user disagrees with a mapping, the agent works around it by using the user's preferred genre directly.
 - **No auto-tagging.** Every genre change requires explicit human approval.
 - **Cache-first.** Audit runs from cached data. If cache is empty for a track, it is flagged as insufficient evidence — do not trigger enrichment mid-audit.
 - **XML export only.** No direct DB writes. All changes flow through `update_tracks` → `preview_changes` → `write_xml`.

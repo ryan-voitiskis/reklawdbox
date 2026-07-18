@@ -18,7 +18,6 @@ pub const GENRES: &[&str] = &[
     "Downtempo",
     "Drum & Bass",
     "Dub",
-    "Dub Reggae",
     "Dub Techno",
     "Dubstep",
     "EBM",

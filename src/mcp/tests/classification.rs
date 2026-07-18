@@ -99,6 +99,15 @@ async fn get_genre_taxonomy_via_router_returns_genres() {
         !genres.is_empty(),
         "genres should include configured taxonomy entries"
     );
+    assert!(genres.iter().any(|genre| genre == "Dub"));
+    assert!(!genres.iter().any(|genre| genre == "Dub Reggae"));
+
+    let aliases = payload
+        .get("aliases")
+        .and_then(serde_json::Value::as_object)
+        .expect("aliases should be present");
+    assert_eq!(aliases.get("dub reggae"), Some(&serde_json::json!("Dub")));
+    assert_eq!(aliases.get("reggae dub"), Some(&serde_json::json!("Dub")));
 }
 
 #[tokio::test]

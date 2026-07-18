@@ -437,7 +437,7 @@ This also fixes an existing latent bug: even with the current checks, if the ran
 
 ### False Positive Analysis
 
-**Downtempo `LowEnergy + centroid < 600`:** The main collision risk is sub-bass-heavy dance music (Dubstep, Dub Reggae). Mitigation: Dubstep is Bass family and Dub Reggae is Downtempo family — if either wins the vote, the tiebreak is within-family (same-family path handles it). The function only fires for cross-family ties, so these genres never reach the Downtempo check in a competing position.
+**Downtempo `LowEnergy + centroid < 600`:** The main collision risk is sub-bass-heavy dance music (Dubstep, Dub). Mitigation: Dubstep is Bass family and Dub is Downtempo family — if either wins the vote, the tiebreak is within-family (same-family path handles it). The function only fires for cross-family ties, so these genres never reach the Downtempo check in a competing position.
 
 **Techno `LowEnergy + 118-132 + centroid < 1200`:** The collision risk is sparse Deep House with very dark mixdowns. Deep House centroid typically sits 1400-2000 Hz. A few edge-case deep house tracks might sit around 1100-1200 Hz — but such tracks genuinely straddle Dub Techno/Deep House and a Low confidence tiebreak is defensible.
 
