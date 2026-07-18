@@ -8,6 +8,7 @@ mod help;
 mod library;
 mod metadata;
 mod planning;
+mod server;
 
 use crate::mcp::analysis::AnalyzeAudioBatchParams;
 use crate::mcp::audit::ScanDuplicatesParams;

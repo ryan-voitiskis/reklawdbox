@@ -118,19 +118,17 @@ pub(super) fn create_server_with_store_path(
     context
         .database
         .db
-        .set(Ok(Mutex::new(db_conn)))
+        .set(Mutex::new(db_conn))
         .expect("test DB should initialize exactly once");
     context
         .database
         .effective_db_path
-        .set(Ok(std::path::PathBuf::from(
-            "/tmp/reklawdbox-tests/master.db",
-        )))
+        .set(std::path::PathBuf::from("/tmp/reklawdbox-tests/master.db"))
         .expect("test effective DB path should initialize exactly once");
     context
         .database
         .internal_db
-        .set(Ok(Mutex::new(store_conn)))
+        .set(Mutex::new(store_conn))
         .expect("test internal store should initialize exactly once");
 
     ReklawdboxServer {

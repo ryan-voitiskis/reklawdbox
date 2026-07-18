@@ -12,9 +12,9 @@ use crate::domain::metadata::ChangeManager;
 use super::enrichment::discogs_auth::DiscogsAuthTestDependencies;
 
 pub(super) struct DatabaseContext {
-    pub(super) db: OnceLock<Result<Mutex<Connection>, String>>,
-    pub(super) effective_db_path: OnceLock<Result<PathBuf, String>>,
-    pub(super) internal_db: OnceLock<Result<Mutex<Connection>, String>>,
+    pub(super) db: OnceLock<Mutex<Connection>>,
+    pub(super) effective_db_path: OnceLock<PathBuf>,
+    pub(super) internal_db: OnceLock<Mutex<Connection>>,
     pub(super) db_path: Option<String>,
     /// Explicit store path override for tests and independently opened batch connections.
     pub(super) store_path: Option<String>,

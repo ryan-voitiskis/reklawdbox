@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -71,6 +71,25 @@ pub struct ReklawdboxServer {
     pub(super) tool_router: ToolRouter<Self>,
 }
 
+fn get_or_try_init_once<T, E>(
+    cell: &OnceLock<T>,
+    initialize: impl FnOnce() -> Result<T, E>,
+) -> Result<&T, E> {
+    if let Some(value) = cell.get() {
+        return Ok(value);
+    }
+
+    match initialize() {
+        Ok(candidate) => {
+            let _ = cell.set(candidate);
+            Ok(cell
+                .get()
+                .expect("successful once-cell initialization must publish a value"))
+        }
+        Err(error) => cell.get().ok_or(error),
+    }
+}
+
 impl ReklawdboxServer {
     #[cfg(test)]
     pub(super) fn build_tool_router() -> ToolRouter<Self> {
@@ -78,7 +97,7 @@ impl ReklawdboxServer {
     }
 
     pub(super) fn effective_db_path(&self) -> Result<PathBuf, McpError> {
-        match self.context.database.effective_db_path.get_or_init(|| {
+        match get_or_try_init_once(&self.context.database.effective_db_path, || {
             let configured = self
                 .context
                 .database
@@ -88,49 +107,47 @@ impl ReklawdboxServer {
             resolve_effective_db_path(configured.as_deref())
         }) {
             Ok(path) => Ok(path.clone()),
-            Err(message) => Err(mcp_internal_error(message.clone())),
+            Err(message) => Err(mcp_internal_error(message)),
         }
     }
 
     pub(super) fn rekordbox_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
-        let result = self.context.database.db.get_or_init(|| {
-            let path = self.effective_db_path().map_err(|error| error.message)?;
+        let mutex = get_or_try_init_once(&self.context.database.db, || {
+            let path = self
+                .effective_db_path()
+                .map_err(|error| error.message.to_string())?;
             let path = path.to_str().ok_or_else(|| {
                 "Effective Rekordbox database path is not valid UTF-8".to_string()
             })?;
             match db::open(path) {
-                Ok(conn) => Ok(Mutex::new(conn)),
+                Ok(conn) => Ok::<_, String>(Mutex::new(conn)),
                 Err(e) => Err(format!("Failed to open Rekordbox database: {e}")),
             }
-        });
-        match result {
-            Ok(mutex) => mutex
-                .lock()
-                .map_err(|_| McpError::internal_error("Database lock poisoned", None)),
-            Err(msg) => Err(McpError::internal_error(msg.clone(), None)),
-        }
+        })
+        .map_err(|message| McpError::internal_error(message, None))?;
+        mutex
+            .lock()
+            .map_err(|_| McpError::internal_error("Database lock poisoned", None))
     }
 
     pub(super) fn cache_store_conn(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, Connection>, McpError> {
-        let result = self.context.database.internal_db.get_or_init(|| {
+        let mutex = get_or_try_init_once(&self.context.database.internal_db, || {
             let path = match self.context.database.store_path {
                 Some(ref p) => std::path::PathBuf::from(p),
                 None => store::resolve_path(),
             };
             let path_str = path.to_string_lossy().to_string();
             match store::open(&path_str) {
-                Ok(conn) => Ok(Mutex::new(conn)),
+                Ok(conn) => Ok::<_, String>(Mutex::new(conn)),
                 Err(e) => Err(format!("Failed to open internal store: {e}")),
             }
-        });
-        match result {
-            Ok(mutex) => mutex
-                .lock()
-                .map_err(|_| McpError::internal_error("Internal store lock poisoned", None)),
-            Err(msg) => Err(McpError::internal_error(msg.clone(), None)),
-        }
+        })
+        .map_err(|message| McpError::internal_error(message, None))?;
+        mutex
+            .lock()
+            .map_err(|_| McpError::internal_error("Internal store lock poisoned", None))
     }
 
     pub(super) fn cache_store_path(&self) -> String {
@@ -814,5 +831,187 @@ impl ServerHandler for ReklawdboxServer {
                  label/catalog data on commercial releases; Discogs is materially more \
                  authoritative there.",
         )
+    }
+}
+
+#[cfg(test)]
+mod retryable_once_init_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, OnceLock, mpsc};
+    use std::time::Duration;
+
+    use super::get_or_try_init_once;
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn retryable_once_init_error_then_success_is_cached() {
+        let cell = OnceLock::new();
+        let initializers = AtomicUsize::new(0);
+
+        let first = get_or_try_init_once(&cell, || -> Result<usize, &'static str> {
+            initializers.fetch_add(1, Ordering::SeqCst);
+            Err("transient failure")
+        });
+        assert_eq!(first, Err("transient failure"));
+        assert!(cell.get().is_none());
+
+        let second = get_or_try_init_once(&cell, || -> Result<usize, &'static str> {
+            initializers.fetch_add(1, Ordering::SeqCst);
+            Ok(42)
+        })
+        .expect("second initialization should succeed");
+        assert_eq!(*second, 42);
+
+        let third = get_or_try_init_once(&cell, || -> Result<usize, &'static str> {
+            initializers.fetch_add(1, Ordering::SeqCst);
+            Ok(99)
+        })
+        .expect("retained value should be reused");
+        assert_eq!(*third, 42);
+        assert_eq!(initializers.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn retryable_once_init_concurrent_success_returns_retained_value() {
+        let cell = Arc::new(OnceLock::new());
+        let initializers = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let (release_one_tx, release_one_rx) = mpsc::channel();
+        let (release_two_tx, release_two_rx) = mpsc::channel();
+
+        let spawn_caller = |candidate, release_rx: mpsc::Receiver<()>| {
+            let cell = Arc::clone(&cell);
+            let initializers = Arc::clone(&initializers);
+            let started_tx = started_tx.clone();
+            let completed_tx = completed_tx.clone();
+            std::thread::spawn(move || {
+                let observed = get_or_try_init_once(&cell, || -> Result<usize, ()> {
+                    initializers.fetch_add(1, Ordering::SeqCst);
+                    started_tx
+                        .send(candidate)
+                        .expect("start receiver should remain available");
+                    release_rx
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("initializer release should be bounded");
+                    Ok(candidate)
+                })
+                .expect("concurrent initializer should return retained success");
+                completed_tx
+                    .send(*observed)
+                    .expect("completion receiver should remain available");
+            })
+        };
+
+        let first = spawn_caller(11, release_one_rx);
+        let second = spawn_caller(22, release_two_rx);
+        drop(started_tx);
+        drop(completed_tx);
+
+        let started_one = started_rx.recv_timeout(TEST_TIMEOUT);
+        let started_two = started_rx.recv_timeout(TEST_TIMEOUT);
+        let release_one = release_one_tx.send(());
+        let release_two = release_two_tx.send(());
+        let completed_one = completed_rx.recv_timeout(TEST_TIMEOUT);
+        let completed_two = completed_rx.recv_timeout(TEST_TIMEOUT);
+        let first_join = first.join();
+        let second_join = second.join();
+
+        assert!(started_one.is_ok(), "first initializer did not start");
+        assert!(started_two.is_ok(), "second initializer did not start");
+        assert!(
+            release_one.is_ok(),
+            "first initializer exited before release"
+        );
+        assert!(
+            release_two.is_ok(),
+            "second initializer exited before release"
+        );
+        assert!(first_join.is_ok(), "first initializer thread panicked");
+        assert!(second_join.is_ok(), "second initializer thread panicked");
+        let completed_one = completed_one.expect("first completion should be bounded");
+        let completed_two = completed_two.expect("second completion should be bounded");
+        let retained = *cell.get().expect("one successful value should be retained");
+        assert_eq!(completed_one, retained);
+        assert_eq!(completed_two, retained);
+        assert_eq!(initializers.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn retryable_once_init_racing_failure_prefers_visible_success() {
+        let cell = Arc::new(OnceLock::new());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (success_release_tx, success_release_rx) = mpsc::channel();
+        let (failure_release_tx, failure_release_rx) = mpsc::channel();
+        let (success_tx, success_rx) = mpsc::channel();
+        let (failure_tx, failure_rx) = mpsc::channel();
+
+        let success_cell = Arc::clone(&cell);
+        let success_started_tx = started_tx.clone();
+        let success = std::thread::spawn(move || {
+            let observed =
+                get_or_try_init_once(&success_cell, || -> Result<usize, &'static str> {
+                    success_started_tx
+                        .send("success")
+                        .expect("start receiver should remain available");
+                    success_release_rx
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("success release should be bounded");
+                    Ok(73)
+                })
+                .expect("successful initializer should publish a value");
+            success_tx
+                .send(*observed)
+                .expect("success receiver should remain available");
+        });
+
+        let failure_cell = Arc::clone(&cell);
+        let failure = std::thread::spawn(move || {
+            let observed =
+                get_or_try_init_once(&failure_cell, || -> Result<usize, &'static str> {
+                    started_tx
+                        .send("failure")
+                        .expect("start receiver should remain available");
+                    failure_release_rx
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("failure release should be bounded");
+                    Err("racing failure")
+                });
+            failure_tx
+                .send(observed.copied())
+                .expect("failure receiver should remain available");
+        });
+
+        let started_one = started_rx.recv_timeout(TEST_TIMEOUT);
+        let started_two = started_rx.recv_timeout(TEST_TIMEOUT);
+        let success_release = success_release_tx.send(());
+        let success_result = success_rx.recv_timeout(TEST_TIMEOUT);
+        let failure_release = failure_release_tx.send(());
+        let failure_result = failure_rx.recv_timeout(TEST_TIMEOUT);
+        let success_join = success.join();
+        let failure_join = failure.join();
+
+        assert!(
+            started_one.is_ok(),
+            "first racing initializer did not start"
+        );
+        assert!(
+            started_two.is_ok(),
+            "second racing initializer did not start"
+        );
+        assert!(
+            success_release.is_ok(),
+            "success thread exited before release"
+        );
+        assert!(
+            failure_release.is_ok(),
+            "failure thread exited before release"
+        );
+        assert!(success_join.is_ok(), "success thread panicked");
+        assert!(failure_join.is_ok(), "failure thread panicked");
+        assert_eq!(success_result.expect("success should complete"), 73);
+        assert_eq!(failure_result.expect("failure should complete"), Ok(73));
+        assert_eq!(cell.get(), Some(&73));
     }
 }
