@@ -9,24 +9,11 @@ mod library;
 mod metadata;
 mod planning;
 
-use crate::mcp::analysis::{AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, CacheCoverageParams};
-use crate::mcp::audit::{AuditOperation, ScanDuplicatesParams};
-use crate::mcp::enrichment::{
-    EnrichTracksParams, LookupDiscogsParams, ResolveTrackDataParams, ResolveTracksDataParams,
-};
-use crate::mcp::files::{
-    EmbedCoverArtParams, ExtractCoverArtParams, ReadFileTagsParams, WriteFileTagsParams,
-};
-use crate::mcp::library::{
-    GetPlaylistTracksParams, GetTrackParams, SearchFilterParams, SearchTracksParams,
-};
-use crate::mcp::metadata::{
-    BackfillLabelsParams, ClearChangesParams, PreviewChangesParams, SuggestNormalizationsParams,
-    UpdateTracksParams, WriteXmlParams,
-};
-use crate::mcp::planning::{
-    BuildSetParams, QueryTransitionCandidatesParams, ScoreTransitionParams,
-};
+use crate::mcp::analysis::AnalyzeAudioBatchParams;
+use crate::mcp::audit::ScanDuplicatesParams;
+use crate::mcp::enrichment::{EnrichTracksParams, ResolveTracksDataParams};
+use crate::mcp::library::{SearchFilterParams, SearchTracksParams};
+use crate::mcp::metadata::BackfillLabelsParams;
 use crate::mcp::server::ReklawdboxServer;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -428,49 +415,196 @@ fn flatten_schema_has_top_level_filter_properties() {
     );
 }
 
-/// Tool schemas must be free of $ref/$defs and top-level oneOf/anyOf for Claude API compatibility.
+#[derive(Debug, PartialEq, Eq)]
+struct ClaudeSchemaViolation {
+    tool_name: String,
+    keyword: &'static str,
+    path: String,
+}
+
+impl std::fmt::Display for ClaudeSchemaViolation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "tool `{}` input schema contains prohibited `{}` at `{}`",
+            self.tool_name, self.keyword, self.path
+        )
+    }
+}
+
+fn json_pointer_child(path: &str, segment: &str) -> String {
+    let escaped = segment.replace('~', "~0").replace('/', "~1");
+    format!("{path}/{escaped}")
+}
+
+fn validate_claude_input_schema(
+    tool_name: &str,
+    input_schema: &serde_json::Value,
+) -> Result<(), Vec<ClaudeSchemaViolation>> {
+    fn visit(
+        tool_name: &str,
+        value: &serde_json::Value,
+        path: &str,
+        is_root: bool,
+        violations: &mut Vec<ClaudeSchemaViolation>,
+    ) {
+        match value {
+            serde_json::Value::Object(object) => {
+                for keyword in ["$ref", "$defs"] {
+                    if object.contains_key(keyword) {
+                        violations.push(ClaudeSchemaViolation {
+                            tool_name: tool_name.to_string(),
+                            keyword,
+                            path: json_pointer_child(path, keyword),
+                        });
+                    }
+                }
+                if is_root {
+                    for keyword in ["oneOf", "anyOf"] {
+                        if object.contains_key(keyword) {
+                            violations.push(ClaudeSchemaViolation {
+                                tool_name: tool_name.to_string(),
+                                keyword,
+                                path: json_pointer_child(path, keyword),
+                            });
+                        }
+                    }
+                }
+                for (key, child) in object {
+                    visit(
+                        tool_name,
+                        child,
+                        &json_pointer_child(path, key),
+                        false,
+                        violations,
+                    );
+                }
+            }
+            serde_json::Value::Array(array) => {
+                for (index, child) in array.iter().enumerate() {
+                    visit(
+                        tool_name,
+                        child,
+                        &json_pointer_child(path, &index.to_string()),
+                        false,
+                        violations,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut violations = Vec::new();
+    visit(tool_name, input_schema, "", true, &mut violations);
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations)
+    }
+}
+
 #[test]
-fn tool_schemas_are_claude_api_compatible() {
-    fn check<T: JsonSchema>(name: &str) {
-        let schema = schemars::schema_for!(T);
-        let json = serde_json::to_string(&schema).unwrap();
-
-        assert!(!json.contains(r#""$ref""#), "{name} schema contains $ref");
-        assert!(!json.contains(r#""$defs""#), "{name} schema contains $defs");
-
-        let root = schema.as_value();
-        assert!(
-            root.get("oneOf").is_none(),
-            "{name} schema has top-level oneOf"
-        );
-        assert!(
-            root.get("anyOf").is_none(),
-            "{name} schema has top-level anyOf"
+fn claude_schema_contract_rejects_forbidden_shapes() {
+    fn assert_violation(
+        schema: serde_json::Value,
+        expected_keyword: &'static str,
+        expected_path: &str,
+    ) {
+        let violations = validate_claude_input_schema("fixture_tool", &schema)
+            .expect_err("fixture should violate the Claude input-schema contract");
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].tool_name, "fixture_tool");
+        assert_eq!(violations[0].keyword, expected_keyword);
+        assert_eq!(violations[0].path, expected_path);
+        assert_eq!(
+            violations[0].to_string(),
+            format!(
+                "tool `fixture_tool` input schema contains prohibited `{expected_keyword}` at `{expected_path}`"
+            )
         );
     }
 
-    check::<AuditOperation>("AuditOperation");
-    check::<BuildSetParams>("BuildSetParams");
-    check::<ScoreTransitionParams>("ScoreTransitionParams");
-    check::<QueryTransitionCandidatesParams>("QueryTransitionCandidatesParams");
-    check::<EnrichTracksParams>("EnrichTracksParams");
-    check::<WriteFileTagsParams>("WriteFileTagsParams");
-    check::<WriteXmlParams>("WriteXmlParams");
-    check::<UpdateTracksParams>("UpdateTracksParams");
+    assert_violation(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": { "value": { "$ref": "#/components/value" } }
+                }
+            }
+        }),
+        "$ref",
+        "/properties/nested/properties/value/$ref",
+    );
+    assert_violation(
+        serde_json::json!({
+            "type": "object",
+            "properties": { "nested": { "$defs": {} } }
+        }),
+        "$defs",
+        "/properties/nested/$defs",
+    );
+    assert_violation(
+        serde_json::json!({ "oneOf": [{ "type": "object" }] }),
+        "oneOf",
+        "/oneOf",
+    );
+    assert_violation(
+        serde_json::json!({ "anyOf": [{ "type": "object" }] }),
+        "anyOf",
+        "/anyOf",
+    );
 
-    check::<SearchTracksParams>("SearchTracksParams");
-    check::<GetTrackParams>("GetTrackParams");
-    check::<GetPlaylistTracksParams>("GetPlaylistTracksParams");
-    check::<PreviewChangesParams>("PreviewChangesParams");
-    check::<ClearChangesParams>("ClearChangesParams");
-    check::<SuggestNormalizationsParams>("SuggestNormalizationsParams");
-    check::<LookupDiscogsParams>("LookupDiscogsParams");
-    check::<AnalyzeTrackAudioParams>("AnalyzeTrackAudioParams");
-    check::<AnalyzeAudioBatchParams>("AnalyzeAudioBatchParams");
-    check::<ResolveTrackDataParams>("ResolveTrackDataParams");
-    check::<ResolveTracksDataParams>("ResolveTracksDataParams");
-    check::<CacheCoverageParams>("CacheCoverageParams");
-    check::<ReadFileTagsParams>("ReadFileTagsParams");
-    check::<ExtractCoverArtParams>("ExtractCoverArtParams");
-    check::<EmbedCoverArtParams>("EmbedCoverArtParams");
+    let allowed = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "value": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                }
+            }
+        }
+    });
+    assert_eq!(
+        validate_claude_input_schema("allowed_tool", &allowed),
+        Ok(())
+    );
+}
+
+/// Tool schemas must be free of $ref/$defs and top-level oneOf/anyOf for Claude API compatibility.
+#[test]
+fn claude_schema_contract_covers_live_router() {
+    const EXPECTED_TOOL_COUNT: usize = 52;
+
+    let tools = ReklawdboxServer::build_tool_router().list_all();
+    assert_eq!(
+        tools.len(),
+        EXPECTED_TOOL_COUNT,
+        "live MCP router tool count changed: observed {} tools",
+        tools.len()
+    );
+
+    let mut violations = Vec::new();
+    for tool in tools {
+        let input_schema = serde_json::to_value(tool.input_schema.as_ref())
+            .unwrap_or_else(|error| panic!("{} input schema should serialize: {error}", tool.name));
+        if let Err(mut tool_violations) =
+            validate_claude_input_schema(tool.name.as_ref(), &input_schema)
+        {
+            violations.append(&mut tool_violations);
+        }
+    }
+
+    let failures = violations
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "Claude input-schema contract violations:\n{failures}"
+    );
 }
