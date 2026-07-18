@@ -16,10 +16,10 @@ export default defineConfig({
     starlight({
       title: 'reklawdbox',
       logo: {
-        src: './src/assets/logo.png',
-        alt: 'reklawdbox',
+        src: './src/assets/logo.svg',
+        alt: '',
       },
-      favicon: '/favicon.png',
+      favicon: '/favicon.svg',
       head: [
         {
           tag: 'link',

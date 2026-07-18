@@ -207,10 +207,8 @@ dialog {
 
 /* Larger nav logo */
 .site-title img {
-	width: 5rem;
-	height: 5rem;
-	position: relative;
-	top: 4px;
+	width: 2.5rem;
+	height: 2.5rem;
 }
 
 /* Hero layout */
