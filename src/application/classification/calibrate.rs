@@ -431,28 +431,24 @@ pub(crate) fn calibration_coverage(
             continue;
         }
         match extracted.features {
-            Some(features) => {
-                if profiles::has_scorable_optional_features(&features) {
-                    stats.tracks_with_scorable_features += 1;
-                    let identity = audio_identity
-                        .as_ref()
-                        .expect("fresh audio cache rows require a resolved file identity");
-                    fingerprint_rows.push(TrainingFingerprintRow {
-                        track_id: track.id.clone(),
-                        genre: canonical,
-                        file_size: identity.file_size,
-                        file_mtime: identity.file_mtime,
-                        stratum_input_fingerprint: identity
-                            .stratum_input_fingerprint
-                            .clone()
-                            .unwrap_or_default(),
-                    });
-                    scorable_samples.push((canonical, features));
-                } else {
-                    stats.missing_scorable_features += 1;
-                }
+            Some(features) if profiles::has_scorable_optional_features(&features) => {
+                stats.tracks_with_scorable_features += 1;
+                let identity = audio_identity
+                    .as_ref()
+                    .expect("fresh audio cache rows require a resolved file identity");
+                fingerprint_rows.push(TrainingFingerprintRow {
+                    track_id: track.id.clone(),
+                    genre: canonical,
+                    file_size: identity.file_size,
+                    file_mtime: identity.file_mtime,
+                    stratum_input_fingerprint: identity
+                        .stratum_input_fingerprint
+                        .clone()
+                        .unwrap_or_default(),
+                });
+                scorable_samples.push((canonical, features));
             }
-            None => {
+            Some(_) | None => {
                 stats.missing_scorable_features += 1;
             }
         }
