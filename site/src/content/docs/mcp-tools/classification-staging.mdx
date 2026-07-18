@@ -156,7 +156,28 @@ Auto-fill empty labels from enrichment caches (Discogs, MusicBrainz, and Bandcam
 | `conflicts_truncated` | boolean | | Legacy alias present and true only when `conflict_page.has_more` is true |
 | `auto_enriched` | integer | | Total successful MusicBrainz and Bandcamp matches when `auto_enrich=true` |
 | `auto_enriched_by_provider` | object | | Successful-match counts for `musicbrainz` and `bandcamp` |
+| `auto_enrichment` | object | | Durable-write and failure report present whenever `auto_enrich=true` |
 | `research_queue` | object | | Remaining unlabeled-track research summary |
+
+{/* /doc-contract:mcp-output */}
+
+{/* doc-contract:mcp-output tool=backfill_labels schema=/properties/auto_enrichment requiredness=global */}
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `operation_failed` | boolean | **yes** | Whether lookup, persistence, worker, or writer failures occurred |
+| `requested` | integer | **yes** | Provider keys selected for this invocation |
+| `matched` | integer | **yes** | Successful provider matches, preserving the legacy counter meaning |
+| `no_match` | integer | **yes** | Completed provider lookups with no result |
+| `lookup_failed` | integer | **yes** | Provider lookups that failed and remain retryable |
+| `cache_writes_succeeded` | integer | **yes** | Acknowledged durable positive and negative cache rows |
+| `cache_writes_failed` | integer | **yes** | Expected cache rows prevented by serialization, queue, acknowledgement, writer-open, or SQLite failures |
+| `serialization_failed` | integer | **yes** | Serialization failures, also counted in `cache_writes_failed` |
+| `worker_failed` | integer | **yes** | Provider worker tasks that failed before a terminal lookup outcome |
+| `writer_failed` | integer | **yes** | Cache-writer open, acknowledgement-receiver, or task failures |
+| `by_provider` | object | **yes** | The same per-request counters keyed by `bandcamp` and `musicbrainz` |
+| `failures` | array | **yes** | Up to 50 typed provider/key failure details with bounded summaries |
+| `failures_truncated` | boolean | **yes** | Whether additional failure details were omitted after the 50-entry cap |
 
 {/* /doc-contract:mcp-output */}
 
@@ -178,6 +199,15 @@ pages with `dry_run=true`, `auto_enrich=false`, and
 provider side effects. A zero page size and an offset beyond the end are
 terminal no-ops.
 
+When `auto_enrich=true`, inspect `auto_enrichment.operation_failed` and its
+failure counters before treating the provider phase as complete. The legacy
+`auto_enriched` fields count provider matches, while
+`cache_writes_succeeded` counts acknowledged durable positive and negative
+rows. Durable successes are re-scanned and may be staged even when another key
+fails; use the typed failures to decide which provider/key lookups need a
+retry. `dry_run=true` still suppresses staging only, so explicitly requested
+auto-enrichment may write Reklawdbox-owned cache rows.
+
 ---
 
 ### `backfill_years`
@@ -193,6 +223,12 @@ Auto-fill missing years (year=0) from file tags, folder paths, and enrichment ca
 
 {/* /doc-contract:mcp */}
 
+With `auto_enrich=true`, the response includes the same `auto_enrichment`
+report described for `backfill_labels`. Successfully persisted MusicBrainz and
+Bandcamp rows are re-scanned through the existing year cascade even when other
+keys fail. Inspect the report before deciding that remaining gaps are genuine
+no-matches rather than retryable lookup or persistence failures.
+
 ---
 
 ### `backfill_albums`
@@ -207,6 +243,12 @@ Auto-fill empty album names from file tags, folder paths, and enrichment cache (
 | `auto_enrich` | boolean | | Automatically enrich uncached tracks via Bandcamp before backfilling (default: `false`) |
 
 {/* /doc-contract:mcp */}
+
+With `auto_enrich=true`, the response includes the same `auto_enrichment`
+report. Album auto-enrichment remains Bandcamp-only and best-effort, but a
+provider match is not evidence of durable cache persistence: check
+`cache_writes_succeeded`, `operation_failed`, and typed failures before
+deciding whether a retry is needed.
 
 ---
 

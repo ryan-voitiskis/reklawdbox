@@ -4,9 +4,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::adapters::rekordbox as db;
-use crate::adapters::state as store;
 use crate::application::metadata::backfill::{scan_albums, stage_suggestions};
-use crate::mcp::{ReklawdboxServer, db_error, mcp_internal_error, ok_json};
+use crate::application::metadata::enrichment::{
+    MetadataAutoEnrichmentReport, MetadataEnrichmentProvider, MetadataEnrichmentRequest,
+    MetadataEnrichmentWriterSession, run_metadata_provider,
+};
+use crate::mcp::{ReklawdboxServer, db_error, lookup_bandcamp_remote, mcp_internal_error, ok_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct BackfillAlbumsParams {
@@ -40,114 +43,55 @@ pub(in crate::mcp) async fn handle_backfill_albums(
         (tracks, scan)
     };
 
-    let mut auto_enriched = 0usize;
+    let mut auto_enrichment = MetadataAutoEnrichmentReport::default();
 
     if auto_enrich && !scan.uncached_bandcamp.is_empty() {
-        let to_enrich: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
-        let total = to_enrich.len();
+        let requests: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp)
+            .into_iter()
+            .map(MetadataEnrichmentRequest::from)
+            .collect();
         tracing::info!(
-            count = total,
+            count = requests.len(),
             "auto_enrich: fetching Bandcamp for uncached album tracks"
         );
 
         use crate::mcp::enrichment::HasScore;
 
-        let store_path = server.cache_store_path();
-
         // Ensure the DB exists and is migrated before spawning the writer.
         {
             let _conn = server.cache_store_conn()?;
         }
-
-        let (cache_tx, mut cache_rx) =
-            tokio::sync::mpsc::channel::<(String, String, Option<String>, Option<String>)>(16);
-        let writer_store_path = store_path.clone();
-        let writer_handle = tokio::task::spawn_blocking(move || {
-            let conn = match store::open(&writer_store_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("album auto-enrich writer: failed to open store: {e}");
-                    return;
+        let writer = MetadataEnrichmentWriterSession::start(
+            server.cache_store_path(),
+            MetadataEnrichmentProvider::Bandcamp,
+            requests
+                .first()
+                .expect("album auto-enrichment requests should be non-empty"),
+        );
+        let lookup_server = server.clone();
+        let provider_report = run_metadata_provider(
+            MetadataEnrichmentProvider::Bandcamp,
+            requests,
+            writer.sender(),
+            move |request| {
+                let server = lookup_server.clone();
+                async move {
+                    lookup_bandcamp_remote(&server, &request.raw_artist, &request.raw_title).await
                 }
-            };
-            while let Some((norm_artist, norm_title, quality, json)) = cache_rx.blocking_recv() {
-                if let Err(e) = store::set_enrichment(
-                    &conn,
-                    "bandcamp",
-                    &norm_artist,
-                    &norm_title,
-                    None,
-                    quality.as_deref(),
-                    json.as_deref(),
-                ) {
-                    tracing::error!(
-                        "album auto-enrich writer: failed to write bandcamp for {norm_artist}/{norm_title}: {e}"
-                    );
+            },
+            |result| {
+                if result.score() >= 90 {
+                    "exact"
+                } else {
+                    "fuzzy"
                 }
-            }
-        });
-
-        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-        let mut handles = Vec::with_capacity(total);
-
-        for (norm_artist, norm_title, raw_artist, raw_title) in to_enrich {
-            let permit = sem
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
-
-            let server = server.clone();
-            let cache_tx = cache_tx.clone();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = permit;
-                let enriched: usize;
-                match crate::adapters::providers::bandcamp::lookup(
-                    &server.context.enrichment.http,
-                    &raw_artist,
-                    &raw_title,
-                )
-                .await
-                {
-                    Ok(result) => {
-                        let (quality, json) = match &result {
-                            Some(r) => {
-                                let q = if r.score() >= 90 { "exact" } else { "fuzzy" };
-                                let j = serde_json::to_string(r).ok();
-                                (Some(q.to_string()), j)
-                            }
-                            None => (Some("none".to_string()), None),
-                        };
-                        enriched = if result.is_some() { 1 } else { 0 };
-                        let _ = cache_tx
-                            .send((norm_artist, norm_title, quality, json))
-                            .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            artist = raw_artist.as_str(),
-                            "Bandcamp auto-enrich failed: {e}"
-                        );
-                        enriched = 0;
-                    }
-                }
-                enriched
-            }));
-        }
-
-        drop(cache_tx);
-
-        for handle in handles {
-            match handle.await {
-                Ok(n) => auto_enriched += n,
-                Err(e) => tracing::warn!("album auto-enrich task panicked: {e}"),
-            }
-        }
-
-        if let Err(e) = writer_handle.await {
-            tracing::warn!("album backfill cache writer task failed: {e}");
-        }
+            },
+        )
+        .await;
+        auto_enrichment = writer
+            .finish(provider_report)
+            .await
+            .map_err(mcp_internal_error)?;
 
         let store_conn = server.cache_store_conn()?;
         scan = scan_albums(&store_conn, &tracks);
@@ -179,7 +123,11 @@ pub(in crate::mcp) async fn handle_backfill_albums(
     if auto_enrich {
         result.as_object_mut().unwrap().insert(
             "auto_enriched".to_string(),
-            serde_json::json!(auto_enriched),
+            serde_json::json!(auto_enrichment.matched),
+        );
+        result.as_object_mut().unwrap().insert(
+            "auto_enrichment".to_string(),
+            serde_json::json!(auto_enrichment),
         );
     }
 

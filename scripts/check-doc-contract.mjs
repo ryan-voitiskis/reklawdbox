@@ -442,10 +442,17 @@ function schemaObjectSurface(root, node, seen = new Set()) {
   for (const keyword of ['anyOf', 'oneOf']) {
     const variants = resolved[keyword] ?? []
     if (!variants.length) continue
+    const objectVariants = variants.filter((variant) => {
+      if (schemaSupportsObjectSurface(root, variant)) return true
+      const types = schemaTypes(root, variant, { includeNull: true })
+      return types.length === 0 || types.includes('object')
+    })
     surface = mergeConjunctiveSurfaces(
       surface,
       mergeAlternativeSurfaces(
-        variants.map((variant) => schemaObjectSurface(root, variant, nextSeen)),
+        (objectVariants.length ? objectVariants : variants).map((variant) =>
+          schemaObjectSurface(root, variant, nextSeen)
+        ),
         keyword,
       ),
     )

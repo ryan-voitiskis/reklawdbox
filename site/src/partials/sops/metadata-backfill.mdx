@@ -64,6 +64,24 @@ backfill tools (see steps 1 and 2). Label and year backfill fetch Bandcamp and
 MusicBrainz for their exact unresolved provider gaps; album backfill fetches
 Bandcamp. This is slower for large collections but requires no manual batching.
 
+Whenever `auto_enrich=true`, inspect the additive `auto_enrichment` report
+before treating enrichment as complete:
+
+- `auto_enriched` and `auto_enriched_by_provider` retain their legacy meaning:
+  successful provider matches, even if a later cache write fails.
+- `cache_writes_succeeded` is the count of acknowledged durable positive and
+  negative cache rows. A completed no-match is a successful durable write.
+- If `operation_failed=true`, inspect `lookup_failed`,
+  `cache_writes_failed`, `serialization_failed`, `worker_failed`,
+  `writer_failed`, and the typed provider/key `failures` before deciding what
+  to retry. Failure details are capped at 50; `failures_truncated=true` means
+  additional failures occurred.
+- Successfully persisted rows are always re-scanned and can contribute staged
+  suggestions even when another provider/key fails. Retry only the failed
+  identities; do not discard the durable partial success.
+- `dry_run=true` suppresses metadata staging only. Explicit auto-enrichment may
+  still persist Reklawdbox-owned provider cache rows before the re-scan.
+
 ## Steps
 
 ### 1. Fill labels
@@ -88,8 +106,12 @@ The tool scans the entire collection (excluding samples), looks up each track's 
 
 Label precedence remains Discogs → MusicBrainz → Bandcamp. The additive
 `auto_enriched_by_provider` counts successful MusicBrainz and Bandcamp matches;
-their sum equals `auto_enriched`. Provider errors remain retryable and do not
-write durable cache rows, while completed no-matches are cached.
+their sum equals `auto_enriched`. These are provider-match counters, not
+durability counters. Use `auto_enrichment.cache_writes_succeeded` for durable
+positive/no-match rows. Provider errors remain retryable and do not write
+durable cache rows, while completed no-matches are cached. If some keys fail,
+durable successes are still re-scanned with Discogs → MusicBrainz → Bandcamp
+precedence and may be staged.
 
 The summary includes `no_enrichment_by_provider` for all scanned tracks that
 lack a usable enrichment label from each provider; these counts are broader
@@ -216,6 +238,12 @@ Or, to automatically fetch Bandcamp and MusicBrainz data for uncached year-zero 
 backfill_years(auto_enrich=true)
 ```
 
+Before treating this provider pass as complete, inspect
+`auto_enrichment.operation_failed` and its failure counters. Provider matches
+remain counted by legacy `auto_enriched`; acknowledged positive and negative
+rows are counted by `cache_writes_succeeded`. Durable successes are re-scanned
+through the unchanged year cascade even when another key needs a retry.
+
 The tool scans the entire collection (excluding samples) and tries five sources in priority order for each track with year=0:
 
 1. **File tags** — reads year from the audio file's metadata (ID3v2, Vorbis Comment, RIFF INFO). Most reliable since the user tagged it.
@@ -297,6 +325,11 @@ Or, to automatically fetch Bandcamp data for uncached tracks:
 ```
 backfill_albums(auto_enrich=true)
 ```
+
+Album auto-enrichment is Bandcamp-only. Check the additive
+`auto_enrichment` report before treating a match as durable; persisted partial
+successes are re-scanned and staged while typed failures identify any keys that
+need retry. Album gaps remain best-effort and do not become a new export gate.
 
 The tool scans tracks with empty album and tries four sources in order:
 

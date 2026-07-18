@@ -4,8 +4,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::adapters::rekordbox as db;
-use crate::adapters::state as store;
 use crate::application::metadata::backfill::{scan_labels, stage_suggestions};
+use crate::application::metadata::enrichment::{
+    MetadataAutoEnrichmentReport, MetadataEnrichmentProvider, MetadataEnrichmentRequest,
+    MetadataEnrichmentWriterSession, run_metadata_provider,
+};
 use crate::domain::metadata as normalize;
 use crate::mcp::{
     OffsetPage, ReklawdboxServer, db_error, lookup_bandcamp_remote, lookup_musicbrainz_remote,
@@ -67,6 +70,8 @@ pub(in crate::mcp) struct BackfillLabelsOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     auto_enriched_by_provider: Option<LabelAutoEnrichedByProvider>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    auto_enrichment: Option<MetadataAutoEnrichmentReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     research_queue: Option<LabelResearchQueue>,
 }
 
@@ -78,6 +83,7 @@ pub(in crate::mcp) struct LabelAutoEnrichedByProvider {
     bandcamp: usize,
 }
 
+#[cfg(test)]
 impl LabelAutoEnrichedByProvider {
     fn total(&self) -> usize {
         self.musicbrainz + self.bandcamp
@@ -107,222 +113,103 @@ pub(in crate::mcp) async fn handle_backfill_labels(
         (tracks, scan)
     };
 
-    let mut bandcamp_enriched = 0usize;
-    let mut musicbrainz_enriched = 0usize;
+    let mut auto_enrichment = MetadataAutoEnrichmentReport::default();
 
     if auto_enrich && (!scan.uncached_bandcamp.is_empty() || !scan.uncached_musicbrainz.is_empty())
     {
         use crate::mcp::enrichment::HasScore;
 
-        let bandcamp_tracks: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp);
-        let musicbrainz_tracks: Vec<_> = std::mem::take(&mut scan.uncached_musicbrainz);
-        let total = bandcamp_tracks.len() + musicbrainz_tracks.len();
+        let bandcamp_requests: Vec<_> = std::mem::take(&mut scan.uncached_bandcamp)
+            .into_iter()
+            .map(MetadataEnrichmentRequest::from)
+            .collect();
+        let musicbrainz_requests: Vec<_> = std::mem::take(&mut scan.uncached_musicbrainz)
+            .into_iter()
+            .map(MetadataEnrichmentRequest::from)
+            .collect();
+        let total = bandcamp_requests.len() + musicbrainz_requests.len();
         tracing::info!(
-            bandcamp = bandcamp_tracks.len(),
-            musicbrainz = musicbrainz_tracks.len(),
+            bandcamp = bandcamp_requests.len(),
+            musicbrainz = musicbrainz_requests.len(),
             "auto_enrich: fetching labels for {total} uncached provider keys"
         );
 
-        let store_path = server.cache_store_path();
-
-        // Ensure DB exists and is migrated before spawning the writer.
+        // The writer opens a separate connection after the store is initialized.
         {
             let _conn = server.cache_store_conn()?;
         }
+        let (writer_provider, writer_request) = bandcamp_requests
+            .first()
+            .map(|request| (MetadataEnrichmentProvider::Bandcamp, request))
+            .or_else(|| {
+                musicbrainz_requests
+                    .first()
+                    .map(|request| (MetadataEnrichmentProvider::MusicBrainz, request))
+            })
+            .expect("label auto-enrichment requests should be non-empty");
+        let writer = MetadataEnrichmentWriterSession::start(
+            server.cache_store_path(),
+            writer_provider,
+            writer_request,
+        );
 
-        let (cache_tx, mut cache_rx) =
-            tokio::sync::mpsc::channel::<(String, String, String, Option<String>, Option<String>)>(
-                32,
-            );
-
-        let writer_store_path = store_path.clone();
-        let writer_handle = tokio::task::spawn_blocking(move || {
-            let conn = match store::open(&writer_store_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("label backfill cache writer: failed to open store: {e}");
-                    return;
+        let bandcamp_server = server.clone();
+        let bandcamp = run_metadata_provider(
+            MetadataEnrichmentProvider::Bandcamp,
+            bandcamp_requests,
+            writer.sender(),
+            move |request| {
+                let server = bandcamp_server.clone();
+                async move {
+                    lookup_bandcamp_remote(&server, &request.raw_artist, &request.raw_title).await
                 }
-            };
-            while let Some((provider, norm_artist, norm_title, match_quality, response_json)) =
-                cache_rx.blocking_recv()
-            {
-                if let Err(e) = store::set_enrichment(
-                    &conn,
-                    &provider,
-                    &norm_artist,
-                    &norm_title,
-                    None,
-                    match_quality.as_deref(),
-                    response_json.as_deref(),
-                ) {
-                    tracing::warn!(
-                        artist = norm_artist.as_str(),
-                        title = norm_title.as_str(),
-                        "label backfill {provider} cache write failed: {e}"
-                    );
+            },
+            |result| {
+                if result.score() >= 90 {
+                    "exact"
+                } else {
+                    "fuzzy"
                 }
-            }
-        });
-
-        let bandcamp_future = {
-            let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-            let mut handles = Vec::with_capacity(bandcamp_tracks.len());
-            for (norm_artist, norm_title, raw_artist, raw_title) in bandcamp_tracks {
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
-                let server = server.clone();
-                let cache_tx = cache_tx.clone();
-                handles.push(tokio::spawn(async move {
-                    let hit = match lookup_bandcamp_remote(&server, &raw_artist, &raw_title).await {
-                        Ok(result) => {
-                            let (quality, json) = match result.as_ref() {
-                                Some(value) => match serde_json::to_string(value) {
-                                    Ok(json) => (
-                                        Some(
-                                            (if value.score() >= 90 {
-                                                "exact"
-                                            } else {
-                                                "fuzzy"
-                                            })
-                                            .to_string(),
-                                        ),
-                                        Some(json),
-                                    ),
-                                    Err(error) => {
-                                        tracing::warn!(
-                                            artist = raw_artist.as_str(),
-                                            "Bandcamp label serialization failed: {error}"
-                                        );
-                                        drop(permit);
-                                        return 0;
-                                    }
-                                },
-                                None => (Some("none".into()), None),
-                            };
-                            let _ = cache_tx
-                                .send(("bandcamp".into(), norm_artist, norm_title, quality, json))
-                                .await;
-                            usize::from(result.is_some())
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                artist = raw_artist.as_str(),
-                                "Bandcamp auto-enrich failed: {error}"
-                            );
-                            0
-                        }
-                    };
-                    drop(permit);
-                    hit
-                }));
-            }
-            async move {
-                let mut total = 0;
-                for handle in handles {
-                    match handle.await {
-                        Ok(hit) => total += hit,
-                        Err(error) => tracing::warn!("Bandcamp label task panicked: {error}"),
-                    }
+            },
+        );
+        let musicbrainz_server = server.clone();
+        let musicbrainz = run_metadata_provider(
+            MetadataEnrichmentProvider::MusicBrainz,
+            musicbrainz_requests,
+            writer.sender(),
+            move |request| {
+                let server = musicbrainz_server.clone();
+                async move {
+                    lookup_musicbrainz_remote(&server, &request.raw_artist, &request.raw_title)
+                        .await
                 }
-                total
-            }
-        };
-
-        let musicbrainz_future = {
-            let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-            let mut handles = Vec::with_capacity(musicbrainz_tracks.len());
-            for (norm_artist, norm_title, raw_artist, raw_title) in musicbrainz_tracks {
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| mcp_internal_error(format!("Semaphore error: {e}")))?;
-                let server = server.clone();
-                let cache_tx = cache_tx.clone();
-                handles.push(tokio::spawn(async move {
-                    let hit =
-                        match lookup_musicbrainz_remote(&server, &raw_artist, &raw_title).await {
-                            Ok(result) => {
-                                let (quality, json) = match result.as_ref() {
-                                    Some(value) => match serde_json::to_string(value) {
-                                        Ok(json) => (
-                                            Some(
-                                                (if value.score() >= 90 {
-                                                    "exact"
-                                                } else {
-                                                    "fuzzy"
-                                                })
-                                                .to_string(),
-                                            ),
-                                            Some(json),
-                                        ),
-                                        Err(error) => {
-                                            tracing::warn!(
-                                                artist = raw_artist.as_str(),
-                                                "MusicBrainz label serialization failed: {error}"
-                                            );
-                                            drop(permit);
-                                            return 0;
-                                        }
-                                    },
-                                    None => (Some("none".into()), None),
-                                };
-                                let _ = cache_tx
-                                    .send((
-                                        "musicbrainz".into(),
-                                        norm_artist,
-                                        norm_title,
-                                        quality,
-                                        json,
-                                    ))
-                                    .await;
-                                usize::from(result.is_some())
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    artist = raw_artist.as_str(),
-                                    "MusicBrainz auto-enrich failed: {error}"
-                                );
-                                0
-                            }
-                        };
-                    drop(permit);
-                    hit
-                }));
-            }
-            async move {
-                let mut total = 0;
-                for handle in handles {
-                    match handle.await {
-                        Ok(hit) => total += hit,
-                        Err(error) => tracing::warn!("MusicBrainz label task panicked: {error}"),
-                    }
+            },
+            |result| {
+                if result.score() >= 90 {
+                    "exact"
+                } else {
+                    "fuzzy"
                 }
-                total
-            }
-        };
+            },
+        );
+        let (bandcamp, musicbrainz) = tokio::join!(bandcamp, musicbrainz);
+        let mut provider_report = bandcamp;
+        provider_report.absorb(musicbrainz);
+        auto_enrichment = writer
+            .finish(provider_report)
+            .await
+            .map_err(mcp_internal_error)?;
 
-        (bandcamp_enriched, musicbrainz_enriched) =
-            tokio::join!(bandcamp_future, musicbrainz_future);
-
-        drop(cache_tx);
-        if let Err(e) = writer_handle.await {
-            tracing::warn!("label backfill cache writer task failed: {e}");
-        }
-
+        // Re-scan only after the acknowledged writer has terminated.
         let store_conn = server.cache_store_conn()?;
         scan = scan_labels(&store_conn, &tracks);
         drop(store_conn);
     }
     let auto_enriched_by_provider = LabelAutoEnrichedByProvider {
-        musicbrainz: musicbrainz_enriched,
-        bandcamp: bandcamp_enriched,
+        musicbrainz: auto_enrichment.matched_by(MetadataEnrichmentProvider::MusicBrainz),
+        bandcamp: auto_enrichment.matched_by(MetadataEnrichmentProvider::Bandcamp),
     };
-    let auto_enriched = auto_enriched_by_provider.total();
+    let auto_enriched = auto_enrichment.matched;
 
     // Collect before to_stage is moved by stage().
     let staged_label_ids: std::collections::HashSet<String> = scan
@@ -419,6 +306,7 @@ pub(in crate::mcp) async fn handle_backfill_labels(
         conflicts_truncated,
         auto_enriched: auto_enrich.then_some(auto_enriched),
         auto_enriched_by_provider: auto_enrich.then_some(auto_enriched_by_provider),
+        auto_enrichment: auto_enrich.then_some(auto_enrichment),
         research_queue,
     })
 }

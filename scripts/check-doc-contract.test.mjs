@@ -246,9 +246,27 @@ function expectAudienceFailure(mutate, expected) {
 }
 
 function selectedOutputFixture(enrichRows) {
+  const autoEnrichmentRows = [
+    ['operation_failed', 'boolean', 'yes', 'Failure flag'],
+    ['requested', 'integer', 'yes', 'Selected provider keys'],
+    ['matched', 'integer', 'yes', 'Provider matches'],
+    ['no_match', 'integer', 'yes', 'Completed no-matches'],
+    ['lookup_failed', 'integer', 'yes', 'Retryable lookup failures'],
+    ['cache_writes_succeeded', 'integer', 'yes', 'Durable rows'],
+    ['cache_writes_failed', 'integer', 'yes', 'Failed expected rows'],
+    ['serialization_failed', 'integer', 'yes', 'Serialization failures'],
+    ['worker_failed', 'integer', 'yes', 'Worker failures'],
+    ['writer_failed', 'integer', 'yes', 'Writer failures'],
+    ['by_provider', 'object', 'yes', 'Per-provider counters'],
+    ['failures', 'array', 'yes', 'Bounded typed failures'],
+    ['failures_truncated', 'boolean', 'yes', 'Failure cap flag'],
+  ]
   const selected = [
     ['analyze_audio_batch', [['page', 'object', 'yes', 'Continuation']]],
-    ['backfill_labels', [['conflict_page', 'object', 'yes', 'Continuation']]],
+    ['backfill_labels', [
+      ['conflict_page', 'object', 'yes', 'Continuation'],
+      ['auto_enrichment', 'object', '', 'Conditional persistence report'],
+    ]],
     ['enrich_tracks', enrichRows],
     ['scan_duplicates', [['page', 'object', 'yes', 'Continuation']]],
   ]
@@ -256,9 +274,20 @@ function selectedOutputFixture(enrichRows) {
     outputTool(
       name,
       Object.fromEntries(rows.map(([field, type]) => [field, { type }])),
-      rows.map(([field]) => field),
+      rows.filter(([, , required]) => required).map(([field]) => field),
     )
   )
+  const backfillLabels = tools.find((item) => item.name === 'backfill_labels')
+  const autoEnrichmentSchema = {
+    type: 'object',
+    properties: Object.fromEntries(
+      autoEnrichmentRows.map(([field, type]) => [field, { type }]),
+    ),
+    required: autoEnrichmentRows.map(([field]) => field),
+  }
+  backfillLabels.outputSchema.properties.auto_enrichment = {
+    anyOf: [autoEnrichmentSchema, { type: 'null' }],
+  }
   const docs = [
     document(
       selected.map(([name, rows]) =>
@@ -266,7 +295,18 @@ function selectedOutputFixture(enrichRows) {
           name,
           table(rows, ['Field', 'Type', 'Required', 'Description']),
         )
-      ).join('\n'),
+      ).join('\n')
+        + '\n'
+        + mcpOutputMarker(
+          'backfill_labels',
+          table(autoEnrichmentRows, [
+            'Field',
+            'Type',
+            'Required',
+            'Description',
+          ]),
+          '/properties/auto_enrichment',
+        ),
     ),
   ]
   return { tools, docs }
@@ -279,6 +319,20 @@ test('selected MCP output contracts compare marked fields with live outputSchema
   ])
   assert.doesNotThrow(() =>
     validateMcpOutputContracts(fixture.docs, fixture.tools)
+  )
+})
+
+test('backfill label output contract requires auto-enrichment core fields', () => {
+  const fixture = selectedOutputFixture([
+    ['summary', 'object', 'yes', 'Batch summary'],
+    ['page', 'object', 'yes', 'Continuation'],
+  ])
+  delete fixture.tools.find((item) => item.name === 'backfill_labels')
+    .outputSchema.properties.auto_enrichment.anyOf[0].properties
+    .cache_writes_failed
+  assert.throws(
+    () => validateMcpOutputContracts(fixture.docs, fixture.tools),
+    /backfill_labels\.cache_writes_failed is not in live output schema/,
   )
 })
 
