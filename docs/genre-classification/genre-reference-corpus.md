@@ -2,7 +2,7 @@
 
 **Research snapshot:** 2026-07-18
 
-**Status:** Taxonomy reconciled; candidate research remains incomplete
+**Status:** Seven-genre ambiguity pilot complete; 45 genre dossiers remain
 
 **Candidate playlist:** `genre_reference_candidates`
 
@@ -117,6 +117,12 @@ the Jamaican reggae-derived genre from `Reggae`, `Dub Techno`, `Dubstep`, and
 other cross-genre uses of dub production techniques. The candidate corpus now
 covers 52 targets: 53 live canonical names minus `Experimental`.
 
+The 2026-07-18 pilot checkpoint populates 7 of those 52 dossiers with 84
+source-verified candidates. Every populated genre meets the complete
+per-genre evidence, diversity, availability, role, and leakage requirements;
+the remaining 45 dossiers are intentionally empty for subsequent family
+waves. This is an incomplete research checkpoint, not a completed corpus.
+
 ## Coverage Matrix
 
 This matrix summarizes the JSON; it is not a second track list. Counts and
@@ -138,31 +144,31 @@ statuses must be reconciled whenever the structured corpus changes.
 | Disco | House | audio_reference | 0 | Research pending |
 | Downtempo | Downtempo | audio_reference | 0 | Research pending |
 | Drum & Bass | Bass | audio_reference | 0 | Research pending |
-| Dub | Downtempo | audio_reference | 0 | Research pending; Dub Reggae and Reggae Dub normalize here |
+| Dub | Downtempo | audio_reference | 12 | Pilot complete; Dub Reggae and Reggae Dub normalize here; Reggae and Dub Techno boundaries retained |
 | Dub Techno | Techno | audio_reference | 0 | Research pending |
 | Dubstep | Bass | audio_reference | 0 | Research pending |
 | EBM | Techno | audio_reference | 0 | Research pending |
-| Electro | Techno | audio_reference | 0 | Research pending |
+| Electro | Techno | taxonomy_review | 12 | Pilot complete; machine-funk lineage retained; Electro House excluded |
 | Footwork | Bass | audio_reference | 0 | Research pending |
 | Future Garage | Bass | audio_reference | 0 | Research pending |
 | Gabber | Hardcore | audio_reference | 0 | Research pending |
-| Garage | House | audio_reference | 0 | Research pending |
+| Garage | House | taxonomy_review | 12 | Pilot complete; US Garage target bounded against UK Garage descendants |
 | Gospel House | House | audio_reference | 0 | Research pending |
 | Grime | Bass | audio_reference | 0 | Research pending |
 | Happy Hardcore | Hardcore | audio_reference | 0 | Research pending |
 | Hard Techno | Techno | audio_reference | 0 | Research pending |
 | Hard Trance | Hardcore | audio_reference | 0 | Research pending |
-| Hardcore | Hardcore | audio_reference | 0 | Research pending |
+| Hardcore | Hardcore | taxonomy_review | 12 | Pilot complete; broad electronic-Hardcore target bounded against Gabber, Hardstyle, and Jungle |
 | Hardstyle | Hardcore | audio_reference | 0 | Research pending |
 | Highlife | Other | metadata_led | 0 | Research pending |
 | Hip Hop | Other | metadata_led | 0 | Research pending |
 | House | House | audio_reference | 0 | Research pending |
-| IDM | Downtempo | audio_reference | 0 | Research pending |
+| IDM | Downtempo | taxonomy_review | 12 | Pilot complete; contested umbrella retained with explicit Ambient, Breakbeat, and Techno boundaries |
 | Italo Disco | House | audio_reference | 0 | Research pending |
 | Italodance | House | audio_reference | 0 | Research pending |
 | Jazz | Other | metadata_led | 0 | Research pending |
 | Jungle | Bass | audio_reference | 0 | Research pending |
-| Minimal | Techno | audio_reference | 0 | Research pending |
+| Minimal | Techno | taxonomy_review | 12 | Pilot complete; minimal electronic target bounded by scene and arrangement, not sparsity alone |
 | Pop | Other | metadata_led | 0 | Research pending |
 | Progressive House | House | audio_reference | 0 | Research pending |
 | Psytrance | Techno | audio_reference | 0 | Research pending |
@@ -171,7 +177,7 @@ statuses must be reconciled whenever the structured corpus changes.
 | Rock | Other | metadata_led | 0 | Research pending |
 | Speed Garage | House | audio_reference | 0 | Research pending |
 | Synth-pop | Other | metadata_led | 0 | Research pending |
-| Tech House | House | audio_reference | 0 | Research pending |
+| Tech House | House | taxonomy_review | 12 | Pilot complete; era-aware target spans DJ-led London roots through festival scale |
 | Techno | Techno | audio_reference | 0 | Research pending |
 | Trance | Techno | audio_reference | 0 | Research pending |
 | Trip-Hop | Downtempo | audio_reference | 0 | Research pending |
@@ -180,11 +186,12 @@ statuses must be reconciled whenever the structured corpus changes.
 ## Research Conclusions And Limitations
 
 The live taxonomy contains 53 names; the research scope is the exact 52 left
-after excluding only `Experimental`. Classifier families are organizational
-metadata, not musicological truth. Ambiguous labels such as `Minimal`,
-`Garage`, `Electro`, `Hardcore`, `Acid`, `Dub`,
-`Tech House`, `Trance`, `Downtempo`, and `IDM` require explicit bounded
-definitions and exclusions in the JSON.
+after excluding only `Experimental`. The pilot has completed the bounded
+definitions and candidate sets for `Minimal`, `Garage`, `Electro`, `Hardcore`,
+`IDM`, `Dub`, and `Tech House`. Classifier families are organizational
+metadata, not musicological truth. Remaining ambiguous labels such as `Acid`,
+`Trance`, and `Downtempo` still require the same explicit definition and
+exclusion work in their family waves.
 
 Broad controls such as Pop, Rock, Jazz, R&B, and Highlife test electronic
 library boundaries; their candidate sets do not claim to exhaustively define a
