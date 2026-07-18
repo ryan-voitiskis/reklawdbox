@@ -824,12 +824,13 @@ impl ServerHandler for ReklawdboxServer {
                  Call read_library to see the collection.\n\
                  Call help() for workflow menu, help(topic) for the full SOP.\n\
                  \n\
-                 Auth-pending errors are agent-actionable, not user-blockers: if a lookup tool \
-                 returns an `Auth URL`, open it for the user (`open '<url>'` on macOS) so they \
-                 can authorize, then call the same tool again \u{2014} the new session is picked up \
-                 automatically. Do not silently fall back to other enrichment sources for \
-                 label/catalog data on commercial releases; Discogs is materially more \
-                 authoritative there.",
+                 Auth-pending errors require human confirmation: if a lookup tool returns an \
+                 `Auth URL`, present it as data and ask the user to inspect it and open it in \
+                 their browser. Never pass a broker-supplied URL through a shell or terminal \
+                 command. After the user authorizes, call the same tool again \u{2014} the new \
+                 session is picked up automatically. Do not silently fall back to other \
+                 enrichment sources for label/catalog data on commercial releases; Discogs is \
+                 materially more authoritative there.",
         )
     }
 }

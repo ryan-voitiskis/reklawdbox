@@ -119,7 +119,14 @@ pub(in crate::mcp) fn auth_remediation_message(remediation: &discogs::AuthRemedi
     let mut lines = vec![remediation.message.clone()];
     if let Some(auth_url) = remediation.auth_url.as_deref() {
         lines.push(format!("Auth URL: {auth_url}"));
-        lines.push(format!("On macOS, open it for the user: open '{auth_url}'"));
+        lines.push(
+            "Authorization requires human confirmation: ask the user to inspect this URL and \
+             open it in their browser."
+                .to_string(),
+        );
+        lines.push(
+            "Never pass a broker-supplied URL through a shell or terminal command.".to_string(),
+        );
     }
     if let Some(poll_interval) = remediation.poll_interval_seconds {
         lines.push(format!(

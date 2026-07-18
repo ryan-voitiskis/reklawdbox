@@ -3163,6 +3163,49 @@ export function validateBatchAudioExtensionsContract(document, audioSource) {
   }
 }
 
+export function validateDiscogsAuthGuidance(document) {
+  const heading = '**Lookup miss vs tool failure.**'
+  const start = document.content.indexOf(heading)
+  if (start < 0) {
+    throw new Error(
+      `${document.file}: Discogs authorization guidance is missing`,
+    )
+  }
+  const paragraphEnd = document.content.indexOf('\n\n', start)
+  const guidance = document.content.slice(
+    start,
+    paragraphEnd < 0 ? document.content.length : paragraphEnd,
+  )
+
+  for (
+    const [label, pattern] of [
+      ['human confirmation', /human confirmation/i],
+      ['URL-as-data guidance', /present the URL as data/i],
+      [
+        'the shell-command prohibition',
+        /never pass a broker-supplied URL through a shell or terminal command/i,
+      ],
+    ]
+  ) {
+    if (!pattern.test(guidance)) {
+      throw new Error(
+        `${document.file}: Discogs authorization guidance is missing ${label}`,
+      )
+    }
+  }
+
+  const generatedCommandPatterns = [
+    /`(?:open|start|xdg-open|sh\s+-c|powershell|start-process)\b[^`\n]*`/im,
+    /\b(?:run|execute|invoke|launch|type|use)\s+(?:(?:the|this)\s+)?(?:open|start|xdg-open|sh\s+-c|powershell|start-process)\b[^\n.]{0,120}(?:<auth-url>|auth URL)/im,
+    /(?:^|[.;:]\s*)(?:open|start|xdg-open|sh\s+-c|powershell|start-process)\s+['"<]/im,
+  ]
+  if (generatedCommandPatterns.some((pattern) => pattern.test(guidance))) {
+    throw new Error(
+      `${document.file}: Discogs authorization guidance must not generate a shell or terminal command`,
+    )
+  }
+}
+
 const LIBRARY_HEALTH_PROMPT_MODES = ['quick', 'exact', 'complete']
 
 function libraryHealthPromptBlocks(document) {
@@ -4771,6 +4814,7 @@ async function main() {
       )
     }
     validateBatchAudioExtensionsContract(batchImportDocument, audioSource)
+    validateDiscogsAuthGuidance(batchImportDocument)
   })
   check(() => validateColorPaletteContract(xmlExportDocument, colorSource))
 

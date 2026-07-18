@@ -1008,6 +1008,33 @@ async fn cli_ensure_discogs_auth(
     }
 }
 
+struct DiscogsHttpRetry<'a> {
+    status: u16,
+    wait_seconds: u64,
+    diagnostic_body: &'a str,
+}
+
+fn discogs_http_retry_metadata(
+    error: &discogs::LookupError,
+    attempt: u32,
+) -> Option<DiscogsHttpRetry<'_>> {
+    let status = error.http_status()?;
+    let wait_seconds = match status {
+        429 => error
+            .retry_after()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5)
+            .min(120),
+        500..=599 => 5 * 2u64.pow(attempt),
+        _ => return None,
+    };
+    Some(DiscogsHttpRetry {
+        status,
+        wait_seconds,
+        diagnostic_body: error.diagnostic_body().unwrap_or_default(),
+    })
+}
+
 async fn cli_discogs_lookup_with_retry(
     client: &reqwest::Client,
     cfg: &discogs::BrokerConfig,
@@ -1025,34 +1052,35 @@ async fn cli_discogs_lookup_with_retry(
                 // Defence-in-depth: the broker handles Discogs 429s internally,
                 // but platform-level rate limits (Cloudflare) or custom brokers
                 // may 429.
-                let backoff = match &e {
-                    discogs::LookupError::Http {
-                        status: 429,
-                        retry_after,
-                        body,
-                        ..
-                    } => {
-                        let wait = retry_after
-                            .as_deref()
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .unwrap_or(5)
-                            .min(120);
-                        tracing::warn!(status = 429, attempt, wait, "Discogs broker 429: {body}");
-                        Some(wait)
+                let backoff = if let Some(retry) = discogs_http_retry_metadata(&e, attempt) {
+                    if retry.status == 429 {
+                        tracing::warn!(
+                            status = 429,
+                            attempt,
+                            wait = retry.wait_seconds,
+                            "Discogs broker 429: {}",
+                            retry.diagnostic_body
+                        );
+                    } else {
+                        tracing::warn!(
+                            status = retry.status,
+                            attempt,
+                            wait = retry.wait_seconds,
+                            "Discogs broker {}: {}",
+                            retry.status,
+                            retry.diagnostic_body
+                        );
                     }
-                    discogs::LookupError::Http { status, body, .. }
-                        if (500..=599).contains(status) =>
-                    {
-                        let wait = 5 * 2u64.pow(attempt);
-                        tracing::warn!(status, attempt, wait, "Discogs broker {status}: {body}");
-                        Some(wait)
+                    Some(retry.wait_seconds)
+                } else {
+                    match &e {
+                        discogs::LookupError::Message(msg) => {
+                            let wait = 5 * 2u64.pow(attempt);
+                            tracing::warn!(attempt, wait, "Discogs broker transport error: {msg}");
+                            Some(wait)
+                        }
+                        _ => None,
                     }
-                    discogs::LookupError::Message(msg) => {
-                        let wait = 5 * 2u64.pow(attempt);
-                        tracing::warn!(attempt, wait, "Discogs broker transport error: {msg}");
-                        Some(wait)
-                    }
-                    _ => None,
                 };
 
                 match backoff {
@@ -1072,6 +1100,51 @@ async fn cli_discogs_lookup_with_retry(
 mod batch_tests {
     use super::*;
     use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard, bounded};
+
+    #[test]
+    fn discogs_cli_retry_keeps_bounded_sanitized_diagnostic_out_of_display() {
+        let remote_instruction = "CLI_REMOTE_DIAGNOSTIC_FIXTURE";
+        let retained = format!(
+            "{remote_instruction}{}",
+            "x".repeat(8_192 - remote_instruction.len())
+        );
+        let diagnostic = format!("{retained} [truncated]");
+        let error = discogs::LookupError::http(503, None, diagnostic.clone());
+
+        let retry = discogs_http_retry_metadata(&error, 0)
+            .expect("HTTP 503 should retain CLI retry metadata");
+        assert_eq!(retry.status, 503);
+        assert_eq!(retry.wait_seconds, 5);
+        assert_eq!(retry.diagnostic_body, diagnostic);
+        assert!(retry.diagnostic_body.len() <= 8_192 + " [truncated]".len());
+        assert!(
+            !retry
+                .diagnostic_body
+                .chars()
+                .any(|character| character.is_ascii_control())
+        );
+        assert!(retry.diagnostic_body.contains(remote_instruction));
+        assert!(!error.to_string().contains(remote_instruction));
+        assert_eq!(error.to_string(), "broker proxy HTTP 503 (retryable)");
+    }
+
+    #[test]
+    fn discogs_cli_retry_metadata_preserves_429_cap_and_5xx_backoff() {
+        let rate_limited =
+            discogs::LookupError::http(429, Some("999".to_string()), "rate limited".to_string());
+        let retry = discogs_http_retry_metadata(&rate_limited, 3)
+            .expect("HTTP 429 should remain retryable");
+        assert_eq!(retry.wait_seconds, 120);
+        assert_eq!(retry.diagnostic_body, "rate limited");
+
+        let unavailable = discogs::LookupError::http(503, None, "unavailable".to_string());
+        let retry =
+            discogs_http_retry_metadata(&unavailable, 3).expect("HTTP 503 should remain retryable");
+        assert_eq!(retry.wait_seconds, 40);
+
+        let bad_request = discogs::LookupError::http(400, None, "bad request".to_string());
+        assert!(discogs_http_retry_metadata(&bad_request, 0).is_none());
+    }
 
     fn test_provider(provider: &str) -> EnrichmentProvider {
         match provider {

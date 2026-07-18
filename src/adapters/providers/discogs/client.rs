@@ -10,29 +10,63 @@ use super::RATE_LIMITER;
 use super::auth::{AuthRemediation, expired_session_remediation};
 use super::broker::BrokerConfig;
 use super::wait_for_rate_limit;
-use crate::adapters::providers::rate_limit;
+use crate::adapters::providers::{http::read_bounded_error_body, rate_limit};
 
 #[derive(Debug, Clone)]
-pub enum LookupError {
+pub(crate) enum LookupError {
     AuthRequired(AuthRemediation),
-    Http {
-        status: u16,
-        retry_after: Option<String>,
-        body: String,
-    },
+    Http(HttpLookupError),
     Message(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HttpLookupError {
+    status: u16,
+    retry_after: Option<String>,
+    diagnostic_body: String,
 }
 
 impl LookupError {
     pub fn auth_remediation(&self) -> Option<&AuthRemediation> {
         match self {
             Self::AuthRequired(remediation) => Some(remediation),
-            Self::Http { .. } | Self::Message(_) => None,
+            Self::Http(_) | Self::Message(_) => None,
         }
     }
 
     pub fn message(msg: impl Into<String>) -> Self {
         Self::Message(msg.into())
+    }
+
+    pub(crate) fn http(status: u16, retry_after: Option<String>, diagnostic_body: String) -> Self {
+        Self::Http(HttpLookupError {
+            status,
+            retry_after,
+            diagnostic_body,
+        })
+    }
+
+    pub(crate) fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Http(error) => Some(error.status),
+            Self::AuthRequired(_) | Self::Message(_) => None,
+        }
+    }
+
+    pub(crate) fn retry_after(&self) -> Option<&str> {
+        match self {
+            Self::Http(error) => error.retry_after.as_deref(),
+            Self::AuthRequired(_) | Self::Message(_) => None,
+        }
+    }
+
+    /// Bounded remote prose for explicit local diagnostics such as CLI logs.
+    /// Never include this value in user- or agent-facing `Display` output.
+    pub(crate) fn diagnostic_body(&self) -> Option<&str> {
+        match self {
+            Self::Http(error) => Some(&error.diagnostic_body),
+            Self::AuthRequired(_) | Self::Message(_) => None,
+        }
     }
 }
 
@@ -41,12 +75,30 @@ impl fmt::Display for LookupError {
         match self {
             Self::AuthRequired(remediation) => {
                 if let Some(auth_url) = remediation.auth_url.as_deref() {
-                    write!(f, "{} Open: {}", remediation.message, auth_url)
+                    write!(f, "{} Auth URL: {}", remediation.message, auth_url)
                 } else {
                     write!(f, "{}", remediation.message)
                 }
             }
-            Self::Http { status, body, .. } => write!(f, "broker proxy HTTP {status}: {body}"),
+            Self::Http(error) => {
+                let retryable = error.status == 429 || (500..=599).contains(&error.status);
+                let retry_after_seconds = error
+                    .retry_after
+                    .as_deref()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .map(|seconds| seconds.min(120));
+                match (retryable, retry_after_seconds) {
+                    (true, Some(seconds)) => write!(
+                        f,
+                        "broker proxy HTTP {} (retryable; retry after {seconds}s)",
+                        error.status
+                    ),
+                    (true, None) => {
+                        write!(f, "broker proxy HTTP {} (retryable)", error.status)
+                    }
+                    (false, _) => write!(f, "broker proxy HTTP {} (not retryable)", error.status),
+                }
+            }
             Self::Message(msg) => write!(f, "{msg}"),
         }
     }
@@ -76,7 +128,29 @@ pub async fn lookup_via_broker(
     album: Option<&str>,
 ) -> Result<Option<DiscogsResult>, LookupError> {
     wait_for_rate_limit().await;
+    lookup_via_broker_request(client, cfg, session_token, artist, title, album).await
+}
 
+#[cfg(test)]
+pub(crate) async fn lookup_via_broker_unthrottled_for_test(
+    client: &Client,
+    cfg: &BrokerConfig,
+    session_token: &str,
+    artist: &str,
+    title: &str,
+    album: Option<&str>,
+) -> Result<Option<DiscogsResult>, LookupError> {
+    lookup_via_broker_request(client, cfg, session_token, artist, title, album).await
+}
+
+async fn lookup_via_broker_request(
+    client: &Client,
+    cfg: &BrokerConfig,
+    session_token: &str,
+    artist: &str,
+    title: &str,
+    album: Option<&str>,
+) -> Result<Option<DiscogsResult>, LookupError> {
     let payload = serde_json::json!({
         "artist": artist,
         "title": title,
@@ -98,12 +172,8 @@ pub async fn lookup_via_broker(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let retry_after = rate_limit::extract_retry_after(response.headers());
-        let body = response.text().await.unwrap_or_default();
-        return Err(LookupError::Http {
-            status,
-            retry_after,
-            body,
-        });
+        let body = read_bounded_error_body(response).await;
+        return Err(LookupError::http(status, retry_after, body));
     }
 
     let json: serde_json::Value = response
@@ -179,14 +249,13 @@ mod tests {
     }
 
     #[test]
-    fn lookup_error_http_5xx_displays_status_and_body() {
-        let err = LookupError::Http {
-            status: 502,
-            retry_after: None,
-            body: "bad gateway".to_string(),
-        };
+    fn lookup_error_http_5xx_displays_safe_metadata_and_keeps_bounded_diagnostic_private() {
+        let err = LookupError::http(502, None, "bad gateway".to_string());
         assert!(err.to_string().contains("502"));
-        assert!(err.to_string().contains("bad gateway"));
+        assert!(err.to_string().contains("retryable"));
+        assert!(!err.to_string().contains("bad gateway"));
+        assert_eq!(err.http_status(), Some(502));
+        assert_eq!(err.diagnostic_body(), Some("bad gateway"));
         assert!(err.auth_remediation().is_none());
     }
 

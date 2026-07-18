@@ -37,6 +37,7 @@ import {
   validateClassificationReadinessContract,
   validateCliContracts,
   validateColorPaletteContract,
+  validateDiscogsAuthGuidance,
   validateDocsGatePathInventories,
   validateFirstSessionPage,
   validateLibraryHealthContract,
@@ -3192,6 +3193,51 @@ test('batch audio extension contract follows the canonical Rust set', () => {
     () =>
       validateBatchAudioExtensionsContract(document(duplicate, file), source),
     /batch-import\.mdx:1: batch audio extension block contains a duplicate extension; source=src\/adapters\/audio\/mod\.rs/,
+  )
+})
+
+test('Discogs authorization guidance requires human confirmation without shell commands', () => {
+  const file = 'site/src/partials/sops/batch-import.mdx'
+  const content = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+  assert.doesNotThrow(() =>
+    validateDiscogsAuthGuidance(document(content, file))
+  )
+
+  const missingProhibition = content.replace(
+    'Never pass a broker-supplied URL through a shell or terminal command.',
+    'Continue after authorization.',
+  )
+  assert.throws(
+    () => validateDiscogsAuthGuidance(document(missingProhibition, file)),
+    /missing the shell-command prohibition/,
+  )
+
+  const generatedCommand = content.replace(
+    'Present the URL as data and ask the user to inspect it and open it in their browser.',
+    "Present the URL as data and run `open '<auth-url>'`.",
+  )
+  assert.throws(
+    () => validateDiscogsAuthGuidance(document(generatedCommand, file)),
+    /must not generate a shell or terminal command/,
+  )
+
+  const naturalLanguageCommand = content.replace(
+    'Never pass a broker-supplied URL through a shell or terminal command.',
+    'Run open <auth-url>. Never pass a broker-supplied URL through a shell or terminal command.',
+  )
+  assert.throws(
+    () => validateDiscogsAuthGuidance(document(naturalLanguageCommand, file)),
+    /must not generate a shell or terminal command/,
+  )
+
+  const alternateExecutableAdvice = content.replace(
+    'Never pass a broker-supplied URL through a shell or terminal command.',
+    'Execute xdg-open <auth-url>. Never pass a broker-supplied URL through a shell or terminal command.',
+  )
+  assert.throws(
+    () =>
+      validateDiscogsAuthGuidance(document(alternateExecutableAdvice, file)),
+    /must not generate a shell or terminal command/,
   )
 })
 

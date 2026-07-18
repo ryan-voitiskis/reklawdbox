@@ -145,10 +145,13 @@ pub(crate) async fn resolve_auth_transition_locked(
             if matches!(pending_state, PendingState::Expired) {
                 gateway.replace_pending_session(None)?;
             }
-            let started = gateway
-                .start_pending(cfg)
-                .await
-                .map_err(|_| discogs::LookupError::message(DISCOGS_AUTH_START_FAILED))?;
+            let started = gateway.start_pending(cfg).await.map_err(|error| {
+                if error == discogs::INVALID_BROKER_AUTHORIZATION_URL {
+                    discogs::LookupError::message(error)
+                } else {
+                    discogs::LookupError::message(DISCOGS_AUTH_START_FAILED)
+                }
+            })?;
             gateway.replace_pending_session(Some(started.clone()))?;
             Ok(AuthResolution::AuthRequired(
                 discogs::pending_auth_remediation(&started),
