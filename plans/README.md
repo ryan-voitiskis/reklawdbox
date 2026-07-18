@@ -9,7 +9,10 @@ documentation/runtime contract findings and three coordinated UX directions.
 Plans 034–035 were added on 2026-07-14 from commit `4e031ca` plus the
 uncommitted post-Beatport-removal working-tree snapshot. They cover the
 classifier-safety and evidence-readiness work required after removing that
-provider. No source change is part of any planning set.
+provider. Plans 036–037 were added on 2026-07-17 from commit `4aad526`. They
+standardize one managed, versioned Essentia runtime and then require complete
+Stratum/Essentia evidence for Full classification while preserving graceful
+degradation elsewhere. No source change is part of any planning set.
 
 Each executor must read its assigned plan in full before changing code, run the
 plan's drift check first, honor every STOP condition, and update the matching
@@ -102,6 +105,8 @@ the dependency graph and recommended waves below.
 | [033](033-return-all-staged-fields-from-resolve.md)        | Return every staged editable field from resolve tools      | P1       | S      | 031                          | DONE   |
 | [034](034-make-classification-confidence-source-aware.md)  | Make classification confidence source-aware and measurable | P1       | L      | post-Beatport removal base   | DONE   |
 | [035](035-align-classification-readiness-and-fallbacks.md) | Align readiness, profile freshness, and label fallbacks    | P1       | L      | 034                          | DONE   |
+| [036](036-standardize-managed-essentia-environment.md)     | Standardize the managed Essentia environment               | P1       | L      | 035                          | DONE   |
+| [037](037-require-essentia-for-full-classification.md)     | Require Essentia evidence for full classification          | P1       | L      | 036                          | DONE   |
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED: <reason>` |
 `REJECTED: <rationale>`.
@@ -144,6 +149,22 @@ the predictive benchmark, full workspace gates, release build, MCP smoke, site
 build, and documentation contract passed on the resulting composite. The plan
 files retain the unchecked clean-base criteria so this procedural deviation is
 not hidden.
+
+## Essentia capability-contract coverage
+
+- Plan 036 is the runtime-reproducibility lane: replace duplicate floating
+  installers with one managed CPython/Essentia contract, bump the Essentia
+  cache identity, migrate the ignored local MCP configuration, and retire the
+  broken repository-local environment only after real-audio validation.
+- Plan 037 is the classification-safety lane: retain backend-specific cache
+  readiness, expose Full and Degraded modes, prevent degraded auto-staging,
+  require complete Stratum/Essentia samples for profile calibration, and align
+  coverage, benchmark, and public documentation.
+
+These plans deliberately do not make Python a global process dependency.
+Library, metadata, export, transition, and pool workflows keep their documented
+availability or graceful-degradation behavior; only Full classification gains
+the stronger evidence requirement.
 
 ## Dependency graph
 
@@ -205,6 +226,8 @@ flowchart LR
 
     REMOVAL["Reviewed post-Beatport removal base"] --> P034["034 Source-aware confidence"]
     P034 --> P035["035 Readiness and fallbacks"]
+    P035 --> P036["036 Managed Essentia runtime"]
+    P036 --> P037["037 Full classification readiness"]
 ```
 
 ## Recommended execution waves
@@ -237,6 +260,13 @@ flowchart LR
 - Wave 15, evidence alignment: run 035 only after 034 is reviewed and
   integrated. It consumes 034's typed provenance and review contract, so it
   must not recreate them independently.
+- Wave 16, managed analyzer migration: run 036 after 035. Centralize and pin
+  setup before deleting ignored local state; do not begin 037 against a
+  floating or broken runtime.
+- Wave 17, classification capability contract: run 037 only after 036 is
+  reviewed, the managed runtime passes its real-audio smoke, and Essentia cache
+  v3 behavior is established. Refresh evidence and recalibrate only after its
+  mandatory source/tests/docs gates pass.
 - Final portfolio gate after every row is DONE:
 
   ```bash
@@ -320,10 +350,19 @@ flowchart LR
 - 034 and 035 both touch classifier models, handlers/tests, and genre docs, so
   they are strictly sequential. 035 must preserve 034's benchmark and rerun
   the full runtime/documentation gate from the integrated base.
+- 036 owns Python selection, the managed environment, the pinned upstream
+  analyzer, and Essentia cache v3. 037 consumes those decisions and must not
+  add a second installer, accept an alternate analyzer version, or bump the
+  audio cache again for its profile-sample policy.
+- 037 owns Full/Degraded classification semantics, the no-degraded-auto-stage
+  invariant, profile schema v2, and the post-migration evidence refresh. It
+  must preserve 034's ranking/provenance contract and 035's exact cache
+  identity while reusing one shared readiness interpretation.
 - Plans 009, 023, 034, and 035 form one semantic chain: missing measurements
   stay unknown; readiness is capability-specific; confidence reflects
   independent usable sources; coverage and calibration report those same
-  usable states.
+  usable states. Plans 036–037 extend that chain by making the Essentia runtime
+  reproducible and the Full classification boundary explicit.
 - No plan may add a direct write path to Rekordbox `master.db`.
 
 ## Findings considered and rejected or deferred
