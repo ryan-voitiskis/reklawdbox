@@ -47,6 +47,18 @@ pub(crate) async fn run_pre_op_backup(db_path: &Path) -> Result<BackupStatus, St
         .map_err(|error| error.to_string())
 }
 
+/// Execute backup using the embedded script with captured stdout and stderr.
+#[allow(dead_code)]
+pub(crate) async fn execute_embedded_with_env(
+    args: &[&str],
+    env_additions: &[(&str, &OsStr)],
+) -> Result<(), String> {
+    let script = PreparedScript::embedded().map_err(|error| error.to_string())?;
+    execute_prepared_script(script, args, env_additions, PRE_OP_BACKUP_TIMEOUT)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 async fn run_pre_op_backup_with_timeout(
     db_path: &Path,
     timeout: Duration,
