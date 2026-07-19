@@ -910,9 +910,17 @@ sleep 60
         assert!(!process_or_group_is_absent(leader_pid));
         assert!(!process_or_group_is_absent(descendant_pid));
 
-        let started = Instant::now();
-        drop(owner);
-        assert!(started.elapsed() < Duration::from_secs(1));
+        let (drop_complete_tx, drop_complete_rx) = std::sync::mpsc::sync_channel(1);
+        let drop_task = thread::spawn(move || {
+            let started = Instant::now();
+            drop(owner);
+            drop_complete_tx.send(started.elapsed()).unwrap();
+        });
+        let drop_elapsed = drop_complete_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("OwnedTarChild::drop must complete within its watchdog");
+        drop_task.join().unwrap();
+        assert!(drop_elapsed < Duration::from_secs(1));
 
         let mut wait_status = 0;
         assert_eq!(
