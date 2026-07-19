@@ -81,13 +81,17 @@ pub(super) fn resolve_provider_task_join(
 pub(super) async fn await_discogs_hydration<HydrationFuture>(
     cancel: &CancellationToken,
     hydration: HydrationFuture,
-) -> Option<EnrichmentTrackOutcome>
+) -> EnrichmentTrackOutcome
 where
     HydrationFuture: std::future::Future<Output = EnrichmentTrackOutcome>,
 {
+    tokio::pin!(hydration);
     tokio::select! {
-        outcome = hydration => Some(outcome),
-        _ = cancel.cancelled() => None,
+        outcome = &mut hydration => outcome,
+        // Graceful token cancellation stops scheduling new work but preserves
+        // the planning-base contract for already-started retries and cache
+        // acknowledgements. Hard caller cancellation is owned by HydrateTask.
+        _ = cancel.cancelled() => hydration.await,
     }
 }
 
@@ -408,12 +412,7 @@ async fn execute_hydration(
                                 Some(&identity.album),
                             ),
                         );
-                        let Some(outcome) = await_discogs_hydration(&cancel, hydration).await
-                        else {
-                            return HydrationWorkerCompletion::cancelled(
-                                EnrichmentTrackOutcome::default(),
-                            );
-                        };
+                        let outcome = await_discogs_hydration(&cancel, hydration).await;
 
                         counters.observe_discogs(&identity, &outcome);
 

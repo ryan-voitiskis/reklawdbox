@@ -253,10 +253,11 @@ async fn hydrate_outer_task_drop_aborts_status_or_provider_future() {
 }
 
 #[tokio::test]
-async fn hydrate_cancellation_drops_discogs_but_drains_started_analysis_future() {
+async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let discogs_started = Arc::new(tokio::sync::Notify::new());
-        let (discogs_dropped, discogs_dropped_rx) = tokio::sync::oneshot::channel();
+        let (discogs_dropped, mut discogs_dropped_rx) = tokio::sync::oneshot::channel();
+        let (discogs_release, discogs_release_rx) = tokio::sync::oneshot::channel();
         let discogs_cancel = tokio_util::sync::CancellationToken::new();
         let (cache_tx, _cache_rx) =
             tokio::sync::mpsc::channel::<CacheWriteRequest<EnrichmentCacheWrite>>(1);
@@ -267,15 +268,17 @@ async fn hydrate_cancellation_drops_discogs_but_drains_started_analysis_future()
                 let lookup = async move {
                     let _drop_signal = DropSignal(Some(discogs_dropped));
                     started.notify_one();
-                    std::future::pending::<
-                        Result<Option<discogs::DiscogsResult>, discogs::LookupError>,
-                    >()
-                    .await
+                    discogs_release_rx
+                        .await
+                        .expect("Discogs fixture should be released");
+                    Err(discogs::LookupError::message(
+                        "released synthetic lookup failure",
+                    ))
                 };
                 let identity = identity();
                 let hydration = hydrate_discogs_track(
                     &identity,
-                    LookupFailurePersistence::CacheTerminalError,
+                    LookupFailurePersistence::DoNotCache,
                     None,
                     &cache_tx,
                     lookup,
@@ -288,16 +291,28 @@ async fn hydrate_cancellation_drops_discogs_but_drains_started_analysis_future()
             .expect("Discogs lookup-start barrier should be bounded");
         discogs_cancel.cancel();
         assert!(
-            tokio::time::timeout(Duration::from_secs(1), discogs_task)
-                .await
-                .expect("Discogs cancellation join should be bounded")
-                .expect("Discogs cancellation task should join")
-                .is_none()
+            !discogs_task.is_finished(),
+            "started Discogs lookup must remain owned during graceful cancellation"
         );
+        assert!(
+            matches!(
+                discogs_dropped_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "Discogs lookup future must not be dropped on token cancellation"
+        );
+        discogs_release
+            .send(())
+            .expect("Discogs fixture should still accept release");
+        let discogs_outcome = tokio::time::timeout(Duration::from_secs(1), discogs_task)
+            .await
+            .expect("Discogs cancellation join should be bounded")
+            .expect("Discogs cancellation task should join");
+        assert_eq!(discogs_outcome.operation_failures, 1);
         tokio::time::timeout(Duration::from_secs(1), discogs_dropped_rx)
             .await
-            .expect("Discogs lookup drop should be bounded")
-            .expect("Discogs lookup future should be dropped");
+            .expect("Discogs completion cleanup should be bounded")
+            .expect("completed Discogs future should release its resources");
 
         let analysis_started = Arc::new(tokio::sync::Notify::new());
         let (analysis_dropped, mut analysis_dropped_rx) = tokio::sync::oneshot::channel();
