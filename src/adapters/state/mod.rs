@@ -36,7 +36,8 @@ pub(crate) use broker::{
 pub(crate) use connection::resolve_path_from;
 pub(crate) use connection::{open, open_read_only, resolve_path};
 pub(crate) use enrichment::{
-    EnrichmentCacheEntry, batch_get_enrichment, get_enrichment, set_enrichment,
+    EnrichmentCacheEntry, batch_get_enrichment, batch_get_enrichment_including_errors,
+    get_enrichment, set_enrichment,
 };
 #[cfg(test)]
 pub(crate) use enrichment::{

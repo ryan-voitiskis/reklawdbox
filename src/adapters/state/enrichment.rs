@@ -141,13 +141,10 @@ pub fn batch_enrichment_with_label(
     )
 }
 
-/// Batch-load full enrichment cache entries for a set of exact primary-key tuples.
-///
-/// Keys are `(provider, query_artist, query_title, query_album)`. Entries with
-/// `match_quality = 'error'` are excluded, matching `get_enrichment` semantics.
-pub fn batch_get_enrichment(
+fn batch_get_enrichment_with_policy(
     conn: &Connection,
     keys: &[(&str, &str, &str, &str)],
+    include_errors: bool,
 ) -> Result<HashMap<EnrichmentKey, EnrichmentCacheEntry>, rusqlite::Error> {
     if keys.is_empty() {
         return Ok(HashMap::new());
@@ -170,7 +167,10 @@ pub fn batch_get_enrichment(
             let b = i * 4 + 1;
             write!(sql, "(?{},?{},?{},?{})", b, b + 1, b + 2, b + 3).unwrap();
         }
-        sql.push_str(") AND COALESCE(match_quality, '') != 'error'");
+        sql.push(')');
+        if !include_errors {
+            sql.push_str(" AND COALESCE(match_quality, '') != 'error'");
+        }
 
         let mut stmt = conn.prepare(&sql)?;
         let mut bind_values: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk.len() * 4);
@@ -203,6 +203,25 @@ pub fn batch_get_enrichment(
         }
     }
     Ok(result)
+}
+
+/// Batch-load terminal enrichment rows for exact primary-key tuples.
+///
+/// Keys are `(provider, query_artist, query_title, query_album)`. Entries with
+/// `match_quality = 'error'` are excluded, matching `get_enrichment` semantics.
+pub fn batch_get_enrichment(
+    conn: &Connection,
+    keys: &[(&str, &str, &str, &str)],
+) -> Result<HashMap<EnrichmentKey, EnrichmentCacheEntry>, rusqlite::Error> {
+    batch_get_enrichment_with_policy(conn, keys, false)
+}
+
+/// Batch-load all enrichment rows, including retryable error rows, for exact keys.
+pub fn batch_get_enrichment_including_errors(
+    conn: &Connection,
+    keys: &[(&str, &str, &str, &str)],
+) -> Result<HashMap<EnrichmentKey, EnrichmentCacheEntry>, rusqlite::Error> {
+    batch_get_enrichment_with_policy(conn, keys, true)
 }
 
 pub fn set_enrichment(

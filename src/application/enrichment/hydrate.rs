@@ -149,7 +149,7 @@ pub(crate) fn select_hydration_work(
                 )
             })
             .collect();
-        let terminal_entries = state::batch_get_enrichment(store_conn, &key_refs)?;
+        let cached_entries = state::batch_get_enrichment_including_errors(store_conn, &key_refs)?;
 
         for identity in identities {
             let key = (
@@ -158,26 +158,14 @@ pub(crate) fn select_hydration_work(
                 identity.norm_title.clone(),
                 identity.norm_album.clone().unwrap_or_default(),
             );
-            if terminal_entries.contains_key(&key) {
-                plan.discogs_cached += 1;
-                continue;
-            }
-
-            // The exact-key batch adapter deliberately excludes terminal error
-            // rows. Probe only unresolved keys so retry/skipped error counts
-            // retain the existing CLI contract without duplicating SQL here.
-            let cached_error = state::get_enrichment(
-                store_conn,
-                EnrichmentProvider::Discogs.as_str(),
-                &identity.norm_artist,
-                &identity.norm_title,
-                identity.norm_album.as_deref(),
-                true,
-            )?
-            .is_some_and(|entry| entry.match_quality.as_deref() == Some("error"));
-            if cached_error {
-                plan.discogs_errors += 1;
-                if !policy.retry_cached_errors {
+            if let Some(entry) = cached_entries.get(&key) {
+                if entry.match_quality.as_deref() == Some("error") {
+                    plan.discogs_errors += 1;
+                    if !policy.retry_cached_errors {
+                        continue;
+                    }
+                } else {
+                    plan.discogs_cached += 1;
                     continue;
                 }
             }

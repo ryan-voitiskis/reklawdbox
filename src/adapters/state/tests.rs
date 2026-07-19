@@ -496,6 +496,70 @@ fn test_enrichment_cache_no_match() {
 }
 
 #[test]
+fn test_enrichment_cache_batch_exact_keys_can_include_errors_without_turning_misses_into_rows() {
+    let (_dir, conn) = open_temp_store();
+    set_enrichment(
+        &conn,
+        "discogs",
+        "cached artist",
+        "cached title",
+        Some("cached album"),
+        Some("exact"),
+        Some("{}"),
+    )
+    .unwrap();
+    set_enrichment(
+        &conn,
+        "discogs",
+        "error artist",
+        "error title",
+        Some("error album"),
+        Some("error"),
+        None,
+    )
+    .unwrap();
+    let keys = [
+        ("discogs", "error artist", "error title", "error album"),
+        (
+            "discogs",
+            "missing artist",
+            "missing title",
+            "missing album",
+        ),
+        ("discogs", "cached artist", "cached title", "cached album"),
+    ];
+
+    let terminal = batch_get_enrichment(&conn, &keys).unwrap();
+    assert_eq!(terminal.len(), 1);
+    assert!(terminal.contains_key(&(
+        "discogs".to_string(),
+        "cached artist".to_string(),
+        "cached title".to_string(),
+        "cached album".to_string(),
+    )));
+
+    let including_errors = batch_get_enrichment_including_errors(&conn, &keys).unwrap();
+    assert_eq!(including_errors.len(), 2);
+    assert_eq!(
+        including_errors
+            .get(&(
+                "discogs".to_string(),
+                "error artist".to_string(),
+                "error title".to_string(),
+                "error album".to_string(),
+            ))
+            .and_then(|entry| entry.match_quality.as_deref()),
+        Some("error")
+    );
+    assert!(!including_errors.contains_key(&(
+        "discogs".to_string(),
+        "missing artist".to_string(),
+        "missing title".to_string(),
+        "missing album".to_string(),
+    )));
+}
+
+#[test]
 fn test_audio_analysis_cache_round_trip() {
     let (_dir, conn) = open_temp_store();
 
