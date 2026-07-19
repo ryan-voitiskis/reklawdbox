@@ -65,14 +65,19 @@ impl<T> Drop for HydrateTask<T> {
 /// Owns the analysis coordinator without abandoning started blocking work.
 pub(super) struct HydrateAnalysisTask<T: Send + 'static> {
     handle: Option<tokio::task::JoinHandle<T>>,
+    cancel: CancellationToken,
     #[cfg(test)]
     reaper_completion: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl<T: Send + 'static> HydrateAnalysisTask<T> {
-    pub(super) fn spawn(future: impl std::future::Future<Output = T> + Send + 'static) -> Self {
+    pub(super) fn spawn(
+        cancel: CancellationToken,
+        future: impl std::future::Future<Output = T> + Send + 'static,
+    ) -> Self {
         Self {
             handle: Some(tokio::spawn(future)),
+            cancel,
             #[cfg(test)]
             reaper_completion: None,
         }
@@ -80,12 +85,14 @@ impl<T: Send + 'static> HydrateAnalysisTask<T> {
 
     #[cfg(test)]
     pub(super) fn spawn_observed(
+        cancel: CancellationToken,
         future: impl std::future::Future<Output = T> + Send + 'static,
     ) -> (Self, tokio::sync::oneshot::Receiver<()>) {
         let (reaper_completion, reaper_completed) = tokio::sync::oneshot::channel();
         (
             Self {
                 handle: Some(tokio::spawn(future)),
+                cancel,
                 reaper_completion: Some(reaper_completion),
             },
             reaper_completed,
@@ -108,6 +115,10 @@ impl<T: Send + 'static> Drop for HydrateAnalysisTask<T> {
         let Some(handle) = self.handle.take() else {
             return;
         };
+        // Stop scheduling synchronously even when no runtime is entered on
+        // the dropping thread. The retained coordinator still drains work
+        // that was already started.
+        self.cancel.cancel();
         #[cfg(test)]
         let reaper_completion = self.reaper_completion.take();
 
@@ -469,7 +480,7 @@ async fn execute_hydration(
         let cache_tx = cache_tx.clone();
         let counters = analysis_counters.clone();
         let pb = progress.primary.clone();
-        HydrateAnalysisTask::spawn(async move {
+        HydrateAnalysisTask::spawn(cancel.clone(), async move {
             if analysis_pending.is_empty() {
                 return HydrationStageReport {
                     selected: analysis_selected,

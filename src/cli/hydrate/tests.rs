@@ -261,8 +261,9 @@ async fn hydrate_outer_task_drop_aborts_status_or_provider_future() {
 #[tokio::test]
 async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
     tokio::time::timeout(Duration::from_secs(5), async {
+        let normal_cancel = tokio_util::sync::CancellationToken::new();
         let (normally_joined, unexpected_reaper) =
-            HydrateAnalysisTask::spawn_observed(async { "joined" });
+            HydrateAnalysisTask::spawn_observed(normal_cancel.clone(), async { "joined" });
         assert_eq!(
             normally_joined
                 .join()
@@ -277,6 +278,10 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
                 .is_err(),
             "normal analysis join must not spawn a detached reaper"
         );
+        assert!(
+            !normal_cancel.is_cancelled(),
+            "normal analysis join must not cancel its scheduling token"
+        );
 
         let directory = tempfile::tempdir().expect("analysis owner directory should create");
         let store_path = directory
@@ -285,7 +290,7 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
             .to_string_lossy()
             .to_string();
         let cancel = tokio_util::sync::CancellationToken::new();
-        let (writer_session, writer_completed) =
+        let (writer_session, mut writer_completed) =
             HydrateCacheWriterSession::start_observed(store_path.clone(), 2, cancel.clone())
                 .expect("observed hydrate writer should start");
         let cache_tx = writer_session.sender().clone();
@@ -295,9 +300,12 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
         let (blocking_release, blocking_release_rx) = std::sync::mpsc::sync_channel(1);
         let (cache_acknowledged, cache_acknowledged_rx) = tokio::sync::oneshot::channel();
         let (coordinator_completed, coordinator_completed_rx) = tokio::sync::oneshot::channel();
-        let (analysis_owner, reaper_completed) = HydrateAnalysisTask::spawn_observed({
-            let worker_calls = worker_calls.clone();
-            async move {
+        let (analysis_owner, reaper_completed) = HydrateAnalysisTask::spawn_observed(
+            cancel.clone(),
+            {
+                let worker_calls = worker_calls.clone();
+                let coordinator_cancel = cancel.clone();
+                async move {
                 let report = run_bounded_workers(
                     "analysis worker task",
                     vec![
@@ -310,7 +318,7 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
                         (2_u8, None, None, None),
                     ],
                     1,
-                    cancel.clone(),
+                    coordinator_cancel,
                     |(identity, _, _, _)| *identity,
                     move |(_, started, release, acknowledged)| {
                         let worker_calls = worker_calls.clone();
@@ -365,7 +373,8 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
                 ));
                 report
             }
-        });
+            },
+        );
 
         tokio::time::timeout(Duration::from_secs(1), blocking_started_rx)
             .await
@@ -373,11 +382,21 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
             .expect("blocking analysis should start");
         assert_eq!(worker_calls.load(Ordering::Relaxed), 1);
 
-        // Hard caller drop hands the coordinator to its detached reaper. The
-        // writer Drop cancels only further scheduling and keeps its blocking
-        // receiver alive while this started worker drains and acknowledges.
+        // Hard caller drop synchronously stops further scheduling, then hands
+        // the coordinator to its detached reaper. The writer deliberately
+        // remains alive while the started worker drains and acknowledges.
         drop(analysis_owner);
-        drop(writer_session);
+        assert!(
+            cancel.is_cancelled(),
+            "analysis owner drop must synchronously cancel scheduling"
+        );
+        assert!(
+            matches!(
+                writer_completed.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "writer must remain alive until its owner is explicitly finished"
+        );
         tokio::task::yield_now().await;
         blocking_release
             .send(())
@@ -398,10 +417,20 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
             .await
             .expect("analysis reaper completion should be bounded")
             .expect("detached analysis reaper should finish");
+        let writer_completion = tokio::time::timeout(
+            Duration::from_secs(1),
+            writer_session.finish(),
+        )
+        .await
+        .expect("writer finish should be bounded");
+        assert_eq!(writer_completion.join_failures, 0);
+        assert_eq!(writer_completion.report.attempted, 1);
+        assert_eq!(writer_completion.report.succeeded, 1);
+        assert_eq!(writer_completion.report.failed, 0);
         tokio::time::timeout(Duration::from_secs(1), writer_completed)
             .await
-            .expect("detached writer completion should be bounded")
-            .expect("detached writer should close its store");
+            .expect("writer completion observer should be bounded")
+            .expect("writer should close its store");
 
         let connection = state::open(&store_path).expect("completed writer store should reopen");
         let cached = state::get_audio_analysis(
@@ -415,6 +444,203 @@ async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
     })
     .await
     .expect("hard-drop analysis ownership should finish within five seconds");
+}
+
+#[test]
+fn hydrate_analysis_owner_drop_without_current_runtime_retains_full_cleanup() {
+    const WALL_CLOCK_WATCHDOG: Duration = Duration::from_secs(5);
+
+    assert!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "fallback proof must drop the owner outside an entered Tokio runtime"
+    );
+
+    let directory = tempfile::tempdir().expect("fallback analysis directory should create");
+    let store_path = directory
+        .path()
+        .join("internal.sqlite3")
+        .to_string_lossy()
+        .to_string();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let worker_calls = Arc::new(AtomicU32::new(0));
+    let (blocking_started, blocking_started_rx) = std::sync::mpsc::sync_channel(1);
+    let (blocking_release, blocking_release_rx) = std::sync::mpsc::sync_channel(1);
+    let (cache_acknowledged, cache_acknowledged_rx) = std::sync::mpsc::sync_channel(1);
+    let (coordinator_completed, coordinator_completed_rx) = std::sync::mpsc::sync_channel(1);
+    let (owner_ready, owner_ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (finish_writer, finish_writer_rx) = tokio::sync::oneshot::channel();
+    let (writer_completed, writer_completed_rx) = std::sync::mpsc::sync_channel(1);
+    let (runtime_completed, runtime_completed_rx) = std::sync::mpsc::sync_channel(1);
+
+    let runtime_store_path = store_path.clone();
+    let runtime_cancel = cancel.clone();
+    let runtime_worker_calls = worker_calls.clone();
+    let runtime_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fallback runtime should build");
+        let completed = runtime.block_on(async move {
+            tokio::time::timeout(WALL_CLOCK_WATCHDOG * 2, async move {
+                let (writer_session, writer_observed) = HydrateCacheWriterSession::start_observed(
+                    runtime_store_path,
+                    2,
+                    runtime_cancel.clone(),
+                )
+                .expect("fallback writer should start");
+                let cache_tx = writer_session.sender().clone();
+                let coordinator_cancel = runtime_cancel.clone();
+                let analysis_owner = HydrateAnalysisTask::spawn(runtime_cancel, async move {
+                    let report = run_bounded_workers(
+                        "analysis worker task",
+                        vec![
+                            (
+                                1_u8,
+                                Some(blocking_started),
+                                Some(blocking_release_rx),
+                                Some(cache_acknowledged),
+                            ),
+                            (2_u8, None, None, None),
+                        ],
+                        1,
+                        coordinator_cancel,
+                        |(identity, _, _, _)| *identity,
+                        move |(_, started, release, acknowledged)| {
+                            let worker_calls = runtime_worker_calls.clone();
+                            let cache_tx = cache_tx.clone();
+                            async move {
+                                worker_calls.fetch_add(1, Ordering::Relaxed);
+                                let write = tokio::task::spawn_blocking(move || {
+                                    started
+                                        .expect("fallback worker should have a start barrier")
+                                        .send(())
+                                        .expect("fallback worker start should be observed");
+                                    release
+                                        .expect("fallback worker should have a release")
+                                        .recv_timeout(WALL_CLOCK_WATCHDOG)
+                                        .expect("fallback worker release should be bounded");
+                                    AnalysisCacheWrite {
+                                        file_path: "/synthetic/no-runtime-analysis.flac"
+                                            .to_string(),
+                                        analyzer: "no-runtime-analysis".to_string(),
+                                        file_size: 84,
+                                        file_mtime: 9,
+                                        analyzer_version: "test-v2".to_string(),
+                                        input_fingerprint: String::new(),
+                                        features_json: "{}".to_string(),
+                                    }
+                                })
+                                .await
+                                .expect("fallback blocking analysis should join");
+                                send_cache_message(
+                                    &cache_tx,
+                                    HydrateCacheMessage::AudioAnalysis(write),
+                                    "no-runtime analysis",
+                                )
+                                .await
+                                .expect("fallback cache write should be acknowledged");
+                                acknowledged
+                                    .expect("fallback worker should have an acknowledgement")
+                                    .send(())
+                                    .expect("fallback acknowledgement should be observed");
+                                HydrationWorkerCompletion::completed(
+                                    HydrationAnalysisOutcome::default(),
+                                )
+                            }
+                        },
+                    )
+                    .await;
+                    coordinator_completed
+                        .send((
+                            report.selected,
+                            report.scheduled,
+                            report.terminal_workers,
+                            report.incomplete(),
+                            report.join_failures.len(),
+                        ))
+                        .expect("fallback coordinator report should be observed");
+                    report
+                });
+                owner_ready
+                    .send(analysis_owner)
+                    .expect("fallback owner should transfer outside the runtime");
+
+                // A closed signal still finishes the writer, keeping panic
+                // cleanup bounded if the driving test exits early.
+                let _ = finish_writer_rx.await;
+                let completion = writer_session.finish().await;
+                let observed = writer_observed.await.is_ok();
+                writer_completed
+                    .send((
+                        completion.join_failures,
+                        completion.report.attempted,
+                        completion.report.succeeded,
+                        completion.report.failed,
+                        observed,
+                    ))
+                    .expect("fallback writer report should be observed");
+            })
+            .await
+            .is_ok()
+        });
+        let _ = runtime_completed.send(completed);
+    });
+
+    let analysis_owner = owner_ready_rx
+        .recv_timeout(WALL_CLOCK_WATCHDOG)
+        .expect("fallback owner setup should meet the wall-clock watchdog");
+    blocking_started_rx
+        .recv_timeout(WALL_CLOCK_WATCHDOG)
+        .expect("fallback blocking worker should start within the watchdog");
+    assert_eq!(worker_calls.load(Ordering::Relaxed), 1);
+
+    drop(analysis_owner);
+    assert!(
+        cancel.is_cancelled(),
+        "no-runtime owner drop must synchronously cancel scheduling"
+    );
+    blocking_release
+        .send(())
+        .expect("fallback started worker should still accept release");
+    cache_acknowledged_rx
+        .recv_timeout(WALL_CLOCK_WATCHDOG)
+        .expect("fallback cache acknowledgement should meet the watchdog");
+    assert_eq!(
+        coordinator_completed_rx
+            .recv_timeout(WALL_CLOCK_WATCHDOG)
+            .expect("fallback coordinator should meet the watchdog"),
+        (2, 1, 1, 1, 0)
+    );
+    assert_eq!(worker_calls.load(Ordering::Relaxed), 1);
+
+    finish_writer
+        .send(())
+        .expect("fallback runtime should retain its writer until explicit finish");
+    assert_eq!(
+        writer_completed_rx
+            .recv_timeout(WALL_CLOCK_WATCHDOG)
+            .expect("fallback writer should close within the watchdog"),
+        (0, 1, 1, 0, true)
+    );
+    assert!(
+        runtime_completed_rx
+            .recv_timeout(WALL_CLOCK_WATCHDOG)
+            .expect("fallback runtime should stop within the watchdog"),
+        "fallback runtime scenario exceeded its internal deadline"
+    );
+    runtime_thread
+        .join()
+        .expect("fallback runtime thread should join cleanly");
+
+    let connection = state::open(&store_path).expect("fallback writer store should reopen");
+    let cached = state::get_audio_analysis(
+        &connection,
+        "/synthetic/no-runtime-analysis.flac",
+        "no-runtime-analysis",
+    )
+    .expect("fallback analysis cache should read")
+    .expect("fallback acknowledged row should be durable");
+    assert_eq!(cached.analysis_version, "test-v2");
 }
 
 #[tokio::test]
