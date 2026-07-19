@@ -113,7 +113,7 @@ the dependency graph and recommended waves below.
 | [035](035-align-classification-readiness-and-fallbacks.md) | Align readiness, profile freshness, and label fallbacks    | P1       | L      | 034                          | DONE   |
 | [036](036-standardize-managed-essentia-environment.md)     | Standardize the managed Essentia environment               | P1       | L      | 035                          | DONE   |
 | [037](037-require-essentia-for-full-classification.md)     | Require Essentia evidence for full classification          | P1       | L      | 036                          | DONE   |
-| [047](047-isolate-private-rekordbox-fixtures.md)           | Isolate private Rekordbox and audio fixtures               | P1       | M      | -                            | TODO   |
+| [047](047-isolate-private-rekordbox-fixtures.md)           | Isolate private Rekordbox and audio fixtures               | P1       | M      | -                            | DONE   |
 | [048](048-plan-audio-tag-mutations-once.md)                | Plan audio-tag mutations once                              | P1       | L      | 047                          | TODO   |
 | [049](049-extract-hydrate-coordination.md)                 | Extract hydrate coordination from CLI                      | P1       | L      | -                            | TODO   |
 | [050](050-model-planning-policies.md)                      | Model planning policies explicitly                         | P1       | L      | -                            | TODO   |
