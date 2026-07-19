@@ -992,13 +992,62 @@ async fn read_bounded_output(mut reader: impl AsyncRead + Unpin) -> std::io::Res
 
 #[cfg(test)]
 mod output_reader_tests {
+    use std::io;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 
-    use super::{OutputReaderTask, strict_timeout_at};
+    use super::{
+        BoundedOutput, OutputReaderTask, duration_label, read_bounded_output, strict_timeout_at,
+        with_cleanup_context,
+    };
+
+    struct FailingReader;
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::other("fixture read failed")))
+        }
+    }
+
+    struct PanickingReader;
+
+    impl AsyncRead for PanickingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            panic!("fixture reader panic")
+        }
+    }
+
+    async fn capture_bytes(count: usize) -> BoundedOutput {
+        let (mut writer, reader) = tokio::io::duplex(256);
+        let writer_task = tokio::spawn(async move {
+            writer
+                .write_all(&vec![b'x'; count])
+                .await
+                .expect("fixture output should write");
+            writer
+                .shutdown()
+                .await
+                .expect("fixture output should close");
+        });
+        let output = read_bounded_output(reader)
+            .await
+            .expect("fixture output should read");
+        writer_task.await.expect("fixture writer should join");
+        output
+    }
 
     #[tokio::test]
     async fn output_reader_cleanup_aborts_persistent_escaped_pipe_holders() {
@@ -1044,6 +1093,75 @@ mod output_reader_tests {
         })
         .await;
         assert_eq!(result, Err(()));
+    }
+
+    #[tokio::test]
+    async fn bounded_output_preserves_exact_limit_and_suffix_contract() {
+        let below = capture_bytes(8 * 1024 - 1).await;
+        assert_eq!(below.bytes.len(), 8 * 1024 - 1);
+        assert!(!below.truncated);
+        assert!(!below.render().ends_with(" …[truncated]"));
+
+        let at_limit = capture_bytes(8 * 1024).await;
+        assert_eq!(at_limit.bytes.len(), 8 * 1024);
+        assert!(!at_limit.truncated);
+        assert!(!at_limit.render().ends_with(" …[truncated]"));
+
+        let above = capture_bytes(8 * 1024 + 1).await;
+        assert_eq!(above.bytes.len(), 8 * 1024);
+        assert!(above.truncated);
+        assert!(above.render().ends_with(" …[truncated]"));
+    }
+
+    #[tokio::test]
+    async fn output_reader_read_failure_preserves_label_and_releases_activity() {
+        let activity = Arc::new(AtomicUsize::new(0));
+        let mut task = OutputReaderTask::spawn("stdout", FailingReader, Arc::clone(&activity));
+        let error = match task.finish().await {
+            Ok(_) => panic!("fixture reader should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "backup stdout capture failed: fixture read failed");
+        assert_eq!(activity.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn output_reader_panic_preserves_task_failure_category_and_releases_activity() {
+        let activity = Arc::new(AtomicUsize::new(0));
+        let mut task = OutputReaderTask::spawn("stderr", PanickingReader, Arc::clone(&activity));
+        let error = match task.finish().await {
+            Ok(_) => panic!("panicking reader task should fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error.starts_with("backup stderr capture task failed: task "),
+            "unexpected reader panic message: {error}"
+        );
+        assert!(error.contains("panicked with message \"fixture reader panic\""));
+        assert_eq!(activity.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn cleanup_context_and_duration_rendering_are_stable() {
+        assert_eq!(
+            with_cleanup_context(
+                "primary failure".to_string(),
+                vec!["first cleanup".to_string(), "second cleanup".to_string()],
+            ),
+            "primary failure; cleanup: first cleanup; second cleanup"
+        );
+        assert_eq!(duration_label(Duration::from_secs(120)), "120s");
+        assert_eq!(duration_label(Duration::from_millis(250)), "250ms");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_child_pid_setup_error_is_stable() {
+        let error = match super::ProcessGroupOwnership::new(None) {
+            Ok(_) => panic!("missing child PID should fail setup"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "backup child PID was unavailable");
     }
 
     #[test]

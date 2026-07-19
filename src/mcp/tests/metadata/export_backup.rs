@@ -1041,6 +1041,73 @@ async fn pre_op_backup_nonzero_exit_is_reported() {
 
 #[tokio::test]
 #[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_nonzero_diagnostic_precedence_is_stable() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+
+    let cases = [
+        (
+            "stderr-first.sh",
+            "#!/bin/sh\nprintf 'stdout detail\\n'\nprintf 'stderr detail\\n' >&2\nexit 7\n",
+            "backup failed with exit status 7: stderr detail",
+        ),
+        (
+            "stdout-fallback.sh",
+            "#!/bin/sh\nprintf 'stdout detail\\n'\nexit 8\n",
+            "backup failed with exit status 8: stdout detail",
+        ),
+        (
+            "no-output.sh",
+            "#!/bin/sh\nexit 9\n",
+            "backup failed with exit status 9: backup script exited without output",
+        ),
+    ];
+
+    for (name, contents, expected) in cases {
+        let script = temp.path().join(name);
+        write_executable_script(&script, contents);
+        let script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+        let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+            .await
+            .expect_err("nonzero custom script should fail");
+        assert_eq!(error, expected);
+        drop(script_env);
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_success_with_stdout_and_stderr_is_stable() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("output-success.sh");
+    write_executable_script(
+        &script,
+        "#!/bin/sh\nprintf 'successful stdout\\n'\nprintf 'successful stderr\\n' >&2\nexit 0\n",
+    );
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let status = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect("zero exit with both output streams should succeed");
+    assert_eq!(
+        status,
+        crate::adapters::rekordbox::backup::BackupStatus::Success
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
 async fn pre_op_backup_timeout_reaps_direct_hung_child() {
     assert_pre_op_backup_timeout_terminates_fixture(false).await;
 }
