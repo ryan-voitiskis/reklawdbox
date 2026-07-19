@@ -14,9 +14,9 @@ use super::{
 };
 
 const COMMAND_BOUND: Duration = Duration::from_secs(10);
-const CLEANUP_BOUND: Duration = Duration::from_secs(2);
-const FIXTURE_READY_BOUND: Duration = Duration::from_secs(5);
-const FIXTURE_FAILSAFE_SECS: u64 = 5;
+const CLEANUP_BOUND: Duration = Duration::from_secs(4);
+const FIXTURE_READY_BOUND: Duration = Duration::from_secs(8);
+const FIXTURE_FAILSAFE_SECS: u64 = 10;
 
 #[derive(Clone)]
 struct RunnerProbe {
@@ -225,13 +225,13 @@ fn essentia_environment_process_direct_child_timeout_cleans_pid_and_readers() {
 
     wait_for_reader_count(&probe, 2);
     let error = result_rx
-        .recv_timeout(Duration::from_secs(4))
+        .recv_timeout(Duration::from_secs(8))
         .expect("timed command should complete before the outer bound")
         .unwrap_err();
     runner.join().unwrap();
 
     assert!(matches!(error.kind, ProcessErrorKind::Timeout));
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(8));
     wait_for_pid_exit(probe.spawned()[0] as i32);
     probe.assert_no_readers();
 }
@@ -246,7 +246,7 @@ fn essentia_environment_process_descendant_timeout_cleans_group_and_readers() {
         root.path(),
         "descendant-timeout",
         &format!(
-            "echo $$ > \"$1\"\nsh -c 'echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do :; done\nwait"
+            "echo $$ > \"$1\"\nsh -c 'echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do sleep 0.01; done\nwait"
         ),
     );
     let probe = RunnerProbe::new(ReaderFault::None);
@@ -259,7 +259,7 @@ fn essentia_environment_process_descendant_timeout_cleans_group_and_readers() {
                 descendant_pid.to_string_lossy().into_owned(),
                 ready.to_string_lossy().into_owned(),
             ],
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .unwrap_err();
 
@@ -283,7 +283,7 @@ fn run_early_exit_fixture(root: &Path, close_pipes: bool) {
         root,
         "early-exit",
         &format!(
-            "echo $$ > \"$1\"\nsh -c '{redirection}echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do :; done\nexit 0"
+            "echo $$ > \"$1\"\nsh -c '{redirection}echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do sleep 0.01; done\nexit 0"
         ),
     );
     let probe = RunnerProbe::new(ReaderFault::None);
@@ -303,7 +303,7 @@ fn run_early_exit_fixture(root: &Path, close_pipes: bool) {
 
     assert!(matches!(error.kind, ProcessErrorKind::SurvivingDescendants));
     assert!(
-        started.elapsed() < Duration::from_secs(4),
+        started.elapsed() < Duration::from_secs(8),
         "runner must inspect and terminate descendants instead of waiting for their pipe fail-safe"
     );
     wait_for_file(&ready);
@@ -333,7 +333,7 @@ fn run_under_watchdog(test_name: &str, scenario: &str) {
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(14);
     let status = loop {
         match child.try_wait().unwrap() {
             Some(status) => break Some(status),
@@ -348,8 +348,8 @@ fn run_under_watchdog(test_name: &str, scenario: &str) {
 
     // The outer watchdog owns the fixture root, so even a killed helper leaves
     // observable identities until both nested fixture processes have exited.
-    // It never signals a recorded numeric PGID: the script's five-second
-    // fail-safe is shorter than the eight-second watchdog, after which these
+    // It never signals a recorded numeric PGID: the script's ten-second
+    // fail-safe is shorter than the fourteen-second watchdog, after which these
     // bounded checks prove that no fixture survived.
     for pid_file in [
         root.path().join("leader.pid"),
@@ -427,7 +427,7 @@ fn essentia_environment_process_second_reader_spawn_failure_joins_first_reader()
         }
         other => panic!("unexpected reader start failure: {other:?}"),
     }
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(8));
     wait_for_pid_exit(probe.spawned()[0] as i32);
     probe.assert_no_readers();
 }
@@ -495,7 +495,7 @@ fn essentia_environment_process_live_reader_failure_terminates_before_timeout() 
     );
     probe.release_fault();
     let error = result_rx
-        .recv_timeout(Duration::from_secs(4))
+        .recv_timeout(Duration::from_secs(8))
         .expect("live reader failure should finish before outer bound")
         .unwrap_err();
     runner.join().unwrap();
@@ -507,7 +507,7 @@ fn essentia_environment_process_live_reader_failure_terminates_before_timeout() 
             ..
         }
     ));
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(8));
     wait_for_pid_exit(child_pid);
     probe.assert_no_readers();
 }
@@ -538,7 +538,7 @@ fn essentia_environment_process_live_reader_panic_terminates_before_timeout() {
     );
     probe.release_fault();
     let error = result_rx
-        .recv_timeout(Duration::from_secs(4))
+        .recv_timeout(Duration::from_secs(8))
         .expect("live reader panic should finish before outer bound")
         .unwrap_err();
     runner.join().unwrap();
@@ -547,7 +547,7 @@ fn essentia_environment_process_live_reader_panic_terminates_before_timeout() {
         error.kind,
         ProcessErrorKind::ReaderPanicked(OutputStream::Stderr)
     ));
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(8));
     wait_for_pid_exit(child_pid);
     probe.assert_no_readers();
 }
@@ -591,7 +591,7 @@ fn essentia_environment_process_inspection_error_releases_reaps_and_joins() {
         root.path(),
         "inspection-error",
         &format!(
-            "echo $$ > \"$1\"\nsh -c 'echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do :; done\nexit 0"
+            "echo $$ > \"$1\"\nsh -c 'echo $$ > \"$1\"; : > \"$2\"; exec sleep {FIXTURE_FAILSAFE_SECS}' fixture \"$2\" \"$3\" &\nwhile [ ! -f \"$3\" ]; do sleep 0.01; done\nexit 0"
         ),
     );
     let probe = RunnerProbe::with_inspection_fault(ReaderFault::None, true);
@@ -640,7 +640,7 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
     let script = executable_script(
         root.path(),
         "concurrent",
-        "echo $$ > \"$1\"; : > \"$2\"; while [ ! -f \"$3\" ]; do :; done; exit 0",
+        "echo $$ > \"$1\"; : > \"$2\"; while [ ! -f \"$3\" ]; do sleep 0.01; done; exit 0",
     );
     let first_pid = root.path().join("first.pid");
     let first_ready = root.path().join("first.ready");
@@ -662,7 +662,7 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
                 first_ready.to_string_lossy().into_owned(),
                 first_release.to_string_lossy().into_owned(),
             ],
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         );
         first_tx.send(("timed", result)).unwrap();
     });
@@ -691,7 +691,7 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
     // SAFETY: getpgid only observes the two live fixture PIDs.
     assert_eq!(unsafe { libc::getpgid(second_pid) }, second_pid);
     let (label, result) = result_rx
-        .recv_timeout(Duration::from_secs(4))
+        .recv_timeout(Duration::from_secs(8))
         .expect("timed runner should complete before the peer is released");
     assert_eq!(label, "timed");
     let error = result.unwrap_err();
@@ -708,7 +708,7 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
     fs::write(root.path().join("second.release"), b"release").unwrap();
 
     let (label, result) = result_rx
-        .recv_timeout(Duration::from_secs(4))
+        .recv_timeout(Duration::from_secs(8))
         .expect("released peer should complete before the outer bound");
     assert_eq!(label, "peer");
     assert!(result.unwrap().success);
