@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use crate::adapters::audio;
+use crate::application::cache_writer::serialize_cache_payload;
 
-use super::batch::serialize_cache_payload;
 use super::identity::{
     analyze_with_stratum_input, file_mtime_unix, load_rekordbox_grid_input_for_path,
 };

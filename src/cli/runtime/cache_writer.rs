@@ -1,25 +1,17 @@
-//! CLI-facing analysis cache protocol and compatibility vocabulary.
-
-pub(crate) use crate::application::analysis::batch::{
-    BatchFailure as CliBatchFailure, CacheWriteRequest, CacheWriterReport,
-    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES, batch_outcome as cli_batch_outcome,
-    persist_analysis_cache_write as persist_cli_cache_message, send_cache_message,
-    serialize_cache_payload, task_join_error_summary,
-};
-#[cfg(test)]
-pub(crate) use crate::application::analysis::identity::{
-    CacheProbe, file_mtime_unix, is_cache_fresh,
-};
-pub(crate) use crate::application::analysis::identity::{
-    cache_probe_for_path, cache_status_for_track,
-};
-pub(crate) use crate::application::analysis::model::AnalysisCacheWrite as CliCacheWriteMsg;
+//! CLI characterization tests for application-owned cache policies.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::adapters::audio;
     use crate::adapters::state::{self as store, CachedAudioAnalysis};
+    use crate::application::analysis::batch::persist_analysis_cache_write as persist_cli_cache_message;
+    use crate::application::analysis::identity::{
+        CacheProbe, cache_status_for_track, file_mtime_unix, is_cache_fresh,
+    };
+    use crate::application::analysis::model::AnalysisCacheWrite as CliCacheWriteMsg;
+    use crate::application::cache_writer::{
+        CacheWriteRequest, send_cache_message, serialize_cache_payload,
+    };
     use crate::cli::runtime::test_support::{TEST_WATCHDOG, TaskGuard, bounded};
     use serde::ser::Error as _;
 
@@ -298,7 +290,7 @@ mod tests {
             .expect("bounded send");
             drop(tx);
             let err = result.expect_err("closed cache channel should surface an error");
-            assert!(err.contains("analysis cache queue send failed"));
+            assert!(err.to_string().contains("analysis cache queue send failed"));
         })
         .await
         .expect("closed-channel test watchdog expired");
@@ -355,7 +347,7 @@ mod tests {
             let err = send_result
                 .expect("bounded send")
                 .expect_err("write error must reach producer");
-            assert_eq!(err, "sqlite write rejected");
+            assert_eq!(err.to_string(), "sqlite write rejected");
             assert_eq!(writer_result.expect("guarded writer join"), Ok(()));
         })
         .await
@@ -384,52 +376,13 @@ mod tests {
             let err = send_result
                 .expect("bounded send")
                 .expect_err("dropped acknowledgement must reach producer");
-            assert!(err.contains("analysis cache acknowledgement canceled"));
+            assert!(
+                err.to_string()
+                    .contains("analysis cache acknowledgement canceled")
+            );
             assert_eq!(writer_result.expect("guarded writer join"), Ok(()));
         })
         .await
         .expect("canceled-ack test watchdog expired");
-    }
-
-    #[test]
-    fn cli_batch_outcome_accepts_only_complete_success() {
-        assert!(cli_batch_outcome("test", 0, 0, 0, 0, false, vec![]).is_ok());
-        for (failures, joins, writes, incomplete, cancelled) in [
-            (1, 0, 0, 0, false),
-            (0, 1, 0, 0, false),
-            (0, 0, 1, 0, false),
-            (0, 0, 0, 1, false),
-            (0, 0, 0, 0, true),
-            (1, 1, 1, 1, true),
-        ] {
-            assert!(
-                cli_batch_outcome(
-                    "test",
-                    failures,
-                    joins,
-                    writes,
-                    incomplete,
-                    cancelled,
-                    vec!["stable summary".to_string()],
-                )
-                .is_err()
-            );
-        }
-
-        let combined =
-            cli_batch_outcome("test", 1, 2, 3, 4, true, vec!["stable summary".to_string()])
-                .expect_err("combined failures");
-        assert_eq!(
-            combined,
-            super::CliBatchFailure {
-                command: "test",
-                track_or_provider_failures: 1,
-                worker_join_failures: 2,
-                writer_failures: 3,
-                incomplete: 4,
-                user_cancelled: true,
-                error_summaries: vec!["stable summary".to_string()],
-            }
-        );
     }
 }

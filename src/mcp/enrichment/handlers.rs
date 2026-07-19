@@ -4,7 +4,7 @@ use rmcp::model::CallToolResult;
 use crate::adapters::providers::musicbrainz;
 use crate::adapters::rekordbox as db;
 use crate::adapters::state as store;
-use crate::application::analysis::batch::CacheWriteRequest;
+use crate::application::cache_writer::CacheWriteRequest;
 #[cfg(test)]
 use crate::application::enrichment::hydrate::acknowledge_mcp_enrichment_cache_write;
 use crate::application::enrichment::hydrate::{

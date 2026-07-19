@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::adapters::state;
-use crate::application::analysis::batch::CacheWriteRequest;
+use crate::application::cache_writer::CacheWriteRequest;
 
 const PROVIDER_CONCURRENCY: usize = 4;
 const CACHE_QUEUE_CAPACITY: usize = 32;

@@ -8,6 +8,7 @@ use crate::application::analysis::identity::{
     AudioCacheIdentity, audio_cache_identities_with_current_stratum_input, check_analysis_cache,
 };
 use crate::application::analysis::{batch as analysis_batch, job as analysis_job};
+use crate::application::cache_writer;
 use crate::mcp::{
     AnalyzeAudioBatchParams, AnalyzeTrackAudioParams, BatchPage, BatchProgress, ReklawdboxServer,
     cache_error, db_error, mcp_internal_error, ok_json, ok_structured_json, resolve_file_path,
@@ -288,7 +289,7 @@ fn audio_cache_write_failure(
 }
 
 type CacheWriteMsg = crate::application::analysis::model::AnalysisCacheWrite;
-type AudioCacheWriteRequest = analysis_batch::CacheWriteRequest<CacheWriteMsg>;
+type AudioCacheWriteRequest = cache_writer::CacheWriteRequest<CacheWriteMsg>;
 
 #[allow(clippy::too_many_arguments)]
 async fn analyze_single_track(
@@ -378,13 +379,13 @@ async fn analyze_single_track(
     for message in report.cache_messages.drain(..) {
         let analyzer = message.analyzer.clone();
         if let Err(error) =
-            analysis_batch::send_cache_message(&cache_tx, message, &format!("{analyzer} analysis"))
+            cache_writer::send_cache_message(&cache_tx, message, &format!("{analyzer} analysis"))
                 .await
         {
             if analyzer == audio::ANALYZER_STRATUM {
-                stratum_cache_write_error = Some(error);
+                stratum_cache_write_error = Some(error.to_string());
             } else {
-                essentia_cache_write_error = Some(error);
+                essentia_cache_write_error = Some(error.to_string());
             }
         }
     }
@@ -907,11 +908,13 @@ mod pending_page_tests {
             });
             let acknowledged = tokio::time::timeout(
                 STEP_TIMEOUT,
-                analysis_batch::send_cache_message(&cache_tx, message, "stratum-dsp analysis"),
+                cache_writer::send_cache_message(&cache_tx, message, "stratum-dsp analysis"),
             )
             .await;
             let error = match acknowledged {
-                Ok(result) => result.expect_err("cache writer should reject an invalid store path"),
+                Ok(result) => result
+                    .expect_err("cache writer should reject an invalid store path")
+                    .to_string(),
                 Err(_) => {
                     drop(cache_tx);
                     writer.abort();

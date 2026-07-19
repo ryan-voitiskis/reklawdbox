@@ -1,8 +1,8 @@
 //! Shared enrichment hydration workflow.
 
 use crate::adapters::{providers, state};
-use crate::application::analysis::batch::{CacheWriteRequest, send_cache_message};
 use crate::application::analysis::{job as analysis_job, model::AnalysisCacheWrite};
+use crate::application::cache_writer::{CacheWriteRequest, send_cache_message};
 
 use super::lookup::{self, LookupIdentity};
 use super::model::{EnrichmentProvider, HydrationStage};
@@ -422,7 +422,9 @@ pub(crate) async fn acknowledge_enrichment_cache_write<T>(
 where
     T: From<EnrichmentCacheWrite>,
 {
-    send_cache_message(tx, T::from(write), context).await
+    send_cache_message(tx, T::from(write), context)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Queue an MCP enrichment write while preserving its original public errors.

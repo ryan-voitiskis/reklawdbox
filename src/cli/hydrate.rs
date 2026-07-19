@@ -12,6 +12,15 @@ use crate::adapters::audio as audio_adapter;
 use crate::adapters::audio;
 use crate::adapters::providers::discogs;
 use crate::adapters::{rekordbox as db, state as store};
+use crate::application::analysis::batch::persist_analysis_cache_write;
+use crate::application::analysis::identity::{cache_probe_for_path, cache_status_for_track};
+use crate::application::analysis::model::AnalysisCacheWrite as CliCacheWriteMsg;
+use crate::application::batch::{BatchOutcome, task_join_error_summary};
+#[cfg(test)]
+use crate::application::cache_writer::send_cache_message;
+use crate::application::cache_writer::{
+    self, CacheWriteRequest, CacheWriterReport, serialize_cache_payload,
+};
 use crate::application::enrichment::hydrate::{
     EnrichmentCacheWrite, HydrationWorkerCompletion, acknowledge_enrichment_cache_write,
     persist_enrichment_cache_write, run_analysis_stage, run_bounded_workers,
@@ -19,13 +28,6 @@ use crate::application::enrichment::hydrate::{
 use crate::application::enrichment::model::{EnrichmentProvider, HydrationStage, HydrationStages};
 use crate::domain::metadata as normalize;
 
-#[cfg(test)]
-use super::runtime::cache_writer::send_cache_message;
-use super::runtime::cache_writer::{
-    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg,
-    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES, cache_probe_for_path, cache_status_for_track,
-    cli_batch_outcome, persist_cli_cache_message, serialize_cache_payload, task_join_error_summary,
-};
 use super::runtime::resources::{
     CpuPreset, analysis_concurrency_for_preset, apply_cpu_niceness, cpu_preset_summary,
     memory_budget_mb, memory_preset_summary, track_memory_cost_mb,
@@ -202,97 +204,25 @@ fn resolve_provider_task_join(
 
 fn run_hydrate_cache_writer(
     store_path: String,
-    mut cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<HydrateCacheMsg>>,
+    cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<HydrateCacheMsg>>,
     cancel: CancellationToken,
 ) -> CacheWriterReport {
-    let mut report = CacheWriterReport::default();
-    let conn = match store::open(&store_path) {
-        Ok(conn) => conn,
-        Err(error) => {
-            let summary = format!("cache store open failed: {error}");
-            tracing::error!("Cache writer: {summary} — rejecting queued writes");
-            report.error_summaries.push(summary.clone());
-            cancel.cancel();
-            while let Some(request) = cache_rx.blocking_recv() {
-                report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary.clone())).ok();
+    cache_writer::run(
+        store_path,
+        cache_rx,
+        cancel,
+        |connection, message| match message {
+            HydrateCacheMsg::Enrichment(write) => persist_enrichment_cache_write(connection, write),
+            HydrateCacheMsg::AudioAnalysis(analysis) => {
+                persist_analysis_cache_write(connection, analysis)
             }
-            return report;
-        }
-    };
-
-    let mut consecutive_failures: u32 = 0;
-    let mut fatal_error: Option<String> = None;
-    while let Some(request) = cache_rx.blocking_recv() {
-        if let Some(summary) = &fatal_error {
-            report.record_failure(summary.clone());
-            request.acknowledgement.send(Err(summary.clone())).ok();
-            continue;
-        }
-
-        let message = request.payload;
-        let (write_result, label) = match &message {
-            HydrateCacheMsg::Enrichment(write) => (
-                persist_enrichment_cache_write(&conn, write),
-                format!("{} enrichment", write.provider),
-            ),
-            HydrateCacheMsg::AudioAnalysis(analysis) => (
-                persist_cli_cache_message(&conn, analysis),
-                format!("{} analysis", analysis.analyzer),
-            ),
-        };
-
-        match write_result {
-            Ok(()) => {
-                consecutive_failures = 0;
-                report.record_success();
-                request.acknowledgement.send(Ok(())).ok();
+        },
+        |message| match message {
+            HydrateCacheMsg::Enrichment(write) => format!("{} enrichment", write.provider),
+            HydrateCacheMsg::AudioAnalysis(analysis) => {
+                format!("{} analysis", analysis.analyzer)
             }
-            Err(error) => {
-                consecutive_failures += 1;
-                let summary = format!("{label} cache write failed: {error}");
-                tracing::error!(
-                    "Cache writer: {summary} ({consecutive_failures}/{})",
-                    MAX_CONSECUTIVE_CACHE_WRITE_FAILURES,
-                );
-                report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary)).ok();
-                if consecutive_failures >= MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
-                    let fatal = format!(
-                        "cache writer stopped after {} consecutive failures",
-                        MAX_CONSECUTIVE_CACHE_WRITE_FAILURES
-                    );
-                    tracing::error!("Cache writer: {fatal} — draining queued writes");
-                    report.threshold_cancelled = true;
-                    if report.error_summaries.len() < 10 && !report.error_summaries.contains(&fatal)
-                    {
-                        report.error_summaries.push(fatal.clone());
-                    }
-                    fatal_error = Some(fatal);
-                    cancel.cancel();
-                }
-            }
-        }
-    }
-    report
-}
-
-fn hydrate_batch_outcome(
-    provider_failures: u32,
-    join_failures: u32,
-    writer_failures: u32,
-    incomplete: usize,
-    user_cancelled: bool,
-    error_summaries: Vec<String>,
-) -> Result<(), CliBatchFailure> {
-    cli_batch_outcome(
-        "hydrate",
-        provider_failures,
-        join_failures,
-        writer_failures,
-        incomplete,
-        user_cancelled,
-        error_summaries,
+        },
     )
 }
 
@@ -912,14 +842,16 @@ pub(crate) async fn run_hydrate(args: HydrateArgs) -> Result<(), Box<dyn std::er
         + analysis_counters.operation_errors.load(Ordering::Relaxed);
     let provider_join_failures = discogs_report.join_failures + analysis_report.join_failures;
 
-    hydrate_batch_outcome(
-        provider_failures,
-        provider_join_failures + status_join_failures + writer_join_failures,
-        writer_report.failed,
+    BatchOutcome {
+        command: "hydrate",
+        operation_failures: provider_failures,
+        worker_join_failures: provider_join_failures + status_join_failures + writer_join_failures,
+        writer_failures: writer_report.failed,
         incomplete,
         user_cancelled,
         error_summaries,
-    )
+    }
+    .finish()
     .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
 }
 
@@ -1243,7 +1175,7 @@ mod batch_tests {
             )
             .await
             {
-                Ok(result) => results.push(result),
+                Ok(result) => results.push(result.map_err(|error| error.to_string())),
                 Err(error) => {
                     results.push(Err(error));
                     break;
@@ -1446,32 +1378,5 @@ mod batch_tests {
         })
         .await
         .expect("provider-join watchdog expired");
-    }
-
-    #[test]
-    fn hydrate_batch_outcome_has_disjoint_exact_counts() {
-        assert!(hydrate_batch_outcome(0, 0, 0, 0, false, vec![]).is_ok());
-
-        let provider =
-            hydrate_batch_outcome(2, 0, 0, 0, false, vec![]).expect_err("provider failure");
-        assert_eq!(provider.track_or_provider_failures, 2);
-        assert_eq!(provider.worker_join_failures, 0);
-        assert_eq!(provider.writer_failures, 0);
-
-        let join = hydrate_batch_outcome(0, 1, 0, 1, false, vec![]).expect_err("join failure");
-        assert_eq!(join.track_or_provider_failures, 0);
-        assert_eq!(join.worker_join_failures, 1);
-        assert_eq!(join.writer_failures, 0);
-        assert_eq!(join.incomplete, 1);
-
-        let writer = hydrate_batch_outcome(0, 0, 3, 0, false, vec![]).expect_err("writer failure");
-        assert_eq!(writer.track_or_provider_failures, 0);
-        assert_eq!(writer.worker_join_failures, 0);
-        assert_eq!(writer.writer_failures, 3);
-
-        let cancelled =
-            hydrate_batch_outcome(0, 0, 0, 2, true, vec![]).expect_err("cancelled batch");
-        assert_eq!(cancelled.incomplete, 2);
-        assert!(cancelled.user_cancelled);
     }
 }

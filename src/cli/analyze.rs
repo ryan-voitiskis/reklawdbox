@@ -9,11 +9,12 @@ use crate::adapters::audio as audio_adapter;
 #[cfg(test)]
 use crate::adapters::audio;
 use crate::adapters::{rekordbox as db, state as store};
+use crate::application::analysis::batch::run_analysis_cache_writer;
+use crate::application::analysis::identity::{cache_probe_for_path, cache_status_for_track};
+use crate::application::analysis::model::AnalysisCacheWrite as CliCacheWriteMsg;
+use crate::application::batch::{BatchOutcome, task_join_error_summary};
+use crate::application::cache_writer::{CacheWriteRequest, CacheWriterReport, send_cache_message};
 
-use super::runtime::cache_writer::{
-    CacheWriteRequest, CacheWriterReport, CliBatchFailure, CliCacheWriteMsg, cache_probe_for_path,
-    cache_status_for_track, cli_batch_outcome, send_cache_message, task_join_error_summary,
-};
 use super::runtime::resources::{
     CpuPreset, analysis_concurrency_for_preset, apply_cpu_niceness, cpu_preset_summary,
     memory_budget_mb, memory_preset_summary, track_memory_cost_mb,
@@ -73,33 +74,6 @@ pub(crate) struct AnalyzeArgs {
     /// Override analysis concurrency (overrides --cpu preset, min 1, max 16)
     #[arg(long, short = 'j')]
     concurrency: Option<u32>,
-}
-
-fn run_analyze_cache_writer(
-    store_path: String,
-    cache_rx: tokio::sync::mpsc::Receiver<CacheWriteRequest<CliCacheWriteMsg>>,
-    cancel: CancellationToken,
-) -> CacheWriterReport {
-    crate::application::analysis::batch::run_analysis_cache_writer(store_path, cache_rx, cancel)
-}
-
-fn analyze_batch_outcome(
-    track_failures: u32,
-    join_failures: u32,
-    writer_failures: u32,
-    incomplete: usize,
-    user_cancelled: bool,
-    error_summaries: Vec<String>,
-) -> Result<(), CliBatchFailure> {
-    cli_batch_outcome(
-        "analyze",
-        track_failures,
-        join_failures,
-        writer_failures,
-        incomplete,
-        user_cancelled,
-        error_summaries,
-    )
 }
 
 fn record_analyze_worker_join(
@@ -256,7 +230,7 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
     let writer_store_path = store_path_str.clone();
     let writer_cancel = cancel.clone();
     let writer_handle = tokio::task::spawn_blocking(move || {
-        run_analyze_cache_writer(writer_store_path, cache_rx, writer_cancel)
+        run_analysis_cache_writer(writer_store_path, cache_rx, writer_cancel)
     });
 
     // Dual semaphore: CPU concurrency + memory budget
@@ -442,14 +416,16 @@ pub(crate) async fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::er
         println!("Cancelled");
     }
 
-    analyze_batch_outcome(
-        track_failures,
-        worker_join_failures + writer_join_failures,
-        writer_report.failed,
+    BatchOutcome {
+        command: "analyze",
+        operation_failures: track_failures,
+        worker_join_failures: worker_join_failures + writer_join_failures,
+        writer_failures: writer_report.failed,
         incomplete,
         user_cancelled,
         error_summaries,
-    )
+    }
+    .finish()
     .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
 }
 
@@ -512,7 +488,7 @@ async fn cli_analyze_single_track(
         let analyzer = message.analyzer.clone();
         send_cache_message(cache_tx, message, &format!("{analyzer} analysis"))
             .await
-            .map_err(CliTrackFailure::CacheWrite)?;
+            .map_err(|error| CliTrackFailure::CacheWrite(error.to_string()))?;
     }
 
     match report.stratum {
@@ -671,7 +647,7 @@ mod batch_tests {
         let writer_cancel = cancel.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(messages.len().max(1));
         let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
-            run_analyze_cache_writer(path, rx, writer_cancel)
+            run_analysis_cache_writer(path, rx, writer_cancel)
         }));
         let mut results = Vec::with_capacity(messages.len());
         for message in messages {
@@ -681,7 +657,7 @@ mod batch_tests {
             )
             .await
             {
-                Ok(result) => results.push(result),
+                Ok(result) => results.push(result.map_err(|error| error.to_string())),
                 Err(error) => {
                     results.push(Err(error));
                     break;
@@ -796,7 +772,7 @@ mod batch_tests {
             let writer_cancel = cancel.clone();
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             let writer = TaskGuard::new(tokio::task::spawn_blocking(move || {
-                run_analyze_cache_writer(path, rx, writer_cancel)
+                run_analysis_cache_writer(path, rx, writer_cancel)
             }));
             let (acknowledgement, result) = tokio::sync::oneshot::channel();
             drop(result);
@@ -837,32 +813,6 @@ mod batch_tests {
         })
         .await
         .expect("worker-join test watchdog expired");
-    }
-
-    #[test]
-    fn analyze_batch_outcome_has_disjoint_exact_counts() {
-        assert!(analyze_batch_outcome(0, 0, 0, 0, false, vec![]).is_ok());
-
-        let track = analyze_batch_outcome(1, 0, 0, 0, false, vec![]).expect_err("track failure");
-        assert_eq!(track.track_or_provider_failures, 1);
-        assert_eq!(track.worker_join_failures, 0);
-        assert_eq!(track.writer_failures, 0);
-
-        let join = analyze_batch_outcome(0, 1, 0, 1, false, vec![]).expect_err("join failure");
-        assert_eq!(join.track_or_provider_failures, 0);
-        assert_eq!(join.worker_join_failures, 1);
-        assert_eq!(join.writer_failures, 0);
-        assert_eq!(join.incomplete, 1);
-
-        let writer = analyze_batch_outcome(0, 0, 2, 0, false, vec![]).expect_err("writer failure");
-        assert_eq!(writer.track_or_provider_failures, 0);
-        assert_eq!(writer.worker_join_failures, 0);
-        assert_eq!(writer.writer_failures, 2);
-
-        let cancelled =
-            analyze_batch_outcome(0, 0, 0, 3, true, vec![]).expect_err("cancelled batch");
-        assert_eq!(cancelled.incomplete, 3);
-        assert!(cancelled.user_cancelled);
     }
 }
 #[cfg(test)]
