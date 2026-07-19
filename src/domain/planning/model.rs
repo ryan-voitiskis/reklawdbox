@@ -106,9 +106,28 @@ pub(crate) struct TransitionScores {
     pub(crate) adjustments: Vec<ScoreAdjustment>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ScoringContext {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransitionMixingPolicy<'a> {
+    pub(crate) weights: &'a PriorityWeights,
+    pub(crate) master_tempo: bool,
+    pub(crate) harmonic_style: Option<HarmonicMixingStyle>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransitionMoment {
+    pub(crate) from_phase: Option<EnergyPhase>,
+    pub(crate) to_phase: Option<EnergyPhase>,
     pub(crate) genre_run_length: u32,
+    pub(crate) play_bpms: Option<(f64, f64)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SequencePolicy<'a> {
+    pub(crate) target_track_count: usize,
+    pub(crate) energy_phases: &'a [EnergyPhase],
+    pub(crate) mixing: TransitionMixingPolicy<'a>,
+    pub(crate) bpm_drift_pct: f64,
+    pub(crate) target_bpms: Option<&'a [f64]>,
 }
 
 #[derive(Debug, Clone)]

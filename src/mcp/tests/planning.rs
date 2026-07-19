@@ -1,11 +1,11 @@
 use crate::domain::classification::taxonomy::GenreFamily;
 use crate::domain::planning::{
-    EnergyPhase, HarmonicMixingStyle, ScoringContext, SequencingPriority, TrackProfile,
-    build_candidate_plan, build_candidate_plan_beam, composite_score, compute_bpm_trajectory,
-    compute_track_energy, format_camelot, genre_family_for, key_to_camelot, musical_key_to_camelot,
-    parse_camelot_key, priority_weights, resolve_energy_curve, round_to_3_decimals, score_bpm_axis,
-    score_energy_axis, score_genre_axis, score_key_axis, score_transition_profiles,
-    transpose_camelot_key,
+    EnergyPhase, HarmonicMixingStyle, PriorityWeights, SequencePolicy, SequencingPriority,
+    TrackProfile, TransitionMixingPolicy, TransitionMoment, build_candidate_plan,
+    build_candidate_plan_beam, composite_score, compute_bpm_trajectory, compute_track_energy,
+    format_camelot, genre_family_for, key_to_camelot, musical_key_to_camelot, parse_camelot_key,
+    priority_weights, resolve_energy_curve, round_to_3_decimals, score_bpm_axis, score_energy_axis,
+    score_genre_axis, score_key_axis, score_transition_profiles, transpose_camelot_key,
 };
 use crate::mcp::planning::{
     BuildSetParams, EnergyCurveInput as McpEnergyCurveInput,
@@ -184,6 +184,47 @@ fn make_test_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) ->
         canonical_genre: Some(genre.to_string()),
         genre_family: genre_family_for(genre),
         timbral: None,
+    }
+}
+
+fn mixing_policy(
+    weights: &PriorityWeights,
+    master_tempo: bool,
+    harmonic_style: Option<HarmonicMixingStyle>,
+) -> TransitionMixingPolicy<'_> {
+    TransitionMixingPolicy {
+        weights,
+        master_tempo,
+        harmonic_style,
+    }
+}
+
+fn transition_moment(
+    from_phase: Option<EnergyPhase>,
+    to_phase: Option<EnergyPhase>,
+    genre_run_length: u32,
+    play_bpms: Option<(f64, f64)>,
+) -> TransitionMoment {
+    TransitionMoment {
+        from_phase,
+        to_phase,
+        genre_run_length,
+        play_bpms,
+    }
+}
+
+fn sequence_policy<'a>(
+    target_track_count: usize,
+    energy_phases: &'a [EnergyPhase],
+    weights: &'a PriorityWeights,
+    target_bpms: Option<&'a [f64]>,
+) -> SequencePolicy<'a> {
+    SequencePolicy {
+        target_track_count,
+        energy_phases,
+        mixing: mixing_policy(weights, true, Some(HarmonicMixingStyle::Balanced)),
+        bpm_drift_pct: 6.0,
+        target_bpms,
     }
 }
 
@@ -723,13 +764,8 @@ fn master_tempo_off_changes_key_scoring() {
     let scores_mt_on = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(None, None, 0, None),
     );
     assert_eq!(
         scores_mt_on.key.value, 1.0,
@@ -741,13 +777,8 @@ fn master_tempo_off_changes_key_scoring() {
     let scores_mt_off = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, None),
     );
     assert_eq!(
         scores_mt_off.pitch_shift_semitones, -1,
@@ -779,29 +810,17 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
     let to_under = make_test_profile("cliff-under", "8A", 131.5, 0.5, "House");
     let to_over = make_test_profile("cliff-over", "8A", 132.0, 0.5, "House");
 
-    let ctx = ScoringContext::default();
-
     let scores_under = score_transition_profiles(
         &from,
         &to_under,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, None),
     );
     let scores_over = score_transition_profiles(
         &from,
         &to_over,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, None),
     );
 
     let diff = (scores_under.key.value - scores_over.key.value).abs();
@@ -826,8 +845,6 @@ fn detuning_eliminates_cliff_at_rounding_boundary() {
 #[test]
 fn detuning_smooth_degradation_with_increasing_shift() {
     let from = make_test_profile("smooth-from", "8A", 128.0, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let bpms = [128.0, 129.0, 130.0, 131.0, 132.0, 133.0, 134.0, 135.0];
     let mut prev_score = 1.1_f64;
 
@@ -836,13 +853,8 @@ fn detuning_smooth_degradation_with_increasing_shift() {
         let scores = score_transition_profiles(
             &from,
             &to,
-            None,
-            None,
-            &priority_weights(SequencingPriority::Balanced),
-            false,
-            None,
-            &ctx,
-            None,
+            mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+            transition_moment(None, None, 0, None),
         );
 
         assert!(
@@ -858,13 +870,8 @@ fn detuning_smooth_degradation_with_increasing_shift() {
     let scores_same = score_transition_profiles(
         &from,
         &same,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, None),
     );
     assert_eq!(scores_same.key.value, 1.0, "Same BPM should be perfect");
 }
@@ -873,18 +880,11 @@ fn detuning_smooth_degradation_with_increasing_shift() {
 fn detuning_master_tempo_on_unchanged() {
     let from = make_test_profile("mt-on-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("mt-on-to", "8A", 135.0, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ctx,
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(None, None, 0, None),
     );
 
     assert_eq!(
@@ -897,18 +897,11 @@ fn detuning_master_tempo_on_unchanged() {
 fn detuning_label_shows_cents_when_audible() {
     let from = make_test_profile("label-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("label-to", "8A", 130.5, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, None),
     );
 
     assert!(
@@ -923,18 +916,11 @@ fn detuning_play_bpms_bilinear_interpolation() {
     // Both tracks have fractional pitch shifts, exercising all 4 bilinear blend combinations.
     let from = make_test_profile("pb-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("pb-to", "8A", 132.0, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        Some((130.0, 130.0)), // both pitched to 130
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, Some((130.0, 130.0))), // both pitched to 130
     );
 
     assert!(
@@ -948,18 +934,15 @@ fn detuning_play_bpms_bilinear_interpolation() {
 fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
     let from = make_test_profile("pb-mt-from", "8A", 128.0, 0.5, "House");
     let to = make_test_profile("pb-mt-to", "8A", 135.0, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true, // master tempo ON
-        None,
-        &ctx,
-        Some((130.0, 130.0)),
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true, // master tempo ON
+            None,
+        ),
+        transition_moment(None, None, 0, Some((130.0, 130.0))),
     );
 
     assert_eq!(
@@ -973,18 +956,11 @@ fn detuning_play_bpms_master_tempo_on_ignores_shifts() {
 fn detuning_play_bpms_asymmetric_one_zero_shift() {
     let from = make_test_profile("pb-asym-from", "8A", 130.0, 0.5, "House");
     let to = make_test_profile("pb-asym-to", "8A", 132.0, 0.5, "House");
-    let ctx = ScoringContext::default();
-
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ctx,
-        Some((130.0, 130.0)), // from at native, to pitched down 2 BPM
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, Some((130.0, 130.0))), // from at native, to pitched down 2 BPM
     );
 
     assert!(
@@ -1002,25 +978,19 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
     let conservative = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
 
     let baseline = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
 
     assert!(
@@ -1038,13 +1008,12 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
     let adventurous = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Adventurous),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Adventurous),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     assert_eq!(
         adventurous.composite, baseline.composite,
@@ -1057,24 +1026,18 @@ fn harmonic_style_conservative_penalizes_poor_transitions() {
     let balanced_build = score_transition_profiles(
         &from2,
         &to2,
-        Some(EnergyPhase::Build),
-        Some(EnergyPhase::Build),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+        ),
+        transition_moment(Some(EnergyPhase::Build), Some(EnergyPhase::Build), 0, None),
     );
     let baseline_build = score_transition_profiles(
         &from2,
         &to2,
-        Some(EnergyPhase::Build),
-        Some(EnergyPhase::Build),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(Some(EnergyPhase::Build), Some(EnergyPhase::Build), 0, None),
     );
     assert_eq!(
         balanced_build.composite, baseline_build.composite,
@@ -1090,24 +1053,18 @@ fn harmonic_style_adventurous_is_phase_dependent() {
     let adv_peak = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Adventurous),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Adventurous),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     let baseline_peak = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     assert_eq!(
         adv_peak.composite, baseline_peak.composite,
@@ -1117,24 +1074,28 @@ fn harmonic_style_adventurous_is_phase_dependent() {
     let adv_warmup = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Warmup),
-        Some(EnergyPhase::Warmup),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Adventurous),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Adventurous),
+        ),
+        transition_moment(
+            Some(EnergyPhase::Warmup),
+            Some(EnergyPhase::Warmup),
+            0,
+            None,
+        ),
     );
     let baseline_warmup = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Warmup),
-        Some(EnergyPhase::Warmup),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(
+            Some(EnergyPhase::Warmup),
+            Some(EnergyPhase::Warmup),
+            0,
+            None,
+        ),
     );
     assert!(
         adv_warmup.composite < baseline_warmup.composite,
@@ -1151,24 +1112,27 @@ fn harmonic_style_adventurous_is_phase_dependent() {
     let cons_peak = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     let cons_warmup = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Warmup),
-        Some(EnergyPhase::Warmup),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+        ),
+        transition_moment(
+            Some(EnergyPhase::Warmup),
+            Some(EnergyPhase::Warmup),
+            0,
+            None,
+        ),
     );
     assert!(cons_peak.composite < baseline_peak.composite);
     assert!(cons_warmup.composite < baseline_warmup.composite);
@@ -1365,47 +1329,24 @@ fn bpm_trajectory_drift_penalty() {
     profiles.insert("bpm-close".to_string(), close);
     profiles.insert("bpm-far".to_string(), far);
 
-    let tight = build_candidate_plan(
-        &profiles,
-        "bpm-start",
-        3,
-        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        &priority_weights(SequencingPriority::Harmonic),
-        0,
-        true,
-        None,
-        3.0,
-        None,
-    );
+    let phases = [EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build];
+    let weights = priority_weights(SequencingPriority::Harmonic);
+    let policy = |bpm_drift_pct| SequencePolicy {
+        target_track_count: 3,
+        energy_phases: &phases,
+        mixing: mixing_policy(&weights, true, None),
+        bpm_drift_pct,
+        target_bpms: None,
+    };
+
+    let tight = build_candidate_plan(&profiles, "bpm-start", policy(3.0), 0);
     assert_eq!(tight.ordered_ids[1], "bpm-close");
 
-    let moderate = build_candidate_plan(
-        &profiles,
-        "bpm-start",
-        3,
-        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        &priority_weights(SequencingPriority::Harmonic),
-        0,
-        true,
-        None,
-        6.0,
-        None,
-    );
+    let moderate = build_candidate_plan(&profiles, "bpm-start", policy(6.0), 0);
     assert_eq!(moderate.ordered_ids[1], "bpm-close");
     assert!(moderate.ordered_ids.contains(&"bpm-far".to_string()));
 
-    let generous = build_candidate_plan(
-        &profiles,
-        "bpm-start",
-        3,
-        &[EnergyPhase::Build, EnergyPhase::Build, EnergyPhase::Build],
-        &priority_weights(SequencingPriority::Harmonic),
-        0,
-        true,
-        None,
-        50.0,
-        None,
-    );
+    let generous = build_candidate_plan(&profiles, "bpm-start", policy(50.0), 0);
     assert_eq!(generous.ordered_ids[1], "bpm-close");
     assert!(generous.ordered_ids.contains(&"bpm-far".to_string()));
 }
@@ -1781,13 +1722,8 @@ fn play_bpms_none_preserves_existing_behavior() {
     let without = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(None, None, 0, None),
     );
     assert!(without.composite > 0.0);
     assert!(without.effective_to_key.is_none());
@@ -1802,13 +1738,8 @@ fn play_bpms_affects_bpm_adjustment_pct() {
     let with_play = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext::default(),
-        Some((128.0, 130.0)),
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(None, None, 0, Some((128.0, 130.0))),
     );
     assert!(
         (with_play.bpm_adjustment_pct - 3.174).abs() < 0.1,
@@ -1825,13 +1756,8 @@ fn play_bpms_affects_key_transposition() {
     let no_shift = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ScoringContext::default(),
-        Some((128.0, 128.0)),
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, Some((128.0, 128.0))),
     );
     assert_eq!(
         no_shift.key.value, 1.0,
@@ -1841,13 +1767,8 @@ fn play_bpms_affects_key_transposition() {
     let big_shift = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        false,
-        None,
-        &ScoringContext::default(),
-        Some((128.0, 136.0)),
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), false, None),
+        transition_moment(None, None, 0, Some((128.0, 136.0))),
     );
     assert_ne!(
         big_shift.pitch_shift_semitones, 0,
@@ -1863,26 +1784,24 @@ fn beam_search_width_1_matches_greedy() {
     let greedy = build_candidate_plan(
         &profiles,
         "b1",
-        4,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            4,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            None,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     let beam_plans = build_candidate_plan_beam(
         &profiles,
         "b1",
-        4,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            4,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            None,
+        ),
         1,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
 
     assert_eq!(
@@ -1904,14 +1823,13 @@ fn beam_search_wider_produces_multiple_plans() {
     let plans = build_candidate_plan_beam(
         &profiles,
         "b1",
+        sequence_policy(
+            4,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            None,
+        ),
         4,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
-        4,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
 
     assert!(
@@ -1936,14 +1854,14 @@ fn beam_search_empty_pool() {
     let plans = build_candidate_plan_beam(
         &profiles,
         "missing",
-        4,
-        &[EnergyPhase::Peak; 4],
-        &priority_weights(SequencingPriority::Balanced),
+        SequencePolicy {
+            target_track_count: 4,
+            energy_phases: &[EnergyPhase::Peak; 4],
+            mixing: mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+            bpm_drift_pct: 6.0,
+            target_bpms: None,
+        },
         3,
-        true,
-        None,
-        6.0,
-        None,
     );
     assert_eq!(plans.len(), 1, "empty pool should still produce one plan");
     assert_eq!(plans[0].ordered_ids, vec!["missing"]);
@@ -1965,14 +1883,14 @@ fn beam_search_width_exceeding_pool_size() {
     let plans = build_candidate_plan_beam(
         &profiles,
         "only1",
-        2,
-        &[EnergyPhase::Peak; 2],
-        &priority_weights(SequencingPriority::Balanced),
+        SequencePolicy {
+            target_track_count: 2,
+            energy_phases: &[EnergyPhase::Peak; 2],
+            mixing: mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+            bpm_drift_pct: 6.0,
+            target_bpms: None,
+        },
         10,
-        true,
-        None,
-        6.0,
-        None,
     );
 
     assert_eq!(plans.len(), 1, "only one possible plan with 2-track pool");
@@ -1993,14 +1911,13 @@ fn beam_search_with_bpm_trajectory() {
     let plans = build_candidate_plan_beam(
         &profiles,
         "b1",
-        4,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            4,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            Some(&target_bpms),
+        ),
         3,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        Some(&target_bpms),
     );
 
     assert!(

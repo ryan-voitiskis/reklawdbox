@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::domain::planning::{
-    CandidatePlan, EnergyCurve, HarmonicMixingStyle, PriorityWeights, TrackProfile,
-    build_candidate_plan, build_candidate_plan_beam, compute_bpm_trajectory, resolve_energy_curve,
-    select_start_track_ids,
+    CandidatePlan, EnergyCurve, HarmonicMixingStyle, PriorityWeights, SequencePolicy, TrackProfile,
+    TransitionMixingPolicy, build_candidate_plan, build_candidate_plan_beam,
+    compute_bpm_trajectory, resolve_energy_curve, select_start_track_ids,
 };
 
 pub(crate) struct BuildSetOptions {
@@ -81,6 +81,17 @@ pub(crate) fn build_set_candidates(
         phases[0],
         options.opening_track_id.as_deref(),
     );
+    let sequence_policy = SequencePolicy {
+        target_track_count: actual_target,
+        energy_phases: &phases,
+        mixing: TransitionMixingPolicy {
+            weights: &options.weights,
+            master_tempo: options.master_tempo,
+            harmonic_style: Some(options.harmonic_style),
+        },
+        bpm_drift_pct: options.bpm_drift_pct,
+        target_bpms: bpm_trajectory.as_deref(),
+    };
 
     let plans = if options.beam_width <= 1 {
         let effective_candidates = if profiles_by_id.len() <= actual_target {
@@ -91,18 +102,7 @@ pub(crate) fn build_set_candidates(
         (0..effective_candidates)
             .map(|variation_index| {
                 let start_id = start_tracks[variation_index % start_tracks.len()].clone();
-                build_candidate_plan(
-                    &profiles_by_id,
-                    &start_id,
-                    actual_target,
-                    &phases,
-                    &options.weights,
-                    variation_index,
-                    options.master_tempo,
-                    Some(options.harmonic_style),
-                    options.bpm_drift_pct,
-                    bpm_trajectory.as_deref(),
-                )
+                build_candidate_plan(&profiles_by_id, &start_id, sequence_policy, variation_index)
             })
             .collect()
     } else {
@@ -111,14 +111,8 @@ pub(crate) fn build_set_candidates(
             let mut beam_plans = build_candidate_plan_beam(
                 &profiles_by_id,
                 start_id,
-                actual_target,
-                &phases,
-                &options.weights,
+                sequence_policy,
                 options.beam_width,
-                options.master_tempo,
-                Some(options.harmonic_style),
-                options.bpm_drift_pct,
-                bpm_trajectory.as_deref(),
             );
             all_plans.append(&mut beam_plans);
         }

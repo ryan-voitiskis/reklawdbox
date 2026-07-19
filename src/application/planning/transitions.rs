@@ -9,10 +9,10 @@ use crate::application::analysis::identity::{
 };
 use crate::domain::classification::taxonomy::GenreFamily;
 use crate::domain::planning::{
-    EnergyPhase, HarmonicMixingStyle, PriorityWeights, ScoringContext, SequencingPriority,
-    TimbralFeatures, TrackProfile, TransitionScores, canonicalize_genre, compute_track_energy,
-    format_camelot, genre_family_for, key_to_camelot, parse_camelot_key, priority_weights,
-    renormalize_transition, score_transition_profiles,
+    EnergyPhase, HarmonicMixingStyle, PriorityWeights, SequencingPriority, TimbralFeatures,
+    TrackProfile, TransitionMixingPolicy, TransitionMoment, TransitionScores, canonicalize_genre,
+    compute_track_energy, format_camelot, genre_family_for, key_to_camelot, parse_camelot_key,
+    priority_weights, renormalize_transition, score_transition_profiles,
 };
 
 pub(crate) fn build_track_profile(
@@ -249,13 +249,17 @@ pub(crate) fn evaluate_transition(
     let scores = score_transition_profiles(
         &from,
         &to,
-        phase,
-        phase,
-        weights,
-        master_tempo,
-        Some(harmonic_style),
-        &ScoringContext::default(),
-        None,
+        TransitionMixingPolicy {
+            weights,
+            master_tempo,
+            harmonic_style: Some(harmonic_style),
+        },
+        TransitionMoment {
+            from_phase: phase,
+            to_phase: phase,
+            genre_run_length: 0,
+            play_bpms: None,
+        },
     );
     Ok(TransitionEvaluation { from, to, scores })
 }
@@ -267,17 +271,18 @@ pub(crate) struct RankedTransitionCandidates {
     pub(crate) reference_bpm: f64,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct RankTransitionOptions<'a> {
+    pub(crate) phase: Option<EnergyPhase>,
+    pub(crate) mixing: TransitionMixingPolicy<'a>,
+    pub(crate) target_bpm: Option<f64>,
+    pub(crate) limit: usize,
+}
+
 pub(crate) fn rank_transition_candidates(
     from_track: crate::domain::library::Track,
     pool_tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
-    phase: Option<EnergyPhase>,
-    weights: &PriorityWeights,
-    master_tempo: bool,
-    harmonic_style: HarmonicMixingStyle,
-    target_bpm: Option<f64>,
-    limit: usize,
+    options: RankTransitionOptions<'_>,
 ) -> Result<RankedTransitionCandidates, String> {
     let from_id = from_track.id.clone();
     let mut tracks = Vec::with_capacity(pool_tracks.len() + 1);
@@ -285,22 +290,21 @@ pub(crate) fn rank_transition_candidates(
     tracks.extend(pool_tracks.into_iter().filter(|track| track.id != from_id));
     let mut profiles = build_track_profiles(tracks, store)?;
     let from = profiles.remove(0);
-    let reference_bpm = target_bpm.unwrap_or(from.bpm);
-    let play_bpms = target_bpm.map(|target| (from.bpm, target));
-    let context = ScoringContext::default();
+    let reference_bpm = options.target_bpm.unwrap_or(from.bpm);
+    let play_bpms = options.target_bpm.map(|target| (from.bpm, target));
     let mut candidates: Vec<_> = profiles
         .into_iter()
         .map(|to| {
             let scores = score_transition_profiles(
                 &from,
                 &to,
-                phase,
-                phase,
-                weights,
-                master_tempo,
-                Some(harmonic_style),
-                &context,
-                play_bpms,
+                options.mixing,
+                TransitionMoment {
+                    from_phase: options.phase,
+                    to_phase: options.phase,
+                    genre_run_length: 0,
+                    play_bpms,
+                },
             );
             (to, scores)
         })
@@ -314,7 +318,7 @@ pub(crate) fn rank_transition_candidates(
             .then_with(|| left.0.track.id.cmp(&right.0.track.id))
     });
     let total_pool_size = candidates.len();
-    candidates.truncate(limit);
+    candidates.truncate(options.limit);
     Ok(RankedTransitionCandidates {
         from,
         candidates,

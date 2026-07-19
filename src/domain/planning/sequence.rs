@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use crate::domain::classification::taxonomy::GenreFamily;
 
 use super::{
-    CandidatePlan, CandidateTransition, EnergyPhase, HarmonicMixingStyle, PriorityWeights,
-    ScoreAdjustment, ScoringContext, TrackProfile, TransitionScores, score_transition_profiles,
+    CandidatePlan, CandidateTransition, EnergyPhase, ScoreAdjustment, SequencePolicy, TrackProfile,
+    TransitionMoment, TransitionScores, score_transition_profiles,
 };
 
 const BPM_DRIFT_PENALTY_FACTOR: f64 = 0.7;
@@ -49,18 +49,11 @@ pub(crate) fn select_start_track_ids(
     start_track_ids
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_candidate_plan(
     profiles_by_id: &HashMap<String, TrackProfile>,
     start_track_id: &str,
-    target_tracks: usize,
-    phases: &[EnergyPhase],
-    weights: &PriorityWeights,
+    policy: SequencePolicy<'_>,
     variation_index: usize,
-    master_tempo: bool,
-    harmonic_style: Option<HarmonicMixingStyle>,
-    bpm_drift_pct: f64,
-    target_bpms: Option<&[f64]>,
 ) -> CandidatePlan {
     let mut ordered_ids = vec![start_track_id.to_string()];
     let mut transitions = Vec::new();
@@ -70,7 +63,7 @@ pub(crate) fn build_candidate_plan(
     let mut genre_run_length: u32 = 0;
     let start_bpm = profiles_by_id.get(start_track_id).map_or(0.0, |p| p.bpm);
 
-    while ordered_ids.len() < target_tracks && !remaining.is_empty() {
+    while ordered_ids.len() < policy.target_track_count && !remaining.is_empty() {
         let Some(from_track_id) = ordered_ids.last() else {
             break;
         };
@@ -78,14 +71,13 @@ pub(crate) fn build_candidate_plan(
             break;
         };
 
-        let to_phase = phases.get(ordered_ids.len()).copied();
+        let to_phase = policy.energy_phases.get(ordered_ids.len()).copied();
         let from_phase = ordered_ids
             .len()
             .checked_sub(1)
-            .and_then(|idx| phases.get(idx).copied());
-        let scoring_context = ScoringContext { genre_run_length };
+            .and_then(|idx| policy.energy_phases.get(idx).copied());
         let step = ordered_ids.len();
-        let play_bpms = target_bpms.and_then(|bpms| {
+        let play_bpms = policy.target_bpms.and_then(|bpms| {
             let from_bpm = bpms.get(step - 1).copied()?;
             let to_bpm = bpms.get(step).copied()?;
             Some((from_bpm, to_bpm))
@@ -99,23 +91,23 @@ pub(crate) fn build_candidate_plan(
                         score_transition_profiles(
                             from_profile,
                             to_profile,
-                            from_phase,
-                            to_phase,
-                            weights,
-                            master_tempo,
-                            harmonic_style,
-                            &scoring_context,
-                            play_bpms,
+                            policy.mixing,
+                            TransitionMoment {
+                                from_phase,
+                                to_phase,
+                                genre_run_length,
+                                play_bpms,
+                            },
                         ),
                     )
                 })
             })
             .collect();
 
-        if start_bpm > 0.0 && target_tracks > 1 {
+        if start_bpm > 0.0 && policy.target_track_count > 1 {
             let position = ordered_ids.len();
-            let max_position = (target_tracks - 1) as f64;
-            let budget_pct = bpm_drift_pct * (position as f64 / max_position);
+            let max_position = (policy.target_track_count - 1) as f64;
+            let budget_pct = policy.bpm_drift_pct * (position as f64 / max_position);
             let budget_bpm = start_bpm * budget_pct / 100.0;
             for (candidate_id, scores) in &mut scored_next {
                 if let Some(candidate_profile) = profiles_by_id.get(candidate_id.as_str()) {
@@ -208,18 +200,11 @@ struct BeamState {
     transitions: Vec<CandidateTransition>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_candidate_plan_beam(
     profiles_by_id: &HashMap<String, TrackProfile>,
     start_track_id: &str,
-    target_tracks: usize,
-    phases: &[EnergyPhase],
-    weights: &PriorityWeights,
+    policy: SequencePolicy<'_>,
     beam_width: usize,
-    master_tempo: bool,
-    harmonic_style: Option<HarmonicMixingStyle>,
-    bpm_drift_pct: f64,
-    target_bpms: Option<&[f64]>,
 ) -> Vec<CandidatePlan> {
     let mut remaining_init: HashSet<String> = profiles_by_id.keys().cloned().collect();
     remaining_init.remove(start_track_id);
@@ -236,7 +221,7 @@ pub(crate) fn build_candidate_plan_beam(
 
     let mut beams = vec![initial];
 
-    for step in 1..target_tracks {
+    for step in 1..policy.target_track_count {
         let mut expansions: Vec<BeamState> = Vec::new();
 
         for beam in &beams {
@@ -254,13 +239,12 @@ pub(crate) fn build_candidate_plan_beam(
                 continue;
             };
 
-            let to_phase = phases.get(step).copied();
-            let from_phase = step.checked_sub(1).and_then(|idx| phases.get(idx).copied());
-            let scoring_context = ScoringContext {
-                genre_run_length: beam.genre_run_length,
-            };
+            let to_phase = policy.energy_phases.get(step).copied();
+            let from_phase = step
+                .checked_sub(1)
+                .and_then(|idx| policy.energy_phases.get(idx).copied());
 
-            let play_bpms = target_bpms.and_then(|bpms| {
+            let play_bpms = policy.target_bpms.and_then(|bpms| {
                 let from_bpm = bpms.get(step - 1).copied()?;
                 let to_bpm = bpms.get(step).copied()?;
                 Some((from_bpm, to_bpm))
@@ -274,18 +258,18 @@ pub(crate) fn build_candidate_plan_beam(
                 let mut scores = score_transition_profiles(
                     from_profile,
                     to_profile,
-                    from_phase,
-                    to_phase,
-                    weights,
-                    master_tempo,
-                    harmonic_style,
-                    &scoring_context,
-                    play_bpms,
+                    policy.mixing,
+                    TransitionMoment {
+                        from_phase,
+                        to_phase,
+                        genre_run_length: beam.genre_run_length,
+                        play_bpms,
+                    },
                 );
 
-                if start_bpm > 0.0 && target_tracks > 1 {
-                    let max_position = (target_tracks - 1) as f64;
-                    let budget_pct = bpm_drift_pct * (step as f64 / max_position);
+                if start_bpm > 0.0 && policy.target_track_count > 1 {
+                    let max_position = (policy.target_track_count - 1) as f64;
+                    let budget_pct = policy.bpm_drift_pct * (step as f64 / max_position);
                     let budget_bpm = start_bpm * budget_pct / 100.0;
                     let drift = (to_profile.bpm - start_bpm).abs();
                     if drift > budget_bpm {
@@ -375,14 +359,20 @@ mod tests {
         let plans = build_candidate_plan_beam(
             &profiles,
             "missing",
-            4,
-            &[EnergyPhase::Peak; 4],
-            &super::super::priority_weights(super::super::SequencingPriority::Balanced),
+            SequencePolicy {
+                target_track_count: 4,
+                energy_phases: &[EnergyPhase::Peak; 4],
+                mixing: super::super::TransitionMixingPolicy {
+                    weights: &super::super::priority_weights(
+                        super::super::SequencingPriority::Balanced,
+                    ),
+                    master_tempo: true,
+                    harmonic_style: None,
+                },
+                bpm_drift_pct: 6.0,
+                target_bpms: None,
+            },
             3,
-            true,
-            None,
-            6.0,
-            None,
         );
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].ordered_ids, vec!["missing"]);

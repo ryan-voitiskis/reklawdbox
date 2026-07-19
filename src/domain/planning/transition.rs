@@ -4,8 +4,8 @@ use crate::domain::classification::taxonomy::GenreFamily;
 
 use super::{
     AxisScore, CamelotKey, EnergyPhase, HarmonicMixingStyle, PriorityWeights, ScoreAdjustment,
-    ScoringContext, TrackProfile, TransitionScores, format_camelot, parse_camelot_key,
-    score_key_with_pitch_shifts, transpose_camelot_key,
+    TrackProfile, TransitionMixingPolicy, TransitionMoment, TransitionScores, format_camelot,
+    parse_camelot_key, score_key_with_pitch_shifts, transpose_camelot_key,
 };
 
 const BRIGHTNESS_SIMILAR_HZ: f64 = 300.0;
@@ -72,18 +72,23 @@ pub(crate) fn score_key_axis(from: Option<CamelotKey>, to: Option<CamelotKey>) -
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn score_transition_profiles(
     from: &TrackProfile,
     to: &TrackProfile,
-    from_phase: Option<EnergyPhase>,
-    to_phase: Option<EnergyPhase>,
-    weights: &PriorityWeights,
-    master_tempo: bool,
-    harmonic_style: Option<HarmonicMixingStyle>,
-    ctx: &ScoringContext,
-    play_bpms: Option<(f64, f64)>,
+    mixing: TransitionMixingPolicy<'_>,
+    moment: TransitionMoment,
 ) -> TransitionScores {
+    let TransitionMixingPolicy {
+        weights,
+        master_tempo,
+        harmonic_style,
+    } = mixing;
+    let TransitionMoment {
+        from_phase,
+        to_phase,
+        genre_run_length,
+        play_bpms,
+    } = moment;
     let (
         effective_to_key,
         pitch_shift_semitones,
@@ -194,7 +199,7 @@ pub(crate) fn score_transition_profiles(
         to.canonical_genre.as_deref(),
         from.genre_family,
         to.genre_family,
-        ctx.genre_run_length,
+        genre_run_length,
     );
     let brightness = score_brightness_axis(from.brightness, to.brightness);
     let rhythm = score_rhythm_axis(from.rhythm_regularity, to.rhythm_regularity);

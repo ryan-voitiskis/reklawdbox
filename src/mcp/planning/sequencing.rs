@@ -4,7 +4,9 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use crate::adapters::rekordbox as db;
-use crate::domain::planning::{format_camelot, round_to_3_decimals, transpose_camelot_key};
+use crate::domain::planning::{
+    TransitionMixingPolicy, format_camelot, round_to_3_decimals, transpose_camelot_key,
+};
 use crate::mcp::planning::TransitionScoresPresentation;
 use crate::mcp::{
     BuildSetParams, HarmonicMixingStyle, QueryTransitionCandidatesParams, ReklawdboxServer,
@@ -151,15 +153,21 @@ pub(in crate::mcp) fn handle_query_transition_candidates(
             from_track,
             pool_tracks,
             &store,
-            params.energy_phase.map(Into::into),
-            &weights,
-            master_tempo,
-            params
-                .harmonic_style
-                .unwrap_or(HarmonicMixingStyle::Balanced)
-                .into(),
-            params.target_bpm,
-            limit,
+            crate::application::planning::RankTransitionOptions {
+                phase: params.energy_phase.map(Into::into),
+                mixing: TransitionMixingPolicy {
+                    weights: &weights,
+                    master_tempo,
+                    harmonic_style: Some(
+                        params
+                            .harmonic_style
+                            .unwrap_or(HarmonicMixingStyle::Balanced)
+                            .into(),
+                    ),
+                },
+                target_bpm: params.target_bpm,
+                limit,
+            },
         )
         .map_err(|e| mcp_internal_error(format!("Failed to build track profiles: {e}")))?
     };

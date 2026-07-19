@@ -69,6 +69,47 @@ fn simple_profile(id: &str, key: &str, bpm: f64, energy: f64, genre: &str) -> Tr
     synth_profile(id, key, bpm, energy, genre, None, None, None)
 }
 
+fn mixing_policy(
+    weights: &PriorityWeights,
+    master_tempo: bool,
+    harmonic_style: Option<HarmonicMixingStyle>,
+) -> TransitionMixingPolicy<'_> {
+    TransitionMixingPolicy {
+        weights,
+        master_tempo,
+        harmonic_style,
+    }
+}
+
+fn transition_moment(
+    from_phase: Option<EnergyPhase>,
+    to_phase: Option<EnergyPhase>,
+    genre_run_length: u32,
+    play_bpms: Option<(f64, f64)>,
+) -> TransitionMoment {
+    TransitionMoment {
+        from_phase,
+        to_phase,
+        genre_run_length,
+        play_bpms,
+    }
+}
+
+fn sequence_policy<'a>(
+    target_track_count: usize,
+    energy_phases: &'a [EnergyPhase],
+    weights: &'a PriorityWeights,
+    harmonic_style: HarmonicMixingStyle,
+) -> SequencePolicy<'a> {
+    SequencePolicy {
+        target_track_count,
+        energy_phases,
+        mixing: mixing_policy(weights, true, Some(harmonic_style)),
+        bpm_drift_pct: 6.0,
+        target_bpms: None,
+    }
+}
+
 struct EvalMetrics {
     mean_composite: f64,
     min_composite: f64,
@@ -580,14 +621,13 @@ fn eval_camelot_walk_greedy() {
     let plan = build_candidate_plan(
         &pool,
         "cw1",
-        8,
-        &phases,
-        &priority_weights(SequencingPriority::Harmonic),
+        sequence_policy(
+            8,
+            &phases,
+            &priority_weights(SequencingPriority::Harmonic),
+            HarmonicMixingStyle::Conservative,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        6.0,
-        None,
     );
     assert_eq!(plan.ordered_ids.len(), 8, "should use all 8 tracks");
 
@@ -614,14 +654,13 @@ fn eval_camelot_walk_beam() {
     let plans = build_candidate_plan_beam(
         &pool,
         "cw1",
-        8,
-        &phases,
-        &priority_weights(SequencingPriority::Harmonic),
+        sequence_policy(
+            8,
+            &phases,
+            &priority_weights(SequencingPriority::Harmonic),
+            HarmonicMixingStyle::Conservative,
+        ),
         3,
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        6.0,
-        None,
     );
     assert!(
         !plans.is_empty(),
@@ -641,14 +680,16 @@ fn eval_adversarial_degrades_gracefully() {
     let plan = build_candidate_plan(
         &pool,
         "adv1",
-        6,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        SequencePolicy {
+            bpm_drift_pct: 12.0,
+            ..sequence_policy(
+                6,
+                &phases,
+                &priority_weights(SequencingPriority::Balanced),
+                HarmonicMixingStyle::Balanced,
+            )
+        },
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        12.0,
-        None,
     );
     assert_eq!(plan.ordered_ids.len(), 6, "should use all 6 tracks");
 
@@ -678,14 +719,13 @@ fn eval_iso_key_bpm_differentiates_on_secondary_axes() {
     let plan = build_candidate_plan(
         &pool,
         "iso1",
-        8,
-        &phases,
-        &priority_weights(SequencingPriority::Energy),
+        sequence_policy(
+            8,
+            &phases,
+            &priority_weights(SequencingPriority::Energy),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     assert_eq!(plan.ordered_ids.len(), 8);
 
@@ -711,14 +751,13 @@ fn eval_realistic_club_greedy() {
     let plan = build_candidate_plan(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
 
     let metrics = compute_metrics(&plan, &phases);
@@ -738,14 +777,13 @@ fn eval_realistic_club_beam() {
     let plans = build_candidate_plan_beam(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         5,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     assert!(!plans.is_empty());
 
@@ -768,28 +806,26 @@ fn planning_sequence_beam_is_at_least_as_good_as_greedy() {
     let greedy = build_candidate_plan(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     let greedy_mean = compute_metrics(&greedy, &phases).mean_composite;
 
     let beam_plans = build_candidate_plan_beam(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         5,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     let beam_best_mean = beam_plans
         .iter()
@@ -816,26 +852,24 @@ fn eval_harmonic_priority_improves_key_scores() {
     let balanced = build_candidate_plan(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     let harmonic = build_candidate_plan(
         &pool,
         "rc01",
-        16,
-        &phases,
-        &priority_weights(SequencingPriority::Harmonic),
+        sequence_policy(
+            16,
+            &phases,
+            &priority_weights(SequencingPriority::Harmonic),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
 
     let balanced_key_mean = balanced
@@ -871,26 +905,24 @@ fn planning_sequence_is_deterministic_for_ids_and_scores() {
     let plan_a = build_candidate_plan(
         &pool,
         "cw1",
-        8,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            8,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
     let plan_b = build_candidate_plan(
         &pool,
         "cw1",
-        8,
-        &phases,
-        &priority_weights(SequencingPriority::Balanced),
+        sequence_policy(
+            8,
+            &phases,
+            &priority_weights(SequencingPriority::Balanced),
+            HarmonicMixingStyle::Balanced,
+        ),
         0,
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        6.0,
-        None,
     );
 
     assert_eq!(
@@ -939,24 +971,22 @@ fn planning_transition_conservative_penalty_is_stronger_than_balanced() {
     let conservative = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     let balanced = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
 
     assert!(
@@ -975,13 +1005,12 @@ fn eval_clean_transition_has_no_adjustments() {
     let scores = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Build),
-        Some(EnergyPhase::Build),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Balanced),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Balanced),
+        ),
+        transition_moment(Some(EnergyPhase::Build), Some(EnergyPhase::Build), 0, None),
     );
     assert!(
         scores.adjustments.is_empty(),
@@ -1002,13 +1031,12 @@ fn eval_harmonic_gate_produces_adjustment() {
     let scores = score_transition_profiles(
         &from,
         &to,
-        Some(EnergyPhase::Peak),
-        Some(EnergyPhase::Peak),
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        Some(HarmonicMixingStyle::Conservative),
-        &ScoringContext::default(),
-        None,
+        mixing_policy(
+            &priority_weights(SequencingPriority::Balanced),
+            true,
+            Some(HarmonicMixingStyle::Conservative),
+        ),
+        transition_moment(Some(EnergyPhase::Peak), Some(EnergyPhase::Peak), 0, None),
     );
     assert!(
         scores.adjustments.iter().any(|a| a.kind == "harmonic_gate"),
@@ -1035,15 +1063,8 @@ fn planning_transition_genre_streak_produces_adjustment() {
     let scores = score_transition_profiles(
         &from,
         &to,
-        None,
-        None,
-        &priority_weights(SequencingPriority::Balanced),
-        true,
-        None,
-        &ScoringContext {
-            genre_run_length: 2,
-        },
-        None,
+        mixing_policy(&priority_weights(SequencingPriority::Balanced), true, None),
+        transition_moment(None, None, 2, None),
     );
     assert!(
         scores.adjustments.iter().any(|a| a.kind == "genre_streak"),
