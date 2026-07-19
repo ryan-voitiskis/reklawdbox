@@ -6,8 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::super::contract::{EssentiaSetupError, EssentiaSetupErrorKind, generic_process_error};
+use super::super::install::format_diagnostic_output;
 use super::{
-    CommandRequest, CommandRunner, OutputStream, ProcessErrorKind, ReaderFault,
+    CommandRequest, CommandResult, CommandRunner, OutputStream, ProcessErrorKind, ReaderFault,
     SystemCommandRunner, TestHooks,
 };
 
@@ -715,4 +717,81 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
     wait_for_pid_exit(first_pid);
     wait_for_pid_exit(second_pid);
     probe.assert_no_readers();
+}
+
+fn run_system_command(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<CommandResult, EssentiaSetupError> {
+    SystemCommandRunner::default()
+        .run(CommandRequest {
+            program,
+            args,
+            timeout,
+        })
+        .map_err(|error| generic_process_error(program, timeout, error))
+}
+
+#[cfg(unix)]
+fn fake_python_script(dir: &Path, script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("python");
+    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[test]
+#[cfg(unix)]
+fn essentia_environment_command_runner_times_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_python_script(dir.path(), "sleep 2");
+    let started = Instant::now();
+    let error =
+        run_system_command(&path.to_string_lossy(), &[], Duration::from_millis(20)).unwrap_err();
+    assert_eq!(error.kind, EssentiaSetupErrorKind::ProbeTimeout);
+    assert_eq!(
+        error.message,
+        format!("{} timed out after 0.02 seconds", path.to_string_lossy())
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+#[cfg(unix)]
+fn essentia_environment_process_success_preserves_both_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_python_script(
+        dir.path(),
+        "printf 'stdout-value'; printf 'stderr-value' >&2",
+    );
+
+    let result = run_system_command(&path.to_string_lossy(), &[], Duration::from_secs(5)).unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.stdout, b"stdout-value");
+    assert_eq!(result.stderr, b"stderr-value");
+}
+
+#[test]
+#[cfg(unix)]
+fn essentia_environment_process_nonzero_preserves_diagnostic_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_python_script(
+        dir.path(),
+        "printf 'stdout-value'; printf 'stderr-value' >&2; exit 7",
+    );
+
+    let result = run_system_command(&path.to_string_lossy(), &[], Duration::from_secs(5)).unwrap();
+
+    assert!(!result.success);
+    assert_eq!(result.stdout, b"stdout-value");
+    assert_eq!(result.stderr, b"stderr-value");
+    assert_eq!(
+        format_diagnostic_output(&result),
+        ": stderr-value\nstdout-value"
+    );
 }

@@ -154,6 +154,64 @@ fn platform_process_group_stays_synchronous_and_transport_free() {
     }
 }
 
+#[test]
+fn audio_runtime_lifecycle_owners_stay_separated() {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/audio/essentia_environment");
+    let read_code = |name: &str| {
+        let path = root.join(name);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        String::from_utf8(code_only(&source)).expect("Rust source should remain UTF-8")
+    };
+
+    let navigation = read_code("mod.rs");
+    for declaration in ["fn ", "struct ", "enum ", "impl "] {
+        assert!(
+            !navigation.contains(declaration),
+            "Essentia environment mod.rs must stay navigation-only; found {declaration:?}"
+        );
+    }
+
+    let process = read_code("process.rs");
+    assert!(process.contains("std::process"));
+    assert!(process.contains("struct SystemCommandRunner"));
+    for reader_owner in ["fn output_ready", "libc::poll"] {
+        assert!(
+            process.contains(reader_owner),
+            "process.rs should own output-reader readiness through {reader_owner:?}"
+        );
+    }
+    let platform = read_code("platform.rs");
+    for reader_lifecycle in ["output_ready", "libc::poll"] {
+        assert!(
+            !platform.contains(reader_lifecycle),
+            "platform.rs must not own reader lifecycle through {reader_lifecycle:?}"
+        );
+    }
+    for name in ["contract.rs", "install.rs", "activation.rs", "platform.rs"] {
+        let source = read_code(name);
+        for execution in ["std::process::Command", "Command::new", ".spawn("] {
+            assert!(
+                !source.contains(execution),
+                "{name} must not own child-process execution through {execution:?}"
+            );
+        }
+    }
+
+    let install = read_code("install.rs");
+    for phase in [
+        "fn probe_stable_runtime",
+        "fn build_and_validate_generation",
+        "fn activate_and_validate_stable",
+    ] {
+        assert!(
+            install.contains(phase),
+            "install orchestration should expose the {phase} phase"
+        );
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = std::fs::read_dir(directory)

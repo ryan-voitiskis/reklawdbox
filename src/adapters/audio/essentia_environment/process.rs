@@ -13,8 +13,6 @@ use std::time::{Duration, Instant};
 
 use crate::adapters::platform::process_group::{ProcessGroupError, ProcessGroupOwnership};
 
-use super::platform;
-
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const READER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const READER_SHUTDOWN_BOUND: Duration = Duration::from_secs(1);
@@ -34,6 +32,32 @@ impl<T: Read + std::os::fd::AsRawFd + Send> CapturedRead for T {
 trait CapturedRead: Read + Send {}
 #[cfg(not(unix))]
 impl<T: Read + Send> CapturedRead for T {}
+
+#[cfg(unix)]
+pub(super) fn output_ready(
+    descriptor: std::os::fd::RawFd,
+    timeout: Duration,
+) -> std::io::Result<bool> {
+    let timeout_ms = i32::try_from(timeout.as_millis().max(1)).unwrap_or(i32::MAX);
+    let mut descriptor = libc::pollfd {
+        fd: descriptor,
+        events: libc::POLLIN | libc::POLLHUP,
+        revents: 0,
+    };
+    // SAFETY: `descriptor` references one valid pollfd for the duration of the
+    // call. Its owning reader retains the underlying descriptor until return.
+    let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+    if ready >= 0 {
+        Ok(ready > 0)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn output_ready(_descriptor: (), _timeout: Duration) -> std::io::Result<bool> {
+    Ok(true)
+}
 
 type CapturedOutput = Box<dyn CapturedRead>;
 
@@ -697,7 +721,7 @@ fn read_stream(reader: &mut dyn CapturedRead, control: &ReaderControl) -> Reader
             return ReaderOutcome::TimedOut;
         };
         let poll_for = remaining.min(READER_POLL_INTERVAL);
-        match platform::output_ready(reader.raw_fd(), poll_for) {
+        match output_ready(reader.raw_fd(), poll_for) {
             Ok(false) => continue,
             Ok(true) => {}
             Err(error) => {
