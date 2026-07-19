@@ -5,6 +5,50 @@ const ERROR_BODY_OBSERVATION_BYTES: usize = MAX_ERROR_BODY_BYTES + 1;
 const MAX_LOSSY_ERROR_BODY_BYTES: usize = MAX_ERROR_BODY_BYTES * 3;
 pub(crate) const ERROR_BODY_READ_FAILED: &str = "[body read failed]";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BoundedBodyError {
+    LimitExceeded,
+    ReadFailed,
+}
+
+/// Read a response body without allowing a remote peer to make the retained
+/// buffer grow beyond `max_bytes`.
+///
+/// The limit is enforced for both content-length and streaming/chunked
+/// responses. Callers are responsible for mapping these deliberately terse
+/// categories to operation-specific local errors.
+pub(crate) async fn read_bounded_body(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BoundedBodyError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(BoundedBodyError::LimitExceeded);
+    }
+
+    let mut retained = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0)
+            .min(max_bytes),
+    );
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if chunk.len() > max_bytes.saturating_sub(retained.len()) {
+                    return Err(BoundedBodyError::LimitExceeded);
+                }
+                retained.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(retained),
+            Err(_) => return Err(BoundedBodyError::ReadFailed),
+        }
+    }
+}
+
 /// Read a remote error response into a bounded, single-line diagnostic.
 ///
 /// Remote prose must never become an unbounded or control-character-bearing
@@ -93,6 +137,74 @@ mod tests {
         reqwest::get(format!("http://{address}"))
             .await
             .expect("fixture response")
+    }
+
+    async fn chunked_response(chunks: Vec<Vec<u8>>) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1_024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            for chunk in chunks {
+                socket
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .unwrap();
+                socket.write_all(&chunk).await.unwrap();
+                socket.write_all(b"\r\n").await.unwrap();
+            }
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+
+        reqwest::get(format!("http://{address}"))
+            .await
+            .expect("fixture response")
+    }
+
+    #[tokio::test]
+    async fn bounded_body_accepts_exact_content_length_limit() {
+        let response = error_response(b"12345678".to_vec(), None).await;
+        assert_eq!(
+            read_bounded_body(response, 8).await,
+            Ok(b"12345678".to_vec())
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_body_rejects_content_length_overflow_before_parsing() {
+        let response = error_response(b"123456789".to_vec(), None).await;
+        assert_eq!(
+            read_bounded_body(response, 8).await,
+            Err(BoundedBodyError::LimitExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_body_enforces_limit_across_streaming_chunks() {
+        let exact = chunked_response(vec![b"1234".to_vec(), b"5678".to_vec()]).await;
+        assert_eq!(read_bounded_body(exact, 8).await, Ok(b"12345678".to_vec()));
+
+        let overflow = chunked_response(vec![b"1234".to_vec(), b"5678".to_vec(), vec![b'9']]).await;
+        assert_eq!(
+            read_bounded_body(overflow, 8).await,
+            Err(BoundedBodyError::LimitExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_body_returns_stable_read_failure_category() {
+        let response = error_response(b"partial".to_vec(), Some(100)).await;
+        assert_eq!(
+            read_bounded_body(response, 200).await,
+            Err(BoundedBodyError::ReadFailed)
+        );
     }
 
     #[tokio::test]

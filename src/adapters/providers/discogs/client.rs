@@ -10,12 +10,18 @@ use super::RATE_LIMITER;
 use super::auth::{AuthRemediation, expired_session_remediation};
 use super::broker::BrokerConfig;
 use super::wait_for_rate_limit;
-use crate::adapters::providers::{http::read_bounded_error_body, rate_limit};
+use crate::adapters::providers::{
+    http::{BoundedBodyError, read_bounded_body, read_bounded_error_body},
+    rate_limit,
+};
+
+pub(crate) const MAX_BROKER_LOOKUP_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) enum LookupError {
     AuthRequired(AuthRemediation),
     Http(HttpLookupError),
+    Payload(LookupPayloadError),
     Message(String),
 }
 
@@ -26,11 +32,33 @@ pub(crate) struct HttpLookupError {
     diagnostic_body: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LookupPayloadError {
+    ResponseTooLarge,
+    BodyReadFailed,
+    InvalidJson,
+    InvalidSchema,
+}
+
+impl fmt::Display for LookupPayloadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ResponseTooLarge => write!(
+                f,
+                "broker proxy response exceeded {MAX_BROKER_LOOKUP_RESPONSE_BYTES} byte limit"
+            ),
+            Self::BodyReadFailed => f.write_str("broker proxy response body read failed"),
+            Self::InvalidJson => f.write_str("broker proxy response JSON was invalid"),
+            Self::InvalidSchema => f.write_str("broker proxy response schema was invalid"),
+        }
+    }
+}
+
 impl LookupError {
     pub fn auth_remediation(&self) -> Option<&AuthRemediation> {
         match self {
             Self::AuthRequired(remediation) => Some(remediation),
-            Self::Http(_) | Self::Message(_) => None,
+            Self::Http(_) | Self::Payload(_) | Self::Message(_) => None,
         }
     }
 
@@ -49,14 +77,14 @@ impl LookupError {
     pub(crate) fn http_status(&self) -> Option<u16> {
         match self {
             Self::Http(error) => Some(error.status),
-            Self::AuthRequired(_) | Self::Message(_) => None,
+            Self::AuthRequired(_) | Self::Payload(_) | Self::Message(_) => None,
         }
     }
 
     pub(crate) fn retry_after(&self) -> Option<&str> {
         match self {
             Self::Http(error) => error.retry_after.as_deref(),
-            Self::AuthRequired(_) | Self::Message(_) => None,
+            Self::AuthRequired(_) | Self::Payload(_) | Self::Message(_) => None,
         }
     }
 
@@ -65,7 +93,7 @@ impl LookupError {
     pub(crate) fn diagnostic_body(&self) -> Option<&str> {
         match self {
             Self::Http(error) => Some(&error.diagnostic_body),
-            Self::AuthRequired(_) | Self::Message(_) => None,
+            Self::AuthRequired(_) | Self::Payload(_) | Self::Message(_) => None,
         }
     }
 }
@@ -99,6 +127,7 @@ impl fmt::Display for LookupError {
                     (false, _) => write!(f, "broker proxy HTTP {} (not retryable)", error.status),
                 }
             }
+            Self::Payload(error) => write!(f, "{error}"),
             Self::Message(msg) => write!(f, "{msg}"),
         }
     }
@@ -176,17 +205,23 @@ async fn lookup_via_broker_request(
         return Err(LookupError::http(status, retry_after, body));
     }
 
-    let json: serde_json::Value = response
-        .json()
+    let body = read_bounded_body(response, MAX_BROKER_LOOKUP_RESPONSE_BYTES)
         .await
-        .map_err(|e| LookupError::message(format!("broker proxy JSON parse error: {e}")))?;
+        .map_err(|error| {
+            LookupError::Payload(match error {
+                BoundedBodyError::LimitExceeded => LookupPayloadError::ResponseTooLarge,
+                BoundedBodyError::ReadFailed => LookupPayloadError::BodyReadFailed,
+            })
+        })?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| LookupError::Payload(LookupPayloadError::InvalidJson))?;
 
-    parse_broker_lookup_payload(json).map_err(LookupError::message)
+    parse_broker_lookup_payload(json).map_err(LookupError::Payload)
 }
 
 pub(crate) fn parse_broker_lookup_payload(
     payload: serde_json::Value,
-) -> Result<Option<DiscogsResult>, String> {
+) -> Result<Option<DiscogsResult>, LookupPayloadError> {
     if payload.is_null() {
         return Ok(None);
     }
@@ -197,12 +232,12 @@ pub(crate) fn parse_broker_lookup_payload(
         }
         return serde_json::from_value::<DiscogsResult>(result_value.clone())
             .map(Some)
-            .map_err(|e| format!("invalid broker result payload: {e}"));
+            .map_err(|_| LookupPayloadError::InvalidSchema);
     }
 
     serde_json::from_value::<DiscogsResult>(payload)
         .map(Some)
-        .map_err(|e| format!("invalid broker payload: {e}"))
+        .map_err(|_| LookupPayloadError::InvalidSchema)
 }
 
 #[cfg(test)]
@@ -257,6 +292,45 @@ mod tests {
         assert_eq!(err.http_status(), Some(502));
         assert_eq!(err.diagnostic_body(), Some("bad gateway"));
         assert!(err.auth_remediation().is_none());
+    }
+
+    #[test]
+    fn lookup_payload_errors_display_only_stable_local_categories() {
+        for (error, expected) in [
+            (
+                LookupPayloadError::ResponseTooLarge,
+                "broker proxy response exceeded 1048576 byte limit",
+            ),
+            (
+                LookupPayloadError::BodyReadFailed,
+                "broker proxy response body read failed",
+            ),
+            (
+                LookupPayloadError::InvalidJson,
+                "broker proxy response JSON was invalid",
+            ),
+            (
+                LookupPayloadError::InvalidSchema,
+                "broker proxy response schema was invalid",
+            ),
+        ] {
+            assert_eq!(error.to_string(), expected);
+        }
+
+        let remote_instruction = "REMOTE_SCHEMA_INSTRUCTION_FIXTURE";
+        let malformed = serde_json::json!({
+            "title": "Artist - Title",
+            "year": "2024",
+            "label": "Label",
+            "genres": ["Electronic"],
+            "styles": ["Techno"],
+            "url": "https://www.discogs.com/release/2",
+            "fuzzy_match": remote_instruction.repeat(1_024),
+        });
+        let error = parse_broker_lookup_payload(malformed)
+            .expect_err("malformed typed field should fail schema validation");
+        assert_eq!(error, LookupPayloadError::InvalidSchema);
+        assert!(!error.to_string().contains(remote_instruction));
     }
 
     #[test]

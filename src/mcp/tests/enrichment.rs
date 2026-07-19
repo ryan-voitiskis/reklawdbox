@@ -156,13 +156,17 @@ impl DiscogsBrokerFixtureState {
     }
 
     fn fail_endpoint(&self, endpoint: DiscogsBrokerEndpoint, body: &str) {
+        self.respond_endpoint(endpoint, "500 Internal Server Error", body);
+    }
+
+    fn respond_endpoint(&self, endpoint: DiscogsBrokerEndpoint, status: &str, body: &str) {
         self.failures
             .lock()
             .expect("broker fixture failure mutex should not be poisoned")
             .insert(
                 endpoint,
                 DiscogsBrokerFailure {
-                    status: "500 Internal Server Error".to_string(),
+                    status: status.to_string(),
                     body: body.to_string(),
                 },
             );
@@ -867,6 +871,145 @@ async fn discogs_error_body_boundary_mcp_error_excludes_remote_prose() {
     assert!(message.contains("Discogs error: broker proxy HTTP 500"));
     assert!(message.contains("retryable"));
     assert!(!message.contains(remote_instruction));
+}
+
+#[tokio::test]
+async fn discogs_success_payload_boundary_hides_malformed_remote_value_from_mcp_outputs() {
+    let remote_instruction = "REMOTE_SUCCESS_SCHEMA_INSTRUCTION_FIXTURE";
+    let malformed_value = remote_instruction.repeat(4_096);
+    let malformed_body = serde_json::json!({
+        "result": {
+            "title": "Fixture Artist - Fixture Title",
+            "year": "2026",
+            "label": "Fixture Label",
+            "genres": ["Electronic"],
+            "styles": ["Techno"],
+            "url": "https://www.discogs.com/release/fixture",
+            "fuzzy_match": malformed_value,
+        }
+    })
+    .to_string();
+    assert!(
+        malformed_body.len()
+            < crate::adapters::providers::discogs::MAX_BROKER_LOOKUP_RESPONSE_BYTES,
+        "malformed schema fixture should exercise safe schema errors below the body-size limit"
+    );
+
+    let fixture = DiscogsBrokerFixture::start("pending").await;
+    fixture
+        .state
+        .respond_endpoint(DiscogsBrokerEndpoint::Search, "200 OK", &malformed_body);
+    let persistence = Arc::new(InMemoryDiscogsSessionPersistence::default());
+    persistence.set_session(
+        &fixture.base_url,
+        "malformed-success-session-fixture",
+        DISCOGS_AUTH_TEST_NOW + 3_600,
+    );
+    let db_conn = create_single_track_test_db(
+        "malformed-success-track",
+        "/tmp/malformed-success-track.flac",
+    );
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    install_discogs_auth_test_dependencies(&server, &fixture, persistence, None);
+
+    let lookup_error = tokio::time::timeout(
+        DISCOGS_AUTH_TEST_TIMEOUT,
+        server.lookup_discogs(Parameters(LookupDiscogsParams {
+            track_id: None,
+            artist: Some("Fixture Artist".to_string()),
+            title: Some("Fixture Title".to_string()),
+            album: None,
+            force_refresh: Some(true),
+        })),
+    )
+    .await
+    .expect("malformed successful lookup should finish within five seconds")
+    .expect_err("malformed successful lookup should return an MCP error");
+    let lookup_message = lookup_error.message.to_string();
+    assert_eq!(
+        lookup_message,
+        "Discogs error: broker proxy response schema was invalid"
+    );
+    assert!(!lookup_message.contains(remote_instruction));
+    assert!(!lookup_message.contains(&malformed_value));
+
+    let batch_result = run_discogs_batch_with_timeout(
+        &server,
+        &["malformed-success-track"],
+        "malformed successful Discogs batch",
+    )
+    .await;
+    let batch_payload = extract_json(&batch_result);
+    assert_eq!(batch_payload["summary"]["failed"], 1);
+    let batch_error = batch_payload["failures"][0]["error"]
+        .as_str()
+        .expect("malformed successful batch should include a stable local error");
+    assert_eq!(
+        batch_error, "broker proxy response schema was invalid",
+        "batch failures must use the same stable local schema category"
+    );
+    let serialized_batch = batch_payload.to_string();
+    assert!(!serialized_batch.contains(remote_instruction));
+    assert!(!serialized_batch.contains(&malformed_value));
+    assert_eq!(fixture.state.count(DiscogsBrokerEndpoint::Search), 2);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn discogs_success_payload_boundary_rejects_oversize_and_invalid_json_stably() {
+    let fixture = DiscogsBrokerFixture::start("pending").await;
+    let oversized =
+        "x".repeat(crate::adapters::providers::discogs::MAX_BROKER_LOOKUP_RESPONSE_BYTES + 1);
+    fixture
+        .state
+        .respond_endpoint(DiscogsBrokerEndpoint::Search, "200 OK", &oversized);
+
+    let oversized_error =
+        crate::adapters::providers::discogs::lookup_via_broker_unthrottled_for_test(
+            &default_http_client_for_tests(),
+            &fixture.config(),
+            "local-session-fixture",
+            "Fixture Artist",
+            "Fixture Title",
+            None,
+        )
+        .await
+        .expect_err("oversized successful broker response should fail before JSON parsing");
+    assert_eq!(
+        oversized_error.to_string(),
+        format!(
+            "broker proxy response exceeded {} byte limit",
+            crate::adapters::providers::discogs::MAX_BROKER_LOOKUP_RESPONSE_BYTES
+        )
+    );
+    assert!(!oversized_error.to_string().contains(&oversized));
+
+    fixture.state.respond_endpoint(
+        DiscogsBrokerEndpoint::Search,
+        "200 OK",
+        "REMOTE_INVALID_JSON_FIXTURE{",
+    );
+    let invalid_json_error =
+        crate::adapters::providers::discogs::lookup_via_broker_unthrottled_for_test(
+            &default_http_client_for_tests(),
+            &fixture.config(),
+            "local-session-fixture",
+            "Fixture Artist",
+            "Fixture Title",
+            None,
+        )
+        .await
+        .expect_err("invalid successful JSON should return a stable local category");
+    assert_eq!(
+        invalid_json_error.to_string(),
+        "broker proxy response JSON was invalid"
+    );
+    assert!(
+        !invalid_json_error
+            .to_string()
+            .contains("REMOTE_INVALID_JSON_FIXTURE")
+    );
+    fixture.shutdown().await;
 }
 
 fn assert_cache_write_summary(
