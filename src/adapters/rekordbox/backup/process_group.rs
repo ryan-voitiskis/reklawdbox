@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use crate::adapters::platform::process_group as platform;
 
+use super::error::{BackupError, BackupErrorKind, CleanupEntry, CleanupReport};
+
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub(super) struct ProcessGroupOwnership {
@@ -10,19 +12,19 @@ pub(super) struct ProcessGroupOwnership {
 }
 
 impl ProcessGroupOwnership {
-    pub(super) fn new(child_id: Option<u32>) -> Result<Self, String> {
+    pub(super) fn new(child_id: Option<u32>) -> Result<Self, BackupError> {
         platform::ProcessGroupOwnership::new(child_id)
             .map(|owned| Self { owned })
-            .map_err(render_process_group_error)
+            .map_err(process_group_error)
     }
 
     #[cfg(unix)]
-    pub(super) async fn wait_for_leader_exit_without_reaping(&self) -> Result<(), String> {
+    pub(super) async fn wait_for_leader_exit_without_reaping(&self) -> Result<(), BackupError> {
         loop {
             if self
                 .owned
                 .leader_exit_observed_without_reaping()
-                .map_err(render_process_group_error)?
+                .map_err(process_group_error)?
             {
                 return Ok(());
             }
@@ -31,25 +33,28 @@ impl ProcessGroupOwnership {
     }
 
     #[cfg(unix)]
-    pub(super) fn inspect_and_release_before_reap(&mut self) -> Result<bool, String> {
+    pub(super) fn inspect_and_release_before_reap(&mut self) -> Result<bool, BackupError> {
         self.owned
             .inspect_and_release_before_reap()
-            .map_err(render_process_group_error)
+            .map_err(process_group_error)
     }
 
-    pub(super) fn terminate_owned(&mut self, context: &mut Vec<String>) {
-        context.extend(
-            self.owned
-                .terminate_owned()
-                .into_iter()
-                .map(render_cleanup_error),
-        );
+    pub(super) fn terminate_owned(&mut self, report: &mut CleanupReport) {
+        for error in self.owned.terminate_owned() {
+            report.push(CleanupEntry::ProcessGroup(render_cleanup_error(error)));
+        }
     }
 
     #[cfg(test)]
     pub(super) fn is_released(&self) -> bool {
         self.owned.is_released()
     }
+}
+
+fn process_group_error(error: platform::ProcessGroupError) -> BackupError {
+    BackupError::new(BackupErrorKind::ProcessGroup(render_process_group_error(
+        error,
+    )))
 }
 
 fn render_process_group_error(error: platform::ProcessGroupError) -> String {
@@ -170,25 +175,25 @@ fn render_cleanup_error(error: platform::ProcessGroupCleanupError) -> String {
 pub(super) async fn reap_leader_after_group_release(
     child: &mut tokio::process::Child,
     process_group: &mut ProcessGroupOwnership,
-) -> Result<ExitStatus, String> {
+) -> Result<ExitStatus, BackupError> {
     if !process_group.owned.is_released() {
-        return Err(
+        return Err(BackupError::new(BackupErrorKind::ProcessGroup(
             "refusing to reap backup leader before releasing its process group".to_string(),
-        );
+        )));
     }
     child
         .wait()
         .await
-        .map_err(|error| format!("backup wait failed: {error}"))
+        .map_err(|error| BackupError::new(BackupErrorKind::Wait(error.to_string())))
 }
 
 #[cfg(not(unix))]
 pub(super) async fn reap_leader_after_group_release(
     child: &mut tokio::process::Child,
     _process_group: &mut ProcessGroupOwnership,
-) -> Result<ExitStatus, String> {
+) -> Result<ExitStatus, BackupError> {
     child
         .wait()
         .await
-        .map_err(|error| format!("backup wait failed: {error}"))
+        .map_err(|error| BackupError::new(BackupErrorKind::Wait(error.to_string())))
 }
