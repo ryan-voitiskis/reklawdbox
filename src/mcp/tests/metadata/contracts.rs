@@ -1,4 +1,8 @@
-use super::*;
+use crate::mcp::metadata::{TrackChangeInput, UpdateTracksParams, handle_update_tracks};
+
+use crate::domain::metadata::ChangeManager;
+
+use super::super::common::make_test_track;
 
 #[test]
 fn color_input_public_contract() {

@@ -1,4 +1,11 @@
-use super::*;
+use crate::mcp::metadata::{TrackChangeInput, UpdateTracksParams};
+use crate::mcp::server::ReklawdboxServer;
+
+use rmcp::handler::server::wrapper::Parameters;
+
+use crate::domain::classification::taxonomy as genre;
+
+use super::super::common::{call_tool_via_router, extract_json};
 
 #[tokio::test]
 async fn update_tracks_stages_changes() {

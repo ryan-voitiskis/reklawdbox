@@ -1,5 +1,24 @@
-use super::support::*;
-use super::*;
+use super::support::{
+    DISCOGS_AUTH_TEST_NOW, DISCOGS_AUTH_TEST_TIMEOUT, DiscogsAuthTasks, DiscogsBrokerEndpoint,
+    DiscogsBrokerFixture, assert_cache_write_summary, assert_sanitized_discogs_transition_error,
+    discogs_auth_url, finish_discogs_auth_scenario, install_discogs_auth_test_dependencies,
+    run_discogs_batch_with_timeout, set_discogs_pending,
+};
+use crate::mcp::enrichment::{
+    DiscogsAuthTestDependencies, EnrichTracksParams, InMemoryDiscogsSessionPersistence,
+    LookupDiscogsParams, lookup_discogs_remote, resolve_discogs_auth_transition_for_test,
+    set_test_discogs_lookup_override,
+};
+use crate::mcp::library::SearchFilterParams;
+use crate::mcp::server::ReklawdboxServer;
+use std::sync::Arc;
+
+use rmcp::handler::server::wrapper::Parameters;
+
+use super::super::common::{
+    create_enrich_cache_writer_test_server, create_single_track_test_db,
+    default_http_client_for_tests, extract_json, insert_test_track,
+};
 
 #[tokio::test]
 async fn discogs_auth_url_validation_accepts_web_urls_and_different_public_hosts() {
