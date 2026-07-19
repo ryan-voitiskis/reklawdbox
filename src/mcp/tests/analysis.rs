@@ -911,6 +911,7 @@ async fn setup_essentia_cancelled_future_leaves_blocking_transaction_sound() {
         .join("essentia-venv.generations/runtime-cancelled");
     let server = Arc::new(ReklawdboxServer::new(None));
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let first_server = Arc::clone(&server);
     let first_lock_path = lock_path.clone();
@@ -939,6 +940,9 @@ async fn setup_essentia_cancelled_future_leaves_blocking_transaction_sound() {
                 .expect("test should release fake transaction");
             drop(generation_guard);
             drop(lock);
+            finished_tx
+                .send(())
+                .expect("test should still await transaction completion");
             Err::<EssentiaSetupResult, _>(EssentiaSetupError::new(
                 EssentiaSetupErrorKind::ImportFailure,
                 "cancelled fixture completed",
@@ -980,6 +984,10 @@ async fn setup_essentia_cancelled_future_leaves_blocking_transaction_sound() {
     })
     .await
     .expect("fake transaction should clean before deadline");
+    tokio::time::timeout(Duration::from_secs(2), finished_rx)
+        .await
+        .expect("fake transaction should finish before deadline")
+        .expect("fake transaction completion sender should remain live");
     try_lock(&competing_lock).expect("lock should be reacquirable after transaction cleanup");
 
     let result = crate::mcp::analysis::handle_setup_essentia_with(&server, |_| {
