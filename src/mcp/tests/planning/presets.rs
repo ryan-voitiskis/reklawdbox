@@ -1,0 +1,93 @@
+use crate::domain::planning::{SequencingPriority, composite_score, priority_weights};
+
+#[test]
+fn mcp_planning_preset_composite_scoring_changes_by_priority_axis() {
+    let approx = |left: f64, right: f64| (left - right).abs() < 1e-9;
+
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.30
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Harmonic)
+        ),
+        0.48
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Energy)
+        ),
+        0.12
+    ));
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Genre)
+        ),
+        0.18
+    ));
+
+    assert!(approx(
+        composite_score(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.17
+    ));
+    assert!(approx(
+        composite_score(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some(0.0),
+            Some(0.0),
+            &priority_weights(SequencingPriority::Genre)
+        ),
+        0.38
+    ));
+
+    assert!(approx(
+        composite_score(
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            None,
+            &priority_weights(SequencingPriority::Balanced)
+        ),
+        0.30 / 0.85
+    ));
+}
