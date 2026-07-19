@@ -50,10 +50,11 @@ Keep transport types at the edge. Application workflows may accept domain
 models and adapter-neutral inputs, while domain code must remain usable without
 a database, filesystem, network, MCP host, or terminal.
 
-`cargo test --test source_boundaries` mechanically checks crate-root
-references across these directories, including test code. It also keeps CLI
-and MCP from depending on each other; semantic review is still required for
-indirect ownership leaks that a source scan cannot identify.
+`cargo test --test source_boundaries` mechanically checks explicit
+crate-root and upward-relative references across these directories, including
+test code, and rejects crate aliases that could bypass the scan. It also keeps
+CLI and MCP from depending on each other. Semantic review is still required for
+indirect ownership leaks hidden behind otherwise allowed local modules.
 
 ## Safety boundaries
 
