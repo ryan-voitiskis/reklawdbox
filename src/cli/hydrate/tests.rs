@@ -8,17 +8,14 @@ use crate::adapters::providers::discogs;
 use crate::application::cache_writer::{CacheWriteRequest, CacheWriterReport};
 use crate::application::enrichment::hydrate::{
     EnrichmentCacheWrite, EnrichmentTrackOutcome, HydrateCacheWriterCompletion,
-    HydrationApplicationReport, HydrationFailureKind, HydrationStageReport, HydrationTrackIdentity,
-    HydrationWorkerCompletion, LookupFailurePersistence, discogs_stage_report,
-    hydrate_discogs_track, run_bounded_workers,
+    HydrationAnalysisOutcome, HydrationApplicationReport, HydrationFailureKind,
+    HydrationStageReport, HydrationTrackIdentity, HydrationWorkerCompletion,
+    LookupFailurePersistence, discogs_stage_report, hydrate_discogs_track, run_bounded_workers,
 };
 use crate::application::enrichment::model::{EnrichmentProvider, HydrationStage};
 use crate::cli::command::Cli;
 
-use super::command::{
-    HydrateTask, await_analysis_hydration, await_discogs_hydration, hydrate_batch_outcome,
-    resolve_provider_task_join,
-};
+use super::command::{HydrateTask, hydrate_batch_outcome, resolve_provider_task_join};
 use super::discogs as discogs_cli;
 use super::presentation::{
     FinalPresentation, ProviderCounters, final_lines, hydration_failure_message,
@@ -253,7 +250,7 @@ async fn hydrate_outer_task_drop_aborts_status_or_provider_future() {
 }
 
 #[tokio::test]
-async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures() {
+async fn hydrate_token_cancellation_stops_scheduling_and_drains_started_workers() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let discogs_started = Arc::new(tokio::sync::Notify::new());
         let (discogs_dropped, mut discogs_dropped_rx) = tokio::sync::oneshot::channel();
@@ -261,29 +258,54 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
         let discogs_cancel = tokio_util::sync::CancellationToken::new();
         let (cache_tx, _cache_rx) =
             tokio::sync::mpsc::channel::<CacheWriteRequest<EnrichmentCacheWrite>>(1);
-        let discogs_task = tokio::spawn({
+        let discogs_workers = tokio::spawn({
             let started = discogs_started.clone();
             let cancel = discogs_cancel.clone();
+            let first = identity();
+            let second = HydrationTrackIdentity::new(
+                "unscheduled-track".to_string(),
+                "Unscheduled Artist".to_string(),
+                "Unscheduled Title".to_string(),
+                "Unscheduled Album".to_string(),
+            );
             async move {
-                let lookup = async move {
-                    let _drop_signal = DropSignal(Some(discogs_dropped));
-                    started.notify_one();
-                    discogs_release_rx
-                        .await
-                        .expect("Discogs fixture should be released");
-                    Err(discogs::LookupError::message(
-                        "released synthetic lookup failure",
-                    ))
-                };
-                let identity = identity();
-                let hydration = hydrate_discogs_track(
-                    &identity,
-                    LookupFailurePersistence::DoNotCache,
-                    None,
-                    &cache_tx,
-                    lookup,
-                );
-                await_discogs_hydration(&cancel, hydration).await
+                run_bounded_workers(
+                    "discogs worker task",
+                    vec![
+                        (first, Some(discogs_release_rx), Some(discogs_dropped)),
+                        (second, None, None),
+                    ],
+                    1,
+                    cancel,
+                    |(identity, _, _)| identity.clone(),
+                    move |(identity, release, dropped)| {
+                        let started = started.clone();
+                        let cache_tx = cache_tx.clone();
+                        async move {
+                            let lookup = async move {
+                                let _drop_signal = DropSignal(dropped);
+                                started.notify_one();
+                                release
+                                    .expect("scheduled Discogs fixture should have a release")
+                                    .await
+                                    .expect("Discogs fixture should be released");
+                                Err(discogs::LookupError::message(
+                                    "released synthetic lookup failure",
+                                ))
+                            };
+                            let outcome = hydrate_discogs_track(
+                                &identity,
+                                LookupFailurePersistence::DoNotCache,
+                                None,
+                                &cache_tx,
+                                lookup,
+                            )
+                            .await;
+                            HydrationWorkerCompletion::completed(outcome)
+                        }
+                    },
+                )
+                .await
             }
         });
         tokio::time::timeout(Duration::from_secs(1), discogs_started.notified())
@@ -291,7 +313,7 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
             .expect("Discogs lookup-start barrier should be bounded");
         discogs_cancel.cancel();
         assert!(
-            !discogs_task.is_finished(),
+            !discogs_workers.is_finished(),
             "started Discogs lookup must remain owned during graceful cancellation"
         );
         assert!(
@@ -304,11 +326,15 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
         discogs_release
             .send(())
             .expect("Discogs fixture should still accept release");
-        let discogs_outcome = tokio::time::timeout(Duration::from_secs(1), discogs_task)
+        let discogs_report = tokio::time::timeout(Duration::from_secs(1), discogs_workers)
             .await
             .expect("Discogs cancellation join should be bounded")
             .expect("Discogs cancellation task should join");
-        assert_eq!(discogs_outcome.operation_failures, 1);
+        assert_eq!(discogs_report.selected, 2);
+        assert_eq!(discogs_report.scheduled, 1);
+        assert_eq!(discogs_report.terminal_workers, 1);
+        assert_eq!(discogs_report.incomplete(), 1);
+        assert_eq!(discogs_report.completed[0].1.operation_failures, 1);
         tokio::time::timeout(Duration::from_secs(1), discogs_dropped_rx)
             .await
             .expect("Discogs completion cleanup should be bounded")
@@ -318,19 +344,35 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
         let (analysis_dropped, mut analysis_dropped_rx) = tokio::sync::oneshot::channel();
         let (analysis_release, analysis_release_rx) = tokio::sync::oneshot::channel();
         let analysis_cancel = tokio_util::sync::CancellationToken::new();
-        let analysis_task = tokio::spawn({
+        let analysis_workers = tokio::spawn({
             let started = analysis_started.clone();
             let cancel = analysis_cancel.clone();
             async move {
-                let analysis = async move {
-                    let _drop_signal = DropSignal(Some(analysis_dropped));
-                    started.notify_one();
-                    analysis_release_rx
-                        .await
-                        .expect("analysis fixture should be released");
-                    crate::application::enrichment::hydrate::HydrationAnalysisOutcome::default()
-                };
-                await_analysis_hydration(&cancel, analysis).await
+                run_bounded_workers(
+                    "analysis worker task",
+                    vec![
+                        (1_u8, Some(analysis_release_rx), Some(analysis_dropped)),
+                        (2_u8, None, None),
+                    ],
+                    1,
+                    cancel,
+                    |(identity, _, _)| *identity,
+                    move |(_, release, dropped)| {
+                        let started = started.clone();
+                        async move {
+                            let _drop_signal = DropSignal(dropped);
+                            started.notify_one();
+                            release
+                                .expect("scheduled analysis fixture should have a release")
+                                .await
+                                .expect("analysis fixture should be released");
+                            HydrationWorkerCompletion::completed(
+                                HydrationAnalysisOutcome::default(),
+                            )
+                        }
+                    },
+                )
+                .await
             }
         });
         tokio::time::timeout(Duration::from_secs(1), analysis_started.notified())
@@ -338,7 +380,7 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
             .expect("analysis-start barrier should be bounded");
         analysis_cancel.cancel();
         assert!(
-            !analysis_task.is_finished(),
+            !analysis_workers.is_finished(),
             "started analysis must remain owned until its blocking work drains"
         );
         assert!(
@@ -351,10 +393,15 @@ async fn hydrate_token_cancellation_drains_started_provider_and_analysis_futures
         analysis_release
             .send(())
             .expect("analysis fixture should still accept release");
-        tokio::time::timeout(Duration::from_secs(1), analysis_task)
+        let analysis_report = tokio::time::timeout(Duration::from_secs(1), analysis_workers)
             .await
             .expect("analysis cancellation join should be bounded")
             .expect("analysis cancellation task should join");
+        assert_eq!(analysis_report.selected, 2);
+        assert_eq!(analysis_report.scheduled, 1);
+        assert_eq!(analysis_report.terminal_workers, 1);
+        assert_eq!(analysis_report.incomplete(), 1);
+        assert!(analysis_report.completed[0].1.succeeded());
         tokio::time::timeout(Duration::from_secs(1), analysis_dropped_rx)
             .await
             .expect("analysis future drop should be bounded")

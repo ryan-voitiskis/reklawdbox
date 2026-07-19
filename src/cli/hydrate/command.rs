@@ -78,40 +78,6 @@ pub(super) fn resolve_provider_task_join(
     }
 }
 
-pub(super) async fn await_discogs_hydration<HydrationFuture>(
-    cancel: &CancellationToken,
-    hydration: HydrationFuture,
-) -> EnrichmentTrackOutcome
-where
-    HydrationFuture: std::future::Future<Output = EnrichmentTrackOutcome>,
-{
-    tokio::pin!(hydration);
-    tokio::select! {
-        outcome = &mut hydration => outcome,
-        // Graceful token cancellation stops scheduling new work but preserves
-        // the planning-base contract for already-started retries and cache
-        // acknowledgements. Hard caller cancellation is owned by HydrateTask.
-        _ = cancel.cancelled() => hydration.await,
-    }
-}
-
-pub(super) async fn await_analysis_hydration<AnalysisFuture>(
-    cancel: &CancellationToken,
-    analysis: AnalysisFuture,
-) -> HydrationAnalysisOutcome
-where
-    AnalysisFuture: std::future::Future<Output = HydrationAnalysisOutcome>,
-{
-    tokio::pin!(analysis);
-    tokio::select! {
-        outcome = &mut analysis => outcome,
-        // Stratum decode/DSP uses spawn_blocking, which cannot be aborted once
-        // running. Drain the already-started stage so command cancellation
-        // cannot detach blocking work or close its cache acknowledgement path.
-        _ = cancel.cancelled() => analysis.await,
-    }
-}
-
 enum PreparedHydration {
     NoTracks,
     AllCached { total_tracks: usize },
@@ -398,7 +364,7 @@ async fn execute_hydration(
                             );
                         }
 
-                        let hydration = hydrate_discogs_track(
+                        let outcome = hydrate_discogs_track(
                             &identity,
                             LookupFailurePersistence::CacheTerminalError,
                             None,
@@ -411,8 +377,8 @@ async fn execute_hydration(
                                 &identity.title,
                                 Some(&identity.album),
                             ),
-                        );
-                        let outcome = await_discogs_hydration(&cancel, hydration).await;
+                        )
+                        .await;
 
                         counters.observe_discogs(&identity, &outcome);
 
@@ -476,14 +442,14 @@ async fn execute_hydration(
                             ),
                         };
 
-                        let analysis = run_analysis_stage(
+                        let outcome = run_analysis_stage(
                             &job.track.file_path,
                             job.needs_stratum,
                             job.needs_essentia,
                             essentia_python.as_deref(),
                             &cache_tx,
-                        );
-                        let outcome = await_analysis_hydration(&cancel, analysis).await;
+                        )
+                        .await;
 
                         counters.observe_analysis(&outcome);
 
