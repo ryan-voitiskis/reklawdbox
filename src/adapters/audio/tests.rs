@@ -712,7 +712,10 @@ fn private_rekordbox_real_audio_analysis() {
     let audio = fixture
         .copy_accessible_audio(audio_dir.path())
         .expect("private fixture should contain an accessible audio track");
-    assert_eq!(audio.original_hash, audio.copied_hash);
+    assert!(
+        audio.original_hash == audio.copied_hash,
+        "private audio copy must initially match its source"
+    );
     let file_path = audio.copied_path.to_string_lossy().to_string();
 
     let (samples, sample_rate) = decode_to_samples(&file_path)
@@ -724,16 +727,8 @@ fn private_rekordbox_real_audio_analysis() {
     let result = analyze_with_stratum(&samples, sample_rate, None)
         .unwrap_or_else(|_| panic!("private audio copy analysis failed"));
 
-    assert!(
-        result.bpm > 0.0,
-        "BPM should be positive, got {}",
-        result.bpm
-    );
-    assert!(
-        result.bpm < 300.0,
-        "BPM should be < 300, got {}",
-        result.bpm
-    );
+    assert!(result.bpm > 0.0, "BPM should be positive");
+    assert!(result.bpm < 300.0, "BPM should be below the upper bound");
     assert!(!result.key.is_empty(), "key should be non-empty");
     assert!(
         !result.key_camelot.is_empty(),
@@ -764,7 +759,10 @@ fn private_rekordbox_audio_analysis_cache_round_trip() {
     let audio = fixture
         .copy_accessible_audio(audio_dir.path())
         .expect("private fixture should contain an accessible audio track");
-    assert_eq!(audio.original_hash, audio.copied_hash);
+    assert!(
+        audio.original_hash == audio.copied_hash,
+        "private audio copy must initially match its source"
+    );
     let file_path = audio.copied_path.to_string_lossy().to_string();
 
     let (samples, sample_rate) = decode_to_samples(&file_path).unwrap();
@@ -799,14 +797,29 @@ fn private_rekordbox_audio_analysis_cache_round_trip() {
         .unwrap()
         .expect("should find cached entry");
 
-    assert_eq!(cached.file_path, file_path);
-    assert_eq!(cached.file_size, file_size);
-    assert_eq!(cached.file_mtime, file_mtime);
+    assert!(
+        cached.file_path == file_path,
+        "cache path identity must round-trip"
+    );
+    assert!(
+        cached.file_size == file_size,
+        "cache file size must round-trip"
+    );
+    assert!(
+        cached.file_mtime == file_mtime,
+        "cache file mtime must round-trip"
+    );
 
     let cached_result: StratumResult = serde_json::from_str(&cached.features_json).unwrap();
     assert!((cached_result.bpm - result.bpm).abs() < f64::EPSILON);
-    assert_eq!(cached_result.key, result.key);
-    assert_eq!(cached_result.key_camelot, result.key_camelot);
+    assert!(
+        cached_result.key == result.key,
+        "cached key must round-trip"
+    );
+    assert!(
+        cached_result.key_camelot == result.key_camelot,
+        "cached Camelot key must round-trip"
+    );
 
     assert!(
         audio.original_is_unchanged().unwrap(),

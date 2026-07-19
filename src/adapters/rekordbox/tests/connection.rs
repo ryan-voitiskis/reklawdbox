@@ -42,9 +42,13 @@ fn copy_archive_database(
 }
 
 fn write_encrypted_identity_database(path: &std::path::Path, identity: &str) {
+    write_encrypted_identity_database_with_key(path, REKORDBOX_SQLCIPHER_KEY, identity);
+}
+
+fn write_encrypted_identity_database_with_key(path: &std::path::Path, key: &str, identity: &str) {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(&format!(
-        "PRAGMA key = '{REKORDBOX_SQLCIPHER_KEY}'; \
+        "PRAGMA key = '{key}'; \
          CREATE TABLE fixture_identity (value TEXT NOT NULL);"
     ))
     .unwrap();
@@ -90,10 +94,21 @@ fn rekordbox_connection_private_fixture_open_is_production_read_only() {
 }
 
 #[test]
-fn rekordbox_connection_private_fixture_reports_corrupt_or_wrong_key_database() {
+fn rekordbox_connection_private_fixture_reports_corrupt_database() {
     let source_dir = tempfile::tempdir().unwrap();
     let archive = source_dir.path().join("corrupt.db");
     std::fs::write(&archive, b"not a SQLCipher database").unwrap();
+    let fixture =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+
+    assert!(matches!(fixture.open(), Err(PrivateFixtureError::Open(_))));
+}
+
+#[test]
+fn rekordbox_connection_private_fixture_reports_wrong_key_database() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive = source_dir.path().join("wrong-key.db");
+    write_encrypted_identity_database_with_key(&archive, "synthetic-wrong-key", "wrong-key");
     let fixture =
         PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
 

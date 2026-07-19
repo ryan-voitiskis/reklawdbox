@@ -630,14 +630,20 @@ async fn private_rekordbox_analyze_track_audio_essentia_cache_round_trip() {
             skip_cached: Some(false),
         }))
         .await
-        .expect("initial analysis should succeed");
+        .unwrap_or_else(|_| panic!("initial private fixture analysis should succeed"));
     let first_payload = extract_json(&first);
-    assert_eq!(first_payload["essentia_available"], true);
+    assert!(
+        first_payload["essentia_available"] == true,
+        "Essentia should be available"
+    );
     assert!(
         first_payload["essentia"].is_object(),
         "real Essentia run should produce feature JSON"
     );
-    assert_eq!(first_payload["essentia_cache_hit"], false);
+    assert!(
+        first_payload["essentia_cache_hit"] == false,
+        "initial analysis should miss the Essentia cache"
+    );
     let onset_rate = first_payload["essentia"]["onset_rate"]
         .as_f64()
         .expect("onset_rate should be present in Essentia output");
@@ -647,17 +653,14 @@ async fn private_rekordbox_analyze_track_audio_essentia_cache_round_trip() {
     let loudness_integrated = first_payload["essentia"]["loudness_integrated"]
         .as_f64()
         .expect("loudness_integrated should be present in Essentia output");
-    assert!(
-        onset_rate > 1.0,
-        "onset_rate should be rate-like (Hz), got {onset_rate}"
-    );
+    assert!(onset_rate > 1.0, "onset_rate should be rate-like");
     assert!(
         (0.0..=3.5).contains(&danceability),
-        "danceability should stay in plausible Essentia range [0, ~3], got {danceability}"
+        "danceability should stay in the plausible Essentia range"
     );
     assert!(
         (-30.0..=0.0).contains(&loudness_integrated),
-        "loudness_integrated should be in a plausible LUFS range, got {loudness_integrated}"
+        "loudness_integrated should stay in the plausible LUFS range"
     );
 
     let second = server
@@ -666,11 +669,20 @@ async fn private_rekordbox_analyze_track_audio_essentia_cache_round_trip() {
             skip_cached: Some(true),
         }))
         .await
-        .expect("cached analysis should succeed");
+        .unwrap_or_else(|_| panic!("cached private fixture analysis should succeed"));
     let second_payload = extract_json(&second);
-    assert_eq!(second_payload["essentia_available"], true);
-    assert_eq!(second_payload["stratum_cache_hit"], true);
-    assert_eq!(second_payload["essentia_cache_hit"], true);
+    assert!(
+        second_payload["essentia_available"] == true,
+        "Essentia should remain available"
+    );
+    assert!(
+        second_payload["stratum_cache_hit"] == true,
+        "cached analysis should hit the Stratum cache"
+    );
+    assert!(
+        second_payload["essentia_cache_hit"] == true,
+        "cached analysis should hit the Essentia cache"
+    );
 }
 
 #[tokio::test]

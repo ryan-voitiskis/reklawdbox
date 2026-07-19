@@ -599,14 +599,14 @@ mod tests {
         assert!(xml.starts_with("<?xml"));
         assert!(xml.contains("<COLLECTION Entries=\"100\">"));
         let track_count = xml.matches("<TRACK ").count();
-        assert_eq!(
-            track_count, 100,
-            "expected 100 TRACK elements, got {track_count}"
+        assert!(
+            track_count == 100,
+            "expected exactly 100 private fixture TRACK elements"
         );
 
-        for (i, c) in xml.chars().enumerate() {
+        for c in xml.chars() {
             if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
-                panic!("control char U+{:04X} at position {i}", c as u32);
+                panic!("private XML contains a disallowed control character");
             }
         }
     }
@@ -636,13 +636,10 @@ mod tests {
                             || rest.starts_with("quot;")
                             || rest.starts_with("apos;")
                             || rest.starts_with('#'),
-                        "unescaped & in TRACK line at pos {i}: ...{}...",
-                        chars[i.saturating_sub(10)..chars.len().min(i + 20)]
-                            .iter()
-                            .collect::<String>()
+                        "private XML contains an unescaped ampersand in a TRACK attribute"
                     );
                 } else if in_attr && chars[i] == '<' {
-                    panic!("unescaped < in attribute value at pos {i}");
+                    panic!("private XML contains an unescaped less-than sign in an attribute");
                 }
                 i += 1;
             }
@@ -655,22 +652,18 @@ mod tests {
         let tracks = load_real_tracks(50);
         let xml = generate_xml(&tracks);
 
-        for track in &tracks {
+        for (index, track) in tracks.iter().enumerate() {
             let rating_xml = crate::domain::library::stars_to_rating(track.rating);
             let expected_rating = format!("Rating=\"{rating_xml}\"");
             assert!(
                 xml.contains(&expected_rating),
-                "missing {} for track '{}'",
-                expected_rating,
-                track.title
+                "private XML is missing rating fidelity at sample index {index}"
             );
 
             let expected_bpm = format!("AverageBpm=\"{:.2}\"", track.bpm);
             assert!(
                 xml.contains(&expected_bpm),
-                "missing {} for track '{}'",
-                expected_bpm,
-                track.title
+                "private XML is missing BPM fidelity at sample index {index}"
             );
         }
 
@@ -679,8 +672,7 @@ mod tests {
                 let after = &line[loc_start + 10..];
                 assert!(
                     after.starts_with("file://localhost/"),
-                    "Location doesn't start with file://localhost/: {}",
-                    &after[..after.len().min(60)]
+                    "private XML Location must use the file URI prefix"
                 );
             }
         }
@@ -701,8 +693,8 @@ mod tests {
         assert!(content.contains("<COLLECTION Entries=\"50\">"));
 
         let size = std::fs::metadata(&path).unwrap().len();
-        assert!(size > 50 * 200, "file too small: {size} bytes");
-        assert!(size < 50 * 5000, "file too large: {size} bytes");
+        assert!(size > 50 * 200, "private XML file is unexpectedly small");
+        assert!(size < 50 * 5000, "private XML file is unexpectedly large");
     }
 
     #[test]
@@ -738,7 +730,10 @@ mod tests {
             offset += page_size;
         }
 
-        assert!(all.len() > 2000, "expected >2000 tracks, got {}", all.len());
+        assert!(
+            all.len() > 2000,
+            "expected the private fixture to exceed the minimum track count"
+        );
 
         let xml = generate_xml(&all);
 
@@ -746,23 +741,19 @@ mod tests {
         assert!(xml.contains(&expected), "Entries count mismatch");
 
         let track_count = xml.matches("<TRACK ").count();
-        assert_eq!(
-            track_count,
-            all.len(),
-            "TRACK element count mismatch: {track_count} vs {}",
-            all.len()
+        assert!(
+            track_count == all.len(),
+            "private XML TRACK count must match the selected collection"
         );
 
         let size = xml.len();
         assert!(
             size > all.len() * 200,
-            "XML too small: {size} bytes for {} tracks",
-            all.len()
+            "private full-library XML is unexpectedly small"
         );
         assert!(
             size < all.len() * 5000,
-            "XML too large: {size} bytes for {} tracks",
-            all.len()
+            "private full-library XML is unexpectedly large"
         );
     }
 }

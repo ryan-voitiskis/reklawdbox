@@ -279,14 +279,13 @@ async fn private_rekordbox_resolve_tracks_data_batch_consistency() {
             format: None,
         }))
         .await
-        .expect("batch resolve should succeed");
+        .unwrap_or_else(|_| panic!("private fixture batch resolve should succeed"));
     let batch_payload = extract_json(&batch_result);
     let batch_items = batch_payload
         .as_array()
         .expect("batch resolve payload should be an array");
-    assert_eq!(
-        batch_items.len(),
-        track_ids.len(),
+    assert!(
+        batch_items.len() == track_ids.len(),
         "batch resolve should return one entry per requested track"
     );
 
@@ -305,13 +304,13 @@ async fn private_rekordbox_resolve_tracks_data_batch_consistency() {
                 track_id: track_id.clone(),
             }))
             .await
-            .expect("single resolve should succeed");
+            .unwrap_or_else(|_| panic!("private fixture single resolve should succeed"));
         let single_payload = extract_json(&single_result);
-        assert_eq!(
+        assert!(
             by_track_id
                 .get(track_id)
-                .expect("batch output should include every requested track"),
-            &single_payload,
+                .expect("batch output should include every requested track")
+                == &single_payload,
             "batch resolve output should match single-track resolve output"
         );
     }

@@ -58,7 +58,7 @@ fn find_track_by_artist_and_title(
         .expect("fixture lookup query should run");
     match rows.next() {
         Some(Ok(track)) => Some(track),
-        Some(Err(e)) => panic!("fixture lookup failed for {artist} - {title}: {e}"),
+        Some(Err(_)) => panic!("private fixture lookup failed"),
         None => None,
     }
 }
@@ -760,16 +760,18 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
             .to_str()
             .expect("classifier benchmark store path should be UTF-8"),
     )
-    .expect("classifier benchmark requires the existing local enrichment/audio store");
+    .unwrap_or_else(|_| {
+        panic!("classifier benchmark requires the existing local enrichment/audio store")
+    });
 
     let mut predictive_tracks = Vec::new();
     let mut truths = Vec::new();
-    let mut missing_tracks = Vec::new();
+    let mut missing_track_count = 0;
 
     for entry in &entries {
         let Some(mut track) = find_track_by_artist_and_title(&conn, &entry.artist, &entry.title)
         else {
-            missing_tracks.push(format!("{} - {}", entry.artist, entry.title));
+            missing_track_count += 1;
             continue;
         };
         let truth = genre::resolve_genre(&entry.expected_genre)
@@ -798,7 +800,7 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
         false,
         audio_identities.clone(),
     )
-    .expect("rules-only benchmark classification should succeed");
+    .unwrap_or_else(|_| panic!("rules-only benchmark classification should succeed"));
     let rules_cases: Vec<_> = truths
         .iter()
         .zip(&rules_results)
@@ -811,7 +813,7 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
         .collect();
 
     let deployed_registry_present = store::classification::load_from_db(&store_conn, None)
-        .expect("profile registry diagnostic should load")
+        .unwrap_or_else(|_| panic!("profile registry diagnostic should load"))
         .registry
         .is_some();
     let (deployed_results, _) = classification_workflow::classify_batch_with_audio_identities(
@@ -821,7 +823,7 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
         true,
         audio_identities,
     )
-    .expect("deployed-registry diagnostic classification should succeed");
+    .unwrap_or_else(|_| panic!("deployed-registry diagnostic classification should succeed"));
     let deployed_cases: Vec<_> = truths
         .iter()
         .zip(&deployed_results)
@@ -837,12 +839,12 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
         "benchmark_schema": 1,
         "predictive_current_genre": "withheld",
         "fixture_rows": entries.len(),
-        "missing_rows": missing_tracks.len(),
-        "rules_only": evaluate::evaluate(&rules_cases, missing_tracks.len()),
+        "missing_rows": missing_track_count,
+        "rules_only": evaluate::evaluate(&rules_cases, missing_track_count),
         "deployed_registry_diagnostic": {
             "acceptance_evidence": false,
             "registry_present": deployed_registry_present,
-            "metrics": evaluate::evaluate(&deployed_cases, missing_tracks.len()),
+            "metrics": evaluate::evaluate(&deployed_cases, missing_track_count),
         },
         "versions": {
             "classifier_profile_schema": crate::domain::classification::profiles::PROFILE_SCHEMA_VERSION,
@@ -850,10 +852,8 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
             "essentia": crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
         },
     });
-    eprintln!(
-        "{}",
-        serde_json::to_string_pretty(&summary).expect("benchmark summary should serialize")
-    );
+    let _serialized_summary =
+        serde_json::to_string_pretty(&summary).expect("benchmark summary should serialize");
 }
 
 fn benchmark_source_stratum(

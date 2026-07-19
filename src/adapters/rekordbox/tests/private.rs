@@ -38,9 +38,8 @@ fn private_rekordbox_test_real_db_get_session_tracks() {
     let tracks = get_session_tracks(&conn, &sessions[0].id).unwrap();
     assert!(!tracks.is_empty(), "selected session has no tracks");
     for (i, t) in tracks.iter().enumerate() {
-        assert_eq!(
-            t.position,
-            Some((i + 1) as u32),
+        assert!(
+            t.position == Some((i + 1) as u32),
             "track position mismatch at index {i}"
         );
     }
@@ -145,8 +144,7 @@ fn private_rekordbox_test_real_db_track_count() {
     let stats = get_library_stats(&conn).unwrap();
     assert!(
         stats.total_tracks > 2000,
-        "expected >2000 tracks, got {}",
-        stats.total_tracks
+        "expected the private fixture to exceed the minimum track count"
     );
     assert!(stats.avg_bpm > 0.0, "avg_bpm should be positive");
     assert!(
@@ -259,8 +257,8 @@ fn private_rekordbox_test_real_db_unicode() {
     for t in &unicode_tracks {
         let json = serde_json::to_string(t).unwrap();
         let back: crate::domain::library::Track = serde_json::from_str(&json).unwrap();
-        assert_eq!(t.title, back.title, "unicode title round-trip failed");
-        assert_eq!(t.artist, back.artist, "unicode artist round-trip failed");
+        assert!(t.title == back.title, "unicode title round-trip failed");
+        assert!(t.artist == back.artist, "unicode artist round-trip failed");
     }
 }
 
@@ -307,9 +305,15 @@ fn private_rekordbox_test_real_db_get_track_by_id() {
     let by_id = get_track(&conn, &tracks[0].id)
         .unwrap()
         .expect("track not found by ID");
-    assert_eq!(tracks[0].id, by_id.id);
-    assert_eq!(tracks[0].title, by_id.title);
-    assert_eq!(tracks[0].artist, by_id.artist);
+    assert!(tracks[0].id == by_id.id, "track ID lookup must round-trip");
+    assert!(
+        tracks[0].title == by_id.title,
+        "track title lookup must round-trip"
+    );
+    assert!(
+        tracks[0].artist == by_id.artist,
+        "track artist lookup must round-trip"
+    );
 }
 
 #[test]
@@ -318,27 +322,21 @@ fn private_rekordbox_test_real_db_library_stats_consistency() {
     let (_fixture_guard, conn) = open_private_fixture();
     let stats = get_library_stats(&conn).unwrap();
 
-    assert_eq!(
-        stats.rated_count + stats.unrated_count,
-        stats.total_tracks,
-        "rated ({}) + unrated ({}) != total ({})",
-        stats.rated_count,
-        stats.unrated_count,
-        stats.total_tracks
+    assert!(
+        stats.rated_count + stats.unrated_count == stats.total_tracks,
+        "rated and unrated counts must equal the total"
     );
 
     let genre_sum: i32 = stats.genres.iter().map(|g| g.count).sum();
-    assert_eq!(
-        genre_sum, stats.total_tracks,
-        "genre count sum ({genre_sum}) != total ({})",
-        stats.total_tracks
+    assert!(
+        genre_sum == stats.total_tracks,
+        "genre counts must equal the total"
     );
 
     let key_sum: i32 = stats.key_distribution.iter().map(|k| k.count).sum();
-    assert_eq!(
-        key_sum, stats.total_tracks,
-        "key count sum ({key_sum}) != total ({})",
-        stats.total_tracks
+    assert!(
+        key_sum == stats.total_tracks,
+        "key counts must equal the total"
     );
 }
 
@@ -359,8 +357,7 @@ fn private_rekordbox_test_real_db_rated_count_matches_rating_filtered_search() {
     if stats.rated_count > 0 {
         assert!(
             !tracks.is_empty(),
-            "rated_count={} but rating_min=1 search returned no rows",
-            stats.rated_count
+            "a non-empty rated population must produce rating-filtered rows"
         );
     }
     assert!(
@@ -374,7 +371,10 @@ fn private_rekordbox_test_real_db_rated_count_matches_rating_filtered_search() {
 fn private_rekordbox_test_real_db_all_tracks_load() {
     let (_fixture_guard, conn) = open_private_fixture();
     let all = load_all_tracks(&conn);
-    assert!(all.len() > 2000, "expected >2000 tracks, got {}", all.len());
+    assert!(
+        all.len() > 2000,
+        "expected the private fixture to exceed the minimum track count"
+    );
 
     for t in &all {
         assert!(!t.id.is_empty(), "track has empty ID");
@@ -465,9 +465,9 @@ fn private_rekordbox_test_real_db_genre_normalization_coverage() {
         .filter(|genre| genre.name != "(none)" && !genre.name.is_empty())
         .map(|genre| genre.count)
         .sum::<i32>();
-    assert_eq!(
-        canonical_count + alias_count + unknown_count,
-        classified_count
+    assert!(
+        canonical_count + alias_count + unknown_count == classified_count,
+        "genre normalization buckets must cover every classified row"
     );
 }
 

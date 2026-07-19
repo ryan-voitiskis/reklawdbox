@@ -80,8 +80,8 @@ mod tests {
             year: None,
             album: None,
         }]);
-        assert_eq!(staged, 1);
-        assert_eq!(total, 1);
+        assert!(staged == 1, "exactly one change should stage");
+        assert!(total == 1, "exactly one change should be counted");
 
         let diffs = cm.preview(&tracks);
         assert!(!diffs.is_empty(), "expected diffs for staged changes");
@@ -99,9 +99,15 @@ mod tests {
 
         let modified = cm.apply_changes(&tracks);
         let modified_track = modified.iter().find(|t| t.id == track.id).unwrap();
-        assert_eq!(modified_track.genre, "Deep House");
-        assert_eq!(modified_track.comments, "integration test");
-        assert_eq!(modified_track.rating, 4);
+        assert!(
+            modified_track.genre == "Deep House",
+            "staged genre should apply"
+        );
+        assert!(
+            modified_track.comments == "integration test",
+            "staged comments should apply"
+        );
+        assert!(modified_track.rating == 4, "staged rating should apply");
 
         let xml = crate::adapters::rekordbox::xml::generate_xml(&modified);
         assert!(xml.contains("Genre=\"Deep House\""));
@@ -114,9 +120,18 @@ mod tests {
                     .iter()
                     .find(|original| original.id == track.id)
                     .unwrap();
-                assert_eq!(track.genre, original.genre);
-                assert_eq!(track.comments, original.comments);
-                assert_eq!(track.rating, original.rating);
+                assert!(
+                    track.genre == original.genre,
+                    "unstaged genre must remain unchanged"
+                );
+                assert!(
+                    track.comments == original.comments,
+                    "unstaged comments must remain unchanged"
+                );
+                assert!(
+                    track.rating == original.rating,
+                    "unstaged rating must remain unchanged"
+                );
             }
         }
     }
