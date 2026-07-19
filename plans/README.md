@@ -118,7 +118,7 @@ the dependency graph and recommended waves below.
 | [049](049-extract-hydrate-coordination.md)                 | Extract hydrate coordination from CLI                      | P1       | L      | -                            | DONE   |
 | [050](050-model-planning-policies.md)                      | Model planning policies explicitly                         | P1       | L      | -                            | DONE   |
 | [051](051-separate-essentia-runtime-lifecycle.md)          | Separate the Essentia runtime lifecycle                    | P1       | L      | 047, 048, 052                | TODO   |
-| [052](052-encapsulate-backup-process-supervision.md)       | Encapsulate backup process supervision                     | P1       | L      | -                            | TODO   |
+| [052](052-encapsulate-backup-process-supervision.md)       | Encapsulate backup process supervision                     | P1       | L      | -                            | DONE   |
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED: <reason>` |
 `REJECTED: <rationale>`.
