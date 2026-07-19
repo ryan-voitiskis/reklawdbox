@@ -1,6 +1,9 @@
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
-use super::super::process_group::{ProcessGroupOwnership, reap_leader_after_group_release};
+use super::super::process_group::ProcessGroupOwnership;
+#[cfg(target_os = "macos")]
+use super::super::process_group::reap_leader_after_group_release;
 
 #[test]
 #[cfg(unix)]

@@ -789,7 +789,7 @@ mod tests {
             }
             return Err(error);
         }
-        let byte = [b'x'];
+        let byte = *b"x";
         let written = unsafe { libc::write(descriptor, byte.as_ptr().cast(), byte.len()) };
         let write_error = (written != 1).then(io::Error::last_os_error);
         let close_result = unsafe { libc::close(descriptor) };

@@ -45,7 +45,7 @@ impl ProcessGroupOwnership {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(super) fn is_released(&self) -> bool {
         self.owned.is_released()
     }
