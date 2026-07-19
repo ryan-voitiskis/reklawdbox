@@ -7,6 +7,7 @@ use crate::mcp::metadata::{
 };
 use crate::mcp::server::ReklawdboxServer;
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -156,6 +157,73 @@ fn write_hanging_backup_fixture(
 }
 
 #[cfg(unix)]
+fn write_early_exit_backup_fixture(directory: &std::path::Path) -> HangingBackupFixture {
+    write_early_exit_backup_fixture_with_output(directory, false)
+}
+
+#[cfg(unix)]
+fn write_early_exit_backup_fixture_with_closed_output(
+    directory: &std::path::Path,
+) -> HangingBackupFixture {
+    write_early_exit_backup_fixture_with_output(directory, true)
+}
+
+#[cfg(unix)]
+fn write_early_exit_backup_fixture_with_output(
+    directory: &std::path::Path,
+    close_output: bool,
+) -> HangingBackupFixture {
+    let script = directory.join("early-exit-descendant.sh");
+    let ready = directory.join("ready");
+    let parent_pid = directory.join("parent.pid");
+    let descendant_pid = directory.join("descendant.pid");
+    let delayed_sentinel = directory.join("survived-parent-exit");
+    let block_fifo = directory.join("block.fifo");
+    let ready_fifo = directory.join("ready.fifo");
+    let close_output = if close_output {
+        "exec 1>/dev/null 2>/dev/null\n"
+    } else {
+        ""
+    };
+    let contents = format!(
+        "#!/bin/bash\n\
+         set -eu\n\
+         mkfifo {block_fifo} {ready_fifo}\n\
+         exec 3<> {block_fifo}\n\
+         exec 4<> {ready_fifo}\n\
+         (\n\
+           printf '%s\\n' \"$BASHPID\" > {descendant_pid}\n\
+           printf 'early-exit-descendant-ready\\n'\n\
+           printf 'early-exit-descendant-stderr-ready\\n' >&2\n\
+           printf 'ready\\n' >&4\n\
+           {close_output}\
+           IFS= read -r -t 1 _ <&3 || true\n\
+           printf 'descendant survived parent exit\\n' > {delayed_sentinel}\n\
+           while :; do IFS= read -r -t 60 _ <&3 || true; done\n\
+         ) &\n\
+         printf '%s\\n' \"$$\" > {parent_pid}\n\
+         IFS= read -r _ <&4\n\
+         printf 'ready\\n' > {ready}\n\
+         exit 0\n",
+        block_fifo = shell_single_quote(&block_fifo),
+        ready_fifo = shell_single_quote(&ready_fifo),
+        close_output = close_output,
+        descendant_pid = shell_single_quote(&descendant_pid),
+        ready = shell_single_quote(&ready),
+        delayed_sentinel = shell_single_quote(&delayed_sentinel),
+        parent_pid = shell_single_quote(&parent_pid),
+    );
+    write_executable_script(&script, &contents);
+    HangingBackupFixture {
+        script,
+        ready,
+        parent_pid,
+        descendant_pid: Some(descendant_pid),
+        delayed_sentinel,
+    }
+}
+
+#[cfg(unix)]
 async fn wait_for_nonempty_file(path: &std::path::Path, label: &str) -> String {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -260,6 +328,53 @@ async fn assert_pre_op_backup_timeout_terminates_fixture(with_descendant: bool) 
     if let Some(pid) = descendant_pid {
         wait_for_pid_exit(pid, "backup descendant").await;
     }
+    assert_path_remains_absent(&fixture.delayed_sentinel).await;
+}
+
+#[cfg(unix)]
+async fn assert_pre_op_backup_rejects_early_exit_descendant(close_output: bool) {
+    let temp = tempfile::tempdir().expect("early-exit backup fixture directory should create");
+    let fixture = if close_output {
+        write_early_exit_backup_fixture_with_closed_output(temp.path())
+    } else {
+        write_early_exit_backup_fixture(temp.path())
+    };
+    let script = fixture.script.clone();
+    let mut backup_task = tokio::spawn(async move {
+        crate::adapters::rekordbox::backup::execute_script_with_timeout_for_test(
+            &script,
+            Duration::from_millis(250),
+        )
+        .await
+    });
+
+    wait_for_nonempty_file(&fixture.ready, "early-exit backup ready marker").await;
+    let parent_pid = fixture_pid(&fixture.parent_pid, "early-exit parent PID");
+    let descendant_pid = fixture_pid(
+        fixture
+            .descendant_pid
+            .as_deref()
+            .expect("early-exit fixture should record a descendant PID"),
+        "early-exit descendant PID",
+    );
+
+    let result = match tokio::time::timeout(Duration::from_secs(5), &mut backup_task).await {
+        Ok(joined) => joined.expect("early-exit backup task should join"),
+        Err(_) => {
+            kill_fixture_pid(descendant_pid);
+            kill_fixture_pid(parent_pid);
+            let _ = tokio::time::timeout(Duration::from_secs(5), &mut backup_task).await;
+            panic!("pre-operation backup blocked on an early-exit descendant");
+        }
+    };
+    let error = result.expect_err("background backup work must fail closed");
+    assert!(
+        error.starts_with("backup script exited while descendant processes were still running"),
+        "unexpected early-exit error: {error}"
+    );
+
+    wait_for_pid_exit(parent_pid, "early-exit backup parent").await;
+    wait_for_pid_exit(descendant_pid, "early-exit backup descendant").await;
     assert_path_remains_absent(&fixture.delayed_sentinel).await;
 }
 
@@ -2569,10 +2684,16 @@ async fn write_xml_fails_closed_when_backup_script_fails_and_restores_changes() 
     );
 }
 
-#[tokio::test]
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum WriteXmlBackupFailure {
+    HungParent,
+    EarlyExitDescendant,
+}
+
 #[cfg(unix)]
 #[allow(clippy::await_holding_lock)]
-async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
+async fn assert_write_xml_backup_failure_restores_state(failure: WriteXmlBackupFailure) {
     let _env_guard = backup_script_env_lock()
         .lock()
         .expect("backup env mutex should not be poisoned");
@@ -2606,7 +2727,12 @@ async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
     .expect("staged change should serialize");
 
     let backup_dir = tempfile::tempdir().expect("hanging backup fixture should create");
-    let fixture = write_hanging_backup_fixture(backup_dir.path(), true);
+    let fixture = match failure {
+        WriteXmlBackupFailure::HungParent => write_hanging_backup_fixture(backup_dir.path(), true),
+        WriteXmlBackupFailure::EarlyExitDescendant => {
+            write_early_exit_backup_fixture(backup_dir.path())
+        }
+    };
     let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &fixture.script);
     let timeout_override =
         crate::adapters::rekordbox::backup::override_pre_op_backup_timeout_for_test(
@@ -2626,11 +2752,15 @@ async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
     .await
     .expect("timed-out write_xml should return within five seconds")
     .expect_err("timed-out backup must fail XML export");
+    let expected_error = match failure {
+        WriteXmlBackupFailure::HungParent => "pre-op pre-operation backup timed out after 250ms",
+        WriteXmlBackupFailure::EarlyExitDescendant => {
+            "pre-op backup script exited while descendant processes were still running"
+        }
+    };
     assert!(
-        error
-            .message
-            .contains("pre-op pre-operation backup timed out after 250ms"),
-        "unexpected timeout error: {}",
+        error.message.contains(expected_error),
+        "unexpected backup failure: {}",
         error.message
     );
     assert!(!timed_out_path.exists(), "timed-out XML must not exist");
@@ -2695,6 +2825,19 @@ async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
     assert!(xml.contains("Genre=\"Techno\""));
     assert!(xml.contains("Comments=\"restored after timeout\""));
     assert!(xml.contains("Rating=\"255\""));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn write_xml_backup_timeout_restores_state_and_releases_lock() {
+    assert_write_xml_backup_failure_restores_state(WriteXmlBackupFailure::HungParent).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn write_xml_backup_early_exit_descendant_restores_state_and_releases_lock() {
+    assert_write_xml_backup_failure_restores_state(WriteXmlBackupFailure::EarlyExitDescendant)
+        .await;
 }
 
 #[test]
@@ -2868,6 +3011,77 @@ async fn pre_op_backup_timeout_reaps_direct_hung_child() {
 #[cfg(unix)]
 async fn pre_op_backup_timeout_reaps_descendant_holding_output_pipes() {
     assert_pre_op_backup_timeout_terminates_fixture(true).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_early_exit_reaps_descendant_holding_output_pipes() {
+    assert_pre_op_backup_rejects_early_exit_descendant(false).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_early_exit_detects_descendant_that_closed_output_pipes() {
+    assert_pre_op_backup_rejects_early_exit_descendant(true).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_cancellation_keeps_supervisor_cleanup_alive() {
+    let temp = tempfile::tempdir().expect("cancelled backup fixture directory should create");
+    let fixture = write_hanging_backup_fixture(temp.path(), true);
+    let script = fixture.script.clone();
+    let reader_activity = Arc::new(AtomicUsize::new(0));
+    let task_activity = Arc::clone(&reader_activity);
+    let caller = tokio::spawn(async move {
+        crate::adapters::rekordbox::backup::execute_script_with_timeout_and_activity_for_test(
+            &script,
+            Duration::from_millis(250),
+            task_activity,
+        )
+        .await
+    });
+
+    wait_for_nonempty_file(&fixture.ready, "cancelled backup ready marker").await;
+    let parent_pid = fixture_pid(&fixture.parent_pid, "cancelled backup parent PID");
+    let descendant_pid = fixture_pid(
+        fixture
+            .descendant_pid
+            .as_deref()
+            .expect("cancelled fixture should record a descendant PID"),
+        "cancelled backup descendant PID",
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while reader_activity.load(Ordering::Acquire) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled backup output readers should start");
+
+    caller.abort();
+    assert!(
+        caller
+            .await
+            .expect_err("cancelled caller task should not complete")
+            .is_cancelled()
+    );
+
+    let cleanup = tokio::time::timeout(Duration::from_secs(5), async {
+        while pid_exists(parent_pid)
+            || pid_exists(descendant_pid)
+            || reader_activity.load(Ordering::Acquire) != 0
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if let Err(error) = cleanup {
+        kill_fixture_pid(descendant_pid);
+        kill_fixture_pid(parent_pid);
+        panic!("cancelled backup supervisor did not quiesce: {error}");
+    }
+    assert_path_remains_absent(&fixture.delayed_sentinel).await;
 }
 
 #[test]
