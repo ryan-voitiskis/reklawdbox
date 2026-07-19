@@ -10,6 +10,23 @@ use crate::mcp::{
     WriteFileTagsParams, mcp_internal_error, ok_json,
 };
 
+use super::transport::{CommentMode as TransportCommentMode, WavTarget as TransportWavTarget};
+
+fn adapter_wav_target(target: TransportWavTarget) -> tags::WavTarget {
+    match target {
+        TransportWavTarget::Id3v2 => tags::WavTarget::Id3v2,
+        TransportWavTarget::RiffInfo => tags::WavTarget::RiffInfo,
+    }
+}
+
+fn adapter_comment_mode(mode: TransportCommentMode) -> tags::CommentMode {
+    match mode {
+        TransportCommentMode::Replace => tags::CommentMode::Replace,
+        TransportCommentMode::Prepend => tags::CommentMode::Prepend,
+        TransportCommentMode::Append => tags::CommentMode::Append,
+    }
+}
+
 fn workflow_error(error: file_workflows::FileWorkflowError<McpError>) -> McpError {
     match error {
         file_workflows::FileWorkflowError::Lock(error) => error,
@@ -75,8 +92,12 @@ pub(in crate::mcp) async fn handle_write_file_tags(
             tags: entry.tags,
             wav_targets: entry
                 .wav_targets
+                .map(|targets| targets.into_iter().map(adapter_wav_target).collect())
                 .unwrap_or_else(|| vec![tags::WavTarget::Id3v2, tags::WavTarget::RiffInfo]),
-            comment_mode: entry.comment_mode.unwrap_or_default(),
+            comment_mode: entry
+                .comment_mode
+                .map(adapter_comment_mode)
+                .unwrap_or_default(),
         })
         .collect();
     let lock_server = server.clone();

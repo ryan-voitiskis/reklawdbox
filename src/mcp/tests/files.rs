@@ -156,14 +156,15 @@ fn write_audio_file_mutation_png(path: &std::path::Path) {
 fn audio_file_mutation_write_entry(
     path: &std::path::Path,
     comment: &str,
-    comment_mode: crate::adapters::audio::tags::CommentMode,
+    comment_mode: &str,
 ) -> WriteFileTagsEntry {
-    WriteFileTagsEntry {
-        path: path.display().to_string(),
-        tags: HashMap::from([("comment".to_string(), Some(comment.to_string()))]),
-        wav_targets: Some(vec![crate::adapters::audio::tags::WavTarget::Id3v2]),
-        comment_mode: Some(comment_mode),
-    }
+    serde_json::from_value(serde_json::json!({
+        "path": path.display().to_string(),
+        "tags": {"comment": comment},
+        "wav_targets": ["id3v2"],
+        "comment_mode": comment_mode,
+    }))
+    .expect("audio mutation entry should deserialize")
 }
 
 fn audio_file_mutation_state(path: &std::path::Path) -> Result<(Option<String>, bool), String> {
@@ -598,16 +599,8 @@ async fn audio_file_mutation_duplicate_alias_writes_preserve_input_order() {
     let server = ReklawdboxServer::new(None);
     let params = WriteFileTagsParams {
         writes: vec![
-            audio_file_mutation_write_entry(
-                &audio_path,
-                "before",
-                crate::adapters::audio::tags::CommentMode::Prepend,
-            ),
-            audio_file_mutation_write_entry(
-                &symlink_path,
-                "after",
-                crate::adapters::audio::tags::CommentMode::Append,
-            ),
+            audio_file_mutation_write_entry(&audio_path, "before", "prepend"),
+            audio_file_mutation_write_entry(&symlink_path, "after", "append"),
         ],
         dry_run: Some(false),
     };
@@ -702,7 +695,7 @@ async fn audio_file_mutation_tag_and_art_requests_share_one_lock() {
             writes: vec![audio_file_mutation_write_entry(
                 &audio_path,
                 "tag-update",
-                crate::adapters::audio::tags::CommentMode::Replace,
+                "replace",
             )],
             dry_run: Some(false),
         };
@@ -814,11 +807,7 @@ async fn audio_file_mutation_different_file_progress_is_independent() {
         let server = server.clone();
         let barrier = Arc::clone(&barrier);
         let params = WriteFileTagsParams {
-            writes: vec![audio_file_mutation_write_entry(
-                &path,
-                comment,
-                crate::adapters::audio::tags::CommentMode::Replace,
-            )],
+            writes: vec![audio_file_mutation_write_entry(&path, comment, "replace")],
             dry_run: Some(false),
         };
         tasks.push(tokio::spawn(async move {

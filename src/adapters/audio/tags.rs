@@ -14,8 +14,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TagError {
@@ -284,9 +283,7 @@ fn is_riff_info_field(field: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Which WAV tag layers to target on write.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[schemars(inline)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WavTarget {
     Id3v2,
     RiffInfo,
@@ -345,9 +342,7 @@ pub struct CoverArtMeta {
 }
 
 /// How to merge the `comment` field with an existing value.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
-#[schemars(inline)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CommentMode {
     /// Overwrite existing comment (default).
     #[default]

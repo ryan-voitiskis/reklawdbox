@@ -3,7 +3,28 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::adapters::audio::tags;
+/// Which WAV tag layers to target on write.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::mcp) enum WavTarget {
+    Id3v2,
+    RiffInfo,
+}
+
+/// How to merge the `comment` field with an existing value.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::mcp) enum CommentMode {
+    /// Overwrite existing comment (default).
+    #[default]
+    Replace,
+    /// Prepend new text before existing comment, separated by ` | `.
+    Prepend,
+    /// Append new text after existing comment, separated by ` | `.
+    Append,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(in crate::mcp) struct ReadFileTagsParams {
@@ -59,12 +80,12 @@ pub(in crate::mcp) struct WriteFileTagsEntry {
     #[schemars(
         description = "WAV only: which tag layers to write (default: both). Values: \"id3v2\", \"riff_info\""
     )]
-    pub wav_targets: Option<Vec<tags::WavTarget>>,
+    pub wav_targets: Option<Vec<WavTarget>>,
 
     #[schemars(
         description = "How to merge the comment field with any existing value: replace (default), prepend, append. Uses ' | ' as separator."
     )]
-    pub comment_mode: Option<tags::CommentMode>,
+    pub comment_mode: Option<CommentMode>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
