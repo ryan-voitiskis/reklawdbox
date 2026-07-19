@@ -42,6 +42,7 @@ impl<T> HydrateTask<T> {
         }
     }
 
+    /// Join the coordinator normally without creating a detached reaper.
     pub(super) async fn join(mut self) -> Result<T, tokio::task::JoinError> {
         let result = self
             .handle
@@ -58,6 +59,75 @@ impl<T> Drop for HydrateTask<T> {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
+    }
+}
+
+/// Owns the analysis coordinator without abandoning started blocking work.
+pub(super) struct HydrateAnalysisTask<T: Send + 'static> {
+    handle: Option<tokio::task::JoinHandle<T>>,
+    #[cfg(test)]
+    reaper_completion: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl<T: Send + 'static> HydrateAnalysisTask<T> {
+    pub(super) fn spawn(future: impl std::future::Future<Output = T> + Send + 'static) -> Self {
+        Self {
+            handle: Some(tokio::spawn(future)),
+            #[cfg(test)]
+            reaper_completion: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn spawn_observed(
+        future: impl std::future::Future<Output = T> + Send + 'static,
+    ) -> (Self, tokio::sync::oneshot::Receiver<()>) {
+        let (reaper_completion, reaper_completed) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                handle: Some(tokio::spawn(future)),
+                reaper_completion: Some(reaper_completion),
+            },
+            reaper_completed,
+        )
+    }
+
+    pub(super) async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        let result = self
+            .handle
+            .as_mut()
+            .expect("hydrate analysis task handle should be present")
+            .await;
+        self.handle.take();
+        result
+    }
+}
+
+impl<T: Send + 'static> Drop for HydrateAnalysisTask<T> {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        #[cfg(test)]
+        let reaper_completion = self.reaper_completion.take();
+
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            // No current runtime can host an explicit reaper. Dropping the
+            // JoinHandle retains Tokio's baseline detached-task semantics.
+            drop(handle);
+            return;
+        };
+        let reaper = runtime.spawn(async move {
+            if let Err(error) = handle.await {
+                tracing::error!("detached hydrate analysis coordinator failed: {error}");
+            }
+            #[cfg(test)]
+            if let Some(reaper_completion) = reaper_completion {
+                let _ = reaper_completion.send(());
+            }
+        });
+        // The runtime owns this narrow reaper until the coordinator is terminal.
+        drop(reaper);
     }
 }
 
@@ -399,7 +469,7 @@ async fn execute_hydration(
         let cache_tx = cache_tx.clone();
         let counters = analysis_counters.clone();
         let pb = progress.primary.clone();
-        HydrateTask::spawn(async move {
+        HydrateAnalysisTask::spawn(async move {
             if analysis_pending.is_empty() {
                 return HydrationStageReport {
                     selected: analysis_selected,

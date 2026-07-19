@@ -5,17 +5,22 @@ use std::time::Duration;
 use clap::{CommandFactory, Parser};
 
 use crate::adapters::providers::discogs;
-use crate::application::cache_writer::{CacheWriteRequest, CacheWriterReport};
+use crate::adapters::state;
+use crate::application::analysis::model::AnalysisCacheWrite;
+use crate::application::cache_writer::{CacheWriteRequest, CacheWriterReport, send_cache_message};
 use crate::application::enrichment::hydrate::{
-    EnrichmentCacheWrite, EnrichmentTrackOutcome, HydrateCacheWriterCompletion,
-    HydrationAnalysisOutcome, HydrationApplicationReport, HydrationFailureKind,
-    HydrationStageReport, HydrationTrackIdentity, HydrationWorkerCompletion,
-    LookupFailurePersistence, discogs_stage_report, hydrate_discogs_track, run_bounded_workers,
+    EnrichmentCacheWrite, EnrichmentTrackOutcome, HydrateCacheMessage,
+    HydrateCacheWriterCompletion, HydrateCacheWriterSession, HydrationAnalysisOutcome,
+    HydrationApplicationReport, HydrationFailureKind, HydrationStageReport, HydrationTrackIdentity,
+    HydrationWorkerCompletion, LookupFailurePersistence, discogs_stage_report,
+    hydrate_discogs_track, run_bounded_workers,
 };
 use crate::application::enrichment::model::{EnrichmentProvider, HydrationStage};
 use crate::cli::command::Cli;
 
-use super::command::{HydrateTask, hydrate_batch_outcome, resolve_provider_task_join};
+use super::command::{
+    HydrateAnalysisTask, HydrateTask, hydrate_batch_outcome, resolve_provider_task_join,
+};
 use super::discogs as discogs_cli;
 use super::presentation::{
     FinalPresentation, ProviderCounters, final_lines, hydration_failure_message,
@@ -188,29 +193,33 @@ async fn hydrate_discogs_retry_uses_four_attempts_and_exact_injected_backoff() {
         );
     }
 
-    exercise(
-        discogs::LookupError::http(429, Some("7".to_string()), "rate limited".to_string()),
-        vec![Duration::from_secs(7); 3],
-    )
-    .await;
-    exercise(
-        discogs::LookupError::http(503, None, "unavailable".to_string()),
-        vec![
-            Duration::from_secs(5),
-            Duration::from_secs(10),
-            Duration::from_secs(20),
-        ],
-    )
-    .await;
-    exercise(
-        discogs::LookupError::message("synthetic transport failure"),
-        vec![
-            Duration::from_secs(5),
-            Duration::from_secs(10),
-            Duration::from_secs(20),
-        ],
-    )
-    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        exercise(
+            discogs::LookupError::http(429, Some("7".to_string()), "rate limited".to_string()),
+            vec![Duration::from_secs(7); 3],
+        )
+        .await;
+        exercise(
+            discogs::LookupError::http(503, None, "unavailable".to_string()),
+            vec![
+                Duration::from_secs(5),
+                Duration::from_secs(10),
+                Duration::from_secs(20),
+            ],
+        )
+        .await;
+        exercise(
+            discogs::LookupError::message("synthetic transport failure"),
+            vec![
+                Duration::from_secs(5),
+                Duration::from_secs(10),
+                Duration::from_secs(20),
+            ],
+        )
+        .await;
+    })
+    .await
+    .expect("injected Discogs retry matrix should finish within five seconds");
 }
 
 struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
@@ -247,6 +256,165 @@ async fn hydrate_outer_task_drop_aborts_status_or_provider_future() {
     })
     .await
     .expect("outer task cleanup scenario should finish within five seconds");
+}
+
+#[tokio::test]
+async fn hydrate_analysis_owner_drop_drains_blocking_cache_lifecycle() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (normally_joined, unexpected_reaper) =
+            HydrateAnalysisTask::spawn_observed(async { "joined" });
+        assert_eq!(
+            normally_joined
+                .join()
+                .await
+                .expect("normal analysis owner should join"),
+            "joined"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), unexpected_reaper)
+                .await
+                .expect("normal-join observer closure should be bounded")
+                .is_err(),
+            "normal analysis join must not spawn a detached reaper"
+        );
+
+        let directory = tempfile::tempdir().expect("analysis owner directory should create");
+        let store_path = directory
+            .path()
+            .join("internal.sqlite3")
+            .to_string_lossy()
+            .to_string();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (writer_session, writer_completed) =
+            HydrateCacheWriterSession::start_observed(store_path.clone(), 2, cancel.clone())
+                .expect("observed hydrate writer should start");
+        let cache_tx = writer_session.sender().clone();
+
+        let worker_calls = Arc::new(AtomicU32::new(0));
+        let (blocking_started, blocking_started_rx) = tokio::sync::oneshot::channel();
+        let (blocking_release, blocking_release_rx) = std::sync::mpsc::sync_channel(1);
+        let (cache_acknowledged, cache_acknowledged_rx) = tokio::sync::oneshot::channel();
+        let (coordinator_completed, coordinator_completed_rx) = tokio::sync::oneshot::channel();
+        let (analysis_owner, reaper_completed) = HydrateAnalysisTask::spawn_observed({
+            let worker_calls = worker_calls.clone();
+            async move {
+                let report = run_bounded_workers(
+                    "analysis worker task",
+                    vec![
+                        (
+                            1_u8,
+                            Some(blocking_started),
+                            Some(blocking_release_rx),
+                            Some(cache_acknowledged),
+                        ),
+                        (2_u8, None, None, None),
+                    ],
+                    1,
+                    cancel.clone(),
+                    |(identity, _, _, _)| *identity,
+                    move |(_, started, release, acknowledged)| {
+                        let worker_calls = worker_calls.clone();
+                        let cache_tx = cache_tx.clone();
+                        async move {
+                            worker_calls.fetch_add(1, Ordering::Relaxed);
+                            let write = tokio::task::spawn_blocking(move || {
+                                started
+                                    .expect("scheduled blocking analysis should have a start barrier")
+                                    .send(())
+                                    .expect("blocking analysis start should be observed");
+                                release
+                                    .expect("scheduled blocking analysis should have a release")
+                                    .recv_timeout(Duration::from_secs(2))
+                                    .expect("blocking analysis release should be bounded");
+                                AnalysisCacheWrite {
+                                    file_path: "/synthetic/hard-drop-analysis.flac".to_string(),
+                                    analyzer: "hard-drop-analysis".to_string(),
+                                    file_size: 42,
+                                    file_mtime: 7,
+                                    analyzer_version: "test-v1".to_string(),
+                                    input_fingerprint: String::new(),
+                                    features_json: "{}".to_string(),
+                                }
+                            })
+                            .await
+                            .expect("blocking analysis executor should join");
+                            send_cache_message(
+                                &cache_tx,
+                                HydrateCacheMessage::AudioAnalysis(write),
+                                "hard-drop analysis",
+                            )
+                            .await
+                            .expect("hard-drop analysis cache write should be acknowledged");
+                            acknowledged
+                                .expect("scheduled analysis should have an acknowledgement observer")
+                                .send(())
+                                .expect("analysis cache acknowledgement should be observed");
+                            HydrationWorkerCompletion::completed(
+                                HydrationAnalysisOutcome::default(),
+                            )
+                        }
+                    },
+                )
+                .await;
+                let _ = coordinator_completed.send((
+                    report.selected,
+                    report.scheduled,
+                    report.terminal_workers,
+                    report.incomplete(),
+                    report.join_failures.len(),
+                ));
+                report
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), blocking_started_rx)
+            .await
+            .expect("blocking analysis start should be bounded")
+            .expect("blocking analysis should start");
+        assert_eq!(worker_calls.load(Ordering::Relaxed), 1);
+
+        // Hard caller drop hands the coordinator to its detached reaper. The
+        // writer Drop cancels only further scheduling and keeps its blocking
+        // receiver alive while this started worker drains and acknowledges.
+        drop(analysis_owner);
+        drop(writer_session);
+        tokio::task::yield_now().await;
+        blocking_release
+            .send(())
+            .expect("started blocking analysis should still accept release");
+
+        tokio::time::timeout(Duration::from_secs(1), cache_acknowledged_rx)
+            .await
+            .expect("cache acknowledgement should be bounded")
+            .expect("started analysis should retain its cache acknowledgement");
+        let coordinator_report =
+            tokio::time::timeout(Duration::from_secs(1), coordinator_completed_rx)
+                .await
+                .expect("analysis coordinator completion should be bounded")
+                .expect("analysis coordinator should report terminal accounting");
+        assert_eq!(coordinator_report, (2, 1, 1, 1, 0));
+        assert_eq!(worker_calls.load(Ordering::Relaxed), 1);
+        tokio::time::timeout(Duration::from_secs(1), reaper_completed)
+            .await
+            .expect("analysis reaper completion should be bounded")
+            .expect("detached analysis reaper should finish");
+        tokio::time::timeout(Duration::from_secs(1), writer_completed)
+            .await
+            .expect("detached writer completion should be bounded")
+            .expect("detached writer should close its store");
+
+        let connection = state::open(&store_path).expect("completed writer store should reopen");
+        let cached = state::get_audio_analysis(
+            &connection,
+            "/synthetic/hard-drop-analysis.flac",
+            "hard-drop-analysis",
+        )
+        .expect("hard-drop analysis cache should read")
+        .expect("acknowledged hard-drop analysis row should be durable");
+        assert_eq!(cached.analysis_version, "test-v1");
+    })
+    .await
+    .expect("hard-drop analysis ownership should finish within five seconds");
 }
 
 #[tokio::test]

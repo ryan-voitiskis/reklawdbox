@@ -867,7 +867,7 @@ impl HydrateCacheWriterSession {
     }
 
     #[cfg(test)]
-    fn start_observed(
+    pub(crate) fn start_observed(
         store_path: String,
         capacity: usize,
         cancel: tokio_util::sync::CancellationToken,
@@ -914,8 +914,9 @@ impl Drop for HydrateCacheWriterSession {
     fn drop(&mut self) {
         self.cancel.cancel();
         self.sender.take();
-        // A running blocking task cannot be aborted. Detaching after sender
-        // closure lets it drain any producer-held messages and close SQLite.
+        // A running blocking task cannot be aborted. Detaching after our
+        // sender closes keeps the receiver and SQLite alive until any
+        // analysis-reaper-held sender and acknowledgement have drained.
         self.writer.take();
     }
 }
@@ -2083,13 +2084,23 @@ mod tests {
             .join("internal.sqlite3")
             .to_string_lossy()
             .to_string();
-        let error = std::thread::spawn(move || {
-            HydrateCacheWriterSession::start(path, 1, tokio_util::sync::CancellationToken::new())
-                .err()
-                .expect("starting outside Tokio should be reported as a spawn failure")
-        })
-        .join()
-        .expect("spawn-failure harness should join");
+        let (completed, completion) = std::sync::mpsc::sync_channel(1);
+        let harness = std::thread::spawn(move || {
+            let error = HydrateCacheWriterSession::start(
+                path,
+                1,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .err()
+            .expect("starting outside Tokio should be reported as a spawn failure");
+            let _ = completed.send(error);
+        });
+        let error = completion
+            .recv_timeout(Duration::from_secs(1))
+            .expect("spawn-failure harness completion should be bounded");
+        harness
+            .join()
+            .expect("completed spawn-failure harness should join");
         assert!(
             error
                 .summary
