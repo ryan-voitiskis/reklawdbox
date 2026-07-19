@@ -94,13 +94,17 @@ where
 pub(super) async fn await_analysis_hydration<AnalysisFuture>(
     cancel: &CancellationToken,
     analysis: AnalysisFuture,
-) -> Option<HydrationAnalysisOutcome>
+) -> HydrationAnalysisOutcome
 where
     AnalysisFuture: std::future::Future<Output = HydrationAnalysisOutcome>,
 {
+    tokio::pin!(analysis);
     tokio::select! {
-        outcome = analysis => Some(outcome),
-        _ = cancel.cancelled() => None,
+        outcome = &mut analysis => outcome,
+        // Stratum decode/DSP uses spawn_blocking, which cannot be aborted once
+        // running. Drain the already-started stage so command cancellation
+        // cannot detach blocking work or close its cache acknowledgement path.
+        _ = cancel.cancelled() => analysis.await,
     }
 }
 
@@ -480,12 +484,7 @@ async fn execute_hydration(
                             essentia_python.as_deref(),
                             &cache_tx,
                         );
-                        let Some(outcome) = await_analysis_hydration(&cancel, analysis).await
-                        else {
-                            return HydrationWorkerCompletion::cancelled(
-                                HydrationAnalysisOutcome::default(),
-                            );
-                        };
+                        let outcome = await_analysis_hydration(&cancel, analysis).await;
 
                         counters.observe_analysis(&outcome);
 

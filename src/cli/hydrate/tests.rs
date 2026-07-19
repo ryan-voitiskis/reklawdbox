@@ -253,7 +253,7 @@ async fn hydrate_outer_task_drop_aborts_status_or_provider_future() {
 }
 
 #[tokio::test]
-async fn hydrate_cancellation_drops_injected_discogs_lookup_and_analysis_futures() {
+async fn hydrate_cancellation_drops_discogs_but_drains_started_analysis_future() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let discogs_started = Arc::new(tokio::sync::Notify::new());
         let (discogs_dropped, discogs_dropped_rx) = tokio::sync::oneshot::channel();
@@ -300,7 +300,8 @@ async fn hydrate_cancellation_drops_injected_discogs_lookup_and_analysis_futures
             .expect("Discogs lookup future should be dropped");
 
         let analysis_started = Arc::new(tokio::sync::Notify::new());
-        let (analysis_dropped, analysis_dropped_rx) = tokio::sync::oneshot::channel();
+        let (analysis_dropped, mut analysis_dropped_rx) = tokio::sync::oneshot::channel();
+        let (analysis_release, analysis_release_rx) = tokio::sync::oneshot::channel();
         let analysis_cancel = tokio_util::sync::CancellationToken::new();
         let analysis_task = tokio::spawn({
             let started = analysis_started.clone();
@@ -309,10 +310,10 @@ async fn hydrate_cancellation_drops_injected_discogs_lookup_and_analysis_futures
                 let analysis = async move {
                     let _drop_signal = DropSignal(Some(analysis_dropped));
                     started.notify_one();
-                    std::future::pending::<
-                        crate::application::enrichment::hydrate::HydrationAnalysisOutcome,
-                    >()
-                    .await
+                    analysis_release_rx
+                        .await
+                        .expect("analysis fixture should be released");
+                    crate::application::enrichment::hydrate::HydrationAnalysisOutcome::default()
                 };
                 await_analysis_hydration(&cancel, analysis).await
             }
@@ -322,16 +323,27 @@ async fn hydrate_cancellation_drops_injected_discogs_lookup_and_analysis_futures
             .expect("analysis-start barrier should be bounded");
         analysis_cancel.cancel();
         assert!(
-            tokio::time::timeout(Duration::from_secs(1), analysis_task)
-                .await
-                .expect("analysis cancellation join should be bounded")
-                .expect("analysis cancellation task should join")
-                .is_none()
+            !analysis_task.is_finished(),
+            "started analysis must remain owned until its blocking work drains"
         );
+        assert!(
+            matches!(
+                analysis_dropped_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "analysis future must not be dropped on cancellation"
+        );
+        analysis_release
+            .send(())
+            .expect("analysis fixture should still accept release");
+        tokio::time::timeout(Duration::from_secs(1), analysis_task)
+            .await
+            .expect("analysis cancellation join should be bounded")
+            .expect("analysis cancellation task should join");
         tokio::time::timeout(Duration::from_secs(1), analysis_dropped_rx)
             .await
             .expect("analysis future drop should be bounded")
-            .expect("analysis future should be dropped");
+            .expect("completed analysis future should release its resources");
     })
     .await
     .expect("injected hydration cancellation matrix should finish within five seconds");
