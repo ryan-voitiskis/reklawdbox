@@ -132,6 +132,28 @@ fn hydration_cache_and_outcome_coordination_stays_out_of_cli() {
     }
 }
 
+#[test]
+fn platform_process_group_stays_synchronous_and_transport_free() {
+    let source = std::fs::read_to_string("src/adapters/platform/process_group.rs")
+        .expect("platform process-group source should be readable");
+    for forbidden in [
+        "tokio::",
+        "tokio_",
+        "Child",
+        "Command",
+        "AsyncRead",
+        "crate::adapters::audio",
+        "crate::adapters::rekordbox",
+        "crate::cli",
+        "crate::mcp",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "platform process-group primitive must not import or own {forbidden}"
+        );
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = std::fs::read_dir(directory)

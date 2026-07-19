@@ -8,13 +8,15 @@ use std::time::Duration;
 
 #[path = "backup/output.rs"]
 mod output;
+#[path = "backup/process_group.rs"]
+mod process_group;
 
 use output::{BoundedOutput, OutputReaderTask};
+use process_group::{ProcessGroupOwnership, reap_leader_after_group_release};
 
 const PRE_OP_BACKUP_TIMEOUT: Duration = Duration::from_secs(120);
 const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
 const OUTPUT_READER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
-const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[cfg(test)]
 static PRE_OP_BACKUP_TIMEOUT_OVERRIDE_MILLIS: std::sync::atomic::AtomicU64 =
@@ -417,324 +419,6 @@ where
     }
 }
 
-#[cfg(unix)]
-struct ProcessGroupOwnership {
-    leader_pid: i32,
-    process_group: Option<i32>,
-}
-
-#[cfg(unix)]
-impl ProcessGroupOwnership {
-    fn new(child_id: Option<u32>) -> Result<Self, String> {
-        let child_id = child_id.ok_or_else(|| "backup child PID was unavailable".to_string())?;
-        let process_group = i32::try_from(child_id)
-            .map_err(|error| format!("child PID conversion failed: {error}"))?;
-        Ok(Self {
-            leader_pid: process_group,
-            process_group: Some(process_group),
-        })
-    }
-
-    async fn wait_for_leader_exit_without_reaping(&self) -> Result<(), String> {
-        loop {
-            if leader_exit_observed_without_reaping(self.leader_pid)? {
-                return Ok(());
-            }
-            tokio::time::sleep(CHILD_EXIT_POLL_INTERVAL).await;
-        }
-    }
-
-    fn inspect_and_release_before_reap(&mut self) -> Result<bool, String> {
-        let Some(process_group) = self.process_group else {
-            return Err("backup process group was released before inspection".to_string());
-        };
-        // Freeze any live descendants while the unreaped leader still reserves
-        // the numeric PGID. This makes the membership snapshot stable enough
-        // to decide whether the group can be relinquished without signalling.
-        let stop_result = signal_process_group(process_group, libc::SIGSTOP);
-        match process_group_has_other_members(process_group, self.leader_pid) {
-            Ok(false)
-                if stop_result.is_ok()
-                    || stop_result.as_ref().is_err_and(|error| {
-                        matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH))
-                    }) =>
-            {
-                self.relinquish_without_signal();
-                Ok(false)
-            }
-            Ok(false) => {
-                let stop_error = stop_result.expect_err("failed stop should carry an error");
-                let mut context = Vec::new();
-                self.terminate_owned(&mut context);
-                Err(with_cleanup_context(
-                    format!("backup process-group freeze failed: {stop_error}"),
-                    context,
-                ))
-            }
-            Ok(true) => {
-                let mut context = Vec::new();
-                self.terminate_owned(&mut context);
-                if context.is_empty() {
-                    Ok(true)
-                } else {
-                    Err(format!(
-                        "backup process-group cleanup failed: {}",
-                        context.join("; ")
-                    ))
-                }
-            }
-            Err(error) => {
-                let mut context = Vec::new();
-                self.terminate_owned(&mut context);
-                Err(with_cleanup_context(error, context))
-            }
-        }
-    }
-
-    fn relinquish_without_signal(&mut self) {
-        self.process_group = None;
-    }
-
-    fn terminate_owned(&mut self, context: &mut Vec<String>) {
-        let Some(process_group) = self.process_group.take() else {
-            return;
-        };
-        if let Err(error) = signal_process_group(process_group, libc::SIGKILL)
-            && error.raw_os_error() != Some(libc::ESRCH)
-        {
-            context.push(format!("process-group termination failed: {error}"));
-        }
-    }
-}
-
-#[cfg(unix)]
-fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> {
-    let result = unsafe { libc::kill(-process_group, signal) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ProcessGroupOwnership {
-    fn drop(&mut self) {
-        let mut context = Vec::new();
-        self.terminate_owned(&mut context);
-        for error in context {
-            tracing::warn!("Backup process-group cleanup on drop: {error}");
-        }
-    }
-}
-
-#[cfg(not(unix))]
-struct ProcessGroupOwnership;
-
-#[cfg(not(unix))]
-impl ProcessGroupOwnership {
-    fn new(_child_id: Option<u32>) -> Result<Self, String> {
-        Ok(Self)
-    }
-
-    fn terminate_owned(&mut self, _context: &mut Vec<String>) {}
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
-fn leader_exit_observed_without_reaping(leader_pid: i32) -> Result<bool, String> {
-    let leader_id = libc::id_t::try_from(leader_pid)
-        .map_err(|error| format!("backup child PID conversion failed: {error}"))?;
-    loop {
-        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                leader_id,
-                info.as_mut_ptr(),
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == 0 {
-            let info = unsafe { info.assume_init() };
-            let observed_pid = unsafe { info.si_pid() };
-            if observed_pid == 0 {
-                return Ok(false);
-            }
-            if observed_pid != leader_pid {
-                return Err(format!(
-                    "backup exit observation returned PID {observed_pid}, expected {leader_pid}"
-                ));
-            }
-            return Ok(true);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!(
-                "backup exit observation failed before leader reap: {error}"
-            ));
-        }
-    }
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "macos", target_os = "linux", target_os = "android"))
-))]
-fn leader_exit_observed_without_reaping(_leader_pid: i32) -> Result<bool, String> {
-    Err(format!(
-        "safe pre-reap backup exit observation is unsupported on {}",
-        std::env::consts::OS
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn process_group_has_other_members(process_group: i32, leader_pid: i32) -> Result<bool, String> {
-    unsafe extern "C" {
-        fn proc_listpgrppids(
-            process_group: libc::pid_t,
-            buffer: *mut libc::c_void,
-            buffer_size: libc::c_int,
-        ) -> libc::c_int;
-    }
-
-    let mut capacity = 16_usize;
-    loop {
-        let mut pids = vec![0; capacity];
-        let buffer_size = pids
-            .len()
-            .checked_mul(std::mem::size_of::<libc::pid_t>())
-            .and_then(|bytes| libc::c_int::try_from(bytes).ok())
-            .ok_or_else(|| "backup process-group member buffer was too large".to_string())?;
-        let pid_count = unsafe {
-            proc_listpgrppids(
-                process_group,
-                pids.as_mut_ptr().cast::<libc::c_void>(),
-                buffer_size,
-            )
-        };
-        if pid_count < 0 {
-            return Err(format!(
-                "backup process-group member inspection failed: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let pid_count = usize::try_from(pid_count)
-            .map_err(|error| format!("backup process-group result was invalid: {error}"))?;
-        if pid_count < capacity {
-            pids.truncate(pid_count);
-            let mut saw_leader = false;
-            for pid in pids.into_iter().filter(|pid| *pid > 0) {
-                if pid == leader_pid {
-                    saw_leader = true;
-                } else {
-                    return Ok(true);
-                }
-            }
-            if !saw_leader {
-                return Err("backup process-group snapshot omitted the unreaped leader".to_string());
-            }
-            return Ok(false);
-        }
-        capacity = capacity
-            .checked_mul(2)
-            .filter(|capacity| *capacity <= 65_536)
-            .ok_or_else(|| "backup process group was unexpectedly large".to_string())?;
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn process_group_has_other_members(process_group: i32, leader_pid: i32) -> Result<bool, String> {
-    for entry in std::fs::read_dir("/proc")
-        .map_err(|error| format!("backup process-group inspection failed: {error}"))?
-    {
-        let entry =
-            entry.map_err(|error| format!("backup process-group inspection failed: {error}"))?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<i32>().ok())
-        else {
-            continue;
-        };
-        let stat = match std::fs::read_to_string(entry.path().join("stat")) {
-            Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "backup process-group inspection failed for PID {pid}: {error}"
-                ));
-            }
-        };
-        let observed_group = linux_process_group_from_stat(&stat)
-            .map_err(|error| format!("{error} for PID {pid}"))?;
-        if pid != leader_pid && observed_group == process_group {
-            return Ok(true);
-        }
-    }
-    // The leader must remain visible as a zombie until the guarded reap. Its
-    // presence proves the procfs scan still refers to the owned PGID identity.
-    let leader_stat = std::fs::read_to_string(format!("/proc/{leader_pid}/stat"))
-        .map_err(|error| format!("backup process-group snapshot omitted the leader: {error}"))?;
-    let leader_group = linux_process_group_from_stat(&leader_stat)?;
-    if leader_group != process_group {
-        return Err(format!(
-            "backup leader moved from process group {process_group} to {leader_group}"
-        ));
-    }
-    Ok(false)
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn linux_process_group_from_stat(stat: &str) -> Result<i32, String> {
-    let fields = stat
-        .rsplit_once(") ")
-        .map(|(_, fields)| fields)
-        .ok_or_else(|| "backup process-group inspection returned malformed stat".to_string())?;
-    fields
-        .split_whitespace()
-        .nth(2)
-        .and_then(|field| field.parse::<i32>().ok())
-        .ok_or_else(|| "backup process-group inspection returned invalid stat".to_string())
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "macos", target_os = "linux", target_os = "android"))
-))]
-fn process_group_has_other_members(_process_group: i32, _leader_pid: i32) -> Result<bool, String> {
-    Err(format!(
-        "safe backup process-group inspection is unsupported on {}",
-        std::env::consts::OS
-    ))
-}
-
-#[cfg(unix)]
-async fn reap_leader_after_group_release(
-    child: &mut tokio::process::Child,
-    process_group: &mut ProcessGroupOwnership,
-) -> Result<ExitStatus, String> {
-    if process_group.process_group.is_some() {
-        return Err(
-            "refusing to reap backup leader before releasing its process group".to_string(),
-        );
-    }
-    child
-        .wait()
-        .await
-        .map_err(|error| format!("backup wait failed: {error}"))
-}
-
-#[cfg(not(unix))]
-async fn reap_leader_after_group_release(
-    child: &mut tokio::process::Child,
-    _process_group: &mut ProcessGroupOwnership,
-) -> Result<ExitStatus, String> {
-    child
-        .wait()
-        .await
-        .map_err(|error| format!("backup wait failed: {error}"))
-}
-
 async fn cleanup_spawned_child_after_setup_failure(
     child: &mut tokio::process::Child,
     mut process_group: Option<&mut ProcessGroupOwnership>,
@@ -916,25 +600,6 @@ mod lifecycle_tests {
         assert_eq!(error, "backup child PID was unavailable");
     }
 
-    #[test]
-    #[cfg(unix)]
-    fn process_group_release_is_permanent_after_esrch() {
-        use super::ProcessGroupOwnership;
-
-        let mut ownership = ProcessGroupOwnership {
-            leader_pid: i32::MAX,
-            process_group: Some(i32::MAX),
-        };
-        let mut context = Vec::new();
-        ownership.terminate_owned(&mut context);
-        assert!(context.is_empty());
-        assert!(ownership.process_group.is_none());
-
-        ownership.terminate_owned(&mut context);
-        assert!(context.is_empty());
-        assert!(ownership.process_group.is_none());
-    }
-
     #[tokio::test]
     #[cfg(target_os = "macos")]
     async fn leader_reap_is_refused_until_owned_group_is_inspected_and_released() {
@@ -970,21 +635,11 @@ mod lifecycle_tests {
                 .inspect_and_release_before_reap()
                 .expect("leader-only group inspection should succeed")
         );
-        assert!(ownership.process_group.is_none());
+        assert!(ownership.is_released());
         let status = reap_leader_after_group_release(&mut child, &mut ownership)
             .await
             .expect("released leader should reap");
         assert!(status.success());
         assert!(child.id().is_none());
-    }
-
-    #[test]
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn linux_stat_parser_handles_spaces_and_closing_parens_in_process_name() {
-        assert_eq!(
-            super::linux_process_group_from_stat("123 (backup ) worker) S 7 42 9 0"),
-            Ok(42)
-        );
-        assert!(super::linux_process_group_from_stat("malformed").is_err());
     }
 }
