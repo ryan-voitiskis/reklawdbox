@@ -3,14 +3,27 @@
 //! The stable `essentia-venv` entry point is a symlink selected only after a
 //! complete immutable generation has passed the exact runtime probe.
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
+mod activation;
 mod contract;
 mod platform;
 mod process;
 
+#[allow(unused_imports)]
+pub(crate) use self::activation::ESSENTIA_VENV_GENERATIONS;
+#[cfg(test)]
+use self::activation::{ActivationPhase, IncompleteGeneration};
+use self::activation::{
+    ActivationTransaction, AdvisoryLock, LockConfig, ManagedEnvironmentPaths,
+    setup_activation_error,
+};
 pub(crate) use self::contract::{
     ESSENTIA_CONTRACT_ID, ESSENTIA_PROBE_TIMEOUT_SECS, ESSENTIA_PYTHON_ENV_VAR, EssentiaRuntime,
     EssentiaSetupError, EssentiaSetupErrorKind, SUPPORTED_ESSENTIA_MODULE_VERSION,
@@ -23,18 +36,17 @@ use self::contract::{
     ESSENTIA_IMPORT_CHECK_SCRIPT, inspect_essentia_python_with_timeout,
     inspect_essentia_python_with_timeout_result, probe_process_error,
 };
+#[allow(unused_imports)]
+pub(crate) use self::contract::{ESSENTIA_VENV_RELPATH, probe_essentia_runtime_from_sources};
+use self::contract::{diagnostic_text, generic_process_error, inspect_essentia_python_with_runner};
 #[cfg(test)]
 pub(crate) use self::contract::{
-    ESSENTIA_VENV_RELPATH, probe_essentia_python_from_sources, probe_essentia_runtime_from_sources,
-    validate_essentia_python_with_timeout,
+    probe_essentia_python_from_sources, validate_essentia_python_with_timeout,
 };
-use self::contract::{diagnostic_text, generic_process_error, inspect_essentia_python_with_runner};
-use self::platform::atomic_exchange_paths;
 #[cfg(test)]
 use self::process::ProcessError;
 use self::process::{CommandRequest, CommandResult, CommandRunner, SystemCommandRunner};
 
-pub(crate) const ESSENTIA_VENV_GENERATIONS: &str = "essentia-venv.generations";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_POLL: Duration = Duration::from_millis(100);
 const PYTHON_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,32 +64,6 @@ const PACKAGE_SPECS: &[&str] = &[
 pub(crate) struct ManagedEssentiaInstall {
     pub runtime: EssentiaRuntime,
     pub python_bin_used: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct ManagedEnvironmentPaths {
-    stable: PathBuf,
-    generations: PathBuf,
-    lock: PathBuf,
-}
-
-impl ManagedEnvironmentPaths {
-    fn from_stable(stable: PathBuf) -> Result<Self, String> {
-        let parent = stable
-            .parent()
-            .ok_or("Managed Essentia path has no parent")?;
-        Ok(Self {
-            generations: parent.join(ESSENTIA_VENV_GENERATIONS),
-            lock: parent.join("essentia-venv.lock"),
-            stable,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LockConfig {
-    timeout: Duration,
-    poll: Duration,
 }
 
 pub(crate) fn install_managed_essentia() -> Result<ManagedEssentiaInstall, EssentiaSetupError> {
@@ -111,12 +97,7 @@ fn install_managed_essentia_at(
         });
     }
 
-    let parent = paths
-        .stable
-        .parent()
-        .ok_or("Managed Essentia path has no parent")?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
+    paths.prepare_parent()?;
     let _lock = AdvisoryLock::acquire(&paths.lock, lock_config.timeout, lock_config.poll)?;
 
     if let Ok(mut runtime) =
@@ -130,44 +111,8 @@ fn install_managed_essentia_at(
     }
 
     let python = find_python_314(runner)?;
-    if fs::symlink_metadata(&paths.generations)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
-        return Err(EssentiaSetupError::new(
-            EssentiaSetupErrorKind::Filesystem,
-            format!(
-                "Managed generation directory must not be a symlink: {}",
-                paths.generations.display()
-            ),
-        ));
-    }
-    fs::create_dir_all(&paths.generations).map_err(|error| {
-        format!(
-            "Failed to create managed generation directory {}: {error}",
-            paths.generations.display()
-        )
-    })?;
-    let generations_metadata = fs::symlink_metadata(&paths.generations).map_err(|error| {
-        format!(
-            "Failed to inspect managed generation directory {}: {error}",
-            paths.generations.display()
-        )
-    })?;
-    if generations_metadata.file_type().is_symlink() || !generations_metadata.is_dir() {
-        return Err(EssentiaSetupError::new(
-            EssentiaSetupErrorKind::Filesystem,
-            format!(
-                "Managed generation path is not a real directory: {}",
-                paths.generations.display()
-            ),
-        ));
-    }
-    let generation = paths.generations.join(format!(
-        "runtime-{}-{}",
-        std::process::id(),
-        unique_suffix()
-    ));
-    let mut generation_guard = IncompleteGeneration::new(generation.clone());
+    let generation_guard = paths.prepare_generation()?;
+    let generation = generation_guard.path().to_path_buf();
     let venv_args = vec![
         "-m".to_string(),
         "venv".to_string(),
@@ -203,8 +148,8 @@ fn install_managed_essentia_at(
     )?;
     inspect_essentia_python_with_runner(runner, &candidate.to_string_lossy(), probe_timeout)?;
 
-    let previous = switch_stable_generation(&paths.stable, &generation)
-        .map_err(|error| EssentiaSetupError::new(EssentiaSetupErrorKind::Activation, error))?;
+    let mut activation = ActivationTransaction::prepare(paths, generation_guard);
+    activation.switch().map_err(setup_activation_error)?;
     let stable_runtime = inspect_essentia_python_with_runner(
         runner,
         &stable_python.to_string_lossy(),
@@ -213,8 +158,7 @@ fn install_managed_essentia_at(
     let mut stable_runtime = match stable_runtime {
         Ok(runtime) => runtime,
         Err(stable_error) => {
-            if let Err(restore_error) = restore_stable_generation(&paths.stable, previous) {
-                generation_guard.commit();
+            if let Err(restore_error) = activation.rollback() {
                 return Err(EssentiaSetupError::new(
                     EssentiaSetupErrorKind::Activation,
                     format!(
@@ -232,8 +176,10 @@ fn install_managed_essentia_at(
         }
     };
     stable_runtime.python_path = stable_python.to_string_lossy().to_string();
-    generation_guard.commit();
-    prune_superseded_runtime(&paths.stable, previous);
+    activation
+        .stable_validated()
+        .map_err(setup_activation_error)?;
+    activation.commit().map_err(setup_activation_error)?;
     Ok(ManagedEssentiaInstall {
         runtime: stable_runtime,
         python_bin_used: Some(python),
@@ -349,216 +295,6 @@ fn format_diagnostic_output(output: &CommandResult) -> String {
         &String::from_utf8_lossy(&output.stderr),
         &String::from_utf8_lossy(&output.stdout),
     )
-}
-
-fn switch_stable_generation(stable: &Path, generation: &Path) -> Result<Option<PathBuf>, String> {
-    let parent = stable
-        .parent()
-        .ok_or("Managed Essentia path has no parent")?;
-    let legacy = (stable.exists() && !stable.is_symlink())
-        .then(|| parent.join(format!("essentia-venv.legacy-{}", unique_suffix())));
-    // For legacy-directory migration the exchange name is already the final
-    // preserved name. One atomic exchange is therefore sufficient: there is
-    // no vulnerable follow-up rename or second exchange to recover from.
-    let replacement = legacy
-        .clone()
-        .unwrap_or_else(|| parent.join(format!(".essentia-venv-switch-{}", unique_suffix())));
-    let previous = if stable.exists() || stable.is_symlink() {
-        Some(fs::read_link(stable).unwrap_or_else(|_| stable.to_path_buf()))
-    } else {
-        None
-    };
-    let relative = generation.strip_prefix(parent).unwrap_or(generation);
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(relative, &replacement)
-        .map_err(|e| format!("Failed to create managed runtime switch: {e}"))?;
-    #[cfg(not(unix))]
-    return Err("Managed Essentia generations require Unix symlink support".to_string());
-    if let Some(legacy) = legacy {
-        if let Err(error) = atomic_exchange_paths(stable, &replacement) {
-            let _ = fs::remove_file(&replacement);
-            return Err(format!(
-                "Failed to atomically activate the managed runtime over the legacy directory: {error}"
-            ));
-        }
-        debug_assert_eq!(replacement, legacy);
-        return Ok(Some(legacy));
-    }
-    if let Err(error) = fs::rename(&replacement, stable) {
-        let _ = fs::remove_file(&replacement);
-        return Err(format!(
-            "Failed to atomically activate validated managed runtime: {error}"
-        ));
-    }
-    Ok(previous)
-}
-
-fn restore_stable_generation(stable: &Path, previous: Option<PathBuf>) -> Result<(), String> {
-    let parent = stable
-        .parent()
-        .ok_or("Managed Essentia path has no parent")?;
-    match previous {
-        Some(previous)
-            if previous.file_name().is_some_and(|name| {
-                name.to_string_lossy().starts_with("essentia-venv.legacy-")
-            }) =>
-        {
-            atomic_exchange_paths(stable, &previous)
-                .map_err(|error| format!("Failed to restore legacy managed runtime: {error}"))?;
-            fs::remove_file(&previous).map_err(|error| {
-                format!(
-                    "Legacy runtime was restored, but the failed runtime link {} could not be removed: {error}",
-                    previous.display()
-                )
-            })?;
-        }
-        Some(target) => {
-            #[cfg(unix)]
-            {
-                let replacement =
-                    parent.join(format!(".essentia-venv-restore-{}", unique_suffix()));
-                std::os::unix::fs::symlink(target, &replacement).map_err(|error| {
-                    format!("Failed to prepare managed runtime restoration: {error}")
-                })?;
-                if let Err(error) = fs::rename(&replacement, stable) {
-                    let _ = fs::remove_file(&replacement);
-                    return Err(format!(
-                        "Failed to restore managed runtime symlink: {error}"
-                    ));
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                return Err("Managed Essentia generations require Unix symlink support".to_string());
-            }
-        }
-        None => {
-            fs::remove_file(stable)
-                .map_err(|error| format!("Failed to remove rejected managed runtime: {error}"))?;
-        }
-    }
-    Ok(())
-}
-
-fn prune_superseded_runtime(stable: &Path, previous: Option<PathBuf>) {
-    let Some(previous) = previous else {
-        return;
-    };
-    let Some(parent) = stable.parent() else {
-        return;
-    };
-    let path = if previous.is_absolute() {
-        previous
-    } else {
-        parent.join(previous)
-    };
-    let generations = parent.join(ESSENTIA_VENV_GENERATIONS);
-    if fs::symlink_metadata(&generations).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return;
-    }
-    let Ok(canonical_path) = fs::canonicalize(&path) else {
-        return;
-    };
-    let name = canonical_path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    let is_managed_generation = fs::canonicalize(&generations).is_ok_and(|root| {
-        canonical_path.parent() == Some(root.as_path()) && name.starts_with("runtime-")
-    });
-    let is_preserved_legacy = fs::canonicalize(parent).is_ok_and(|root| {
-        canonical_path.parent() == Some(root.as_path()) && name.starts_with("essentia-venv.legacy-")
-    });
-    if is_managed_generation || is_preserved_legacy {
-        let _ = fs::remove_dir_all(path);
-    }
-}
-
-struct IncompleteGeneration {
-    path: PathBuf,
-    committed: bool,
-}
-impl IncompleteGeneration {
-    fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            committed: false,
-        }
-    }
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-impl Drop for IncompleteGeneration {
-    fn drop(&mut self) {
-        if !self.committed {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
-fn unique_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
-/// A process-owned advisory lock. Unlike a create-new sentinel, the kernel
-/// releases this lock when a process exits unexpectedly.
-#[derive(Debug)]
-struct AdvisoryLock {
-    file: File,
-}
-impl AdvisoryLock {
-    fn acquire(path: &Path, timeout: Duration, poll: Duration) -> Result<Self, EssentiaSetupError> {
-        let started = Instant::now();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|error| {
-                EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::Filesystem,
-                    format!(
-                        "Failed to open managed Essentia setup lock at {}: {error}",
-                        path.display()
-                    ),
-                )
-            })?;
-        loop {
-            if platform::try_lock_exclusive(&file).map_err(|error| {
-                EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::Filesystem,
-                    format!(
-                        "Failed to acquire managed Essentia setup lock at {}: {error}",
-                        path.display()
-                    ),
-                )
-            })? {
-                return Ok(Self { file });
-            }
-            if started.elapsed() >= timeout {
-                return Err(EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::LockTimeout,
-                    format!(
-                        "Timed out waiting for managed Essentia setup lock at {}",
-                        path.display()
-                    ),
-                ));
-            }
-            std::thread::sleep(poll);
-        }
-    }
-}
-impl Drop for AdvisoryLock {
-    fn drop(&mut self) {
-        if let Err(error) = platform::unlock(&self.file) {
-            tracing::warn!("Failed to release managed Essentia setup lock: {error}");
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1204,6 +940,74 @@ mod tests {
             let _guard = IncompleteGeneration::new(generation.clone());
         }
 
+        assert!(!generation.exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_activation_drop_emergency_restores_and_cleans() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        let previous = make_previous_symlink(&paths);
+        let previous_target = fs::read_link(&paths.stable).unwrap();
+        let generation = paths.generations.join("runtime-emergency");
+        fs::create_dir_all(generation.join("bin")).unwrap();
+        fs::write(generation.join("bin/python"), b"validated python").unwrap();
+        let guard = IncompleteGeneration::new(generation.clone());
+
+        let mut activation = ActivationTransaction::prepare(&paths, guard);
+        assert_eq!(activation.phase(), ActivationPhase::Prepared);
+        activation.switch().unwrap();
+        assert_eq!(activation.phase(), ActivationPhase::Switched);
+        assert_ne!(fs::read_link(&paths.stable).unwrap(), previous_target);
+        drop(activation);
+
+        assert_eq!(fs::read_link(&paths.stable).unwrap(), previous_target);
+        assert!(previous.exists());
+        assert!(!generation.exists());
+        assert_no_switch_artifacts(dir.path());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_activation_drop_preserves_generation_when_emergency_restore_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        let previous = make_previous_symlink(&paths);
+        let generation = paths.generations.join("runtime-emergency-failure");
+        fs::create_dir_all(generation.join("bin")).unwrap();
+        fs::write(generation.join("bin/python"), b"validated python").unwrap();
+        let guard = IncompleteGeneration::new(generation.clone());
+        let mut activation = ActivationTransaction::prepare(&paths, guard);
+        activation.switch().unwrap();
+        fs::remove_file(&paths.stable).unwrap();
+        fs::create_dir(&paths.stable).unwrap();
+
+        drop(activation);
+
+        assert!(paths.stable.is_dir());
+        assert!(previous.exists());
+        assert!(generation.join("bin/python").is_file());
+        assert_no_switch_artifacts(dir.path());
+    }
+
+    #[test]
+    fn essentia_environment_activation_rejects_invalid_phase_without_advancing() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        let generation = dir.path().join("runtime-invalid-phase");
+        fs::create_dir(&generation).unwrap();
+        let guard = IncompleteGeneration::new(generation.clone());
+        let mut activation = ActivationTransaction::prepare(&paths, guard);
+
+        let error = activation.commit().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Cannot commit managed runtime while activation is Prepared; expected StableValidated"
+        );
+        assert_eq!(activation.phase(), ActivationPhase::Prepared);
+        drop(activation);
         assert!(!generation.exists());
     }
 
