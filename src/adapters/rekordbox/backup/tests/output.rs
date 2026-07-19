@@ -1,13 +1,15 @@
 use std::io;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 
-use super::super::output::{BoundedOutput, OutputReaderTask, read_bounded_output};
+use super::super::output::{
+    BoundedOutput, DetachedOutputReaderJoinTask, OutputReaderTask, read_bounded_output,
+};
 
 struct FailingReader;
 
@@ -30,6 +32,58 @@ impl AsyncRead for PanickingReader {
         _buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         panic!("fixture reader panic")
+    }
+}
+
+struct BlockingReader {
+    gate: Arc<BlockingReaderGate>,
+}
+
+struct BlockingReaderGate {
+    entered: AtomicBool,
+    released: Mutex<bool>,
+    released_changed: Condvar,
+}
+
+impl BlockingReaderGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: AtomicBool::new(false),
+            released: Mutex::new(false),
+            released_changed: Condvar::new(),
+        })
+    }
+
+    fn release(&self) {
+        *self.released.lock().expect("reader gate should lock") = true;
+        self.released_changed.notify_all();
+    }
+}
+
+struct BlockingReaderRelease(Arc<BlockingReaderGate>);
+
+impl Drop for BlockingReaderRelease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+impl AsyncRead for BlockingReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.gate.entered.store(true, Ordering::Release);
+        let mut released = self.gate.released.lock().expect("reader gate should lock");
+        while !*released {
+            released = self
+                .gate
+                .released_changed
+                .wait(released)
+                .expect("reader gate wait should not be poisoned");
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -83,6 +137,53 @@ async fn output_reader_cleanup_aborts_persistent_escaped_pipe_holders() {
     assert_eq!(activity.load(Ordering::Acquire), 0);
     assert!(stdout_holder.write_all(b"still open").await.is_err());
     assert!(stderr_holder.write_all(b"still open").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn output_reader_timeout_handoff_retains_and_joins_aborted_handle() {
+    let gate = BlockingReaderGate::new();
+    let release = BlockingReaderRelease(Arc::clone(&gate));
+    let activity = Arc::new(AtomicUsize::new(0));
+    let mut stdout_task = OutputReaderTask::spawn(
+        "stdout",
+        BlockingReader {
+            gate: Arc::clone(&gate),
+        },
+        Arc::clone(&activity),
+    );
+    let mut stderr_task =
+        OutputReaderTask::spawn("stderr", tokio::io::empty(), Arc::clone(&activity));
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !gate.entered.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("blocking output reader should enter its poll");
+
+    stdout_task.abort_if_running();
+    stderr_task.abort_if_running();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), stdout_task.finish_after_abort())
+            .await
+            .is_err(),
+        "blocked reader join should exceed the injected wait"
+    );
+    assert!(
+        stdout_task.owns_handle(),
+        "cancelling the join wait must retain reader ownership"
+    );
+
+    let cleanup = DetachedOutputReaderJoinTask::spawn(&mut stdout_task, &mut stderr_task)
+        .expect("timed-out reader handle should transfer to detached cleanup");
+    assert!(!stdout_task.owns_handle());
+    assert!(!stderr_task.owns_handle());
+    drop(release);
+    tokio::time::timeout(Duration::from_secs(1), cleanup.join())
+        .await
+        .expect("detached cleanup should join the released reader");
+    assert_eq!(activity.load(Ordering::Acquire), 0);
 }
 
 #[tokio::test]

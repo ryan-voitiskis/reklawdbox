@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::error::{BackupError, BackupErrorKind, CleanupEntry, CleanupReport};
-use super::output::{BoundedOutput, OutputReaderTask};
+use super::output::{BoundedOutput, DetachedOutputReaderJoinTask, OutputReaderTask};
 use super::process_group::{ProcessGroupOwnership, reap_leader_after_group_release};
 use super::script::PreparedScript;
 
@@ -573,6 +573,7 @@ impl BackupSupervisor {
             )
         })
         .await;
+        let reader_cleanup_timed_out = reader_results.is_err();
         match reader_results {
             Ok((stdout, stderr)) => {
                 append_output_cleanup("stdout", stdout, &mut report);
@@ -584,6 +585,12 @@ impl BackupSupervisor {
         }
         if self.reader_activity.load(Ordering::Acquire) != 0 {
             report.push(CleanupEntry::OutputTasksStillActive);
+        }
+        if reader_cleanup_timed_out
+            && let Some(join_task) =
+                DetachedOutputReaderJoinTask::spawn(&mut self.stdout, &mut self.stderr)
+        {
+            join_task.detach();
         }
         report
     }

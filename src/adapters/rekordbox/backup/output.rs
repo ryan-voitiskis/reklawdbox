@@ -6,6 +6,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use super::error::{BackupError, BackupErrorKind};
 
 const FAILURE_OUTPUT_LIMIT: usize = 8 * 1024;
+type ReaderJoinHandle = tokio::task::JoinHandle<std::io::Result<BoundedOutput>>;
 
 pub(super) struct BoundedOutput {
     pub(super) bytes: Vec<u8>,
@@ -24,7 +25,7 @@ impl BoundedOutput {
 
 pub(super) struct OutputReaderTask {
     label: &'static str,
-    handle: Option<tokio::task::JoinHandle<std::io::Result<BoundedOutput>>>,
+    handle: Option<ReaderJoinHandle>,
 }
 
 impl OutputReaderTask {
@@ -64,11 +65,21 @@ impl OutputReaderTask {
     pub(super) async fn finish_after_abort(
         &mut self,
     ) -> Option<Result<BoundedOutput, BackupError>> {
-        let handle = self.handle.take()?;
-        match handle.await {
+        let result = self.handle.as_mut()?.await;
+        self.handle.take();
+        match result {
             Err(error) if error.is_cancelled() => None,
             result => Some(map_output_reader_result(self.label, result)),
         }
+    }
+
+    fn take_handle(&mut self) -> Option<ReaderJoinHandle> {
+        self.handle.take()
+    }
+
+    #[cfg(test)]
+    pub(super) fn owns_handle(&self) -> bool {
+        self.handle.is_some()
     }
 }
 
@@ -77,6 +88,48 @@ impl Drop for OutputReaderTask {
         if let Some(handle) = self.handle.as_ref() {
             handle.abort();
         }
+    }
+}
+
+/// Explicitly owns reader handles that exceeded the bounded cleanup wait.
+///
+/// Spawning performs the ownership handoff. `detach` only drops the outer task
+/// handle; the spawned task continues until both aborted readers are joined.
+pub(super) struct DetachedOutputReaderJoinTask {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl DetachedOutputReaderJoinTask {
+    pub(super) fn spawn(
+        stdout: &mut OutputReaderTask,
+        stderr: &mut OutputReaderTask,
+    ) -> Option<Self> {
+        let stdout = stdout.take_handle();
+        let stderr = stderr.take_handle();
+        if stdout.is_none() && stderr.is_none() {
+            return None;
+        }
+        let handle = tokio::spawn(async move {
+            tokio::join!(join_reader(stdout), join_reader(stderr));
+        });
+        Some(Self { handle })
+    }
+
+    pub(super) fn detach(self) {
+        drop(self.handle);
+    }
+
+    #[cfg(test)]
+    pub(super) async fn join(self) {
+        self.handle
+            .await
+            .expect("detached output-reader join task should complete");
+    }
+}
+
+async fn join_reader(handle: Option<ReaderJoinHandle>) {
+    if let Some(handle) = handle {
+        let _ = handle.await;
     }
 }
 
