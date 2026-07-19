@@ -21,6 +21,59 @@ fn dummy_norm_stats(dims: usize) -> TimbralNormalization {
     }
 }
 
+const DISCOVERY_GOLDEN_TOLERANCE: f64 = 1e-12;
+
+struct DiscoveredPoolGolden<'a> {
+    track_ids: &'a [&'a str],
+    mean: f64,
+    minimum: f64,
+    core: &'a [&'a str],
+    edge: &'a [&'a str],
+    score: f64,
+}
+
+fn assert_discovered_pool_golden(pool: &DiscoveredPool, expected: DiscoveredPoolGolden<'_>) {
+    assert_eq!(
+        pool.track_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected.track_ids,
+    );
+    assert!(
+        (pool.mean_compatibility - expected.mean).abs() <= DISCOVERY_GOLDEN_TOLERANCE,
+        "mean compatibility: expected {:.17}, got {:.17}",
+        expected.mean,
+        pool.mean_compatibility,
+    );
+    assert!(
+        (pool.min_compatibility - expected.minimum).abs() <= DISCOVERY_GOLDEN_TOLERANCE,
+        "minimum compatibility: expected {:.17}, got {:.17}",
+        expected.minimum,
+        pool.min_compatibility,
+    );
+    assert_eq!(
+        pool.core_members
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected.core,
+    );
+    assert_eq!(
+        pool.edge_members
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected.edge,
+    );
+    assert!(
+        (pool.score - expected.score).abs() <= DISCOVERY_GOLDEN_TOLERANCE,
+        "pool score: expected {:.17}, got {:.17}",
+        expected.score,
+        pool.score,
+    );
+}
+
 #[test]
 fn planning_pool_scoring_is_symmetric() {
     let a = simple_profile("sym-a", "8A", 126.0, 0.6, "House");
@@ -711,6 +764,121 @@ fn planning_pool_discovery_finds_planted_clusters() {
     }
     assert!(found_a, "should find a pool from cluster A");
     assert!(found_b, "should find a pool from cluster B");
+}
+
+#[test]
+fn planning_pool_discovery_base_golden_preserves_thresholds_membership_and_truncation() {
+    let profiles = [
+        simple_profile("left-a", "8A", 126.0, 0.50, "House"),
+        simple_profile("left-b", "8A", 126.5, 0.52, "House"),
+        simple_profile("left-c", "9A", 127.0, 0.55, "Deep House"),
+        simple_profile("bridge", "10A", 128.0, 0.60, "Tech House"),
+        simple_profile("right-a", "11A", 129.0, 0.65, "Techno"),
+        simple_profile("right-b", "11A", 129.5, 0.68, "Techno"),
+        simple_profile("right-c", "12A", 130.0, 0.70, "Techno"),
+    ];
+    let refs: Vec<_> = profiles.iter().collect();
+    let weights = pool_weights(PoolPreset::Balanced);
+    let scoring = pool_scoring_policy(true, 128.0, &weights, None);
+
+    let lower_threshold = discover_pools(&refs, scoring, pool_discovery_bounds(0.65, 2, 10, 20));
+    assert_eq!(lower_threshold.len(), 3);
+    assert_discovered_pool_golden(
+        &lower_threshold[0],
+        DiscoveredPoolGolden {
+            track_ids: &["left-a", "left-b", "left-c", "bridge"],
+            mean: 0.888_671_010_070_466_8,
+            minimum: 0.773_773_629_633_860_1,
+            core: &["left-c", "left-b"],
+            edge: &["left-a", "bridge"],
+            score: 0.888_671_010_070_466_8,
+        },
+    );
+    assert_discovered_pool_golden(
+        &lower_threshold[1],
+        DiscoveredPoolGolden {
+            track_ids: &["bridge", "right-a", "right-b", "right-c"],
+            mean: 0.887_359_850_282_306_8,
+            minimum: 0.714_577_012_185_744_8,
+            core: &["right-a", "right-b"],
+            edge: &["right-c", "bridge"],
+            score: 0.887_359_850_282_306_8,
+        },
+    );
+    assert_discovered_pool_golden(
+        &lower_threshold[2],
+        DiscoveredPoolGolden {
+            track_ids: &["left-c", "bridge", "right-a", "right-b"],
+            mean: 0.828_262_328_170_095_3,
+            minimum: 0.668_643_271_670_039_4,
+            core: &["bridge", "right-a"],
+            edge: &["right-b", "left-c"],
+            score: 0.828_262_328_170_095_3,
+        },
+    );
+
+    let higher_threshold = discover_pools(&refs, scoring, pool_discovery_bounds(0.75, 2, 10, 20));
+    assert_eq!(higher_threshold.len(), 3);
+    assert_discovered_pool_golden(
+        &higher_threshold[0],
+        DiscoveredPoolGolden {
+            track_ids: &["left-a", "left-b", "left-c", "bridge"],
+            mean: 0.888_671_010_070_466_8,
+            minimum: 0.773_773_629_633_860_1,
+            core: &["left-c", "left-b"],
+            edge: &["left-a", "bridge"],
+            score: 0.888_671_010_070_466_8,
+        },
+    );
+    assert_discovered_pool_golden(
+        &higher_threshold[1],
+        DiscoveredPoolGolden {
+            track_ids: &["right-a", "right-b", "right-c"],
+            mean: 0.976_735_891_970_003_4,
+            minimum: 0.959_832_391_266_795_8,
+            core: &["right-b", "right-a"],
+            edge: &["right-c"],
+            score: 0.830_225_508_174_502_9,
+        },
+    );
+    assert_discovered_pool_golden(
+        &higher_threshold[2],
+        DiscoveredPoolGolden {
+            track_ids: &["bridge", "right-a", "right-b"],
+            mean: 0.890_559_207_586_280_6,
+            minimum: 0.824_084_189_563_506_7,
+            core: &["right-a", "right-b"],
+            edge: &["bridge"],
+            score: 0.756_975_326_448_338_5,
+        },
+    );
+
+    assert_ne!(
+        lower_threshold[1].track_ids, higher_threshold[1].track_ids,
+        "raising the threshold must exercise a real membership change",
+    );
+    let mut bridges = find_bridge_tracks(&higher_threshold);
+    bridges.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        bridges,
+        [
+            ("bridge".to_string(), vec![0, 2]),
+            ("right-a".to_string(), vec![1, 2]),
+            ("right-b".to_string(), vec![1, 2]),
+        ],
+    );
+
+    let truncated = discover_pools(&refs, scoring, pool_discovery_bounds(0.75, 2, 10, 2));
+    assert_eq!(truncated.len(), 2);
+    assert_eq!(truncated[0].track_ids, higher_threshold[0].track_ids);
+    assert_eq!(truncated[1].track_ids, higher_threshold[1].track_ids);
+    assert!(
+        !truncated
+            .iter()
+            .any(|pool| pool.track_ids == higher_threshold[2].track_ids)
+    );
+    assert!((truncated[0].score - higher_threshold[0].score).abs() <= f64::EPSILON);
+    assert!((truncated[1].score - higher_threshold[1].score).abs() <= f64::EPSILON);
 }
 
 #[test]

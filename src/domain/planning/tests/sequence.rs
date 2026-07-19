@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::domain::planning::*;
 
 use super::support::{
-    ProfileAnalysis, ProfileSpec, sequence_policy, simple_profile, synth_profile,
+    ProfileAnalysis, ProfileSpec, mixing_policy, sequence_policy, simple_profile, synth_profile,
 };
 
 const MEAN_COMPOSITE_MIN: f64 = 0.65;
@@ -113,6 +113,358 @@ fn build_pool(profiles: Vec<TrackProfile>) -> HashMap<String, TrackProfile> {
         .into_iter()
         .map(|p| (p.track.id.clone(), p))
         .collect()
+}
+
+const SEQUENCE_GOLDEN_TOLERANCE: f64 = 1e-12;
+
+type TransitionVector = [f64; 8];
+type AdjustmentGolden<'a> = &'a [(&'a str, f64, f64)];
+
+fn assert_sequence_float(actual: f64, expected: f64, label: &str) {
+    assert!(
+        (actual - expected).abs() <= SEQUENCE_GOLDEN_TOLERANCE,
+        "{label}: expected {expected:.17}, got {actual:.17}",
+    );
+}
+
+fn assert_transition_goldens(
+    plan: &CandidatePlan,
+    expected_vectors: &[TransitionVector],
+    expected_adjustments: &[AdjustmentGolden<'_>],
+) {
+    assert_eq!(plan.transitions.len(), expected_vectors.len());
+    assert_eq!(plan.transitions.len(), expected_adjustments.len());
+    for (index, ((transition, expected), adjustments)) in plan
+        .transitions
+        .iter()
+        .zip(expected_vectors)
+        .zip(expected_adjustments)
+        .enumerate()
+    {
+        assert_eq!(transition.from_index, index);
+        assert_eq!(transition.to_index, index + 1);
+        let scores = &transition.scores;
+        let actual = [
+            scores.key.value,
+            scores.bpm.value,
+            scores.energy.value,
+            scores.genre.value,
+            scores.brightness.value,
+            scores.rhythm.value,
+            scores.composite,
+            scores.bpm_adjustment_pct,
+        ];
+        for (axis, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+            assert_sequence_float(
+                actual,
+                *expected,
+                &format!("transition {index} axis {axis}"),
+            );
+        }
+        assert_eq!(scores.effective_to_key, None);
+        assert_eq!(scores.pitch_shift_semitones, 0);
+        assert_eq!(scores.adjustments.len(), adjustments.len());
+        for (actual, (kind, delta, composite_without)) in
+            scores.adjustments.iter().zip(*adjustments)
+        {
+            assert_eq!(actual.kind, *kind);
+            assert_sequence_float(actual.delta, *delta, "adjustment delta");
+            assert_sequence_float(
+                actual.composite_without,
+                *composite_without,
+                "pre-adjustment composite",
+            );
+        }
+    }
+}
+
+fn golden_sequence_profiles() -> HashMap<String, TrackProfile> {
+    build_pool(vec![
+        simple_profile("b1", "8A", 126.0, 0.4, "Deep House"),
+        simple_profile("b2", "9A", 127.0, 0.5, "Deep House"),
+        simple_profile("b3", "10A", 128.0, 0.6, "House"),
+        simple_profile("b4", "11A", 129.0, 0.7, "House"),
+        simple_profile("b5", "12A", 130.0, 0.8, "Tech House"),
+    ])
+}
+
+#[test]
+fn planning_sequence_base_golden_preserves_greedy_beam_and_bpm_trajectory() {
+    let profiles = golden_sequence_profiles();
+    let phases = [
+        EnergyPhase::Warmup,
+        EnergyPhase::Build,
+        EnergyPhase::Peak,
+        EnergyPhase::Peak,
+    ];
+    let target_bpms = compute_bpm_trajectory(&phases, 126.0, 130.0);
+    assert_eq!(target_bpms, [126.0, 128.0, 130.0, 130.0]);
+    let weights = priority_weights(SequencingPriority::Balanced);
+    let policy = SequencePolicy {
+        target_track_count: 4,
+        energy_phases: &phases,
+        mixing: mixing_policy(&weights, false, Some(HarmonicMixingStyle::Balanced)),
+        bpm_drift_pct: 6.0,
+        target_bpms: Some(&target_bpms),
+    };
+
+    let greedy_zero = build_candidate_plan(&profiles, "b1", policy, 0);
+    assert_eq!(greedy_zero.ordered_ids, ["b1", "b2", "b3", "b4"]);
+    assert_transition_goldens(
+        &greedy_zero,
+        &[
+            [
+                0.791_372_993_012_792_4,
+                0.988_470_302_628_205_9,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.923_654_068_740_563_4,
+                0.787_401_574_803_149_5,
+            ],
+            [
+                0.634_955_953_910_760_7,
+                0.956_025_766_200_672_3,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.714_931_693_427_485_5,
+                1.562_5,
+            ],
+            [
+                0.635_732_997_076_276_7,
+                0.988_820_358_344_232_1,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.868_804_671_519_681_9,
+                0.775_193_798_449_612_4,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.694_931_693_427_485_5)],
+            &[("genre_streak", 0.02, 0.848_804_671_519_681_9)],
+        ],
+    );
+
+    let greedy_one = build_candidate_plan(&profiles, "b1", policy, 1);
+    assert_eq!(greedy_one.ordered_ids, ["b1", "b3", "b4", "b5"]);
+    assert_transition_goldens(
+        &greedy_one,
+        &[
+            [0.45, 1.0, 1.0, 0.7, 0.5, 0.5, 0.745_882_352_941_176_6, 0.0],
+            [
+                0.793_050_646_990_076_1,
+                0.988_820_358_344_232_1,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.924_328_547_959_846_2,
+                0.775_193_798_449_612_4,
+            ],
+            [
+                0.793_050_646_990_076_1,
+                1.0,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.781_076_698_937_674,
+                0.0,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.904_328_547_959_846_2)],
+            &[("genre_streak", 0.02, 0.761_076_698_937_673_9)],
+        ],
+    );
+
+    let beam = build_candidate_plan_beam(&profiles, "b1", policy, 4);
+    assert_eq!(
+        beam.iter()
+            .map(|plan| plan.ordered_ids.as_slice())
+            .collect::<Vec<_>>(),
+        [
+            ["b1", "b2", "b3", "b4"].as_slice(),
+            ["b1", "b3", "b4", "b5"].as_slice(),
+            ["b1", "b3", "b5", "b4"].as_slice(),
+            ["b1", "b3", "b4", "b2"].as_slice(),
+        ],
+    );
+    assert_transition_goldens(
+        &beam[0],
+        &[
+            [
+                0.791_372_993_012_792_4,
+                0.988_470_302_628_205_9,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.923_654_068_740_563_4,
+                0.787_401_574_803_149_5,
+            ],
+            [
+                0.634_955_953_910_760_7,
+                0.956_025_766_200_672_3,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.714_931_693_427_485_5,
+                1.562_5,
+            ],
+            [
+                0.635_732_997_076_276_7,
+                0.988_820_358_344_232_1,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.868_804_671_519_681_9,
+                0.775_193_798_449_612_4,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.694_931_693_427_485_5)],
+            &[("genre_streak", 0.02, 0.848_804_671_519_681_9)],
+        ],
+    );
+    assert_transition_goldens(
+        &beam[1],
+        &[
+            [0.45, 1.0, 1.0, 0.7, 0.5, 0.5, 0.745_882_352_941_176_6, 0.0],
+            [
+                0.793_050_646_990_076_1,
+                0.988_820_358_344_232_1,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.924_328_547_959_846_2,
+                0.775_193_798_449_612_4,
+            ],
+            [
+                0.793_050_646_990_076_1,
+                1.0,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.781_076_698_937_674,
+                0.0,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.904_328_547_959_846_2)],
+            &[("genre_streak", 0.02, 0.761_076_698_937_673_9)],
+        ],
+    );
+    assert_transition_goldens(
+        &beam[2],
+        &[
+            [0.45, 1.0, 1.0, 0.7, 0.5, 0.5, 0.745_882_352_941_176_6, 0.0],
+            [0.45, 1.0, 0.5, 0.8, 0.5, 0.5, 0.66, 0.0],
+            [
+                0.793_050_646_990_076_1,
+                0.988_820_358_344_232_1,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.778_446_195_018_669_7,
+                0.775_193_798_449_612_4,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.64)],
+            &[("genre_streak", 0.02, 0.758_446_195_018_669_7)],
+        ],
+    );
+    assert_transition_goldens(
+        &beam[3],
+        &[
+            [0.45, 1.0, 1.0, 0.7, 0.5, 0.5, 0.745_882_352_941_176_6, 0.0],
+            [
+                0.793_050_646_990_076_1,
+                0.988_820_358_344_232_1,
+                1.0,
+                1.0,
+                0.5,
+                0.5,
+                0.924_328_547_959_846_2,
+                0.775_193_798_449_612_4,
+            ],
+            [
+                0.299_565_607_666_593_6,
+                0.903_767_237_891_080_2,
+                0.5,
+                0.8,
+                0.5,
+                0.5,
+                0.292_131_252_869_526,
+                2.362_204_724_409_448_6,
+            ],
+        ],
+        &[
+            &[],
+            &[("genre_streak", 0.02, 0.904_328_547_959_846_2)],
+            &[
+                ("genre_streak", 0.02, 0.564_262_505_739_051_9),
+                (
+                    "harmonic_gate",
+                    -0.292_131_252_869_526,
+                    0.584_262_505_739_051_9,
+                ),
+            ],
+        ],
+    );
+}
+
+#[test]
+fn planning_sequence_base_golden_preserves_id_tie_break_and_variation() {
+    let profiles = build_pool(vec![
+        simple_profile("tie-start", "8A", 126.0, 0.5, "House"),
+        simple_profile("tie-a", "8A", 126.0, 0.5, "House"),
+        simple_profile("tie-b", "8A", 126.0, 0.5, "House"),
+        simple_profile("tie-c", "8A", 126.0, 0.5, "House"),
+    ]);
+    let phases = [EnergyPhase::Build; 4];
+    let weights = priority_weights(SequencingPriority::Balanced);
+    let policy = sequence_policy(4, &phases, &weights, HarmonicMixingStyle::Balanced);
+    let expected_vectors = [
+        [1.0, 1.0, 0.3, 1.0, 0.5, 0.5, 0.851_764_705_882_353_1, 0.0],
+        [1.0, 1.0, 0.3, 1.0, 0.5, 0.5, 0.851_764_705_882_353_1, 0.0],
+        [1.0, 1.0, 0.3, 1.0, 0.5, 0.5, 0.851_764_705_882_353_1, 0.0],
+    ];
+    let expected_adjustments: &[AdjustmentGolden<'_>] = &[
+        &[],
+        &[("genre_streak", 0.02, 0.831_764_705_882_353_1)],
+        &[("genre_streak", 0.02, 0.831_764_705_882_353_1)],
+    ];
+
+    let variation_zero = build_candidate_plan(&profiles, "tie-start", policy, 0);
+    assert_eq!(
+        variation_zero.ordered_ids,
+        ["tie-start", "tie-a", "tie-b", "tie-c"],
+    );
+    assert_transition_goldens(&variation_zero, &expected_vectors, expected_adjustments);
+
+    let variation_one = build_candidate_plan(&profiles, "tie-start", policy, 1);
+    assert_eq!(
+        variation_one.ordered_ids,
+        ["tie-start", "tie-b", "tie-a", "tie-c"],
+    );
+    assert_transition_goldens(&variation_one, &expected_vectors, expected_adjustments);
 }
 
 fn pool_camelot_walk() -> HashMap<String, TrackProfile> {

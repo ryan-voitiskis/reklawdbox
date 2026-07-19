@@ -706,6 +706,269 @@ mod tests {
 
     use super::*;
 
+    const GOLDEN_TOLERANCE: f64 = 1e-12;
+
+    fn assert_golden_float(actual: f64, expected: f64, label: &str) {
+        assert!(
+            (actual - expected).abs() <= GOLDEN_TOLERANCE,
+            "{label}: expected {expected:.17}, got {actual:.17}",
+        );
+    }
+
+    fn expansion_track(
+        id: &str,
+        genre: &str,
+        bpm: f64,
+        key: &str,
+    ) -> crate::domain::library::Track {
+        crate::domain::library::Track {
+            id: id.to_string(),
+            title: format!("Track {id}"),
+            artist: "Probe Artist".to_string(),
+            album: "Probe Album".to_string(),
+            genre: genre.to_string(),
+            bpm,
+            key: key.to_string(),
+            rating: 3,
+            comments: String::new(),
+            color: String::new(),
+            color_code: 0,
+            label: String::new(),
+            remixer: String::new(),
+            year: 2025,
+            length: 300,
+            file_path: format!("/tmp/{id}.flac"),
+            play_count: 0,
+            bit_rate: 1411,
+            sample_rate: 44100,
+            file_kind: crate::domain::library::FileKind::Flac,
+            date_added: "2025-01-01".to_string(),
+            position: None,
+            played_at: None,
+        }
+    }
+
+    fn expansion_seed_tracks() -> Vec<crate::domain::library::Track> {
+        vec![
+            expansion_track("seed-a", "House", 126.0, "8A"),
+            expansion_track("seed-b", "Deep House", 127.0, "9A"),
+        ]
+    }
+
+    fn expansion_candidates() -> Vec<crate::domain::library::Track> {
+        vec![
+            expansion_track("house-best", "House", 126.5, "8A"),
+            expansion_track("house-next", "Tech House", 128.0, "10A"),
+            expansion_track("cross-near", "Techno", 126.4, "8A"),
+            expansion_track("house-bad", "House", 180.0, "2A"),
+        ]
+    }
+
+    fn assert_addition(
+        addition: &PoolAddition,
+        expected_id: &str,
+        expected_min: f64,
+        expected_mean: f64,
+        expected_weakest: &[&str],
+        expected_member: &str,
+    ) {
+        assert_eq!(addition.track_id, expected_id);
+        assert_eq!(addition.title, format!("Track {expected_id}"));
+        assert_eq!(addition.artist, "Probe Artist");
+        assert_golden_float(addition.min_score, expected_min, "addition minimum score");
+        assert_golden_float(addition.mean_score, expected_mean, "addition mean score");
+        assert_eq!(addition.rationale.strongest_axes, ["energy", "bpm"]);
+        assert!(
+            expected_weakest.contains(&addition.rationale.weakest_axis),
+            "unexpected weakest axis: {}",
+            addition.rationale.weakest_axis,
+        );
+        assert_eq!(addition.rationale.most_compatible_member, expected_member,);
+    }
+
+    #[test]
+    fn planning_pool_use_case_expand_pool_preserves_selection_scores_and_accounting() {
+        let store_dir = tempfile::tempdir().expect("temporary store should create");
+        let store = crate::adapters::state::open(
+            store_dir
+                .path()
+                .join("state.sqlite3")
+                .to_str()
+                .expect("temporary store path should be UTF-8"),
+        )
+        .expect("temporary store should open");
+        let weights = pool_weights(crate::domain::planning::PoolPreset::Balanced);
+
+        let same_family_seed = prepare_pool_expansion(expansion_seed_tracks(), &store, Some(133.0))
+            .expect("seed profiles should build");
+        assert_golden_float(
+            same_family_seed.reference_bpm,
+            133.0,
+            "explicit seed reference BPM",
+        );
+        let same_family = expand_pool(
+            same_family_seed,
+            expansion_candidates(),
+            &store,
+            ExpandPoolOptions {
+                additions: 3,
+                cross_genre: false,
+                scoring: PoolScoringRequest {
+                    master_tempo: false,
+                    reference_bpm: Some(133.0),
+                    weights: &weights,
+                },
+            },
+        );
+
+        assert_eq!(same_family.candidates_scanned, 3);
+        assert!(same_family.stopped_early);
+        assert_eq!(same_family.skipped_seed_tracks, Vec::<String>::new());
+        assert_golden_float(same_family.reference_bpm, 133.0, "reference BPM");
+        assert_eq!(same_family.additions.len(), 2);
+        assert_addition(
+            &same_family.additions[0],
+            "house-best",
+            0.895_333_086_292_440_2,
+            0.932_269_933_666_866_5,
+            &["brightness", "rhythm"],
+            "seed-a",
+        );
+        assert_addition(
+            &same_family.additions[1],
+            "house-next",
+            0.805_687_229_554_973_1,
+            0.831_581_147_808_167,
+            &["key"],
+            "seed-b",
+        );
+        assert_golden_float(
+            same_family.final_cohesion.mean_pairwise,
+            0.875_832_875_045_480_4,
+            "same-family final mean cohesion",
+        );
+        assert_golden_float(
+            same_family.final_cohesion.min_pairwise,
+            0.805_687_229_554_973_1,
+            "same-family final minimum cohesion",
+        );
+        assert_eq!(
+            same_family.final_cohesion.weakest_member_id.as_deref(),
+            Some("seed-a"),
+        );
+        assert_eq!(
+            same_family.final_cohesion.medoid_id.as_deref(),
+            Some("house-best"),
+        );
+        assert_eq!(same_family.final_cohesion.per_pair.len(), 6);
+
+        let cross_family = expand_pool(
+            prepare_pool_expansion(expansion_seed_tracks(), &store, Some(133.0))
+                .expect("seed profiles should build"),
+            expansion_candidates(),
+            &store,
+            ExpandPoolOptions {
+                additions: 3,
+                cross_genre: true,
+                scoring: PoolScoringRequest {
+                    master_tempo: false,
+                    reference_bpm: Some(133.0),
+                    weights: &weights,
+                },
+            },
+        );
+
+        assert_eq!(cross_family.candidates_scanned, 4);
+        assert!(!cross_family.stopped_early);
+        assert_eq!(
+            cross_family
+                .additions
+                .iter()
+                .map(|addition| addition.track_id.as_str())
+                .collect::<Vec<_>>(),
+            ["house-best", "cross-near", "house-next"],
+        );
+        assert_addition(
+            &cross_family.additions[1],
+            "cross-near",
+            0.835_996_238_600_460_2,
+            0.854_440_141_044_141_5,
+            &["genre"],
+            "seed-a",
+        );
+        assert_addition(
+            &cross_family.additions[2],
+            "house-next",
+            0.755_020_090_274_430_7,
+            0.812_440_883_424_733,
+            &["key"],
+            "seed-b",
+        );
+        assert_golden_float(
+            cross_family.final_cohesion.mean_pairwise,
+            0.857_333_776_367_973_7,
+            "cross-family final mean cohesion",
+        );
+        assert_golden_float(
+            cross_family.final_cohesion.min_pairwise,
+            0.755_020_090_274_430_7,
+            "cross-family final minimum cohesion",
+        );
+        assert_eq!(
+            cross_family.final_cohesion.weakest_member_id.as_deref(),
+            Some("cross-near"),
+        );
+        assert_eq!(
+            cross_family.final_cohesion.medoid_id.as_deref(),
+            Some("house-best"),
+        );
+        assert_eq!(cross_family.final_cohesion.per_pair.len(), 10);
+    }
+
+    #[test]
+    fn planning_pool_use_case_expand_pool_stops_before_a_sub_threshold_addition() {
+        let store_dir = tempfile::tempdir().expect("temporary store should create");
+        let store = crate::adapters::state::open(
+            store_dir
+                .path()
+                .join("state.sqlite3")
+                .to_str()
+                .expect("temporary store path should be UTF-8"),
+        )
+        .expect("temporary store should open");
+        let weights = pool_weights(crate::domain::planning::PoolPreset::Balanced);
+        let expanded = expand_pool(
+            prepare_pool_expansion(expansion_seed_tracks(), &store, Some(133.0))
+                .expect("seed profiles should build"),
+            vec![expansion_track("quality-stop", "House", 220.0, "2A")],
+            &store,
+            ExpandPoolOptions {
+                additions: 2,
+                cross_genre: false,
+                scoring: PoolScoringRequest {
+                    master_tempo: false,
+                    reference_bpm: Some(133.0),
+                    weights: &weights,
+                },
+            },
+        );
+
+        assert_eq!(expanded.candidates_scanned, 1);
+        assert!(expanded.additions.is_empty());
+        assert!(expanded.stopped_early);
+        assert_golden_float(
+            expanded.final_cohesion.mean_pairwise,
+            0.895_713_939_514_648,
+            "unchanged seed cohesion",
+        );
+        assert_golden_float(
+            expanded.final_cohesion.min_pairwise,
+            0.895_713_939_514_648,
+            "unchanged seed minimum cohesion",
+        );
+        assert_eq!(expanded.final_cohesion.per_pair.len(), 1);
+    }
+
     #[test]
     fn planning_pool_use_case_preserves_saved_preset_precedence() {
         let loaded = Cell::new(false);
