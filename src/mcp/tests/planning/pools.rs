@@ -131,3 +131,159 @@ async fn mcp_planning_contract_pool_discovery_returns_base_golden_json() {
         }),
     );
 }
+
+#[tokio::test]
+async fn mcp_planning_contract_pool_discovery_serializes_bridges_and_binds_result_cap() {
+    let (db_conn, track_ids, audio_dir) = create_build_set_test_db();
+    let store_dir = tempfile::tempdir().expect("temp store dir");
+    let store_path = store_dir.path().join("internal.sqlite3");
+    let store_conn = store::open(store_path.to_str().unwrap()).expect("store open");
+    seed_build_set_cache(&store_conn, audio_dir.path());
+
+    let server =
+        create_server_with_connections(db_conn, store_conn, default_http_client_for_tests());
+    let capped = server
+        .discover_pools(Parameters(DiscoverPoolsParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(track_ids.clone()),
+            playlist_id: None,
+            max_tracks: None,
+            threshold: Some(0.8),
+            min_pool_size: Some(2),
+            max_pool_size: Some(6),
+            max_pools: Some(2),
+            master_tempo: Some(true),
+            reference_bpm: Some(126.0),
+            preset: None,
+        }))
+        .await
+        .expect("capped six-track pool discovery should succeed");
+    let mut payload = extract_json(&capped);
+
+    // The second two-track pool has one House and one Tech House member.
+    // Existing behavior deliberately uses HashMap iteration for a tied mode,
+    // so characterize both semantic outcomes before canonicalizing that sole
+    // unordered field for the exact payload comparison below.
+    let tied_dominant_genre = payload["pools"][1]["dominant_genre"]
+        .as_str()
+        .expect("tied dominant genre should serialize as a string");
+    assert!(
+        matches!(tied_dominant_genre, "House" | "Tech House"),
+        "unexpected tied dominant genre: {tied_dominant_genre}",
+    );
+    payload["pools"][1]["dominant_genre"] = serde_json::json!("<tied>");
+
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "bridge_tracks": [{
+                "appears_in_pools": [0, 1],
+                "track": {
+                    "artist": "Aníbal",
+                    "bpm": 128.0,
+                    "energy": 0.66,
+                    "genre": "Tech House",
+                    "key": "11A",
+                    "title": "Fourth Lift",
+                    "track_id": "set-track-4",
+                },
+            }],
+            "master_tempo": true,
+            "pools": [
+                {
+                    "bpm_range": [128.0, 129.5],
+                    "core_members": ["set-track-4", "set-track-5"],
+                    "dominant_genre": "Tech House",
+                    "edge_members": [],
+                    "energy_range": [0.66, 0.69],
+                    "mean_compatibility": 0.966,
+                    "min_compatibility": 0.966,
+                    "pool_index": 0,
+                    "score": 0.821,
+                    "size": 2,
+                    "tracks": [
+                        {
+                            "artist": "Aníbal",
+                            "bpm": 128.0,
+                            "energy": 0.66,
+                            "genre": "Tech House",
+                            "key": "11A",
+                            "title": "Fourth Lift",
+                            "track_id": "set-track-4",
+                        },
+                        {
+                            "artist": "Aníbal",
+                            "bpm": 129.5,
+                            "energy": 0.69,
+                            "genre": "Tech House",
+                            "key": "12A",
+                            "title": "Fifth Peak",
+                            "track_id": "set-track-5",
+                        },
+                    ],
+                },
+                {
+                    "bpm_range": [126.0, 128.0],
+                    "core_members": ["set-track-3", "set-track-4"],
+                    "dominant_genre": "<tied>",
+                    "edge_members": [],
+                    "energy_range": [0.62, 0.66],
+                    "mean_compatibility": 0.909,
+                    "min_compatibility": 0.909,
+                    "pool_index": 1,
+                    "score": 0.772,
+                    "size": 2,
+                    "tracks": [
+                        {
+                            "artist": "Aníbal",
+                            "bpm": 126.0,
+                            "energy": 0.62,
+                            "genre": "House",
+                            "key": "10A",
+                            "title": "Third Wave",
+                            "track_id": "set-track-3",
+                        },
+                        {
+                            "artist": "Aníbal",
+                            "bpm": 128.0,
+                            "energy": 0.66,
+                            "genre": "Tech House",
+                            "key": "11A",
+                            "title": "Fourth Lift",
+                            "track_id": "set-track-4",
+                        },
+                    ],
+                },
+            ],
+            "reference_bpm": 126.0,
+            "threshold": 0.8,
+            "tracks_analyzed": 6,
+        }),
+    );
+
+    let uncapped = server
+        .discover_pools(Parameters(DiscoverPoolsParams {
+            filters: SearchFilterParams::default(),
+            track_ids: Some(track_ids),
+            playlist_id: None,
+            max_tracks: None,
+            threshold: Some(0.8),
+            min_pool_size: Some(2),
+            max_pool_size: Some(6),
+            max_pools: Some(10),
+            master_tempo: Some(true),
+            reference_bpm: Some(126.0),
+            preset: None,
+        }))
+        .await
+        .expect("uncapped six-track pool discovery should succeed");
+    let uncapped_payload = extract_json(&uncapped);
+    assert_eq!(
+        uncapped_payload["pools"]
+            .as_array()
+            .expect("uncapped pools should be an array")
+            .len(),
+        4,
+        "the max_pools=2 call above must truncate two base-characterized pools",
+    );
+}
