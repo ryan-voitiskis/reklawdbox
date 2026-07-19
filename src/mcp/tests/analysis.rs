@@ -608,7 +608,7 @@ async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() 
 
 #[tokio::test]
 #[ignore]
-async fn analyze_track_audio_essentia_cache_round_trip_real_track() {
+async fn private_rekordbox_analyze_track_audio_essentia_cache_round_trip() {
     let (server, _store_dir, _fixture_guard) =
         create_real_server_with_temp_store(default_http_client_for_tests())
             .expect("private Rekordbox fixture should be configured and readable");

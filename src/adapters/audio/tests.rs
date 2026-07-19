@@ -705,7 +705,7 @@ fn generated_wav_fixture_decodes_and_analyzes_without_private_audio() {
 
 #[test]
 #[ignore]
-fn test_real_audio_analysis() {
+fn private_rekordbox_real_audio_analysis() {
     let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
         .expect("private Rekordbox fixture should be configured");
     let audio_dir = tempfile::tempdir().expect("private audio copy root should create");
@@ -715,14 +715,14 @@ fn test_real_audio_analysis() {
     assert_eq!(audio.original_hash, audio.copied_hash);
     let file_path = audio.copied_path.to_string_lossy().to_string();
 
-    let (samples, sample_rate) =
-        decode_to_samples(&file_path).unwrap_or_else(|e| panic!("decode failed: {e}"));
+    let (samples, sample_rate) = decode_to_samples(&file_path)
+        .unwrap_or_else(|_| panic!("private audio copy decode failed"));
 
     assert!(!samples.is_empty(), "decoded zero samples");
     assert!(sample_rate > 0, "invalid sample rate");
 
     let result = analyze_with_stratum(&samples, sample_rate, None)
-        .unwrap_or_else(|e| panic!("analysis failed: {e}"));
+        .unwrap_or_else(|_| panic!("private audio copy analysis failed"));
 
     assert!(
         result.bpm > 0.0,
@@ -757,7 +757,7 @@ fn test_real_audio_analysis() {
 
 #[test]
 #[ignore]
-fn test_audio_analysis_cache_round_trip() {
+fn private_rekordbox_audio_analysis_cache_round_trip() {
     let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
         .expect("private Rekordbox fixture should be configured");
     let audio_dir = tempfile::tempdir().expect("private audio copy root should create");

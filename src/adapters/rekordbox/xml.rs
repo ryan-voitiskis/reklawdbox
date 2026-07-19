@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_real_tracks_to_xml() {
+    fn private_rekordbox_tracks_to_xml() {
         let tracks = load_real_tracks(100);
         let xml = generate_xml(&tracks);
 
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_real_tracks_xml_well_formed() {
+    fn private_rekordbox_tracks_xml_well_formed() {
         let tracks = load_real_tracks(200);
         let xml = generate_xml(&tracks);
 
@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_real_tracks_xml_field_fidelity() {
+    fn private_rekordbox_tracks_xml_field_fidelity() {
         let tracks = load_real_tracks(50);
         let xml = generate_xml(&tracks);
 
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_real_tracks_xml_write_and_read_back() {
+    fn private_rekordbox_tracks_xml_write_and_read_back() {
         let tracks = load_real_tracks(50);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("real_test.xml");
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_real_full_library_xml_generation() {
+    fn private_rekordbox_full_library_xml_generation() {
         let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
             .expect("private Rekordbox fixture should be configured");
         let conn = fixture

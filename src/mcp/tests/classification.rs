@@ -747,7 +747,7 @@ fn golden_genres_fixture_is_well_formed() {
 
 #[test]
 #[ignore]
-fn golden_dataset_genre_accuracy() {
+fn private_rekordbox_golden_dataset_genre_accuracy() {
     let entries = load_golden_genres_fixture();
     let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
         .expect("classifier benchmark requires REKORDBOX_TEST_BACKUP");

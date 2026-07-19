@@ -258,7 +258,7 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
 
 #[tokio::test]
 #[ignore]
-async fn resolve_tracks_data_batch_consistency() {
+async fn private_rekordbox_resolve_tracks_data_batch_consistency() {
     let (server, _store_dir, _fixture_guard) =
         create_real_server_with_temp_store(default_http_client_for_tests())
             .expect("private Rekordbox fixture should be configured and readable");

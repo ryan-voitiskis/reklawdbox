@@ -38,7 +38,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn real_change_pipeline() {
+    fn private_rekordbox_real_change_pipeline() {
         let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
             .expect("private Rekordbox fixture should be configured");
         let conn = fixture

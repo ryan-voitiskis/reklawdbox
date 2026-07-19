@@ -28,6 +28,18 @@ Ignored Rust tests are opt-in checks that may require private local audio,
 Rekordbox data, or benchmark fixtures. They are not part of the normal test
 suite. New required tests must use synthetic or checked-in fixtures.
 
+Run the private Rekordbox fixture gate only with an explicit backup archive:
+
+```bash
+REKORDBOX_TEST_BACKUP=/absolute/path/to/backup.tar.gz \
+  cargo test -p reklawdbox private_rekordbox_ -- --ignored --nocapture
+```
+
+The gate extracts only `master.db` and optional WAL/SHM sidecars into a unique
+temporary directory, opens the extracted database read-only, and copies any
+selected audio into a separate temporary directory before a test may mutate
+it. Never point a private test at the live database or mutate source audio.
+
 ## Area-specific checks
 
 For documentation-site or public tool/CLI contract changes:
