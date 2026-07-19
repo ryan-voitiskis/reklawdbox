@@ -123,6 +123,44 @@ per-genre evidence, diversity, availability, role, and leakage requirements;
 the remaining 45 dossiers are intentionally empty for subsequent family
 waves. This is an incomplete research checkpoint, not a completed corpus.
 
+## Taxonomy Decision: Tech House Is Multi-Strain
+
+The Tech House label does not identify one stable sound across its history.
+The revised dossier distinguishes these overlapping strains:
+
+- the early London DJ practice, including Wiggle's raw, stripped and dubby
+  direction and Heart & Soul's Detroit-and-breaks direction;
+- late-1990s UK production shaped by House shuffle, dub bass, Chicago jack,
+  Detroit musicality, and West Coast jacking or tribal percussion;
+- the cleaner European minimal-polished and electro-house-influenced 2000s
+  form;
+- 2010s Ibiza vocal anthems and percussion-led large-room tools;
+- contemporary overlap with the minimal/deep-tech umbrella, whose artists,
+  labels, venues, and audiences intersect with Tech House even when individual
+  recordings remain better classified as House, Deep House, or Minimal; and
+- an EDM- and Electro House-tinged commercial festival branch heard
+  internationally and in Australian commercial-leaning events.
+
+The last branch is legitimate scene and retail usage, but it is too sonically
+divergent to define the pilot's positive center without separate listening and
+benchmark evidence. On 2026-07-18 the operator removed FISHER's `Losing It`
+and `You Little Beauty` from the candidate set as insufficiently aligned
+positive references. East End Dubs' `Dis` replaced one, representing the
+rolling, bass-led London underground.
+
+On 2026-07-19 listening review also rejected Chris Stussy's `Desire`. Its
+appearance in a current minimal-tech-house feature established shared scene
+context, but the recording sounded like House and the artist's official tags
+were House, Deep House, and Minimal. The corpus replaced it with Mr. G's `Home
+Alone (on my b'day)`, whose rugged jacking drums, bass weight, restrained vocal,
+and hypnotic development more directly continue the underground Tech House
+target.
+
+This is a curation decision, not a claim that commercial festival Tech House
+does not exist. That branch remains a documented review cohort. A later
+leakage-controlled benchmark must determine whether one classifier target can
+cover it alongside the underground strains without reducing accuracy for both.
+
 ## Coverage Matrix
 
 This matrix summarizes the JSON; it is not a second track list. Counts and
@@ -177,7 +215,7 @@ statuses must be reconciled whenever the structured corpus changes.
 | Rock | Other | metadata_led | 0 | Research pending |
 | Speed Garage | House | audio_reference | 0 | Research pending |
 | Synth-pop | Other | metadata_led | 0 | Research pending |
-| Tech House | House | taxonomy_review | 12 | Pilot complete; era-aware target spans DJ-led London roots through festival scale |
+| Tech House | House | taxonomy_review | 12 | Pilot complete; multi-strain target spans London roots, minimal-polished and Ibiza forms, plus underground continuity; minimal/deep-tech adjacency and the commercial festival branch remain review cohorts |
 | Techno | Techno | audio_reference | 0 | Research pending |
 | Trance | Techno | audio_reference | 0 | Research pending |
 | Trip-Hop | Downtempo | audio_reference | 0 | Research pending |

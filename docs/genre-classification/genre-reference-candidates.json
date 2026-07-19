@@ -7,7 +7,7 @@
     "path": "src/domain/classification/taxonomy/catalog.rs",
     "commit": "d41accd9a7d8d7313036082141330b6148d0de0a"
   },
-  "research_completed_on": "2026-07-18",
+  "research_completed_on": "2026-07-19",
   "excluded_genres": [
     {
       "genre": "Experimental",
@@ -3285,8 +3285,35 @@
           "publisher": "Bleep",
           "url": "https://bleep.com/release/38688-plastikman-sheet-one-30th-anniversary-edition?lang=en_GB",
           "source_type": "respected_editorial",
-          "claim": "Lists Plasticine in downloadable MP3, WAV, and FLAC formats and identifies the 1993 record as a defining work of minimalist techno.",
+          "claim": "Lists Plasticity in downloadable MP3, WAV, and FLAC formats and identifies the 1993 record as an undisputed classic built from laser-cut minimalist structures and acid lines.",
           "accessed_on": "2026-07-18"
+        },
+        {
+          "id": "minimal-plastikman-sheet-one-djmag",
+          "title": "Solid Gold: How Plastikman redefined acid techno with Sheet One",
+          "publisher": "DJ Mag",
+          "url": "https://djmag.com/content/solid-gold-how-plastikman-redefined-acid-techno-sheet-one",
+          "source_type": "respected_editorial",
+          "claim": "Identifies Plasticity and Plasticine as the stand-out tracks through which Sheet One redefined acid techno as a sparse, hypnotic form.",
+          "accessed_on": "2026-07-19"
+        },
+        {
+          "id": "minimal-plastikman-musik-artist",
+          "title": "Musik",
+          "publisher": "Richie Hawtin",
+          "url": "https://richiehawtin.bandcamp.com/album/musik",
+          "source_type": "artist_history",
+          "claim": "The official artist store lists the original 13:03 album version of Plastique, identifies Musik as Plastikman's 1994 album, and offers a lossless download.",
+          "accessed_on": "2026-07-19"
+        },
+        {
+          "id": "minimal-plastikman-musik-pitchfork",
+          "title": "Plastikman: Musik (2024 Remastered)",
+          "publisher": "Pitchfork",
+          "url": "https://pitchfork.com/reviews/albums/plastikman-musik-2024-remastered/",
+          "source_type": "respected_editorial",
+          "claim": "Calls Plastique the album's 13-minute highlight and describes how its contrapuntal acid lines, rigid drums, subtle motion, and unusual tempo expanded Plastikman's minimalism.",
+          "accessed_on": "2026-07-19"
         },
         {
           "id": "minimal-hood-moveable",
@@ -3295,15 +3322,6 @@
           "url": "https://bleep.com/release/54332-robert-hood-moveable-parts-chapter-1-ep?lang=en_GB",
           "source_type": "respected_editorial",
           "claim": "Lists Untitled 1 as a download and documents the EP as a 1995 Robert Hood minimal-techno work reissued by M-Plant.",
-          "accessed_on": "2026-07-18"
-        },
-        {
-          "id": "minimal-mills-waveform",
-          "title": "Waveform Transmission Vol. 3",
-          "publisher": "Bleep",
-          "url": "https://bleep.com/release/25005-jeff-mills-waveform-transmission-vol-3?lang=en_GB",
-          "source_type": "respected_editorial",
-          "claim": "Lists Life Cycle as a download and describes the 1994 album as an essential Detroit techno classic built from tightly reduced machine patterns.",
           "accessed_on": "2026-07-18"
         },
         {
@@ -3451,6 +3469,33 @@
           "accessed_on": "2026-07-18"
         },
         {
+          "id": "minimal-maurizio-mseries-clone",
+          "title": "Maurizio - M",
+          "publisher": "Clone Records",
+          "url": "https://clone.nl/item2365.html",
+          "source_type": "release_metadata",
+          "claim": "Lists M4.5A (Edit) as track eight of the edited Maurizio compilation, catalog MAUCD001, and categorizes the release as Techno Dub.",
+          "accessed_on": "2026-07-19"
+        },
+        {
+          "id": "minimal-maurizio-mseries-brainwashed",
+          "title": "CD Review: Maurizio Maurizio",
+          "publisher": "Brainwashed",
+          "url": "https://brainwashed.com/weddle/reviews/mcd.html",
+          "source_type": "respected_editorial",
+          "claim": "Reviews the 1997 edited M-Series compilation, lists the M4.5 edit at 9:44, and describes its blend of dub, house, ambience, repetition, and subtle spatial change within minimal Detroit-influenced techno.",
+          "accessed_on": "2026-07-19"
+        },
+        {
+          "id": "minimal-maurizio-m45-edit-traxsource",
+          "title": "Mø4.5A (Edit)",
+          "publisher": "Traxsource",
+          "url": "https://www.traxsource.com/track/110976/m-4-5a-edit",
+          "source_type": "release_metadata",
+          "claim": "Lists the exact 9:45 M-Series edit as a legal digital purchase and distinguishes it from the full-length 1995 M-4.5A recording.",
+          "accessed_on": "2026-07-19"
+        },
+        {
           "id": "minimal-marco-qobuz",
           "title": "Bloody Cash",
           "publisher": "Qobuz",
@@ -3527,9 +3572,9 @@
           "recommended_pool_role": "training_anchor"
         },
         {
-          "id": "minimal-plastikman-plasticine",
+          "id": "minimal-plastikman-plasticity",
           "artist": "Plastikman",
-          "track_title": "Plasticine",
+          "track_title": "Plasticity",
           "mix_version": "30th Anniversary remaster",
           "original_release": "Sheet One",
           "label": "Plus 8 Records",
@@ -3538,10 +3583,10 @@
           "reference_role": "foundational",
           "era_bucket": "1993-1996 Detroit-Windsor formation",
           "substyle_scene": "Windsor acid-minimal techno",
-          "canonicality_rationale": "A defining early reduction of acid-techno materials into a sparse, slowly modulating machine groove.",
+          "canonicality_rationale": "One of Sheet One's two documented stand-outs, reducing long-form acid improvisation to a sparse, slowly modulating machine groove and supplying a clear anchor for Plastikman's early minimal language.",
           "canonicality_source_ids": [
             "minimal-plastikman-sheet-one",
-            "minimal-huddersfield"
+            "minimal-plastikman-sheet-one-djmag"
           ],
           "metadata_source_ids": [
             "minimal-plastikman-sheet-one"
@@ -3560,7 +3605,7 @@
             }
           ],
           "confidence": "high",
-          "leakage_group": "minimal-plastikman-plasticine",
+          "leakage_group": "minimal-plastikman-plasticity",
           "recommended_pool_role": "training_anchor"
         },
         {
@@ -3601,40 +3646,42 @@
           "recommended_pool_role": "training_anchor"
         },
         {
-          "id": "minimal-jeff-mills-life-cycle",
-          "artist": "Jeff Mills",
-          "track_title": "Life Cycle",
-          "mix_version": "2010 Tresor digital edition",
-          "original_release": "Waveform Transmission Vol. 3",
-          "label": "Tresor",
+          "id": "minimal-plastikman-plastique",
+          "artist": "Plastikman",
+          "track_title": "Plastique",
+          "mix_version": "Original album version",
+          "original_release": "Musik",
+          "label": "NovaMute / Plus 8 Records",
           "original_year": 1994,
-          "catalog_number": "TRESOR10076D",
+          "catalog_number": null,
           "reference_role": "foundational",
-          "era_bucket": "1993-1996 Detroit formation",
-          "substyle_scene": "Detroit loop techno at the minimal boundary",
-          "canonicality_rationale": "Its short, highly economical machine-loop form supplies an early Detroit control for distinguishing minimal structure from merely low-density production.",
+          "era_bucket": "1993-1996 Detroit-Windsor formation",
+          "substyle_scene": "Windsor psychedelic acid-minimal techno",
+          "canonicality_rationale": "Musik's documented highlight uses two slowly shifting acid lines, rigid percussion, negative space, and a sub-dancefloor tempo to extend minimal techno beyond a single austere loop while retaining strict economy.",
           "canonicality_source_ids": [
-            "minimal-mills-waveform",
-            "minimal-allmusic"
+            "minimal-plastikman-musik-pitchfork",
+            "minimal-plastikman-musik-artist"
           ],
           "metadata_source_ids": [
-            "minimal-mills-waveform"
+            "minimal-plastikman-musik-artist"
           ],
           "acquisitions": [
             {
-              "store": "Bleep",
-              "url": "https://bleep.com/release/25005-jeff-mills-waveform-transmission-vol-3?lang=en_GB",
+              "store": "Bandcamp",
+              "url": "https://richiehawtin.bandcamp.com/album/musik",
               "formats": [
                 "MP3",
+                "FLAC",
+                "ALAC",
                 "WAV",
-                "FLAC"
+                "AIFF"
               ],
-              "accessed_on": "2026-07-18",
+              "accessed_on": "2026-07-19",
               "australian_region_caveat": null
             }
           ],
-          "confidence": "medium",
-          "leakage_group": "minimal-jeff-mills-life-cycle",
+          "confidence": "high",
+          "leakage_group": "minimal-plastikman-plastique-original-album",
           "recommended_pool_role": "training_anchor"
         },
         {
@@ -3900,40 +3947,41 @@
           "recommended_pool_role": "boundary_review"
         },
         {
-          "id": "minimal-maurizio-m04-5a",
+          "id": "minimal-maurizio-m45a-edit",
           "artist": "Maurizio",
-          "track_title": "M04.5A",
-          "mix_version": "Original version",
-          "original_release": "M-4.5",
+          "track_title": "M-4.5A",
+          "mix_version": "M-Series Edit (2003 remaster)",
+          "original_release": "M-Series",
           "label": "M",
-          "original_year": 1995,
-          "catalog_number": "M-4.5",
+          "original_year": 1997,
+          "catalog_number": "MAUCD001",
           "reference_role": "boundary",
-          "era_bucket": "1993-1996 dub-techno boundary",
+          "era_bucket": "1993-1997 dub-techno boundary",
           "substyle_scene": "Basic Channel Dub Techno boundary",
-          "canonicality_rationale": "The track shares reduction and repetition with minimal techno, but its delay architecture and documented M-Series lineage make Dub Techno the primary neighboring label.",
+          "canonicality_rationale": "The compilation edit preserves the 1995 recording's reduction and repetition, but its delay architecture and documented M-Series lineage make Dub Techno the primary neighboring label rather than a Minimal positive.",
           "canonicality_source_ids": [
             "minimal-maurizio-bleep",
-            "minimal-allmusic"
+            "minimal-maurizio-mseries-brainwashed"
           ],
           "metadata_source_ids": [
-            "minimal-maurizio-bleep"
+            "minimal-maurizio-mseries-clone",
+            "minimal-maurizio-m45-edit-traxsource"
           ],
           "acquisitions": [
             {
-              "store": "Bleep",
-              "url": "https://bleep.com/release/27271-maurizio-m-45?lang=en_US",
+              "store": "Traxsource",
+              "url": "https://www.traxsource.com/track/110976/m-4-5a-edit",
               "formats": [
                 "MP3",
                 "WAV",
-                "FLAC"
+                "AIFF"
               ],
-              "accessed_on": "2026-07-18",
+              "accessed_on": "2026-07-19",
               "australian_region_caveat": null
             }
           ],
           "confidence": "medium",
-          "leakage_group": "minimal-maurizio-m04-5a",
+          "leakage_group": "minimal-maurizio-m45a-all-versions",
           "recommended_pool_role": "boundary_review"
         }
       ]
@@ -4038,13 +4086,14 @@
       "genre": "Tech House",
       "classifier_family": "House",
       "research_disposition": "taxonomy_review",
-      "working_definition": "Tech House is a historically shifting house-tempo club lineage first incubated in early-1990s London as a DJ practice joining the swing, funk, and low end of house with techno's tougher, stripped, or Detroit-derived texture. It became a production category by the late 1990s, absorbed West Coast tribal, minimal, and electro-house traits in the 2000s, and expanded into a polished big-room and festival category in the 2010s. Across eras, the classifier target retains a four-on-the-floor house pulse, low-end groove, stripped or repetitive arrangement, and techno-leaning drums or textures; evidence must be evaluated in its historical context.",
+      "working_definition": "Tech House is a historically shifting house-tempo club lineage first incubated in early-1990s London as a DJ practice joining the swing, funk, and low end of house with techno's tougher, stripped, or Detroit-derived texture. It became a production category by the late 1990s, then split into overlapping raw and dubby London, West Coast jacking and tribal, European minimal-polished, Ibiza vocal and percussion-led, and EDM- or electro-house-tinged festival strains, while also sharing artists, venues, and retail space with contemporary minimal/deep-tech. Across its positive strains, the classifier target retains a four-on-the-floor house pulse, low-end groove, stripped or repetitive arrangement, and techno-leaning drums or textures. Neither the festival strain nor scene adjacency to minimal/deep-tech is sufficient to define the pilot's positive center without track-level listening and benchmark evidence.",
       "explicit_exclusions": [
         "Exclude generic House or Deep House whose harmony, vocals, and soulful song structure dominate without the stripped, tougher, techno-derived rhythmic character.",
         "Exclude Techno when a straighter machine pulse, harder attack, and reduced house swing or funk dominate the recording.",
         "Exclude Minimal or Minimal Techno when sparse repetition is the only evidence; Tech House also requires house-tempo groove and the relevant scene or release context.",
         "Exclude Progressive House when long-form melodic development and sweeping harmonic builds dominate over compact, groove-led repetition.",
-        "Do not use the current Beatport chart identity to rewrite the genre's broader 1990s DJ-led lineage."
+        "Do not use the current Beatport chart identity to rewrite the genre's broader 1990s DJ-led lineage.",
+        "Do not treat EDM-scale breakdowns, electro-house leads, or a store Tech House tag as sufficient positive evidence when the recording lacks the lineage's subtler swing, groove, or underground club context."
       ],
       "boundary_genres": [
         "House",
@@ -4064,12 +4113,30 @@
           "accessed_on": "2026-07-18"
         },
         {
-          "id": "tech-house-soundtaxi-guide",
-          "title": "Tech House",
-          "publisher": "SoundTaxi",
-          "url": "https://soundtaxi.com/en/genres/tech-house",
+          "id": "tech-house-roland-history",
+          "title": "The Tech House Story",
+          "publisher": "Roland",
+          "url": "https://articles.roland.com/the-tech-house-story/",
           "source_type": "scene_history",
-          "claim": "Defines the UK-originating House and Techno hybrid by four-on-the-floor rhythm, darker drums, groovy bass, and minimal repetition, and names key records from Animus Amor through FISHER.",
+          "claim": "Traces the London DJ-led origin, distinguishes Wiggle's raw stripped strain from Heart & Soul's Detroit-and-breaks direction, follows the minimal-polished and global big-room phases, and documents how later formulaic production narrowed the original sound's breadth.",
+          "accessed_on": "2026-07-18"
+        },
+        {
+          "id": "tech-house-ra-history",
+          "title": "What Happened To Tech House?",
+          "publisher": "Resident Advisor",
+          "url": "https://ra.co/features/3851",
+          "source_type": "respected_editorial",
+          "claim": "Revisits the genre's changing identity through early London recordings, the mid-2000s European turn, and later underground continuities rather than treating its current commercial meaning as timeless.",
+          "accessed_on": "2026-07-18"
+        },
+        {
+          "id": "tech-house-soundcloud-minimal-tech",
+          "title": "Minimal Tech House",
+          "publisher": "SoundCloud Stories",
+          "url": "https://soundcloud.com/stories/post/minimal-tech-house-playlist",
+          "source_type": "respected_editorial",
+          "claim": "Maps the current umbrella across a grimy bass-and-drums club end, a jazzy and garage-inflected deep-tech pocket, and a vocal-forward festival end, while explicitly describing the umbrella as shared scene and audience context rather than one stable genre.",
           "accessed_on": "2026-07-18"
         },
         {
@@ -4172,31 +4239,40 @@
           "accessed_on": "2026-07-18"
         },
         {
-          "id": "tech-house-beatport-losing-it",
-          "title": "Losing It (Extended)",
-          "publisher": "Beatport",
-          "url": "https://www.beatport.com/track/losing-it/10766349",
-          "source_type": "release_metadata",
-          "claim": "Lists FISHER's exact 6:40 Extended version on Catch & Release as Tech House with a live Australian-dollar purchase route.",
+          "id": "tech-house-hot-creations-east-end-dubs",
+          "title": "A Bit Dandy EP",
+          "publisher": "Hot Creations",
+          "url": "https://hotcreations.bandcamp.com/album/a-bit-dandy-ep",
+          "source_type": "label_history",
+          "claim": "Presents Dis as the low-swinging, bass-led opening track in an EP of club-focused rollers that showcases East End Dubs' slick but soulful underground production style and offers a lossless download.",
           "accessed_on": "2026-07-18"
         },
         {
-          "id": "tech-house-billboard-you-little-beauty",
-          "title": "Fisher Channels Disco Roots On Jumpin' House Jam 'You Little Beauty'",
-          "publisher": "Billboard",
-          "url": "https://www.billboard.com/music/music-news/fisher-you-little-beauty-8510987/",
+          "id": "tech-house-beatport-east-end-dubs-dis",
+          "title": "Dis (Original Mix)",
+          "publisher": "Beatport",
+          "url": "https://www.beatport.com/track/dis/13457576",
+          "source_type": "release_metadata",
+          "claim": "Lists the exact 8:03 Original Mix on Hot Creations, catalog HOTC151, as a current Tech House download.",
+          "accessed_on": "2026-07-18"
+        },
+        {
+          "id": "tech-house-djmag-mr-g",
+          "title": "Mr. G cover feature: The tech-house enigma tells all",
+          "publisher": "DJ Mag",
+          "url": "https://djmag.com/features/mr-g-cover-feature-tech-house-enigma-tells-all",
           "source_type": "respected_editorial",
-          "claim": "A release-time editorial describes FISHER's follow-up hit through its house groove, bass line, sampled vocal, and festival-ready scale.",
-          "accessed_on": "2026-07-18"
+          "claim": "Documents Mr. G's long-running practice of rugged, stripped, soulful Tech House and his resistance to the later derivative meaning of the label.",
+          "accessed_on": "2026-07-19"
         },
         {
-          "id": "tech-house-beatport-you-little-beauty",
-          "title": "You Little Beauty (Extended)",
-          "publisher": "Beatport",
-          "url": "https://www.beatport.com/track/you-little-beauty/11867846",
-          "source_type": "release_metadata",
-          "claim": "Lists FISHER's exact 6:12 Extended version on Catch & Release as Tech House with a live Australian-dollar purchase route.",
-          "accessed_on": "2026-07-18"
+          "id": "tech-house-mr-g-home-alone-bandcamp",
+          "title": "French Connection E.P",
+          "publisher": "Bass Culture Records",
+          "url": "https://bassculture.bandcamp.com/album/french-connection-e-p",
+          "source_type": "label_history",
+          "claim": "The official label store lists Home Alone (on my b'day), dates it to 2019, offers a 24-bit lossless download, and describes its rugged jacking beats, hypnotic rhythm, bass weight, and percussion track-specifically.",
+          "accessed_on": "2026-07-19"
         },
         {
           "id": "tech-house-vice-mood-ii-swing",
@@ -4228,12 +4304,16 @@
       ],
       "definition_source_ids": [
         "tech-house-beatportal-history",
-        "tech-house-soundtaxi-guide",
+        "tech-house-roland-history",
+        "tech-house-soundcloud-minimal-tech",
         "tech-house-5mag-housey-doingz"
       ],
       "research_caveats": [
         "Tech House began as a DJ-led context before it became a stable production category, so early positive and boundary examples deliberately include records whose original marketing genre differs.",
-        "The genre's center of gravity moved substantially between the 1990s London scene, 2000s minimal and tribal production, and 2010s big-room sound; one era must not monopolize the learned target.",
+        "The label covers several substantially different strains: raw and dubby London Tech House, West Coast jacking and tribal forms, European minimal-polished production, Ibiza vocal and percussion-led records, and commercial festival Tech House. Contemporary minimal/deep-tech overlaps the same scene but is not automatically part of the positive target.",
+        "FISHER's festival records remain valid evidence of one commercial Australian and international use of the label, but the operator rejected them as positive reference candidates because that EDM- and electro-house-leaning strain is not sufficiently aligned with the corpus's intended sonic center.",
+        "Chris Stussy's Desire was also rejected after listening: its appearance in a current minimal-tech-house scene playlist was artist and audience context, while the recording itself and the artist's official tags support House, Deep House, and Minimal more directly than Tech House.",
+        "A single centroid may not model every strain well. Commercial festival Tech House should remain a documented review cohort until listening and a leakage-controlled benchmark show whether one classifier target can cover it without degrading the underground strains.",
         "Current store genres are version and reissue metadata, not historical proof; canonicality is supported separately by scene histories, label accounts, and editorial retrospectives."
       ],
       "candidates": [
@@ -4250,7 +4330,7 @@
           "era_bucket": "1992-1994 DJ-led incubation",
           "substyle_scene": "early London Detroit-leaning Tech House context",
           "canonicality_rationale": "An era-defining early Wiggle-era selection whose Detroit pads and techno identity were repurposed by London DJs at house pace before Tech House stabilized as a record-bin genre.",
-          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-soundtaxi-guide"],
+          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-roland-history"],
           "metadata_source_ids": ["tech-house-beatport-animus"],
           "acquisitions": [{"store": "Beatport", "url": "https://www.beatport.com/track/and-on-original-mix/972998", "formats": ["MP3", "WAV", "AIFF"], "accessed_on": "2026-07-18", "australian_region_caveat": null}],
           "confidence": "high",
@@ -4310,7 +4390,7 @@
           "era_bucket": "1996-1999 first-wave UK production",
           "substyle_scene": "London Wiggle deep and precise first wave",
           "canonicality_rationale": "A durable 1996 first-wave production balancing featherlight detail, heavy low end, house movement, and restrained techno texture.",
-          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-soundtaxi-guide"],
+          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-roland-history"],
           "metadata_source_ids": ["tech-house-beatport-silverlining"],
           "acquisitions": [{"store": "Beatport", "url": "https://www.beatport.com/track/pearl-divers/13434633", "formats": ["MP3", "WAV", "AIFF"], "accessed_on": "2026-07-18", "australian_region_caveat": null}],
           "confidence": "high",
@@ -4350,7 +4430,7 @@
           "era_bucket": "2005-2008 minimal-polished expansion",
           "substyle_scene": "minimal-influenced functional club Tech House",
           "canonicality_rationale": "A key late-2000s example of pinched one-note synthesis, taut bass, clean beats, controlled builds, and a functional breakdown rather than raw first-wave swing.",
-          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-soundtaxi-guide"],
+          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-roland-history"],
           "metadata_source_ids": ["tech-house-juno-lawler"],
           "acquisitions": [{"store": "Juno Download", "url": "https://www.junodownload.com/products/steve-lawler-time-a-collection-of-singles/6340460-02/", "formats": ["MP3", "WAV"], "accessed_on": "2026-07-18", "australian_region_caveat": "The UK storefront was opened directly from Australia and exposed a live digital cart; checkout was not completed."}],
           "confidence": "high",
@@ -4398,43 +4478,43 @@
           "recommended_pool_role": "holdout_candidate"
         },
         {
-          "id": "tech-house-fisher-losing-it",
-          "artist": "FISHER",
-          "track_title": "Losing It",
-          "mix_version": "Extended",
-          "original_release": "Losing It",
-          "label": "Catch & Release",
-          "original_year": 2018,
-          "catalog_number": null,
+          "id": "tech-house-east-end-dubs-dis",
+          "artist": "East End Dubs",
+          "track_title": "Dis",
+          "mix_version": "Original Mix",
+          "original_release": "A Bit Dandy EP",
+          "label": "Hot Creations",
+          "original_year": 2020,
+          "catalog_number": "HOTC151",
           "reference_role": "contemporary",
-          "era_bucket": "2018-2019 festival-scale Tech House",
-          "substyle_scene": "Australian big-room and festival crossover",
-          "canonicality_rationale": "The late-2010s inflection point where a minimal hook, oversized breakdown, and electro-house sheen took the genre to global festival scale.",
-          "canonicality_source_ids": ["tech-house-beatportal-history", "tech-house-soundtaxi-guide"],
-          "metadata_source_ids": ["tech-house-beatport-losing-it"],
-          "acquisitions": [{"store": "Beatport", "url": "https://www.beatport.com/track/losing-it/10766349", "formats": ["MP3", "WAV", "AIFF"], "accessed_on": "2026-07-18", "australian_region_caveat": null}],
+          "era_bucket": "2016-2026 underground continuity",
+          "substyle_scene": "London rolling and bass-led underground Tech House",
+          "canonicality_rationale": "An extended low-swinging roller whose bass weight, clipped vocal hooks, restrained development, and club-tool scale represent the contemporary grimy-club end without adopting festival build-and-drop syntax.",
+          "canonicality_source_ids": ["tech-house-soundcloud-minimal-tech", "tech-house-hot-creations-east-end-dubs"],
+          "metadata_source_ids": ["tech-house-beatport-east-end-dubs-dis"],
+          "acquisitions": [{"store": "Beatport", "url": "https://www.beatport.com/track/dis/13457576", "formats": ["MP3", "WAV", "AIFF"], "accessed_on": "2026-07-18", "australian_region_caveat": null}],
           "confidence": "high",
-          "leakage_group": "tech-house-fisher-losing-it-extended",
+          "leakage_group": "tech-house-east-end-dubs-dis-original",
           "recommended_pool_role": "holdout_candidate"
         },
         {
-          "id": "tech-house-fisher-you-little-beauty",
-          "artist": "FISHER",
-          "track_title": "You Little Beauty",
-          "mix_version": "Extended",
-          "original_release": "You Little Beauty",
-          "label": "Catch & Release",
+          "id": "tech-house-mr-g-home-alone",
+          "artist": "Mr. G",
+          "track_title": "Home Alone (on my b'day)",
+          "mix_version": "Original version",
+          "original_release": "French Connection E.P",
+          "label": "Bass Culture Records",
           "original_year": 2019,
-          "catalog_number": null,
+          "catalog_number": "BCR059T",
           "reference_role": "contemporary",
-          "era_bucket": "2018-2019 festival-scale Tech House",
-          "substyle_scene": "sample-led Australian festival Tech House",
-          "canonicality_rationale": "A follow-up retaining the same festival-scale low end while adding disco-rooted vocal sampling, useful for preventing the contemporary target from becoming instrumental-only.",
-          "canonicality_source_ids": ["tech-house-soundtaxi-guide", "tech-house-billboard-you-little-beauty"],
-          "metadata_source_ids": ["tech-house-beatport-you-little-beauty"],
-          "acquisitions": [{"store": "Beatport", "url": "https://www.beatport.com/track/you-little-beauty/11867846", "formats": ["MP3", "WAV", "AIFF"], "accessed_on": "2026-07-18", "australian_region_caveat": null}],
+          "era_bucket": "2016-2026 underground continuity",
+          "substyle_scene": "UK rugged and jacking underground Tech House",
+          "canonicality_rationale": "Rugged jacking drums, hoover-like bass, restrained vocal sampling, slow hypnotic development, and Mr. G's documented Tech House lineage make this a stronger contemporary continuation of the underground target than scene-adjacent groove-led House.",
+          "canonicality_source_ids": ["tech-house-djmag-mr-g", "tech-house-mr-g-home-alone-bandcamp"],
+          "metadata_source_ids": ["tech-house-mr-g-home-alone-bandcamp"],
+          "acquisitions": [{"store": "Bandcamp", "url": "https://bassculture.bandcamp.com/album/french-connection-e-p", "formats": ["MP3", "FLAC", "ALAC", "WAV", "AIFF", "24-bit FLAC"], "accessed_on": "2026-07-19", "australian_region_caveat": null}],
           "confidence": "high",
-          "leakage_group": "tech-house-fisher-you-little-beauty-extended",
+          "leakage_group": "tech-house-mr-g-home-alone-original",
           "recommended_pool_role": "holdout_candidate"
         },
         {

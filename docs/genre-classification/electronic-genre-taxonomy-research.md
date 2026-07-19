@@ -257,25 +257,62 @@ Sources:
 
 ### Tech House
 
-Supported traits:
+Supported history and internal strains:
 
-- Hybrid of House and Techno, with house tempo, rawer techno-styled kick/drums,
-  stripped repetition/groove, minimal and dub elements, less musical richness
-  than Deep House.
-- Beatportal emphasizes that Tech House has shifted historically and now spans
-  multiple DJ-scene meanings.
+- Tech House began in early-1990s London as a DJ method rather than one
+  production template. DJs sped up US Garage dubs, slowed down Techno, and
+  selected House, Detroit, Electro, Progressive, and breakbeat records whose
+  common ground was a stripped arrangement, strong low end, and underground
+  groove.
+- Even the London origin contained distinct strains: Wiggle emphasized raw,
+  stripped and dubby rhythm, while Heart & Soul leaned further toward Detroit
+  musicality and breaks. Late-1990s production then joined those ideas to
+  Chicago jack, West Coast tribal percussion, soulful House, and Techno.
+- The 2000s European strain was cleaner and more minimal-polished, with precise
+  drums, reduced riffs, and electro-house or Progressive House influence. The
+  2010s Ibiza strain split again between vocal anthems, percussion-led
+  large-room tools, and increasingly standardized big-room production.
+- Current `minimal/deep tech` usage overlaps but is not synonymous. SoundCloud's
+  2026 scene map distinguishes a bass-and-drums-led grimy club end, a jazzy and
+  Garage-inflected deep-tech pocket, and a vocal-forward festival end. Labels
+  and artists cross those boundaries, so the umbrella describes shared scene,
+  venue, and audience context more reliably than a discrete Tech House
+  production taxon.
+- The EDM- and Electro House-tinged festival strain associated with FISHER is a
+  real Australian and international use of the Tech House label. It is also
+  significantly brighter, more breakdown-led, and more commercial than the
+  lineage's raw, dubby, Detroit-influenced, or minimal-polished centers. The
+  operator rejected the two FISHER recordings as positive reference examples;
+  that curation decision does not erase the strain's scene meaning.
+- Chris Stussy's `Desire` demonstrates the opposite leakage risk: an artist and
+  track can appear inside the contemporary minimal-tech-house umbrella while
+  the recording remains acoustically closer to House. Scene association is
+  useful boundary evidence, not sufficient positive evidence for Tech House.
 
 Classifier implications:
 
 - Do not collapse Tech House into either House or Techno by family alone.
-- Useful positive signals: house-range BPM, four-on-floor, raw/short drum sound,
-  repetitive groove, limited harmonic density, and some house or label support.
+- Do not assume one centroid can represent every historical strain. Preserve
+  candidate `era_bucket` and `substyle_scene` data, and test a commercial
+  festival review cohort separately before treating it as the same acoustic
+  target as underground Tech House.
+- Useful cross-strain signals remain house-range BPM, four-on-floor pulse,
+  low-end-led groove, reduced or repetitive arrangement, and some techno-like
+  drum or texture evidence. Raw shuffle, dub weight, and tribal percussion are
+  conditional substyle evidence rather than universal traits; jazzy deep-tech
+  chords, vocal hooks, and large-room breakdowns need stronger track-level
+  evidence because they can instead indicate an adjacent House or festival
+  sound.
 - Sidechain/pumping may help but should be validated; it is less directly
   supported by sources than kick/drum/groove claims.
+- A current store tag is supporting metadata, not sufficient evidence that an
+  EDM-scale record belongs in the positive classifier center.
 
 Sources:
 [Beatportal tech house history](https://www.beatportal.com/articles/60692-beatports-definitive-history-of-tech-house),
-[LSA tech house](https://www.londonsoundacademy.com/blog/list-of-electronic-dance-music-genres).
+[Roland tech house history](https://articles.roland.com/the-tech-house-story/),
+[Resident Advisor: What Happened To Tech House?](https://ra.co/features/3851),
+[SoundCloud Stories: Minimal Tech House](https://soundcloud.com/stories/post/minimal-tech-house-playlist).
 
 ### Progressive House
 
