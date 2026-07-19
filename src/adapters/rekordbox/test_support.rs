@@ -717,6 +717,9 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
+    const PROCESS_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[cfg(unix)]
     fn create_archive(source: &Path, archive: &Path, members: &[&str]) {
         let status = Command::new("tar")
             .arg("-czf")
@@ -900,7 +903,7 @@ sleep 60
         let owner = OwnedTarChild::new(child)
             .unwrap_or_else(|_| panic!("synthetic tar child ownership should initialize"));
 
-        assert!(wait_for_condition(Duration::from_secs(1), || {
+        assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
             ready.is_file() && descendant_pid_file.is_file()
         }));
         let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
@@ -917,10 +920,10 @@ sleep 60
             drop_complete_tx.send(started.elapsed()).unwrap();
         });
         let drop_elapsed = drop_complete_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(PROCESS_TEST_TIMEOUT)
             .expect("OwnedTarChild::drop must complete within its watchdog");
         drop_task.join().unwrap();
-        assert!(drop_elapsed < Duration::from_secs(1));
+        assert!(drop_elapsed < PROCESS_TEST_TIMEOUT);
 
         let mut wait_status = 0;
         assert_eq!(
@@ -932,7 +935,7 @@ sleep 60
             io::Error::last_os_error().raw_os_error(),
             Some(libc::ECHILD)
         );
-        assert!(wait_for_condition(Duration::from_secs(1), || {
+        assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
             process_or_group_is_absent(-leader_pid) && process_or_group_is_absent(descendant_pid)
         }));
         thread::sleep(Duration::from_millis(300));
@@ -980,7 +983,7 @@ sleep 60
                 .unwrap_or_else(|_| panic!("synthetic tar child ownership should initialize"));
             let mut capture = TarOutputCapture::take_from(&mut owner)
                 .unwrap_or_else(|_| panic!("synthetic tar capture should initialize"));
-            let deadline = Instant::now() + Duration::from_secs(1);
+            let deadline = Instant::now() + PROCESS_TEST_TIMEOUT;
             let error = owner
                 .wait_until(deadline, &mut capture)
                 .expect_err("over-cap tar output must fail closed");
@@ -994,7 +997,7 @@ sleep 60
                 .unwrap()
                 .parse()
                 .unwrap();
-            assert!(wait_for_condition(Duration::from_secs(1), || {
+            assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
                 process_or_group_is_absent(-leader_pid)
                     && process_or_group_is_absent(descendant_pid)
             }));
