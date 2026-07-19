@@ -1431,7 +1431,7 @@ fn bpm_proxy_energy_keeps_peak_phase_reachable_without_essentia() {
 }
 
 #[tokio::test]
-async fn score_transition_returns_expected_axis_scores() {
+async fn mcp_planning_contract_score_transition_returns_expected_axis_scores() {
     let temp_audio_dir = tempfile::tempdir().expect("temp audio dir should create");
     let from_path = temp_audio_dir.path().join("from-track.flac");
     let to_path = temp_audio_dir.path().join("to-track.flac");
@@ -1673,7 +1673,7 @@ async fn score_transition_balanced_default_penalizes_clash() {
 }
 
 #[test]
-fn build_set_params_bpm_range_deserializes_from_json_array() {
+fn mcp_planning_contract_build_set_bpm_range_deserializes_from_json_array() {
     let json = serde_json::json!({
         "track_ids": ["a", "b"],
         "target_tracks": 4,
@@ -1688,7 +1688,7 @@ fn build_set_params_bpm_range_deserializes_from_json_array() {
 }
 
 #[test]
-fn build_set_params_without_new_fields_deserializes() {
+fn mcp_planning_contract_build_set_without_new_fields_deserializes() {
     let json = serde_json::json!({
         "track_ids": ["a"],
         "target_tracks": 2,
@@ -1701,7 +1701,7 @@ fn build_set_params_without_new_fields_deserializes() {
 }
 
 #[test]
-fn query_transition_candidates_params_deserializes_from_json() {
+fn mcp_planning_contract_query_transition_candidates_deserializes_from_json() {
     let json = serde_json::json!({
         "from_track_id": "t1",
         "pool_track_ids": ["t2", "t3"],

@@ -755,7 +755,7 @@ fn eval_realistic_club_beam() {
 }
 
 #[test]
-fn eval_beam_at_least_as_good_as_greedy() {
+fn planning_sequence_beam_is_at_least_as_good_as_greedy() {
     let pool = pool_realistic_club();
     let phases = resolve_energy_curve(
         Some(&EnergyCurve::Preset(
@@ -858,7 +858,7 @@ fn eval_harmonic_priority_improves_key_scores() {
 }
 
 #[test]
-fn eval_deterministic_output() {
+fn planning_sequence_is_deterministic_for_ids_and_scores() {
     let pool = pool_camelot_walk();
     let phases = resolve_energy_curve(
         Some(&EnergyCurve::Preset(
@@ -932,7 +932,7 @@ fn eval_bpm_curve_monotonic() {
 }
 
 #[test]
-fn eval_conservative_penalty_stronger_than_balanced() {
+fn planning_transition_conservative_penalty_is_stronger_than_balanced() {
     let from = simple_profile("pen-from", "8A", 128.0, 0.7, "House");
     let to = simple_profile("pen-to", "2A", 128.0, 0.7, "House"); // Clash: key=0.1
 
@@ -1028,7 +1028,7 @@ fn eval_harmonic_gate_produces_adjustment() {
 }
 
 #[test]
-fn eval_genre_streak_produces_adjustment() {
+fn planning_transition_genre_streak_produces_adjustment() {
     let from = simple_profile("gs-from", "8A", 128.0, 0.5, "House");
     let to = simple_profile("gs-to", "9A", 128.0, 0.55, "House");
 
@@ -1052,7 +1052,7 @@ fn eval_genre_streak_produces_adjustment() {
 }
 
 #[test]
-fn eval_pool_scoring_is_symmetric() {
+fn planning_pool_scoring_is_symmetric() {
     let a = simple_profile("sym-a", "8A", 126.0, 0.6, "House");
     let b = simple_profile("sym-b", "10A", 128.0, 0.7, "Tech House");
 
@@ -1743,7 +1743,7 @@ fn eval_pool_genre_axis_other_family_not_matched() {
 }
 
 #[test]
-fn eval_discover_pools_finds_planted_clusters() {
+fn planning_pool_discovery_finds_planted_clusters() {
     let cluster_a = vec![
         simple_profile("da1", "8A", 126.0, 0.55, "Deep House"),
         simple_profile("da2", "9A", 126.5, 0.58, "Deep House"),
@@ -1803,7 +1803,7 @@ fn eval_discover_pools_finds_planted_clusters() {
 }
 
 #[test]
-fn eval_discover_pools_respects_min_max_size() {
+fn planning_pool_discovery_respects_min_max_size() {
     let profiles: Vec<TrackProfile> = (0..8)
         .map(|i| simple_profile(&format!("sz{i}"), "8A", 126.0, 0.5, "House"))
         .collect();
@@ -1925,7 +1925,7 @@ fn eval_find_bridge_tracks() {
 }
 
 #[test]
-fn eval_discover_pools_max_pools_cap() {
+fn planning_pool_discovery_respects_max_pool_count() {
     let profiles: Vec<TrackProfile> = (0..8)
         .map(|i| simple_profile(&format!("mc{i}"), "8A", 126.0, 0.5, "House"))
         .collect();
