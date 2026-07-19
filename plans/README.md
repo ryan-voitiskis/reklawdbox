@@ -12,7 +12,13 @@ classifier-safety and evidence-readiness work required after removing that
 provider. Plans 036–037 were added on 2026-07-17 from commit `4aad526`. They
 standardize one managed, versioned Essentia runtime and then require complete
 Stratum/Essentia evidence for Full classification while preserving graceful
-degradation elsewhere. No source change is part of any planning set.
+degradation elsewhere. Plans 047–052 were added on 2026-07-19 from commit
+`b2155e5` after a source-wide decomplexification pass. They isolate safe private
+fixtures, unify audio-tag mutation policy, relocate hydrate coordination,
+model planning policies, and make the two remaining process lifecycles
+explicit. Numbers 038–046 remain reserved for prior isolated execution
+identifiers and are not reused here. No source change is part of any planning
+set.
 
 Each executor must read its assigned plan in full before changing code, run the
 plan's drift check first, honor every STOP condition, and update the matching
@@ -107,6 +113,12 @@ the dependency graph and recommended waves below.
 | [035](035-align-classification-readiness-and-fallbacks.md) | Align readiness, profile freshness, and label fallbacks    | P1       | L      | 034                          | DONE   |
 | [036](036-standardize-managed-essentia-environment.md)     | Standardize the managed Essentia environment               | P1       | L      | 035                          | DONE   |
 | [037](037-require-essentia-for-full-classification.md)     | Require Essentia evidence for full classification          | P1       | L      | 036                          | DONE   |
+| [047](047-isolate-private-rekordbox-fixtures.md)           | Isolate private Rekordbox and audio fixtures               | P1       | M      | -                            | TODO   |
+| [048](048-plan-audio-tag-mutations-once.md)                | Plan audio-tag mutations once                              | P1       | L      | 047                          | TODO   |
+| [049](049-extract-hydrate-coordination.md)                 | Extract hydrate coordination from CLI                      | P1       | L      | -                            | TODO   |
+| [050](050-model-planning-policies.md)                      | Model planning policies explicitly                         | P1       | L      | -                            | TODO   |
+| [051](051-separate-essentia-runtime-lifecycle.md)          | Separate the Essentia runtime lifecycle                    | P1       | L      | 047, 048, 052                | TODO   |
+| [052](052-encapsulate-backup-process-supervision.md)       | Encapsulate backup process supervision                     | P1       | L      | -                            | TODO   |
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED: <reason>` |
 `REJECTED: <rationale>`.
@@ -165,6 +177,32 @@ These plans deliberately do not make Python a global process dependency.
 Library, metadata, export, transition, and pool workflows keep their documented
 availability or graceful-degradation behavior; only Full classification gains
 the stronger evidence requirement.
+
+## Remaining-hotspot decomplexification coverage
+
+- Plan 047 removes fixed global private-fixture state and gives portable versus
+  private Rekordbox tests explicit homes. It adds no private data or mandatory
+  private gate.
+- Plan 048 removes the duplicated preview/write interpretation of tag edits by
+  producing one validated per-layer mutation plan, then returns MCP enum
+  ownership to the transport edge.
+- Plan 049 moves transport-independent cache selection, task outcome,
+  persistence, and final accounting into `application/`; CLI keeps prompts,
+  rendering, progress, authentication, and retry policy.
+- Plan 050 replaces long positional planning signatures with cohesive policy
+  values and splits planning tests by behavior without changing numerical
+  ordering or serialization.
+- Plan 051 removes one duplicate synchronous subprocess state machine and
+  makes managed-runtime activation/rollback an explicit transaction while
+  localizing unsafe platform primitives.
+- Plan 052 localizes the Tokio child/process-group/readers state machine under
+  one concrete supervisor and types internal failure decisions while
+  preserving detached cleanup and edge strings.
+
+The acceptance test for each plan is deleted coupling or explicit ownership,
+not reduced file size. Plans 047 and 050 primarily remove navigation and
+parameter pressure; 048, 049, 051, and 052 must also delete duplicated or
+implicit orchestration. A module split without that change is not completion.
 
 ## Dependency graph
 
@@ -228,6 +266,13 @@ flowchart LR
     P034 --> P035["035 Readiness and fallbacks"]
     P035 --> P036["036 Managed Essentia runtime"]
     P036 --> P037["037 Full classification readiness"]
+
+    P047["047 Private fixture isolation"] --> P048["048 One tag mutation plan"]
+    P047 --> P051["051 Essentia lifecycle"]
+    P048 --> P051
+    P052["052 Backup supervision"] --> P051
+    P049["049 Hydrate coordination"]
+    P050["050 Planning policies"]
 ```
 
 ## Recommended execution waves
@@ -267,6 +312,18 @@ flowchart LR
   reviewed, the managed runtime passes its real-audio smoke, and Essentia cache
   v3 behavior is established. Refresh evidence and recalibrate only after its
   mandatory source/tests/docs gates pass.
+- Wave 18, low-overlap foundations: 047, 049, and 050 may be developed in
+  parallel only in isolated worktrees. Integrate one reviewed branch at a time
+  and rerun each drift check from the resulting head.
+- Wave 19, audio mutation policy: run 048 after 047 so every optional
+  real-format mutation uses owned temporary audio copies and shared audio-test
+  moves are reconciled once.
+- Wave 20, high-risk backup lifecycle: run 052 after the low-overlap lanes. It
+  establishes the reviewed platform process-group identity primitive but keeps
+  all Tokio/command/output policy in backup.
+- Wave 21, Essentia lifecycle: run 051 only after 047, 048, and 052 are reviewed
+  and integrated. It must preserve the audio changes and consume only 052's
+  low-level process-group primitive, never the backup supervisor.
 - Final portfolio gate after every row is DONE:
 
   ```bash
@@ -363,6 +420,26 @@ flowchart LR
   independent usable sources; coverage and calibration report those same
   usable states. Plans 036–037 extend that chain by making the Essentia runtime
   reproducible and the Full classification boundary explicit.
+- 047 owns test-only private fixture lifetime and safe copied-audio helpers.
+  It must never add a private path, checksum, database, archive, or audio file
+  to the repository, and its ignored gates stay opt-in.
+- 048 and 051 both touch `adapters/audio` module and test surfaces, so they are
+  sequential through 047. Plan 048 owns tag-layer policy; Plan 051 must not
+  absorb it into runtime setup.
+- 049 must preserve the deliberate CLI/MCP difference for durable lookup
+  failures. Application code owns transport-independent sequencing, not
+  prompts, progress bars, transport payloads, or retry interaction.
+- 050 is a numerical-semantics-preserving refactor. Keep score ordering,
+  tie-breaking, seeds, defaults, and serialized planning payloads exact; policy
+  types are not permission to retune algorithms.
+- 051 and 052 share only the non-async platform primitive that reserves,
+  inspects, releases, or terminates a process-group identity before leader
+  reap. Essentia owns its synchronous bounded command runner; backup owns its
+  Tokio supervisor, deadline, output readers, and detached cancellation
+  cleanup.
+- 052 must preserve pre-reap process-group inspection and the fail-closed
+  `write_xml` restoration/retry contract. Green tests alone are not sufficient
+  evidence for process ownership.
 - No plan may add a direct write path to Rekordbox `master.db`.
 
 ## Findings considered and rejected or deferred
@@ -404,3 +481,23 @@ flowchart LR
   deferred. Plan 034 first establishes benchmark and provenance invariants;
   future work should be justified by its measured confusion and abstention
   output.
+- `src/domain/metadata/changes.rs`: deferred because its production policy is
+  now about 500 cohesive lines; most remaining size is characterization tests.
+  Revisit only if new change kinds create a second state machine, not to chase
+  line count.
+- `src/application/metadata/enrichment.rs`: deferred because the previous pass
+  already gave worker/writer lifecycle and typed outcomes coherent ownership.
+  Revisit only with evidence of duplicated orchestration or a caller-visible
+  policy split.
+- `src/mcp/analysis/handlers.rs` and `src/application/audit/scan.rs`: deferred
+  below Plans 047–052. Their remaining pressure is meaningful but lower risk
+  and should be remeasured after hydrate and process ownership settle.
+- `src/mcp/tests/metadata/backfill.rs` and
+  `src/mcp/tests/enrichment/auth.rs`: deferred despite their size because each
+  is already capability-specific and assertion-heavy. Revisit when its
+  production workflow changes or when a second internal responsibility is
+  demonstrated; do not split solely by line count.
+- Grouped `dead_code` suppressions in classification and writable-state read
+  models: deferred until their compatibility/diagnostic consumers are mapped.
+  Removing fields blindly could change stored-data or debugging contracts;
+  wrapping them would not reduce complexity.
