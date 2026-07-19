@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod platform;
 mod process;
 
+use self::platform::atomic_exchange_paths;
 use self::process::{
     CommandRequest, CommandResult, CommandRunner, ProcessError, ProcessErrorKind,
     SystemCommandRunner,
@@ -837,67 +838,6 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-#[cfg(target_os = "macos")]
-fn atomic_exchange_paths(left: &Path, right: &Path) -> Result<(), String> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    unsafe extern "C" {
-        fn renamex_np(
-            from: *const libc::c_char,
-            to: *const libc::c_char,
-            flags: u32,
-        ) -> libc::c_int;
-    }
-    const RENAME_SWAP: u32 = 0x0000_0002;
-    let left = CString::new(left.as_os_str().as_bytes())
-        .map_err(|_| "left exchange path contains a NUL byte".to_string())?;
-    let right = CString::new(right.as_os_str().as_bytes())
-        .map_err(|_| "right exchange path contains a NUL byte".to_string())?;
-    // SAFETY: both C strings are valid for the duration of the call. The paths
-    // are on the same managed filesystem and RENAME_SWAP preserves both names.
-    let result = unsafe { renamex_np(left.as_ptr(), right.as_ptr(), RENAME_SWAP) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn atomic_exchange_paths(left: &Path, right: &Path) -> Result<(), String> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    const RENAME_EXCHANGE: libc::c_uint = 0x2;
-    let left = CString::new(left.as_os_str().as_bytes())
-        .map_err(|_| "left exchange path contains a NUL byte".to_string())?;
-    let right = CString::new(right.as_os_str().as_bytes())
-        .map_err(|_| "right exchange path contains a NUL byte".to_string())?;
-    // SAFETY: arguments follow renameat2(2); both C strings remain valid for
-    // the call and RENAME_EXCHANGE preserves both names atomically.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            left.as_ptr(),
-            libc::AT_FDCWD,
-            right.as_ptr(),
-            RENAME_EXCHANGE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn atomic_exchange_paths(_left: &Path, _right: &Path) -> Result<(), String> {
-    Err("atomic legacy-directory migration is unsupported on this platform".into())
-}
-
 /// A process-owned advisory lock. Unlike a create-new sentinel, the kernel
 /// releases this lock when a process exits unexpectedly.
 #[derive(Debug)]
@@ -923,28 +863,16 @@ impl AdvisoryLock {
                 )
             })?;
         loop {
-            // SAFETY: file remains open for this lock's lifetime and flock only
-            // touches its owned descriptor.
-            let result = unsafe {
-                libc::flock(
-                    std::os::fd::AsRawFd::as_raw_fd(&file),
-                    libc::LOCK_EX | libc::LOCK_NB,
-                )
-            };
-            if result == 0 {
-                return Ok(Self { file });
-            }
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EWOULDBLOCK)
-                && error.raw_os_error() != Some(libc::EAGAIN)
-            {
-                return Err(EssentiaSetupError::new(
+            if platform::try_lock_exclusive(&file).map_err(|error| {
+                EssentiaSetupError::new(
                     EssentiaSetupErrorKind::Filesystem,
                     format!(
                         "Failed to acquire managed Essentia setup lock at {}: {error}",
                         path.display()
                     ),
-                ));
+                )
+            })? {
+                return Ok(Self { file });
             }
             if started.elapsed() >= timeout {
                 return Err(EssentiaSetupError::new(
@@ -961,8 +889,9 @@ impl AdvisoryLock {
 }
 impl Drop for AdvisoryLock {
     fn drop(&mut self) {
-        // SAFETY: this is the descriptor acquired by this lock instance.
-        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+        if let Err(error) = platform::unlock(&self.file) {
+            tracing::warn!("Failed to release managed Essentia setup lock: {error}");
+        }
     }
 }
 
