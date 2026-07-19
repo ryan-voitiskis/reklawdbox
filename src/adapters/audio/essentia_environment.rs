@@ -11,6 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod platform;
+#[cfg(test)]
+mod process;
+
 pub(crate) const ESSENTIA_PYTHON_ENV_VAR: &str = "CRATE_DIG_ESSENTIA_PYTHON";
 pub(crate) const ESSENTIA_VENV_RELPATH: &str = ".local/share/reklawdbox/essentia-venv";
 pub(crate) const ESSENTIA_VENV_GENERATIONS: &str = "essentia-venv.generations";
