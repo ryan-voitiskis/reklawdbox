@@ -2,6 +2,7 @@ use super::support::{
     assert_cache_write_summary, discogs_match, install_enrichment_insert_failure,
     run_discogs_batch_with_timeout, set_enrich_test_track_title,
 };
+use crate::adapters::providers::discogs::LookupError;
 use crate::mcp::enrichment::{
     EnrichTracksParams, LookupDiscogsParams, set_test_discogs_lookup_override,
 };
@@ -305,6 +306,53 @@ async fn enrich_tracks_enrich_cache_writer_persists_match_before_enriched() {
     .expect("enriched match should have a durable cache row");
     assert_eq!(entry.match_quality.as_deref(), Some("exact"));
     assert!(entry.response_json.is_some());
+}
+
+#[tokio::test]
+async fn hydrate_mcp_discogs_lookup_failure_does_not_persist_error_row() {
+    let db_conn = create_single_track_test_db("lookup-failure", "/tmp/lookup-failure.flac");
+    let title = "Lookup Failure";
+    set_enrich_test_track_title(&db_conn, "lookup-failure", title);
+    let (server, _store_dir, _store_path) = create_enrich_cache_writer_test_server(db_conn);
+    set_test_discogs_lookup_override(
+        "Aníbal",
+        title,
+        Some("Encoded Paths"),
+        Err(LookupError::message("synthetic lookup failure")),
+    );
+
+    let result =
+        run_discogs_batch_with_timeout(&server, &["lookup-failure"], "failed Discogs lookup").await;
+    let payload = extract_json(&result);
+
+    assert_eq!(payload["summary"]["enriched"], 0);
+    assert_eq!(payload["summary"]["skipped"], 0);
+    assert_eq!(payload["summary"]["failed"], 1);
+    assert_cache_write_summary(&payload, 0, 0, 0);
+    assert_eq!(payload["failures"][0]["track_id"], "lookup-failure");
+    assert_eq!(payload["failures"][0]["provider"], "discogs");
+    assert_eq!(payload["failures"][0]["stage"], "lookup");
+    assert_eq!(payload["failures"][0]["error"], "synthetic lookup failure");
+
+    let norm_artist = crate::domain::metadata::normalize_for_matching("Aníbal");
+    let norm_title = crate::domain::metadata::normalize_for_matching(title);
+    let norm_album = crate::domain::metadata::normalize_for_matching("Encoded Paths");
+    let conn = server
+        .cache_store_conn()
+        .expect("internal store should be available");
+    assert!(
+        store::get_enrichment(
+            &conn,
+            "discogs",
+            &norm_artist,
+            &norm_title,
+            Some(&norm_album),
+            true,
+        )
+        .expect("error-inclusive cache read should succeed")
+        .is_none(),
+        "MCP lookup failures must remain absent from the cache"
+    );
 }
 
 #[tokio::test]

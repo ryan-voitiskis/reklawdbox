@@ -4,13 +4,14 @@ use rmcp::model::CallToolResult;
 use crate::adapters::providers::musicbrainz;
 use crate::adapters::rekordbox as db;
 use crate::adapters::state as store;
-use crate::application::cache_writer::CacheWriteRequest;
+use crate::application::cache_writer::{CacheMessageError, CacheWriteRequest};
 #[cfg(test)]
 use crate::application::enrichment::hydrate::acknowledge_mcp_enrichment_cache_write;
 use crate::application::enrichment::hydrate::{
-    EnrichmentCachePolicy, EnrichmentCacheWrite, EnrichmentCacheWriterReport,
-    EnrichmentWorkerConfig, HydrationFailure, HydrationFailureKind, HydrationTrackIdentity,
-    enrichment_completion_flags, run_enrichment_cache_writer, run_enrichment_workers,
+    DiscogsBatchAuthState, EnrichmentCachePolicy, EnrichmentCacheWrite,
+    EnrichmentCacheWriterReport, EnrichmentWorkerConfig, HydrationFailure, HydrationFailureKind,
+    HydrationTrackIdentity, enrichment_completion_flags, run_enrichment_cache_writer,
+    run_enrichment_workers,
 };
 use crate::application::enrichment::lookup::{
     self as enrichment_lookup, LookupIdentity, LookupPolicy, LookupProvider, PersistLookupError,
@@ -298,9 +299,15 @@ fn hydration_failure_json(failure: HydrationFailure) -> serde_json::Value {
     let error = match failure.kind {
         HydrationFailureKind::AuthBatchFailed => "Discogs auth failed (batch-wide)".to_string(),
         HydrationFailureKind::DiscogsAuth(remediation) => auth_remediation_message(&remediation),
-        HydrationFailureKind::Lookup(error)
-        | HydrationFailureKind::Serialize(error)
-        | HydrationFailureKind::CacheWrite(error) => error,
+        HydrationFailureKind::Lookup(error) => error,
+        HydrationFailureKind::Serialize(error) => format!("Serialize error: {error}"),
+        HydrationFailureKind::CacheWrite(error) => match error {
+            CacheMessageError::QueueClosed { .. } => "cache write queue closed".to_string(),
+            CacheMessageError::AcknowledgementCanceled { .. } => {
+                "cache writer acknowledgement canceled".to_string()
+            }
+            CacheMessageError::WriteRejected(summary) => summary,
+        },
         HydrationFailureKind::SemaphoreClosed => {
             format!("{} semaphore closed", failure.provider)
         }
@@ -385,8 +392,7 @@ pub(in crate::mcp) async fn handle_enrich_tracks(
     });
 
     let (auth_fail_tx, auth_fail_rx) = tokio::sync::watch::channel(false);
-    let auth_fail_tx = std::sync::Arc::new(auth_fail_tx);
-    let auth_fail_rx = std::sync::Arc::new(auth_fail_rx);
+    let auth = DiscogsBatchAuthState::new(auth_fail_rx, auth_fail_tx);
 
     let worker_report = run_enrichment_workers(
         tracks.iter().map(hydration_identity).collect(),
@@ -401,8 +407,7 @@ pub(in crate::mcp) async fn handle_enrich_tracks(
         },
         server.context.enrichment.http.clone(),
         cache_tx.clone(),
-        auth_fail_rx,
-        auth_fail_tx,
+        auth,
         {
             let server = server.clone();
             move |identity: HydrationTrackIdentity| {
@@ -487,6 +492,27 @@ pub(in crate::mcp) async fn handle_enrich_tracks(
 mod pending_page_tests {
     use super::*;
     use crate::mcp::enrichment::pending_batch_page;
+
+    #[test]
+    fn hydrate_mcp_serialization_failure_keeps_legacy_single_prefix() {
+        let failure = HydrationFailure {
+            identity: HydrationTrackIdentity::new(
+                "serialization-track".to_string(),
+                "Serialization Artist".to_string(),
+                "Serialization Title".to_string(),
+                String::new(),
+            ),
+            provider: crate::application::enrichment::model::EnrichmentProvider::Discogs,
+            kind: HydrationFailureKind::Serialize("synthetic serializer detail".to_string()),
+        };
+
+        let rendered = hydration_failure_json(failure);
+        assert_eq!(rendered["stage"], "serialize");
+        assert_eq!(
+            rendered["error"],
+            "Serialize error: synthetic serializer detail"
+        );
+    }
 
     fn track(id: &str, album: &str) -> crate::domain::library::Track {
         crate::domain::library::Track {

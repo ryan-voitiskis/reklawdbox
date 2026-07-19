@@ -17,6 +17,9 @@ pub(crate) struct CacheWriterReport {
     pub(crate) attempted: u32,
     pub(crate) succeeded: u32,
     pub(crate) failed: u32,
+    pub(crate) open_failures: u32,
+    pub(crate) write_failures: u32,
+    pub(crate) dropped_acknowledgements: u32,
     pub(crate) threshold_cancelled: bool,
     pub(crate) error_summaries: Vec<String>,
 }
@@ -36,7 +39,7 @@ impl CacheWriterReport {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CacheMessageError {
     QueueClosed { context: String },
     AcknowledgementCanceled { context: String },
@@ -110,11 +113,14 @@ where
         Err(error) => {
             let summary = format!("cache store open failed: {error}");
             tracing::error!("Cache writer: {summary} — rejecting queued writes");
+            report.open_failures = 1;
             report.error_summaries.push(summary.clone());
             cancel.cancel();
             while let Some(request) = receiver.blocking_recv() {
                 report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary.clone())).ok();
+                if request.acknowledgement.send(Err(summary.clone())).is_err() {
+                    report.dropped_acknowledgements += 1;
+                }
             }
             return report;
         }
@@ -125,7 +131,9 @@ where
     while let Some(request) = receiver.blocking_recv() {
         if let Some(summary) = &fatal_error {
             report.record_failure(summary.clone());
-            request.acknowledgement.send(Err(summary.clone())).ok();
+            if request.acknowledgement.send(Err(summary.clone())).is_err() {
+                report.dropped_acknowledgements += 1;
+            }
             continue;
         }
 
@@ -134,16 +142,21 @@ where
             Ok(()) => {
                 consecutive_failures = 0;
                 report.record_success();
-                request.acknowledgement.send(Ok(())).ok();
+                if request.acknowledgement.send(Ok(())).is_err() {
+                    report.dropped_acknowledgements += 1;
+                }
             }
             Err(error) => {
                 consecutive_failures += 1;
+                report.write_failures += 1;
                 let summary = format!("{} cache write failed: {error}", label(&message));
                 tracing::error!(
                     "Cache writer: {summary} ({consecutive_failures}/{MAX_CONSECUTIVE_CACHE_WRITE_FAILURES})"
                 );
                 report.record_failure(summary.clone());
-                request.acknowledgement.send(Err(summary)).ok();
+                if request.acknowledgement.send(Err(summary)).is_err() {
+                    report.dropped_acknowledgements += 1;
+                }
                 if consecutive_failures >= MAX_CONSECUTIVE_CACHE_WRITE_FAILURES {
                     let fatal = format!(
                         "cache writer stopped after {MAX_CONSECUTIVE_CACHE_WRITE_FAILURES} consecutive failures"

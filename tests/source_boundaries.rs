@@ -78,6 +78,60 @@ fn explicit_source_paths_follow_dependency_direction() {
     );
 }
 
+#[test]
+fn hydration_cache_and_outcome_coordination_stays_out_of_cli() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cli_root = manifest.join("src/cli/hydrate");
+    let cli_source = rust_files(&cli_root)
+        .into_iter()
+        .map(|path| {
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for forbidden in [
+        "get_enrichment(",
+        "set_enrichment(",
+        "serialize_cache_payload(",
+        "run_hydrate_cache_writer(",
+        "match_quality: Some(\"error\"",
+    ] {
+        assert!(
+            !cli_source.contains(forbidden),
+            "CLI hydrate must not own {forbidden:?} coordination"
+        );
+    }
+    for application_call in [
+        "select_hydration_work(",
+        "hydrate_discogs_track(",
+        "HydrateCacheWriterSession::start(",
+        "HydrationApplicationReport::assemble(",
+        ".final_accounting()",
+    ] {
+        assert!(
+            cli_source.contains(application_call),
+            "CLI hydrate should delegate through {application_call:?}"
+        );
+    }
+
+    let application_source =
+        std::fs::read_to_string(manifest.join("src/application/enrichment/hydrate.rs"))
+            .expect("application hydration source should read");
+    for owner in [
+        "pub(crate) fn select_hydration_work(",
+        "pub(crate) async fn hydrate_discogs_track",
+        "pub(crate) struct HydrateCacheWriterSession",
+        "pub(crate) struct HydrationApplicationReport",
+        "pub(crate) fn final_accounting(&self)",
+    ] {
+        assert!(
+            application_source.contains(owner),
+            "application hydration should own {owner:?}"
+        );
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = std::fs::read_dir(directory)
