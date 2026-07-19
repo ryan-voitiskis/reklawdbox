@@ -5,10 +5,10 @@ use rusqlite::params;
 
 use crate::adapters::state as store;
 use crate::domain::planning::{
-    EnergyPhase, HarmonicMixingStyle, PriorityWeights, SequencePolicy, SequencingPriority,
-    TrackProfile, build_candidate_plan, build_candidate_plan_beam, compute_bpm_trajectory,
-    compute_track_energy, priority_weights, resolve_energy_curve, round_to_3_decimals,
-    score_energy_axis,
+    AxisScore, EnergyPhase, HarmonicMixingStyle, PriorityWeights, SequencePolicy,
+    SequencingPriority, TrackProfile, TransitionScores, build_candidate_plan,
+    build_candidate_plan_beam, compute_bpm_trajectory, compute_track_energy, priority_weights,
+    resolve_energy_curve, round_to_3_decimals, score_energy_axis,
 };
 use crate::mcp::planning::{
     BuildSetParams, EnergyCurveInput as McpEnergyCurveInput,
@@ -50,6 +50,118 @@ fn make_beam_test_profiles() -> HashMap<String, TrackProfile> {
         .into_iter()
         .map(|p| (p.track.id.clone(), p))
         .collect()
+}
+
+fn assert_float_close(actual: f64, expected: f64, field: &str) {
+    assert!(
+        (actual - expected).abs() <= 1e-12,
+        "{field} differs: actual={actual:.15}, expected={expected:.15}",
+    );
+}
+
+fn assert_axis_score_parity(actual: &AxisScore, expected: &AxisScore, field: &str) {
+    assert_float_close(actual.value, expected.value, field);
+    assert_eq!(actual.label, expected.label, "{field} label differs");
+}
+
+fn assert_transition_score_parity(actual: &TransitionScores, expected: &TransitionScores) {
+    assert_axis_score_parity(&actual.key, &expected.key, "key score");
+    assert_axis_score_parity(&actual.bpm, &expected.bpm, "BPM score");
+    assert_axis_score_parity(&actual.energy, &expected.energy, "energy score");
+    assert_axis_score_parity(&actual.genre, &expected.genre, "genre score");
+    assert_axis_score_parity(&actual.brightness, &expected.brightness, "brightness score");
+    assert_axis_score_parity(&actual.rhythm, &expected.rhythm, "rhythm score");
+    assert_float_close(actual.composite, expected.composite, "composite score");
+    assert_eq!(
+        actual.effective_to_key, expected.effective_to_key,
+        "effective target key differs",
+    );
+    assert_eq!(
+        actual.pitch_shift_semitones, expected.pitch_shift_semitones,
+        "pitch shift differs",
+    );
+    assert_eq!(
+        actual.key_relation, expected.key_relation,
+        "key relation differs",
+    );
+    assert_float_close(
+        actual.bpm_adjustment_pct,
+        expected.bpm_adjustment_pct,
+        "BPM adjustment",
+    );
+    assert_eq!(
+        actual.adjustments.len(),
+        expected.adjustments.len(),
+        "adjustment count differs",
+    );
+    for (index, (actual, expected)) in actual
+        .adjustments
+        .iter()
+        .zip(&expected.adjustments)
+        .enumerate()
+    {
+        assert_eq!(
+            actual.kind, expected.kind,
+            "adjustment {index} kind differs"
+        );
+        assert_float_close(
+            actual.delta,
+            expected.delta,
+            &format!("adjustment {index} delta"),
+        );
+        assert_float_close(
+            actual.composite_without,
+            expected.composite_without,
+            &format!("adjustment {index} pre-adjustment composite"),
+        );
+        assert_eq!(
+            actual.reason, expected.reason,
+            "adjustment {index} reason differs",
+        );
+    }
+}
+
+fn assert_greedy_beam_parity(
+    profiles: &HashMap<String, TrackProfile>,
+    start_track_id: &str,
+    policy: SequencePolicy<'_>,
+) {
+    let greedy = build_candidate_plan(profiles, start_track_id, policy, 0);
+    let beam_plans = build_candidate_plan_beam(profiles, start_track_id, policy, 1);
+
+    assert!(
+        greedy
+            .transitions
+            .iter()
+            .any(|transition| !transition.scores.adjustments.is_empty()),
+        "parity fixture should exercise ordered score adjustments",
+    );
+    assert_eq!(
+        beam_plans.len(),
+        1,
+        "beam width 1 should produce exactly 1 plan",
+    );
+    let beam = &beam_plans[0];
+    assert_eq!(
+        greedy.ordered_ids, beam.ordered_ids,
+        "beam width 1 should match greedy ordering",
+    );
+    assert_eq!(
+        greedy.transitions.len(),
+        beam.transitions.len(),
+        "beam width 1 should produce the same transition count",
+    );
+    for (index, (greedy, beam)) in greedy.transitions.iter().zip(&beam.transitions).enumerate() {
+        assert_eq!(
+            greedy.from_index, beam.from_index,
+            "transition {index} source index differs",
+        );
+        assert_eq!(
+            greedy.to_index, beam.to_index,
+            "transition {index} target index differs",
+        );
+        assert_transition_score_parity(&greedy.scores, &beam.scores);
+    }
 }
 
 #[tokio::test]
@@ -476,7 +588,7 @@ fn mcp_planning_set_beam_search_width_1_matches_greedy() {
     let profiles = make_beam_test_profiles();
     let phases = resolve_energy_curve(None, 4).unwrap();
 
-    let greedy = build_candidate_plan(
+    assert_greedy_beam_parity(
         &profiles,
         "b1",
         sequence_policy(
@@ -485,28 +597,6 @@ fn mcp_planning_set_beam_search_width_1_matches_greedy() {
             &priority_weights(SequencingPriority::Balanced),
             None,
         ),
-        0,
-    );
-    let beam_plans = build_candidate_plan_beam(
-        &profiles,
-        "b1",
-        sequence_policy(
-            4,
-            &phases,
-            &priority_weights(SequencingPriority::Balanced),
-            None,
-        ),
-        1,
-    );
-
-    assert_eq!(
-        beam_plans.len(),
-        1,
-        "beam width 1 should produce exactly 1 plan"
-    );
-    assert_eq!(
-        greedy.ordered_ids, beam_plans[0].ordered_ids,
-        "beam width 1 should match greedy ordering"
     );
 }
 
