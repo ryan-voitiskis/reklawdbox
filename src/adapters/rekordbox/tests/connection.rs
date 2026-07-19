@@ -168,7 +168,8 @@ fn rekordbox_connection_private_fixture_never_reuses_another_archive_extraction(
 
     assert_eq!(identity_a, "A");
     assert_eq!(identity_b, "B");
-    assert_ne!(fixture_a.archive_identity(), fixture_b.archive_identity());
+    assert!(fixture_a.source_archive_is_unchanged().unwrap());
+    assert!(fixture_b.source_archive_is_unchanged().unwrap());
     assert_ne!(fixture_a.database_path(), fixture_b.database_path());
 }
 
