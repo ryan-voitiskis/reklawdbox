@@ -229,6 +229,13 @@ fn probe_process_error(path: &str, timeout: Duration, error: ProcessError) -> Es
                 stream.name()
             ),
         ),
+        ProcessErrorKind::ReaderStart { stream, source } => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!(
+                "failed to start runtime probe {} reader for {path}: {source}",
+                stream.name()
+            ),
+        ),
         ProcessErrorKind::Wait(source) => (
             EssentiaSetupErrorKind::ImportFailure,
             format!("failed while waiting for runtime probe {path}: {source}"),
@@ -278,6 +285,13 @@ fn generic_process_error(
         ProcessErrorKind::MissingCapture(stream) => (
             EssentiaSetupErrorKind::ImportFailure,
             format!("failed to capture {} for {program}", stream.name()),
+        ),
+        ProcessErrorKind::ReaderStart { stream, source } => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!(
+                "failed to start {} reader for {program}: {source}",
+                stream.name()
+            ),
         ),
         ProcessErrorKind::Wait(source) => (
             EssentiaSetupErrorKind::ImportFailure,
@@ -1410,6 +1424,14 @@ mod tests {
                 "failed to capture runtime probe stdout for /managed/python",
             ),
             (
+                ProcessError::new(ProcessErrorKind::ReaderStart {
+                    stream: OutputStream::Stderr,
+                    source: std::io::Error::other("sentinel"),
+                }),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to start runtime probe stderr reader for /managed/python: sentinel",
+            ),
+            (
                 ProcessError::new(ProcessErrorKind::Wait(std::io::Error::other("sentinel"))),
                 EssentiaSetupErrorKind::ImportFailure,
                 "failed while waiting for runtime probe /managed/python: sentinel",
@@ -1442,6 +1464,14 @@ mod tests {
                 ProcessError::new(ProcessErrorKind::MissingCapture(OutputStream::Stderr)),
                 EssentiaSetupErrorKind::ImportFailure,
                 "failed to capture stderr for python3.14",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::ReaderStart {
+                    stream: OutputStream::Stdout,
+                    source: std::io::Error::other("sentinel"),
+                }),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to start stdout reader for python3.14: sentinel",
             ),
             (
                 ProcessError::new(ProcessErrorKind::Wait(std::io::Error::other("sentinel"))),

@@ -22,6 +22,13 @@ impl ProcessGroupError {
     fn with_cleanup(kind: ProcessGroupErrorKind, cleanup: Vec<ProcessGroupCleanupError>) -> Self {
         Self { kind, cleanup }
     }
+
+    #[cfg(test)]
+    pub(crate) fn injected_inspection_failure() -> Self {
+        Self::new(ProcessGroupErrorKind::ObservationFailed(
+            std::io::Error::other("scripted process-group inspection failure"),
+        ))
+    }
 }
 
 #[derive(Debug)]

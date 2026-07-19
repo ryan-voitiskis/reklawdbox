@@ -76,6 +76,13 @@ impl std::fmt::Display for ProcessError {
             ProcessErrorKind::MissingCapture(stream) => {
                 write!(formatter, "missing {} capture", stream.name())
             }
+            ProcessErrorKind::ReaderStart { stream, source } => {
+                write!(
+                    formatter,
+                    "{} reader failed to start: {source}",
+                    stream.name()
+                )
+            }
             ProcessErrorKind::Wait(error) => write!(formatter, "process wait failed: {error}"),
             ProcessErrorKind::Timeout => formatter.write_str("process timed out"),
             ProcessErrorKind::SurvivingDescendants => {
@@ -101,6 +108,10 @@ pub(super) enum ProcessErrorKind {
     Start(std::io::Error),
     ProcessGroup(ProcessGroupError),
     MissingCapture(OutputStream),
+    ReaderStart {
+        stream: OutputStream,
+        source: std::io::Error,
+    },
     Wait(std::io::Error),
     Timeout,
     SurvivingDescendants,
@@ -171,40 +182,70 @@ impl CommandRunner for SystemCommandRunner {
 
         let deadline = Deadline::new(request.timeout);
         let (reader_tx, reader_rx) = mpsc::channel();
+        let (completion_tx, completion_rx) = mpsc::channel();
         let reader_control = Arc::new(ReaderControl::new(deadline.end));
-        let readers = vec![
-            self.spawn_reader(
+        let mut reader_owner =
+            ReaderOwner::new(reader_rx, completion_rx, Arc::clone(&reader_control));
+        for (stream, capture, sender, completion_sender) in [
+            (
                 OutputStream::Stdout,
                 stdout,
                 reader_tx.clone(),
-                Arc::clone(&reader_control),
+                completion_tx.clone(),
             ),
-            self.spawn_reader(
-                OutputStream::Stderr,
-                stderr,
-                reader_tx,
+            (OutputStream::Stderr, stderr, reader_tx, completion_tx),
+        ] {
+            match self.spawn_reader(
+                stream,
+                capture,
+                sender,
+                completion_sender,
                 Arc::clone(&reader_control),
-            ),
-        ];
-        let process_outcome = wait_for_process(&mut child, &mut ownership, &deadline);
-        if process_outcome.is_err() {
+            ) {
+                Ok(reader) => reader_owner.push(reader),
+                Err(source) => {
+                    reader_control.cancel();
+                    terminate_owned_child(&mut child, &mut ownership);
+                    reader_owner.shutdown(&deadline);
+                    return Err(ProcessError::new(ProcessErrorKind::ReaderStart {
+                        stream,
+                        source,
+                    }));
+                }
+            }
+        }
+        let process_outcome = wait_for_process(
+            &mut child,
+            &mut ownership,
+            &deadline,
+            &mut reader_owner,
+            self.inject_inspection_failure(),
+        );
+        if !matches!(process_outcome, ProcessWait::Exited(_)) {
             reader_control.cancel();
         }
-        let reader_outcome = collect_readers(readers, reader_rx, &deadline, &reader_control);
+        let reader_outcome = reader_owner.finish(&deadline);
 
-        let process_outcome = process_outcome?;
-        let streams = reader_outcome?;
-        if process_outcome.had_surviving_descendants {
-            return Err(ProcessError::new(ProcessErrorKind::SurvivingDescendants));
+        match process_outcome {
+            ProcessWait::ReaderFailed => Err(reader_outcome
+                .err()
+                .unwrap_or_else(|| ProcessError::new(ProcessErrorKind::ReaderShutdownTimeout))),
+            ProcessWait::Failed(error) => Err(error),
+            ProcessWait::Exited(process_outcome) => {
+                let streams = reader_outcome?;
+                if process_outcome.had_surviving_descendants {
+                    return Err(ProcessError::new(ProcessErrorKind::SurvivingDescendants));
+                }
+                if deadline.expired() {
+                    return Err(ProcessError::new(ProcessErrorKind::Timeout));
+                }
+                Ok(CommandResult {
+                    success: process_outcome.status.success(),
+                    stdout: streams.stdout,
+                    stderr: streams.stderr,
+                })
+            }
         }
-        if deadline.expired() {
-            return Err(ProcessError::new(ProcessErrorKind::Timeout));
-        }
-        Ok(CommandResult {
-            success: process_outcome.status.success(),
-            stdout: streams.stdout,
-            stderr: streams.stderr,
-        })
     }
 }
 
@@ -224,44 +265,76 @@ struct ProcessOutcome {
     had_surviving_descendants: bool,
 }
 
+enum ProcessWait {
+    Exited(ProcessOutcome),
+    Failed(ProcessError),
+    ReaderFailed,
+}
+
 #[cfg(unix)]
 fn wait_for_process(
     child: &mut Child,
     ownership: &mut ProcessGroupOwnership,
     deadline: &Deadline,
-) -> Result<ProcessOutcome, ProcessError> {
+    readers: &mut ReaderOwner,
+    inject_inspection_failure: bool,
+) -> ProcessWait {
     loop {
+        readers.drain_outcomes();
+        if readers.has_failure() {
+            terminate_owned_child(child, ownership);
+            return ProcessWait::ReaderFailed;
+        }
         match ownership.leader_exit_observed_without_reaping() {
             Ok(true) => break,
             Ok(false) if !deadline.expired() => deadline.sleep_poll(),
             Ok(false) => {
                 terminate_owned_child(child, ownership);
-                return Err(ProcessError::new(ProcessErrorKind::Timeout));
+                return ProcessWait::Failed(ProcessError::new(ProcessErrorKind::Timeout));
             }
             Err(error) => {
                 terminate_owned_child(child, ownership);
-                return Err(process_group_error(error));
+                return ProcessWait::Failed(process_group_error(error));
             }
         }
     }
 
-    let had_surviving_descendants = match ownership.inspect_and_release_before_reap() {
+    readers.drain_outcomes();
+    if readers.has_failure() {
+        terminate_owned_child(child, ownership);
+        return ProcessWait::ReaderFailed;
+    }
+    let inspection = inspect_and_release_before_reap(ownership, inject_inspection_failure);
+    let had_surviving_descendants = match inspection {
         Ok(had_surviving_descendants) => had_surviving_descendants,
         Err(error) => {
             // Inspection errors still leave this function owning the child.
             // Release/terminate the group first, then reap the unreaped leader.
             terminate_owned_child(child, ownership);
-            return Err(process_group_error(error));
+            return ProcessWait::Failed(process_group_error(error));
         }
     };
     debug_assert!(ownership.is_released());
-    let status = child
-        .wait()
-        .map_err(|error| ProcessError::new(ProcessErrorKind::Wait(error)))?;
-    Ok(ProcessOutcome {
-        status,
-        had_surviving_descendants,
-    })
+    match child.wait() {
+        Ok(status) => ProcessWait::Exited(ProcessOutcome {
+            status,
+            had_surviving_descendants,
+        }),
+        Err(error) => ProcessWait::Failed(ProcessError::new(ProcessErrorKind::Wait(error))),
+    }
+}
+
+#[cfg(unix)]
+fn inspect_and_release_before_reap(
+    ownership: &mut ProcessGroupOwnership,
+    inject_failure: bool,
+) -> Result<bool, ProcessGroupError> {
+    #[cfg(test)]
+    if inject_failure {
+        return Err(ProcessGroupError::injected_inspection_failure());
+    }
+    let _ = inject_failure;
+    ownership.inspect_and_release_before_reap()
 }
 
 #[cfg(not(unix))]
@@ -269,12 +342,19 @@ fn wait_for_process(
     child: &mut Child,
     ownership: &mut ProcessGroupOwnership,
     deadline: &Deadline,
-) -> Result<ProcessOutcome, ProcessError> {
+    readers: &mut ReaderOwner,
+    _inject_inspection_failure: bool,
+) -> ProcessWait {
     loop {
+        readers.drain_outcomes();
+        if readers.has_failure() {
+            terminate_owned_child(child, ownership);
+            return ProcessWait::ReaderFailed;
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 debug_assert!(ownership.is_released());
-                return Ok(ProcessOutcome {
+                return ProcessWait::Exited(ProcessOutcome {
                     status,
                     had_surviving_descendants: false,
                 });
@@ -282,11 +362,11 @@ fn wait_for_process(
             Ok(None) if !deadline.expired() => deadline.sleep_poll(),
             Ok(None) => {
                 terminate_owned_child(child, ownership);
-                return Err(ProcessError::new(ProcessErrorKind::Timeout));
+                return ProcessWait::Failed(ProcessError::new(ProcessErrorKind::Timeout));
             }
             Err(error) => {
                 terminate_owned_child(child, ownership);
-                return Err(ProcessError::new(ProcessErrorKind::Wait(error)));
+                return ProcessWait::Failed(ProcessError::new(ProcessErrorKind::Wait(error)));
             }
         }
     }
@@ -348,6 +428,25 @@ struct ReaderMessage {
     outcome: ReaderOutcome,
 }
 
+struct ReaderCompletion {
+    stream: OutputStream,
+}
+
+struct ReaderCompletionGuard {
+    stream: OutputStream,
+    sender: Option<mpsc::Sender<ReaderCompletion>>,
+}
+
+impl Drop for ReaderCompletionGuard {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(ReaderCompletion {
+                stream: self.stream,
+            });
+        }
+    }
+}
+
 enum ReaderOutcome {
     Bytes(Vec<u8>),
     ReadError(std::io::Error),
@@ -360,93 +459,189 @@ struct CapturedStreams {
     stderr: Vec<u8>,
 }
 
-fn collect_readers(
+struct ReaderOwner {
     readers: Vec<ReaderHandle>,
     receiver: Receiver<ReaderMessage>,
-    deadline: &Deadline,
-    control: &ReaderControl,
-) -> Result<CapturedStreams, ProcessError> {
-    let mut stdout = None;
-    let mut stderr = None;
-    let mut received = 0;
-    let mut shutdown_timed_out = false;
-    while received < readers.len() {
-        let Some(remaining) = deadline.remaining() else {
-            control.cancel();
-            break;
-        };
-        match receiver.recv_timeout(remaining) {
-            Ok(message) => {
-                store_reader_message(message, &mut stdout, &mut stderr);
-                received += 1;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                control.cancel();
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    // Once the command deadline expires or process cleanup requests
-    // cancellation, the readers poll that flag at a bounded interval. This
-    // shutdown window owns their completion handshake; joins occur only after
-    // the corresponding thread has sent or disconnected.
-    if received < readers.len() {
-        control.cancel();
-        let shutdown_deadline = Instant::now() + READER_SHUTDOWN_BOUND;
-        while received < readers.len() {
-            let Some(remaining) = shutdown_deadline.checked_duration_since(Instant::now()) else {
-                break;
-            };
-            match receiver.recv_timeout(remaining) {
-                Ok(message) => {
-                    store_reader_message(message, &mut stdout, &mut stderr);
-                    received += 1;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
-                    shutdown_timed_out = received < readers.len();
-                    break;
-                }
-            }
-        }
-    }
-
-    // `read_stream` has no unbounded operation: after cancellation its only
-    // possible blocking call is the platform poll capped at
-    // READER_POLL_INTERVAL. These joins are therefore the terminal ownership
-    // path even if the scheduling-oriented completion handshake misses its
-    // generous shutdown window.
-    for reader in readers {
-        if reader.handle.join().is_err() {
-            let outcome = match reader.stream {
-                OutputStream::Stdout => &mut stdout,
-                OutputStream::Stderr => &mut stderr,
-            };
-            *outcome = Some(ReaderOutcome::Panicked);
-        }
-    }
-
-    if shutdown_timed_out {
-        return Err(ProcessError::new(ProcessErrorKind::ReaderShutdownTimeout));
-    }
-
-    // Match the planning-base join order: stdout failures take precedence over
-    // stderr failures regardless of which reader reported first.
-    let stdout = resolve_reader_outcome(OutputStream::Stdout, stdout)?;
-    let stderr = resolve_reader_outcome(OutputStream::Stderr, stderr)?;
-    Ok(CapturedStreams { stdout, stderr })
+    completion_receiver: Receiver<ReaderCompletion>,
+    control: Arc<ReaderControl>,
+    stdout: Option<ReaderOutcome>,
+    stderr: Option<ReaderOutcome>,
 }
 
-fn store_reader_message(
-    message: ReaderMessage,
-    stdout: &mut Option<ReaderOutcome>,
-    stderr: &mut Option<ReaderOutcome>,
-) {
-    match message.stream {
-        OutputStream::Stdout => *stdout = Some(message.outcome),
-        OutputStream::Stderr => *stderr = Some(message.outcome),
+impl ReaderOwner {
+    fn new(
+        receiver: Receiver<ReaderMessage>,
+        completion_receiver: Receiver<ReaderCompletion>,
+        control: Arc<ReaderControl>,
+    ) -> Self {
+        Self {
+            readers: Vec::new(),
+            receiver,
+            completion_receiver,
+            control,
+            stdout: None,
+            stderr: None,
+        }
     }
+
+    fn push(&mut self, reader: ReaderHandle) {
+        self.readers.push(reader);
+    }
+
+    fn drain_outcomes(&mut self) {
+        while let Ok(message) = self.receiver.try_recv() {
+            self.store(message);
+        }
+    }
+
+    fn has_failure(&self) -> bool {
+        [&self.stdout, &self.stderr].into_iter().any(|outcome| {
+            matches!(
+                outcome,
+                Some(
+                    ReaderOutcome::ReadError(_) | ReaderOutcome::Panicked | ReaderOutcome::TimedOut
+                )
+            )
+        })
+    }
+
+    fn finish(mut self, deadline: &Deadline) -> Result<CapturedStreams, ProcessError> {
+        let joined = self.join_readers(deadline);
+        let stdout = resolve_reader_outcome(OutputStream::Stdout, self.stdout.take())?;
+        let stderr = resolve_reader_outcome(OutputStream::Stderr, self.stderr.take())?;
+        if joined.exceeded_total_deadline || joined.missing_completion_ack {
+            return Err(ProcessError::new(ProcessErrorKind::ReaderShutdownTimeout));
+        }
+        Ok(CapturedStreams { stdout, stderr })
+    }
+
+    fn shutdown(mut self, deadline: &Deadline) {
+        self.control.cancel();
+        let _ = self.join_readers(deadline);
+    }
+
+    fn join_readers(&mut self, deadline: &Deadline) -> ReaderJoinState {
+        self.drain_outcomes();
+        let expects_stdout = self.has_reader(OutputStream::Stdout);
+        let expects_stderr = self.has_reader(OutputStream::Stderr);
+        let mut stdout_complete = false;
+        let mut stderr_complete = false;
+        let mut exceeded_total_deadline = false;
+        let mut cleanup_deadline = self
+            .control
+            .is_cancelled()
+            .then(|| cleanup_deadline_from(Instant::now()));
+        loop {
+            self.drain_outcomes();
+            while let Ok(completion) = self.completion_receiver.try_recv() {
+                match completion.stream {
+                    OutputStream::Stdout => stdout_complete = true,
+                    OutputStream::Stderr => stderr_complete = true,
+                }
+            }
+
+            if self
+                .readers
+                .iter()
+                .all(|reader| reader.handle.is_finished())
+            {
+                break;
+            }
+
+            let now = Instant::now();
+            if cleanup_deadline.is_none() && now >= deadline.end {
+                exceeded_total_deadline = true;
+                self.control.cancel();
+                cleanup_deadline = Some(cleanup_deadline_from(now));
+            }
+            if cleanup_deadline.is_some_and(|cleanup_deadline| now >= cleanup_deadline) {
+                panic!("Essentia output reader violated its bounded cancellation invariant");
+            }
+
+            let next_deadline = cleanup_deadline.unwrap_or(deadline.end);
+            let wait = next_deadline
+                .checked_duration_since(now)
+                .unwrap_or_default()
+                .min(READER_POLL_INTERVAL);
+            match self.completion_receiver.recv_timeout(wait) {
+                Ok(completion) => match completion.stream {
+                    OutputStream::Stdout => stdout_complete = true,
+                    OutputStream::Stderr => stderr_complete = true,
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // Sender disconnection proves both reader closures have
+                    // returned; `is_finished` is still checked before join.
+                }
+            }
+        }
+        // Each handle exclusively owns one pipe. On Unix `read_stream` first
+        // polls that sole descriptor for at most 10 ms, so its subsequent read
+        // cannot lose readiness to a competing consumer. The panic guard still
+        // sends an outcome, and cancellation closes every scripted stall. The
+        // completion acknowledgement is only a wake-up: `is_finished` above is
+        // the actual nonblocking-join precondition.
+        for reader in std::mem::take(&mut self.readers) {
+            assert!(reader.handle.is_finished());
+            if reader.handle.join().is_err() {
+                let outcome = match reader.stream {
+                    OutputStream::Stdout => &mut self.stdout,
+                    OutputStream::Stderr => &mut self.stderr,
+                };
+                *outcome = Some(ReaderOutcome::Panicked);
+            }
+        }
+
+        // A guard acknowledgement may race just behind `is_finished`; joining
+        // establishes completion, so judge the handshake only after this final
+        // drain. Outcomes use the same ordering for deterministic diagnostics.
+        self.drain_outcomes();
+        while let Ok(completion) = self.completion_receiver.try_recv() {
+            match completion.stream {
+                OutputStream::Stdout => stdout_complete = true,
+                OutputStream::Stderr => stderr_complete = true,
+            }
+        }
+        ReaderJoinState {
+            exceeded_total_deadline,
+            missing_completion_ack: (expects_stdout && !stdout_complete)
+                || (expects_stderr && !stderr_complete),
+        }
+    }
+
+    fn store(&mut self, message: ReaderMessage) {
+        match message.stream {
+            OutputStream::Stdout => self.stdout = Some(message.outcome),
+            OutputStream::Stderr => self.stderr = Some(message.outcome),
+        }
+    }
+
+    fn has_reader(&self, stream: OutputStream) -> bool {
+        self.readers.iter().any(|reader| reader.stream == stream)
+    }
+}
+
+struct ReaderJoinState {
+    exceeded_total_deadline: bool,
+    missing_completion_ack: bool,
+}
+
+impl Drop for ReaderOwner {
+    fn drop(&mut self) {
+        self.control.cancel();
+        // Normal paths take only already-finished handles. If the bounded
+        // invariant panics, retain ownership and join during unwinding instead
+        // of silently detaching an output reader.
+        for reader in std::mem::take(&mut self.readers) {
+            let _ = reader.handle.join();
+        }
+    }
+}
+
+fn cleanup_deadline_from(started: Instant) -> Instant {
+    started
+        .checked_add(READER_SHUTDOWN_BOUND)
+        .unwrap_or(started)
 }
 
 fn resolve_reader_outcome(
@@ -535,6 +730,9 @@ fn read_stream(reader: &mut dyn CapturedRead, _control: &ReaderControl) -> Reade
 #[derive(Clone)]
 struct TestHooks {
     fault: ReaderFault,
+    spawn_failure: Option<OutputStream>,
+    inject_inspection_failure: bool,
+    fault_release: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     active_readers: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     spawned_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
 }
@@ -547,6 +745,8 @@ enum ReaderFault {
     ReadError(OutputStream),
     ReadBoth,
     Panic(OutputStream),
+    StallUntilCancelled(OutputStream),
+    SuppressCompletion(OutputStream),
 }
 
 #[cfg(test)]
@@ -559,6 +759,12 @@ impl SystemCommandRunner {
         if let Some(hooks) = &self.hooks {
             hooks.spawned_pids.lock().unwrap().push(pid);
         }
+    }
+
+    fn inject_inspection_failure(&self) -> bool {
+        self.hooks
+            .as_ref()
+            .is_some_and(|hooks| hooks.inject_inspection_failure)
     }
 
     fn take_capture(&self, child: &mut Child, stream: OutputStream) -> Option<CapturedOutput> {
@@ -582,46 +788,15 @@ impl SystemCommandRunner {
             capture
         }
     }
-
-    fn spawn_reader(
-        &self,
-        stream: OutputStream,
-        mut reader: CapturedOutput,
-        sender: mpsc::Sender<ReaderMessage>,
-        control: Arc<ReaderControl>,
-    ) -> ReaderHandle {
-        let hooks = self.hooks.clone();
-        let handle = std::thread::spawn(move || {
-            let _activity = ReaderActivity::new(
-                hooks
-                    .as_ref()
-                    .map(|hooks| std::sync::Arc::clone(&hooks.active_readers)),
-            );
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let fault = hooks
-                    .as_ref()
-                    .map_or(ReaderFault::None, |hooks| hooks.fault);
-                if fault == ReaderFault::Panic(stream) {
-                    panic!("scripted {stream:?} reader panic");
-                }
-                if fault == ReaderFault::ReadError(stream) || fault == ReaderFault::ReadBoth {
-                    return ReaderOutcome::ReadError(std::io::Error::other(format!(
-                        "scripted {} reader failure",
-                        stream.name()
-                    )));
-                }
-                read_stream(reader.as_mut(), &control)
-            }))
-            .unwrap_or(ReaderOutcome::Panicked);
-            let _ = sender.send(ReaderMessage { stream, outcome });
-        });
-        ReaderHandle { stream, handle }
-    }
 }
 
 #[cfg(not(test))]
 impl SystemCommandRunner {
     fn record_spawn(&self, _pid: u32) {}
+
+    fn inject_inspection_failure(&self) -> bool {
+        false
+    }
 
     fn take_capture(&self, child: &mut Child, stream: OutputStream) -> Option<CapturedOutput> {
         let capture: Option<CapturedOutput> = match stream {
@@ -636,20 +811,104 @@ impl SystemCommandRunner {
         };
         capture
     }
+}
 
+impl SystemCommandRunner {
     fn spawn_reader(
         &self,
         stream: OutputStream,
         mut reader: CapturedOutput,
         sender: mpsc::Sender<ReaderMessage>,
+        completion_sender: mpsc::Sender<ReaderCompletion>,
         control: Arc<ReaderControl>,
-    ) -> ReaderHandle {
-        let handle = std::thread::spawn(move || {
-            let outcome = read_stream(reader.as_mut(), &control);
-            let _ = sender.send(ReaderMessage { stream, outcome });
-        });
-        ReaderHandle { stream, handle }
+    ) -> std::io::Result<ReaderHandle> {
+        #[cfg(test)]
+        if self
+            .hooks
+            .as_ref()
+            .is_some_and(|hooks| hooks.spawn_failure == Some(stream))
+        {
+            return Err(std::io::Error::other(format!(
+                "scripted {} reader spawn failure",
+                stream.name()
+            )));
+        }
+
+        #[cfg(test)]
+        let hooks = self.hooks.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("essentia-{}-reader", stream.name()))
+            .spawn(move || {
+                #[cfg(test)]
+                let suppress_completion = hooks
+                    .as_ref()
+                    .is_some_and(|hooks| hooks.fault == ReaderFault::SuppressCompletion(stream));
+                #[cfg(not(test))]
+                let suppress_completion = false;
+                let _completion = ReaderCompletionGuard {
+                    stream,
+                    sender: (!suppress_completion).then_some(completion_sender),
+                };
+                #[cfg(test)]
+                let _activity = ReaderActivity::new(
+                    hooks
+                        .as_ref()
+                        .map(|hooks| std::sync::Arc::clone(&hooks.active_readers)),
+                );
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    #[cfg(test)]
+                    {
+                        read_stream_with_test_hooks(
+                            reader.as_mut(),
+                            &control,
+                            stream,
+                            hooks.as_ref(),
+                        )
+                    }
+                    #[cfg(not(test))]
+                    {
+                        read_stream(reader.as_mut(), &control)
+                    }
+                }))
+                .unwrap_or(ReaderOutcome::Panicked);
+                let _ = sender.send(ReaderMessage { stream, outcome });
+            })?;
+        Ok(ReaderHandle { stream, handle })
     }
+}
+
+#[cfg(test)]
+fn read_stream_with_test_hooks(
+    reader: &mut dyn CapturedRead,
+    control: &ReaderControl,
+    stream: OutputStream,
+    hooks: Option<&TestHooks>,
+) -> ReaderOutcome {
+    let fault = hooks.map_or(ReaderFault::None, |hooks| hooks.fault);
+    if let Some(release) = hooks.and_then(|hooks| hooks.fault_release.as_ref()) {
+        while !release.load(std::sync::atomic::Ordering::SeqCst) {
+            if control.is_cancelled() || Instant::now() >= control.deadline {
+                return ReaderOutcome::TimedOut;
+            }
+            std::thread::yield_now();
+        }
+    }
+    if fault == ReaderFault::Panic(stream) {
+        panic!("scripted {stream:?} reader panic");
+    }
+    if fault == ReaderFault::ReadError(stream) || fault == ReaderFault::ReadBoth {
+        return ReaderOutcome::ReadError(std::io::Error::other(format!(
+            "scripted {} reader failure",
+            stream.name()
+        )));
+    }
+    if fault == ReaderFault::StallUntilCancelled(stream) {
+        while !control.is_cancelled() {
+            std::thread::sleep(READER_POLL_INTERVAL);
+        }
+        return ReaderOutcome::Bytes(Vec::new());
+    }
+    read_stream(reader, control)
 }
 
 #[cfg(test)]
