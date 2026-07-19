@@ -42,7 +42,6 @@ pub(super) fn write_hanging_backup_fixture(
              exec 3<> {block_fifo}\n\
              exec 4<> {ready_fifo}\n\
              (\n\
-               printf '%s\\n' \"$BASHPID\" > {descendant_pid}\n\
                printf 'descendant-ready\\n'\n\
                printf 'descendant-stderr-ready\\n' >&2\n\
                printf 'ready\\n' >&4\n\
@@ -51,6 +50,7 @@ pub(super) fn write_hanging_backup_fixture(
                while :; do IFS= read -r -t 60 _ <&3 || true; done\n\
              ) &\n\
              descendant=$!\n\
+             printf '%s\\n' \"$descendant\" > {descendant_pid}\n\
              printf '%s\\n' \"$$\" > {parent_pid}\n\
              IFS= read -r _ <&4\n\
              printf 'ready\\n' > {ready}\n\
@@ -127,7 +127,6 @@ pub(super) fn write_early_exit_backup_fixture_with_output(
          exec 3<> {block_fifo}\n\
          exec 4<> {ready_fifo}\n\
          (\n\
-           printf '%s\\n' \"$BASHPID\" > {descendant_pid}\n\
            printf 'early-exit-descendant-ready\\n'\n\
            printf 'early-exit-descendant-stderr-ready\\n' >&2\n\
            printf 'ready\\n' >&4\n\
@@ -136,6 +135,8 @@ pub(super) fn write_early_exit_backup_fixture_with_output(
            printf 'descendant survived parent exit\\n' > {delayed_sentinel}\n\
            while :; do IFS= read -r -t 60 _ <&3 || true; done\n\
          ) &\n\
+         descendant=$!\n\
+         printf '%s\\n' \"$descendant\" > {descendant_pid}\n\
          printf '%s\\n' \"$$\" > {parent_pid}\n\
          IFS= read -r _ <&4\n\
          printf 'ready\\n' > {ready}\n\
