@@ -583,6 +583,7 @@ mod tests {
         pip_wheel_unavailable: bool,
         direct_probe: bool,
         stable_probe: bool,
+        sabotage_stable_before_failure: bool,
     }
 
     impl Default for FakeConfig {
@@ -595,6 +596,7 @@ mod tests {
                 pip_wheel_unavailable: false,
                 direct_probe: true,
                 stable_probe: true,
+                sabotage_stable_before_failure: false,
             }
         }
     }
@@ -657,6 +659,13 @@ mod tests {
                 }
                 let manifest_matches = (is_direct && self.config.direct_probe)
                     || (is_stable && self.config.stable_probe);
+                if is_stable
+                    && !self.config.stable_probe
+                    && self.config.sabotage_stable_before_failure
+                {
+                    fs::remove_file(&self.paths.stable).unwrap();
+                    fs::create_dir(&self.paths.stable).unwrap();
+                }
                 return Ok(CommandResult {
                     success: true,
                     stdout: probe_json(manifest_matches),
@@ -664,9 +673,10 @@ mod tests {
                 });
             }
             let success = if args.get(1).is_some_and(|arg| arg == "venv") {
+                let generation = PathBuf::from(args.last().unwrap());
+                fs::create_dir_all(generation.join("bin")).unwrap();
+                fs::write(generation.join("partial-build"), b"incomplete").unwrap();
                 if self.config.venv {
-                    let generation = PathBuf::from(args.last().unwrap());
-                    fs::create_dir_all(generation.join("bin")).unwrap();
                     fs::write(generation.join("bin/python"), b"fake python").unwrap();
                     *self.new_generation.lock().unwrap() = Some(generation);
                 }
@@ -1184,6 +1194,20 @@ mod tests {
     }
 
     #[test]
+    fn essentia_environment_incomplete_generation_drop_removes_uncommitted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let generation = dir.path().join("runtime-incomplete");
+        fs::create_dir(&generation).unwrap();
+        fs::write(generation.join("partial-build"), b"incomplete").unwrap();
+
+        {
+            let _guard = IncompleteGeneration::new(generation.clone());
+        }
+
+        assert!(!generation.exists());
+    }
+
+    #[test]
     fn essentia_environment_uses_exact_candidate_order_and_wheel_only_manifest() {
         assert_eq!(ESSENTIA_PROBE_TIMEOUT_SECS, 30);
         assert_eq!(PYTHON_CANDIDATES, &["python3.14", "python3"]);
@@ -1201,6 +1225,64 @@ mod tests {
                 "six==1.17.0",
             ]
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_installs_with_no_prior_stable_path_in_phase_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        let runner = FakeCommandRunner::new(paths.clone(), FakeConfig::default());
+
+        let installed = install_managed_essentia_at(&paths, &runner, test_lock_config()).unwrap();
+
+        assert_eq!(installed.python_bin_used.as_deref(), Some("python3.14"));
+        assert!(paths.stable.is_symlink());
+        let generations = fs::read_dir(&paths.generations)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(generations.len(), 1);
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 7);
+        let stable_python = paths
+            .stable
+            .join("bin/python")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(calls[0].program, stable_python);
+        assert_eq!(calls[1].program, stable_python);
+        assert_eq!(calls[2].program, "python3.14");
+        assert_eq!(&calls[3].args[..3], ["-m", "venv", "--copies"]);
+        assert_eq!(&calls[4].args[..2], ["-m", "pip"]);
+        assert_eq!(calls[5].program, calls[4].program);
+        assert_eq!(calls[6].program, stable_python);
+        assert_no_switch_artifacts(dir.path());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_rejects_non_directory_generation_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        fs::create_dir_all(paths.stable.parent().unwrap()).unwrap();
+        fs::write(&paths.generations, b"not a directory").unwrap();
+        let runner = FakeCommandRunner::new(paths.clone(), FakeConfig::default());
+
+        let error = install_managed_essentia_at(&paths, &runner, test_lock_config()).unwrap_err();
+
+        assert_eq!(error.kind, EssentiaSetupErrorKind::Filesystem);
+        assert_eq!(
+            error.message,
+            format!(
+                "Failed to create managed generation directory {}: {}",
+                paths.generations.display(),
+                std::io::Error::from_raw_os_error(libc::EEXIST)
+            )
+        );
+        assert_eq!(fs::read(&paths.generations).unwrap(), b"not a directory");
+        assert!(!paths.stable.exists());
+        assert_no_switch_artifacts(dir.path());
     }
 
     #[test]
@@ -1404,6 +1486,54 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .collect();
         assert_eq!(generations, vec![previous]);
+        assert_no_switch_artifacts(dir.path());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_rollback_failure_preserves_validated_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = test_paths(dir.path());
+        let previous = make_previous_symlink(&paths);
+        let runner = FakeCommandRunner::new(
+            paths.clone(),
+            FakeConfig {
+                stable_probe: false,
+                sabotage_stable_before_failure: true,
+                ..FakeConfig::default()
+            },
+        );
+
+        let error = install_managed_essentia_at(&paths, &runner, test_lock_config()).unwrap_err();
+
+        let stable_python = paths.stable.join("bin/python");
+        let stable_failure = format!(
+            "ManifestMismatch: runtime at {} does not match the supported manifest (implementation=cpython, python=3.14.6, essentia_distribution=2.1b6.dev1438, essentia_module=2.1-beta6-dev, numpy=0.0.0, pyyaml=6.0.3, six=1.17.0)",
+            stable_python.display()
+        );
+        let restore_failure = format!(
+            "Failed to restore managed runtime symlink: {}",
+            std::io::Error::from_raw_os_error(libc::EISDIR)
+        );
+        assert_eq!(error.kind, EssentiaSetupErrorKind::Activation);
+        assert_eq!(
+            error.message,
+            format!(
+                "Validated generation failed through the stable managed path ({stable_failure}), and the prior runtime could not be restored; the directly validated generation was preserved: {restore_failure}"
+            )
+        );
+        assert!(paths.stable.is_dir());
+        assert!(previous.exists());
+        let generations = fs::read_dir(&paths.generations)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(generations.len(), 2);
+        let validated = generations
+            .iter()
+            .find(|generation| generation.as_path() != previous)
+            .expect("directly validated generation should be retained");
+        assert!(validated.join("bin/python").is_file());
         assert_no_switch_artifacts(dir.path());
     }
 
