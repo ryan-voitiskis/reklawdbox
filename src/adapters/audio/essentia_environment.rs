@@ -371,51 +371,6 @@ pub(crate) fn probe_essentia_python_path() -> Option<String> {
     probe_essentia_runtime_path().map(|runtime| runtime.python_path)
 }
 
-trait EnvironmentOps {
-    fn run(
-        &self,
-        program: &str,
-        args: &[String],
-        timeout: Duration,
-    ) -> Result<CommandResult, EssentiaSetupError>;
-    fn inspect_runtime(
-        &self,
-        python_path: &Path,
-        timeout: Duration,
-    ) -> Result<EssentiaRuntime, EssentiaSetupError>;
-}
-
-struct SystemEnvironmentOps;
-
-impl EnvironmentOps for SystemEnvironmentOps {
-    fn run(
-        &self,
-        program: &str,
-        args: &[String],
-        timeout: Duration,
-    ) -> Result<CommandResult, EssentiaSetupError> {
-        SystemCommandRunner::default()
-            .run(CommandRequest {
-                program,
-                args,
-                timeout,
-            })
-            .map_err(|error| generic_process_error(program, timeout, error))
-    }
-
-    fn inspect_runtime(
-        &self,
-        python_path: &Path,
-        timeout: Duration,
-    ) -> Result<EssentiaRuntime, EssentiaSetupError> {
-        inspect_essentia_python_with_runner(
-            &SystemCommandRunner::default(),
-            &python_path.to_string_lossy(),
-            timeout,
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 struct ManagedEnvironmentPaths {
     stable: PathBuf,
@@ -445,9 +400,10 @@ struct LockConfig {
 pub(crate) fn install_managed_essentia() -> Result<ManagedEssentiaInstall, EssentiaSetupError> {
     let stable = essentia_venv_dir()
         .ok_or("Cannot determine home directory for managed Essentia location")?;
+    let runner = SystemCommandRunner::default();
     install_managed_essentia_at(
         &ManagedEnvironmentPaths::from_stable(stable)?,
-        &SystemEnvironmentOps,
+        &runner,
         LockConfig {
             timeout: LOCK_TIMEOUT,
             poll: LOCK_POLL,
@@ -457,12 +413,14 @@ pub(crate) fn install_managed_essentia() -> Result<ManagedEssentiaInstall, Essen
 
 fn install_managed_essentia_at(
     paths: &ManagedEnvironmentPaths,
-    ops: &dyn EnvironmentOps,
+    runner: &dyn CommandRunner,
     lock_config: LockConfig,
 ) -> Result<ManagedEssentiaInstall, EssentiaSetupError> {
     let stable_python = paths.stable.join("bin/python");
     let probe_timeout = Duration::from_secs(ESSENTIA_PROBE_TIMEOUT_SECS);
-    if let Ok(mut runtime) = ops.inspect_runtime(&stable_python, probe_timeout) {
+    if let Ok(mut runtime) =
+        inspect_essentia_python_with_runner(runner, &stable_python.to_string_lossy(), probe_timeout)
+    {
         runtime.python_path = stable_python.to_string_lossy().into_owned();
         return Ok(ManagedEssentiaInstall {
             runtime,
@@ -478,7 +436,9 @@ fn install_managed_essentia_at(
         .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
     let _lock = AdvisoryLock::acquire(&paths.lock, lock_config.timeout, lock_config.poll)?;
 
-    if let Ok(mut runtime) = ops.inspect_runtime(&stable_python, probe_timeout) {
+    if let Ok(mut runtime) =
+        inspect_essentia_python_with_runner(runner, &stable_python.to_string_lossy(), probe_timeout)
+    {
         runtime.python_path = stable_python.to_string_lossy().into_owned();
         return Ok(ManagedEssentiaInstall {
             runtime,
@@ -486,7 +446,7 @@ fn install_managed_essentia_at(
         });
     }
 
-    let python = find_python_314(ops)?;
+    let python = find_python_314(runner)?;
     if fs::symlink_metadata(&paths.generations)
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
@@ -532,7 +492,7 @@ fn install_managed_essentia_at(
         generation.to_string_lossy().into_owned(),
     ];
     run_checked(
-        ops,
+        runner,
         &python,
         &venv_args,
         VENV_CREATE_TIMEOUT,
@@ -551,18 +511,22 @@ fn install_managed_essentia_at(
     }
     let args = pip_install_args();
     run_checked(
-        ops,
+        runner,
         &candidate.to_string_lossy(),
         &args,
         PIP_INSTALL_TIMEOUT,
         "wheel-only Essentia installation",
         InstallCommand::Pip,
     )?;
-    ops.inspect_runtime(&candidate, probe_timeout)?;
+    inspect_essentia_python_with_runner(runner, &candidate.to_string_lossy(), probe_timeout)?;
 
     let previous = switch_stable_generation(&paths.stable, &generation)
         .map_err(|error| EssentiaSetupError::new(EssentiaSetupErrorKind::Activation, error))?;
-    let stable_runtime = ops.inspect_runtime(&stable_python, probe_timeout);
+    let stable_runtime = inspect_essentia_python_with_runner(
+        runner,
+        &stable_python.to_string_lossy(),
+        probe_timeout,
+    );
     let mut stable_runtime = match stable_runtime {
         Ok(runtime) => runtime,
         Err(stable_error) => {
@@ -593,20 +557,27 @@ fn install_managed_essentia_at(
     })
 }
 
-fn find_python_314(ops: &dyn EnvironmentOps) -> Result<String, EssentiaSetupError> {
+fn find_python_314(runner: &dyn CommandRunner) -> Result<String, EssentiaSetupError> {
     let mut diagnostics = Vec::new();
     for candidate in PYTHON_CANDIDATES {
         let args = vec![
             "-c".to_string(),
             "import platform, sys; raise SystemExit(0 if platform.python_implementation() == 'CPython' and sys.version_info[:2] == (3, 14) else 1)".to_string(),
         ];
-        match ops.run(candidate, &args, PYTHON_CHECK_TIMEOUT) {
+        match runner.run(CommandRequest {
+            program: candidate,
+            args: &args,
+            timeout: PYTHON_CHECK_TIMEOUT,
+        }) {
             Ok(result) if result.success => return Ok(candidate.to_string()),
             Ok(result) => diagnostics.push(format!(
                 "{candidate}: not CPython 3.14{}",
                 format_diagnostic_output(&result)
             )),
-            Err(error) => diagnostics.push(format!("{candidate}: {error}")),
+            Err(error) => diagnostics.push(format!(
+                "{candidate}: {}",
+                generic_process_error(candidate, PYTHON_CHECK_TIMEOUT, error)
+            )),
         }
     }
     Err(EssentiaSetupError::new(
@@ -628,19 +599,28 @@ fn pip_install_args() -> Vec<String> {
 }
 
 fn run_checked(
-    ops: &dyn EnvironmentOps,
+    runner: &dyn CommandRunner,
     program: &str,
     args: &[String],
     timeout: Duration,
     context: &str,
     stage: InstallCommand,
 ) -> Result<(), EssentiaSetupError> {
-    let output = ops.run(program, args, timeout).map_err(|error| {
-        EssentiaSetupError::new(
-            stage.default_error_kind(),
-            format!("Failed to run {context}: {error}"),
-        )
-    })?;
+    let output = runner
+        .run(CommandRequest {
+            program,
+            args,
+            timeout,
+        })
+        .map_err(|error| {
+            EssentiaSetupError::new(
+                stage.default_error_kind(),
+                format!(
+                    "Failed to run {context}: {}",
+                    generic_process_error(program, timeout, error)
+                ),
+            )
+        })?;
     if output.success {
         return Ok(());
     }
@@ -919,6 +899,7 @@ mod tests {
     struct RecordedCall {
         program: String,
         args: Vec<String>,
+        timeout: Duration,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -946,14 +927,14 @@ mod tests {
         }
     }
 
-    struct FakeEnvironmentOps {
+    struct FakeCommandRunner {
         paths: ManagedEnvironmentPaths,
         config: FakeConfig,
         calls: Mutex<Vec<RecordedCall>>,
         new_generation: Mutex<Option<PathBuf>>,
     }
 
-    impl FakeEnvironmentOps {
+    impl FakeCommandRunner {
         fn new(paths: ManagedEnvironmentPaths, config: FakeConfig) -> Self {
             Self {
                 paths,
@@ -968,17 +949,48 @@ mod tests {
         }
     }
 
-    impl EnvironmentOps for FakeEnvironmentOps {
-        fn run(
-            &self,
-            program: &str,
-            args: &[String],
-            _timeout: Duration,
-        ) -> Result<CommandResult, EssentiaSetupError> {
+    impl CommandRunner for FakeCommandRunner {
+        fn run(&self, request: CommandRequest<'_>) -> Result<CommandResult, ProcessError> {
+            let program = request.program;
+            let args = request.args;
             self.calls.lock().unwrap().push(RecordedCall {
                 program: program.to_string(),
                 args: args.to_vec(),
+                timeout: request.timeout,
             });
+            if args == ["-c", ESSENTIA_IMPORT_CHECK_SCRIPT] {
+                let generation = self.new_generation.lock().unwrap().clone();
+                let is_direct = generation
+                    .as_ref()
+                    .is_some_and(|generation| Path::new(program) == generation.join("bin/python"));
+                let is_stable = generation.as_ref().is_some_and(|generation| {
+                    Path::new(program) == self.paths.stable.join("bin/python")
+                        && fs::read_link(&self.paths.stable)
+                            .ok()
+                            .map(|target| {
+                                if target.is_absolute() {
+                                    target
+                                } else {
+                                    self.paths.stable.parent().unwrap().join(target)
+                                }
+                            })
+                            .is_some_and(|target| target == generation.as_path())
+                });
+                if !is_direct && !is_stable {
+                    return Ok(CommandResult {
+                        success: false,
+                        stdout: Vec::new(),
+                        stderr: b"scripted runtime unavailable".to_vec(),
+                    });
+                }
+                let manifest_matches = (is_direct && self.config.direct_probe)
+                    || (is_stable && self.config.stable_probe);
+                return Ok(CommandResult {
+                    success: true,
+                    stdout: probe_json(manifest_matches),
+                    stderr: Vec::new(),
+                });
+            }
             let success = if args.get(1).is_some_and(|arg| arg == "venv") {
                 if self.config.venv {
                     let generation = PathBuf::from(args.last().unwrap());
@@ -1010,54 +1022,20 @@ mod tests {
                 },
             })
         }
-
-        fn inspect_runtime(
-            &self,
-            python_path: &Path,
-            _timeout: Duration,
-        ) -> Result<EssentiaRuntime, EssentiaSetupError> {
-            let generation = self.new_generation.lock().unwrap().clone().ok_or_else(|| {
-                EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::ImportFailure,
-                    "no scripted generation is available",
-                )
-            })?;
-            let is_direct = python_path == generation.join("bin/python");
-            let is_stable = python_path == self.paths.stable.join("bin/python")
-                && fs::read_link(&self.paths.stable)
-                    .ok()
-                    .map(|target| {
-                        if target.is_absolute() {
-                            target
-                        } else {
-                            self.paths.stable.parent().unwrap().join(target)
-                        }
-                    })
-                    .is_some_and(|target| target == generation);
-            if (is_direct && !self.config.direct_probe)
-                || (is_stable && !self.config.stable_probe)
-                || (!is_direct && !is_stable)
-            {
-                return Err(EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::ManifestMismatch,
-                    "scripted runtime probe mismatch",
-                ));
-            }
-            Ok(exact_runtime(python_path))
-        }
     }
 
-    fn exact_runtime(python_path: &Path) -> EssentiaRuntime {
-        EssentiaRuntime {
-            python_path: python_path.to_string_lossy().into_owned(),
-            python_version: "3.14.6".into(),
-            essentia_version: "2.1b6.dev1438".into(),
-            essentia_module_version: "2.1-beta6-dev".into(),
-            numpy_version: "2.5.1".into(),
-            pyyaml_version: "6.0.3".into(),
-            six_version: "1.17.0".into(),
-            analyzer_contract: ESSENTIA_CONTRACT_ID.into(),
-        }
+    fn probe_json(manifest_matches: bool) -> Vec<u8> {
+        let numpy = if manifest_matches { "2.5.1" } else { "0.0.0" };
+        serde_json::to_vec(&serde_json::json!({
+            "python": "3.14.6",
+            "implementation": "cpython",
+            "essentia": "2.1b6.dev1438",
+            "essentia_module": "2.1-beta6-dev",
+            "numpy": numpy,
+            "pyyaml": "6.0.3",
+            "six": "1.17.0"
+        }))
+        .unwrap()
     }
 
     fn test_paths(root: &Path) -> ManagedEnvironmentPaths {
@@ -1069,6 +1047,20 @@ mod tests {
             timeout: Duration::from_millis(50),
             poll: Duration::from_millis(1),
         }
+    }
+
+    fn run_system_command(
+        program: &str,
+        args: &[String],
+        timeout: Duration,
+    ) -> Result<CommandResult, EssentiaSetupError> {
+        SystemCommandRunner::default()
+            .run(CommandRequest {
+                program,
+                args,
+                timeout,
+            })
+            .map_err(|error| generic_process_error(program, timeout, error))
     }
 
     #[cfg(unix)]
@@ -1294,8 +1286,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = fake_python_script(dir.path(), "sleep 2");
         let started = Instant::now();
-        let error = SystemEnvironmentOps
-            .run(&path.to_string_lossy(), &[], Duration::from_millis(20))
+        let error = run_system_command(&path.to_string_lossy(), &[], Duration::from_millis(20))
             .unwrap_err();
         assert_eq!(error.kind, EssentiaSetupErrorKind::ProbeTimeout);
         assert_eq!(
@@ -1314,9 +1305,8 @@ mod tests {
             "printf 'stdout-value'; printf 'stderr-value' >&2",
         );
 
-        let result = SystemEnvironmentOps
-            .run(&path.to_string_lossy(), &[], Duration::from_secs(5))
-            .unwrap();
+        let result =
+            run_system_command(&path.to_string_lossy(), &[], Duration::from_secs(5)).unwrap();
 
         assert!(result.success);
         assert_eq!(result.stdout, b"stdout-value");
@@ -1332,9 +1322,8 @@ mod tests {
             "printf 'stdout-value'; printf 'stderr-value' >&2; exit 7",
         );
 
-        let result = SystemEnvironmentOps
-            .run(&path.to_string_lossy(), &[], Duration::from_secs(5))
-            .unwrap();
+        let result =
+            run_system_command(&path.to_string_lossy(), &[], Duration::from_secs(5)).unwrap();
 
         assert!(!result.success);
         assert_eq!(result.stdout, b"stdout-value");
@@ -1548,7 +1537,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = test_paths(dir.path());
         let previous = make_previous_symlink(&paths);
-        let ops = FakeEnvironmentOps::new(
+        let ops = FakeCommandRunner::new(
             paths.clone(),
             FakeConfig {
                 python314: false,
@@ -1573,14 +1562,35 @@ mod tests {
         assert!(!previous.exists(), "previous generation should be pruned");
 
         let calls = ops.calls();
-        assert_eq!(calls[0].program, "python3.14");
-        assert_eq!(calls[1].program, "python3");
-        let venv = &calls[2];
+        assert_eq!(calls.len(), 8);
+        let stable_python = paths
+            .stable
+            .join("bin/python")
+            .to_string_lossy()
+            .into_owned();
+        for probe in [&calls[0], &calls[1]] {
+            assert_eq!(probe.program, stable_python);
+            assert_eq!(probe.args, ["-c", ESSENTIA_IMPORT_CHECK_SCRIPT]);
+            assert_eq!(probe.timeout, Duration::from_secs(30));
+        }
+        assert_eq!(calls[2].program, "python3.14");
+        assert_eq!(calls[2].timeout, Duration::from_secs(5));
+        assert_eq!(calls[3].program, "python3");
+        assert_eq!(calls[3].timeout, Duration::from_secs(5));
+        let venv = &calls[4];
         assert_eq!(venv.program, "python3");
         assert_eq!(&venv.args[..3], ["-m", "venv", "--copies"]);
-        let pip = &calls[3];
+        assert_eq!(venv.timeout, Duration::from_secs(120));
+        let pip = &calls[5];
         assert!(pip.program.ends_with("/bin/python"));
         assert_eq!(pip.args, pip_install_args());
+        assert_eq!(pip.timeout, Duration::from_secs(600));
+        assert_eq!(calls[6].program, pip.program);
+        assert_eq!(calls[6].args, ["-c", ESSENTIA_IMPORT_CHECK_SCRIPT]);
+        assert_eq!(calls[6].timeout, Duration::from_secs(30));
+        assert_eq!(calls[7].program, stable_python);
+        assert_eq!(calls[7].args, ["-c", ESSENTIA_IMPORT_CHECK_SCRIPT]);
+        assert_eq!(calls[7].timeout, Duration::from_secs(30));
         assert_no_switch_artifacts(dir.path());
     }
 
@@ -1595,7 +1605,7 @@ mod tests {
         fs::create_dir_all(external.join("bin")).unwrap();
         fs::write(external.join("bin/python"), b"external python").unwrap();
         std::os::unix::fs::symlink(&external, &paths.stable).unwrap();
-        let ops = FakeEnvironmentOps::new(paths.clone(), FakeConfig::default());
+        let ops = FakeCommandRunner::new(paths.clone(), FakeConfig::default());
 
         install_managed_essentia_at(&paths, &ops, test_lock_config()).unwrap();
 
@@ -1616,7 +1626,7 @@ mod tests {
         let external = dir.path().join("external-generations");
         fs::create_dir(&external).unwrap();
         std::os::unix::fs::symlink(&external, &paths.generations).unwrap();
-        let ops = FakeEnvironmentOps::new(paths.clone(), FakeConfig::default());
+        let ops = FakeCommandRunner::new(paths.clone(), FakeConfig::default());
 
         let error = install_managed_essentia_at(&paths, &ops, test_lock_config()).unwrap_err();
 
@@ -1665,7 +1675,7 @@ mod tests {
             let paths = test_paths(dir.path());
             let previous = make_previous_symlink(&paths);
             let previous_target = fs::read_link(&paths.stable).unwrap();
-            let ops = FakeEnvironmentOps::new(paths.clone(), config);
+            let ops = FakeCommandRunner::new(paths.clone(), config);
 
             let error = install_managed_essentia_at(&paths, &ops, test_lock_config()).unwrap_err();
             assert_eq!(error.kind, expected_kind);
@@ -1685,7 +1695,7 @@ mod tests {
     fn essentia_environment_candidate_not_found_is_typed() {
         let dir = tempfile::tempdir().unwrap();
         let paths = test_paths(dir.path());
-        let ops = FakeEnvironmentOps::new(
+        let ops = FakeCommandRunner::new(
             paths.clone(),
             FakeConfig {
                 python314: false,
@@ -1706,7 +1716,7 @@ mod tests {
         let paths = test_paths(dir.path());
         let previous = make_previous_symlink(&paths);
         let previous_target = fs::read_link(&paths.stable).unwrap();
-        let ops = FakeEnvironmentOps::new(
+        let ops = FakeCommandRunner::new(
             paths.clone(),
             FakeConfig {
                 stable_probe: false,
@@ -1732,7 +1742,7 @@ mod tests {
         let paths = test_paths(dir.path());
         fs::create_dir_all(paths.stable.join("bin")).unwrap();
         fs::write(paths.stable.join("bin/python"), b"legacy python").unwrap();
-        let ops = FakeEnvironmentOps::new(
+        let ops = FakeCommandRunner::new(
             paths.clone(),
             FakeConfig {
                 stable_probe: false,
@@ -1761,7 +1771,7 @@ mod tests {
         let paths = test_paths(dir.path());
         fs::create_dir_all(paths.stable.join("bin")).unwrap();
         fs::write(paths.stable.join("bin/python"), b"legacy python").unwrap();
-        let ops = FakeEnvironmentOps::new(paths.clone(), FakeConfig::default());
+        let ops = FakeCommandRunner::new(paths.clone(), FakeConfig::default());
 
         install_managed_essentia_at(&paths, &ops, test_lock_config()).unwrap();
 
