@@ -1167,7 +1167,7 @@ async fn backfill_albums_backfill_cache_persistence_surfaces_selective_failure_a
              BEFORE INSERT ON enrichment_cache
              WHEN NEW.provider = 'bandcamp' AND NEW.query_title = 'album cache reject'
              BEGIN
-                 SELECT RAISE(FAIL, 'selected album cache failure');
+                 SELECT RAISE(FAIL, 'queue send failed acknowledgement canceled writer open failed');
              END;",
         )
         .expect("album partial failure trigger should install");
@@ -1602,12 +1602,25 @@ async fn metadata_backfill_cancellation_aborts_provider_work_and_quiesces_writer
     }
 
     handler.abort();
-    drop(pause_guard);
-    let cancelled = tokio::time::timeout(Duration::from_secs(5), &mut handler)
-        .await
-        .expect("metadata handler cancellation should join within five seconds")
-        .expect_err("metadata handler should be cancelled");
+    let cancelled = match tokio::time::timeout(Duration::from_secs(5), &mut handler).await {
+        Ok(result) => result.expect_err("metadata handler should be cancelled"),
+        Err(_) => {
+            // Only release paused provider work as bounded cleanup after the
+            // handler failed to observe cancellation on its own.
+            drop(pause_guard);
+            assert!(
+                tokio::time::timeout(Duration::from_secs(5), &mut handler)
+                    .await
+                    .is_ok(),
+                "timed-out cancelled metadata handler cleanup should join within five seconds"
+            );
+            panic!("metadata handler cancellation did not join within five seconds");
+        }
+    };
     assert!(cancelled.is_cancelled());
+    // Cancellation is now confirmed, so releasing the test barrier cannot let
+    // provider work race past the cancellation boundary.
+    drop(pause_guard);
 
     tokio::time::timeout(Duration::from_secs(5), async {
         while metadata_writer_active_for_test(&store_path) {

@@ -9,9 +9,9 @@ use super::model::AnalysisCacheWrite;
 /// Abort analysis scheduling after this many consecutive cache write failures.
 pub(crate) const MAX_CONSECUTIVE_CACHE_WRITE_FAILURES: u32 = 3;
 
-pub(crate) struct CacheWriteRequest<T> {
+pub(crate) struct CacheWriteRequest<T, E = String> {
     pub payload: T,
-    pub acknowledgement: tokio::sync::oneshot::Sender<Result<(), String>>,
+    pub acknowledgement: tokio::sync::oneshot::Sender<Result<(), E>>,
 }
 
 #[derive(Debug, Default)]

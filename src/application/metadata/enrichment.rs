@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::adapters::state;
-use crate::application::analysis::batch::{CacheWriteRequest, send_cache_message};
+use crate::application::analysis::batch::CacheWriteRequest;
 
 const PROVIDER_CONCURRENCY: usize = 4;
 const CACHE_QUEUE_CAPACITY: usize = 32;
@@ -71,6 +71,52 @@ pub(crate) struct MetadataCacheWrite {
     pub(crate) norm_title: String,
     pub(crate) match_quality: String,
     pub(crate) response_json: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetadataCacheWriteError {
+    WriterOpenFailed,
+    CacheWriteFailed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetadataCacheRequestError {
+    QueueSendFailed,
+    AcknowledgementCanceled,
+    WriterOpenFailed,
+    CacheWriteFailed,
+}
+
+impl From<MetadataCacheWriteError> for MetadataCacheRequestError {
+    fn from(error: MetadataCacheWriteError) -> Self {
+        match error {
+            MetadataCacheWriteError::WriterOpenFailed => Self::WriterOpenFailed,
+            MetadataCacheWriteError::CacheWriteFailed => Self::CacheWriteFailed,
+        }
+    }
+}
+
+impl MetadataCacheRequestError {
+    const fn failure(self) -> (MetadataEnrichmentFailureKind, &'static str) {
+        match self {
+            Self::QueueSendFailed => (
+                MetadataEnrichmentFailureKind::QueueSendFailed,
+                "metadata cache queue send failed",
+            ),
+            Self::AcknowledgementCanceled => (
+                MetadataEnrichmentFailureKind::AcknowledgementCanceled,
+                "metadata cache acknowledgement canceled",
+            ),
+            Self::WriterOpenFailed => (
+                MetadataEnrichmentFailureKind::WriterOpenFailed,
+                "metadata cache writer open failed",
+            ),
+            Self::CacheWriteFailed => (
+                MetadataEnrichmentFailureKind::CacheWriteFailed,
+                "metadata cache write failed",
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, JsonSchema)]
@@ -330,11 +376,15 @@ fn persist_metadata_cache_write(
 
 pub(crate) fn run_metadata_cache_writer(
     store_path: &str,
-    mut receiver: tokio::sync::mpsc::Receiver<CacheWriteRequest<MetadataCacheWrite>>,
+    mut receiver: tokio::sync::mpsc::Receiver<
+        CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>,
+    >,
 ) -> MetadataCacheWriterReport {
     let _active_writer = ActiveMetadataWriterGuard::new(store_path);
-    let connection = state::open(store_path)
-        .map_err(|error| format!("metadata cache writer open failed: {error}"));
+    let connection = state::open(store_path);
+    if let Err(error) = &connection {
+        tracing::error!("metadata cache writer open failed: {error}");
+    }
     let mut report = MetadataCacheWriterReport {
         open_failed: usize::from(connection.is_err()),
         ..MetadataCacheWriterReport::default()
@@ -343,9 +393,18 @@ pub(crate) fn run_metadata_cache_writer(
     while let Some(request) = receiver.blocking_recv() {
         report.attempted += 1;
         let result = match &connection {
-            Ok(connection) => persist_metadata_cache_write(connection, &request.payload)
-                .map_err(|error| format!("metadata cache write failed: {error}")),
-            Err(error) => Err(error.clone()),
+            Ok(connection) => {
+                persist_metadata_cache_write(connection, &request.payload).map_err(|error| {
+                    tracing::warn!(
+                        provider = request.payload.provider.as_str(),
+                        artist = request.payload.norm_artist.as_str(),
+                        title = request.payload.norm_title.as_str(),
+                        "metadata cache write failed: {error}"
+                    );
+                    MetadataCacheWriteError::CacheWriteFailed
+                })
+            }
+            Err(_) => Err(MetadataCacheWriteError::WriterOpenFailed),
         };
         if result.is_ok() {
             report.succeeded += 1;
@@ -362,7 +421,9 @@ pub(crate) fn run_metadata_cache_writer(
 }
 
 pub(crate) struct MetadataEnrichmentWriterSession {
-    sender: Option<tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite>>>,
+    sender: Option<
+        tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>>,
+    >,
     writer: Option<tokio::task::JoinHandle<MetadataCacheWriterReport>>,
     writer_failure_context: MetadataEnrichmentFailure,
 }
@@ -391,7 +452,8 @@ impl MetadataEnrichmentWriterSession {
 
     pub(crate) fn sender(
         &self,
-    ) -> tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite>> {
+    ) -> tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>>
+    {
         self.sender
             .as_ref()
             .expect("metadata writer session sender should exist before finish")
@@ -449,34 +511,32 @@ impl RequestOutcome {
     }
 }
 
-fn cache_failure_kind(error: &str) -> (MetadataEnrichmentFailureKind, &'static str) {
-    if error.contains("queue send failed") {
-        (
-            MetadataEnrichmentFailureKind::QueueSendFailed,
-            "metadata cache queue send failed",
-        )
-    } else if error.contains("acknowledgement canceled") {
-        (
-            MetadataEnrichmentFailureKind::AcknowledgementCanceled,
-            "metadata cache acknowledgement canceled",
-        )
-    } else if error.contains("writer open failed") {
-        (
-            MetadataEnrichmentFailureKind::WriterOpenFailed,
-            "metadata cache writer open failed",
-        )
-    } else {
-        (
-            MetadataEnrichmentFailureKind::CacheWriteFailed,
-            "metadata cache write failed",
-        )
-    }
+async fn send_metadata_cache_message(
+    sender: &tokio::sync::mpsc::Sender<
+        CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>,
+    >,
+    write: MetadataCacheWrite,
+) -> Result<(), MetadataCacheRequestError> {
+    let (acknowledgement, result) = tokio::sync::oneshot::channel();
+    sender
+        .send(CacheWriteRequest {
+            payload: write,
+            acknowledgement,
+        })
+        .await
+        .map_err(|_| MetadataCacheRequestError::QueueSendFailed)?;
+    result
+        .await
+        .map_err(|_| MetadataCacheRequestError::AcknowledgementCanceled)?
+        .map_err(Into::into)
 }
 
 async fn run_request<T, Lookup, LookupFuture, Quality>(
     provider: MetadataEnrichmentProvider,
     request: MetadataEnrichmentRequest,
-    sender: tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite>>,
+    sender: tokio::sync::mpsc::Sender<
+        CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>,
+    >,
     lookup: Lookup,
     quality: Quality,
 ) -> RequestOutcome
@@ -545,11 +605,11 @@ where
         match_quality,
         response_json,
     };
-    match send_cache_message(&sender, write, "metadata auto-enrichment").await {
+    match send_metadata_cache_message(&sender, write).await {
         Ok(()) => outcome.report.cache_writes_succeeded = 1,
         Err(error) => {
             outcome.report.cache_writes_failed = 1;
-            let (kind, summary) = cache_failure_kind(&error);
+            let (kind, summary) = error.failure();
             outcome.failure = Some(MetadataEnrichmentFailure::new(
                 provider, &request, kind, summary,
             ));
@@ -562,7 +622,9 @@ where
 pub(crate) async fn run_metadata_provider<T, Lookup, LookupFuture, Quality>(
     provider: MetadataEnrichmentProvider,
     requests: Vec<MetadataEnrichmentRequest>,
-    sender: tokio::sync::mpsc::Sender<CacheWriteRequest<MetadataCacheWrite>>,
+    sender: tokio::sync::mpsc::Sender<
+        CacheWriteRequest<MetadataCacheWrite, MetadataCacheWriteError>,
+    >,
     lookup: Lookup,
     quality: Quality,
 ) -> MetadataAutoEnrichmentReport
@@ -859,7 +921,7 @@ mod tests {
                 &request("writer success"),
             );
             let result =
-                send_cache_message(&session.sender(), write("writer success"), "test").await;
+                send_metadata_cache_message(&session.sender(), write("writer success")).await;
             assert_eq!(result, Ok(()));
             let report = session
                 .finish(MetadataAutoEnrichmentReport::default())
@@ -900,7 +962,7 @@ mod tests {
                      BEFORE INSERT ON enrichment_cache
                      WHEN NEW.query_title = 'reject this'
                      BEGIN
-                         SELECT RAISE(FAIL, 'selected metadata cache write failure');
+                         SELECT RAISE(FAIL, 'queue send failed acknowledgement canceled writer open failed');
                      END;",
                 )
                 .expect("selective metadata trigger should install");
@@ -911,14 +973,11 @@ mod tests {
                 MetadataEnrichmentProvider::Bandcamp,
                 &request("reject this"),
             );
-            let rejected =
-                send_cache_message(&session.sender(), write("reject this"), "test").await;
-            let accepted =
-                send_cache_message(&session.sender(), write("accept this"), "test").await;
-            assert!(
-                rejected
-                    .expect_err("selected write should fail")
-                    .starts_with("metadata cache write failed:")
+            let rejected = send_metadata_cache_message(&session.sender(), write("reject this")).await;
+            let accepted = send_metadata_cache_message(&session.sender(), write("accept this")).await;
+            assert_eq!(
+                rejected.expect_err("selected write should fail"),
+                MetadataCacheRequestError::CacheWriteFailed,
             );
             assert_eq!(accepted, Ok(()));
             session
@@ -932,13 +991,12 @@ mod tests {
                 MetadataEnrichmentProvider::Bandcamp,
                 &request("open one"),
             );
-            let first = send_cache_message(&session.sender(), write("open one"), "test").await;
-            let second = send_cache_message(&session.sender(), write("open two"), "test").await;
+            let first = send_metadata_cache_message(&session.sender(), write("open one")).await;
+            let second = send_metadata_cache_message(&session.sender(), write("open two")).await;
             for result in [first, second] {
-                assert!(
-                    result
-                        .expect_err("open failure should reject each row")
-                        .starts_with("metadata cache writer open failed:")
+                assert_eq!(
+                    result.expect_err("open failure should reject each row"),
+                    MetadataCacheRequestError::WriterOpenFailed,
                 );
             }
             let report = session
@@ -977,7 +1035,7 @@ mod tests {
                 .await
                 .expect("dropped-ack request should enqueue");
             let next =
-                send_cache_message(&session.sender(), write("after dropped ack"), "test").await;
+                send_metadata_cache_message(&session.sender(), write("after dropped ack")).await;
             assert_eq!(next, Ok(()));
             let report = session
                 .finish(MetadataAutoEnrichmentReport::default())
@@ -1018,14 +1076,14 @@ mod tests {
                 run_metadata_cache_writer(&writer_path, receiver)
             });
             assert_eq!(
-                send_cache_message(&sender, write("writer report accept"), "test").await,
+                send_metadata_cache_message(&sender, write("writer report accept")).await,
                 Ok(())
             );
-            assert!(
-                send_cache_message(&sender, write("writer report reject"), "test")
+            assert_eq!(
+                send_metadata_cache_message(&sender, write("writer report reject"))
                     .await
-                    .expect_err("writer report selected row should fail")
-                    .starts_with("metadata cache write failed:")
+                    .expect_err("writer report selected row should fail"),
+                MetadataCacheRequestError::CacheWriteFailed,
             );
             let (acknowledgement, receiver) = tokio::sync::oneshot::channel();
             drop(receiver);
