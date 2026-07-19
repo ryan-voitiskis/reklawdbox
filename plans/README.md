@@ -114,7 +114,7 @@ the dependency graph and recommended waves below.
 | [036](036-standardize-managed-essentia-environment.md)     | Standardize the managed Essentia environment               | P1       | L      | 035                          | DONE   |
 | [037](037-require-essentia-for-full-classification.md)     | Require Essentia evidence for full classification          | P1       | L      | 036                          | DONE   |
 | [047](047-isolate-private-rekordbox-fixtures.md)           | Isolate private Rekordbox and audio fixtures               | P1       | M      | -                            | DONE   |
-| [048](048-plan-audio-tag-mutations-once.md)                | Plan audio-tag mutations once                              | P1       | L      | 047                          | TODO   |
+| [048](048-plan-audio-tag-mutations-once.md)                | Plan audio-tag mutations once                              | P1       | L      | 047                          | DONE   |
 | [049](049-extract-hydrate-coordination.md)                 | Extract hydrate coordination from CLI                      | P1       | L      | -                            | DONE   |
 | [050](050-model-planning-policies.md)                      | Model planning policies explicitly                         | P1       | L      | -                            | DONE   |
 | [051](051-separate-essentia-runtime-lifecycle.md)          | Separate the Essentia runtime lifecycle                    | P1       | L      | 047, 048, 052                | TODO   |
