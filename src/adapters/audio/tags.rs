@@ -56,9 +56,169 @@ pub const ALL_FIELDS: &[&str] = &[
     "remixer",
 ];
 
-/// Fields that RIFF INFO supports. Other fields are silently skipped on
-/// write and return `None` on read.
-const RIFF_INFO_FIELDS: &[&str] = &["artist", "title", "album", "genre", "year", "comment"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TagField {
+    Artist,
+    Title,
+    Album,
+    AlbumArtist,
+    Genre,
+    Year,
+    Track,
+    Disc,
+    Comment,
+    Publisher,
+    Bpm,
+    Key,
+    Composer,
+    Remixer,
+}
+
+impl TagField {
+    #[cfg(test)]
+    const ALL: [Self; 14] = [
+        Self::Artist,
+        Self::Title,
+        Self::Album,
+        Self::AlbumArtist,
+        Self::Genre,
+        Self::Year,
+        Self::Track,
+        Self::Disc,
+        Self::Comment,
+        Self::Publisher,
+        Self::Bpm,
+        Self::Key,
+        Self::Composer,
+        Self::Remixer,
+    ];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Artist => "artist",
+            Self::Title => "title",
+            Self::Album => "album",
+            Self::AlbumArtist => "album_artist",
+            Self::Genre => "genre",
+            Self::Year => "year",
+            Self::Track => "track",
+            Self::Disc => "disc",
+            Self::Comment => "comment",
+            Self::Publisher => "publisher",
+            Self::Bpm => "bpm",
+            Self::Key => "key",
+            Self::Composer => "composer",
+            Self::Remixer => "remixer",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "artist" => Some(Self::Artist),
+            "title" => Some(Self::Title),
+            "album" => Some(Self::Album),
+            "album_artist" => Some(Self::AlbumArtist),
+            "genre" => Some(Self::Genre),
+            "year" => Some(Self::Year),
+            "track" => Some(Self::Track),
+            "disc" => Some(Self::Disc),
+            "comment" => Some(Self::Comment),
+            "publisher" => Some(Self::Publisher),
+            "bpm" => Some(Self::Bpm),
+            "key" => Some(Self::Key),
+            "composer" => Some(Self::Composer),
+            "remixer" => Some(Self::Remixer),
+            _ => None,
+        }
+    }
+
+    const fn is_riff_info(self) -> bool {
+        matches!(
+            self,
+            Self::Artist | Self::Title | Self::Album | Self::Genre | Self::Year | Self::Comment
+        )
+    }
+
+    const fn primary_item_key(self) -> ItemKey {
+        match self {
+            Self::Artist => ItemKey::TrackArtist,
+            Self::Title => ItemKey::TrackTitle,
+            Self::Album => ItemKey::AlbumTitle,
+            Self::AlbumArtist => ItemKey::AlbumArtist,
+            Self::Genre => ItemKey::Genre,
+            Self::Year => ItemKey::RecordingDate,
+            Self::Track => ItemKey::TrackNumber,
+            Self::Disc => ItemKey::DiscNumber,
+            Self::Comment => ItemKey::Comment,
+            Self::Publisher => ItemKey::Label,
+            Self::Bpm => ItemKey::IntegerBpm,
+            Self::Key => ItemKey::InitialKey,
+            Self::Composer => ItemKey::Composer,
+            Self::Remixer => ItemKey::Remixer,
+        }
+    }
+
+    const fn secondary_item_key(self) -> Option<ItemKey> {
+        match self {
+            Self::Year => Some(ItemKey::Year),
+            Self::Bpm => Some(ItemKey::Bpm),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TagEdit {
+    Set(String),
+    Delete,
+}
+
+#[derive(Debug)]
+struct ValidatedTagPatch {
+    edits: BTreeMap<TagField, TagEdit>,
+}
+
+impl TryFrom<&HashMap<String, Option<String>>> for ValidatedTagPatch {
+    type Error = TagError;
+
+    fn try_from(tags: &HashMap<String, Option<String>>) -> Result<Self, Self::Error> {
+        let mut edits = BTreeMap::new();
+
+        for (raw_field, raw_value) in tags {
+            let field = TagField::parse(raw_field)
+                .ok_or_else(|| TagError::Validation(format!("Unknown field \"{raw_field}\"")))?;
+            let edit = match raw_value {
+                None => TagEdit::Delete,
+                Some(value) if value.is_empty() => TagEdit::Delete,
+                Some(value) => {
+                    match field {
+                        TagField::Year => {
+                            if value.len() != 4 || value.parse::<u16>().is_err() {
+                                return Err(TagError::Validation(format!(
+                                    "Invalid year \"{value}\": must be 4-digit YYYY or null/empty to delete"
+                                )));
+                            }
+                        }
+                        TagField::Track | TagField::Disc => match value.parse::<u32>() {
+                            Ok(number) if number > 0 => {}
+                            _ => {
+                                return Err(TagError::Validation(format!(
+                                    "Invalid {} \"{value}\": must be a positive integer or null/empty to delete",
+                                    field.as_str()
+                                )));
+                            }
+                        },
+                        _ => {}
+                    }
+                    TagEdit::Set(value.clone())
+                }
+            };
+            edits.insert(field, edit);
+        }
+
+        Ok(Self { edits })
+    }
+}
 
 /// Exact, case-sensitive picture type names accepted by cover-art operations.
 pub(crate) const ACCEPTED_PICTURE_TYPES: &[&str] = &[
@@ -91,31 +251,6 @@ pub(crate) const ACCEPTED_PICTURE_TYPES: &[&str] = &[
 // Field ↔ ItemKey mapping
 // ---------------------------------------------------------------------------
 
-/// Map a canonical field name to the primary `ItemKey` used for generic `Tag`
-/// reads/writes.
-///
-/// For fields with format-specific split keys (bpm, year) the caller may
-/// need to fall through to secondary keys — see `get_field_from_tag`.
-pub fn field_to_item_key(field: &str) -> Option<ItemKey> {
-    match field {
-        "artist" => Some(ItemKey::TrackArtist),
-        "title" => Some(ItemKey::TrackTitle),
-        "album" => Some(ItemKey::AlbumTitle),
-        "album_artist" => Some(ItemKey::AlbumArtist),
-        "genre" => Some(ItemKey::Genre),
-        "year" => Some(ItemKey::RecordingDate),
-        "track" => Some(ItemKey::TrackNumber),
-        "disc" => Some(ItemKey::DiscNumber),
-        "comment" => Some(ItemKey::Comment),
-        "publisher" => Some(ItemKey::Label),
-        "bpm" => Some(ItemKey::IntegerBpm),
-        "key" => Some(ItemKey::InitialKey),
-        "composer" => Some(ItemKey::Composer),
-        "remixer" => Some(ItemKey::Remixer),
-        _ => None,
-    }
-}
-
 /// Reverse mapping from `ItemKey` to canonical field name (test-only).
 #[cfg(test)]
 fn item_key_to_field(key: &ItemKey) -> Option<&'static str> {
@@ -141,7 +276,7 @@ fn item_key_to_field(key: &ItemKey) -> Option<&'static str> {
 }
 
 fn is_riff_info_field(field: &str) -> bool {
-    RIFF_INFO_FIELDS.contains(&field)
+    TagField::parse(field).is_some_and(TagField::is_riff_info)
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +297,15 @@ impl From<&WavTarget> for TagType {
         match target {
             WavTarget::Id3v2 => TagType::Id3v2,
             WavTarget::RiffInfo => TagType::RiffInfo,
+        }
+    }
+}
+
+impl WavTarget {
+    const fn capability(&self) -> LayerCapability {
+        match self {
+            Self::Id3v2 => LayerCapability::Id3v2,
+            Self::RiffInfo => LayerCapability::RiffInfo,
         }
     }
 }
@@ -275,6 +419,104 @@ pub struct DryRunChange {
     pub new: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerCapability {
+    Id3v2,
+    RiffInfo,
+    Primary,
+}
+
+impl LayerCapability {
+    const fn supports(self, field: TagField) -> bool {
+        !matches!(self, Self::RiffInfo) || field.is_riff_info()
+    }
+}
+
+#[derive(Debug)]
+struct ExistingLayerValues {
+    values: BTreeMap<TagField, Option<String>>,
+}
+
+impl ExistingLayerValues {
+    fn read(tag: Option<&Tag>, patch: &ValidatedTagPatch) -> Self {
+        let values = patch
+            .edits
+            .keys()
+            .copied()
+            .map(|field| (field, tag.and_then(|tag| get_tag_field(tag, field))))
+            .collect();
+        Self { values }
+    }
+
+    fn get(&self, field: TagField) -> Option<String> {
+        self.values.get(&field).cloned().flatten()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedTagMutation {
+    field: TagField,
+    edit: TagEdit,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LayerMutationPlan {
+    operations: Vec<PlannedTagMutation>,
+    changes: BTreeMap<String, DryRunChange>,
+}
+
+fn plan_layer_mutation(
+    patch: &ValidatedTagPatch,
+    capability: LayerCapability,
+    existing: &ExistingLayerValues,
+    comment_mode: CommentMode,
+) -> LayerMutationPlan {
+    let mut operations = Vec::new();
+    let mut changes = BTreeMap::new();
+
+    for (&field, edit) in &patch.edits {
+        if !capability.supports(field) {
+            continue;
+        }
+
+        let old = existing.get(field);
+        let effective_edit = match edit {
+            TagEdit::Delete => TagEdit::Delete,
+            TagEdit::Set(value)
+                if field == TagField::Comment && comment_mode != CommentMode::Replace =>
+            {
+                TagEdit::Set(merge_comment(value, old.as_deref(), comment_mode))
+            }
+            TagEdit::Set(value) => TagEdit::Set(value.clone()),
+        };
+        let new = match &effective_edit {
+            TagEdit::Set(value) => Some(value.clone()),
+            TagEdit::Delete => None,
+        };
+
+        if old == new {
+            continue;
+        }
+
+        changes.insert(
+            field.as_str().to_string(),
+            DryRunChange {
+                old,
+                new: new.clone(),
+            },
+        );
+        operations.push(PlannedTagMutation {
+            field,
+            edit: effective_edit,
+        });
+    }
+
+    LayerMutationPlan {
+        operations,
+        changes,
+    }
+}
+
 /// Dry-run result for a single file.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -370,22 +612,26 @@ fn tag_type_name(tt: TagType) -> &'static str {
 /// Returns:
 /// - `Some(val)` — tag present with value (possibly empty string)
 /// - `None` — tag absent or unknown field
-fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
-    let primary = field_to_item_key(field)?;
+fn get_tag_field(tag: &Tag, field: TagField) -> Option<String> {
+    let primary = field.primary_item_key();
 
     if let Some(val) = tag.get_string(primary) {
         return Some(val.to_string());
     }
 
     match field {
-        "year" => tag
+        TagField::Year => tag
             .get_string(ItemKey::Year)
             .map(std::string::ToString::to_string),
-        "bpm" => tag
+        TagField::Bpm => tag
             .get_string(ItemKey::Bpm)
             .map(std::string::ToString::to_string),
         _ => None,
     }
+}
+
+fn get_field_from_tag(tag: &Tag, field: &str) -> Option<String> {
+    get_tag_field(tag, TagField::parse(field)?)
 }
 
 fn read_tag_fields(tag: &Tag, fields: &[&str]) -> HashMap<String, Option<String>> {
@@ -523,39 +769,9 @@ fn mime_name(mime: Option<&MimeType>) -> &'static str {
 /// - `year`: must be 4-digit YYYY or null/empty (delete)
 /// - `track`, `disc`: must be positive integer or null/empty (delete)
 /// - All other fields: accepted as-is
-pub fn validate_write_tags(tags: &HashMap<String, Option<String>>) -> Result<(), TagError> {
-    for (field, value) in tags {
-        // Check field name validity first — even for null/empty (delete) values
-        let is_validated_field = matches!(field.as_str(), "year" | "track" | "disc");
-        if !is_validated_field && field_to_item_key(field).is_none() {
-            return Err(TagError::Validation(format!("Unknown field \"{field}\"")));
-        }
-
-        let Some(val) = value else { continue };
-        if val.is_empty() {
-            continue; // empty means delete
-        }
-
-        match field.as_str() {
-            "year" => {
-                if val.len() != 4 || val.parse::<u16>().is_err() {
-                    return Err(TagError::Validation(format!(
-                        "Invalid year \"{val}\": must be 4-digit YYYY or null/empty to delete"
-                    )));
-                }
-            }
-            "track" | "disc" => match val.parse::<u32>() {
-                Ok(n) if n > 0 => {}
-                _ => {
-                    return Err(TagError::Validation(format!(
-                        "Invalid {field} \"{val}\": must be a positive integer or null/empty to delete"
-                    )));
-                }
-            },
-            _ => {}
-        }
-    }
-    Ok(())
+#[cfg(test)]
+fn validate_write_tags(tags: &HashMap<String, Option<String>>) -> Result<(), TagError> {
+    ValidatedTagPatch::try_from(tags).map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -718,15 +934,18 @@ fn read_single_tags(
 pub fn write_file_tags(entry: &WriteEntry) -> FileWriteResult {
     let path_str = entry.path.display().to_string();
 
-    if let Err(e) = validate_write_tags(&entry.tags) {
-        return FileWriteResult::Error {
-            path: path_str,
-            status: "error".to_string(),
-            error: e.to_string(),
-        };
-    }
+    let patch = match ValidatedTagPatch::try_from(&entry.tags) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return FileWriteResult::Error {
+                path: path_str,
+                status: "error".to_string(),
+                error: error.to_string(),
+            };
+        }
+    };
 
-    match write_file_tags_inner(entry) {
+    match write_file_tags_inner(entry, &patch) {
         Ok(result) => result,
         Err(e) => FileWriteResult::Error {
             path: path_str,
@@ -783,7 +1002,10 @@ fn atomic_temp_path(original: &Path) -> PathBuf {
     original.with_file_name(filename)
 }
 
-fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError> {
+fn write_file_tags_inner(
+    entry: &WriteEntry,
+    patch: &ValidatedTagPatch,
+) -> Result<FileWriteResult, TagError> {
     let path = &entry.path;
     let path_str = path.display().to_string();
 
@@ -822,8 +1044,8 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
                 write_tag_layer(
                     &temp_path,
                     tag_type,
-                    &entry.tags,
-                    *target == WavTarget::RiffInfo,
+                    patch,
+                    target.capability(),
                     entry.comment_mode,
                     &mut fields_written,
                     &mut fields_deleted,
@@ -848,8 +1070,8 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
         write_tag_layer(
             path,
             tag_type,
-            &entry.tags,
-            *target == WavTarget::RiffInfo,
+            patch,
+            target.capability(),
             entry.comment_mode,
             &mut fields_written,
             &mut fields_deleted,
@@ -860,8 +1082,8 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
         write_tag_layer(
             path,
             tag_type,
-            &entry.tags,
-            false,
+            patch,
+            LayerCapability::Primary,
             entry.comment_mode,
             &mut fields_written,
             &mut fields_deleted,
@@ -895,18 +1117,15 @@ fn write_file_tags_inner(entry: &WriteEntry) -> Result<FileWriteResult, TagError
     })
 }
 
-/// Write to a single tag layer within a file.
+/// Plan and apply one validated patch to a single tag layer.
 ///
-/// For each field in `tags`:
-/// - `None` or `Some("")` → delete the field
-/// - `Some(value)` → set the field
-///
-/// If `riff_info_layer` is true, skip fields not available in RIFF INFO.
+/// The pure planner owns capability filtering, comment merging, deletion, and
+/// no-op policy. This function owns only Lofty I/O and plan application.
 fn write_tag_layer(
     path: &Path,
     tag_type: TagType,
-    tags: &HashMap<String, Option<String>>,
-    riff_info_layer: bool,
+    patch: &ValidatedTagPatch,
+    capability: LayerCapability,
     comment_mode: CommentMode,
     fields_written: &mut Vec<String>,
     fields_deleted: &mut Vec<String>,
@@ -942,66 +1161,49 @@ fn write_tag_layer(
         }
     };
 
-    let mut any_changes = false;
+    let existing = ExistingLayerValues::read(Some(tag), patch);
+    let plan = plan_layer_mutation(patch, capability, &existing, comment_mode);
+    apply_layer_mutation_plan(tag, tag_type, &plan, fields_written, fields_deleted);
 
-    for (field, value) in tags {
-        if riff_info_layer && !is_riff_info_field(field) {
-            continue;
-        }
-
-        let Some(primary_key) = field_to_item_key(field) else {
-            continue;
-        };
-
-        let should_delete = value.as_ref().is_none_or(std::string::String::is_empty);
-        let current_value = get_field_from_tag(tag, field);
-
-        if should_delete {
-            if current_value.is_none() {
-                continue;
-            }
-            tag.remove_key(primary_key);
-            // Also remove secondary keys for split-key fields
-            match field.as_str() {
-                "year" => tag.remove_key(ItemKey::Year),
-                "bpm" => tag.remove_key(ItemKey::Bpm),
-                _ => {}
-            }
-            fields_deleted.push(field.clone());
-            any_changes = true;
-        } else {
-            let raw_value = value.as_ref().unwrap();
-            let new_value = if field == "comment" && comment_mode != CommentMode::Replace {
-                merge_comment(raw_value, current_value.as_deref(), comment_mode)
-            } else {
-                raw_value.clone()
-            };
-            if current_value.as_deref() == Some(new_value.as_str()) {
-                continue;
-            }
-            tag.insert_text(primary_key, new_value.clone());
-            // For non-Vorbis tags, also write secondary keys for compatibility.
-            // Vorbis Comments use DATE (not YEAR) per spec, and BPM is already
-            // the correct key — secondary writes would create duplicate fields.
-            if tag_type != TagType::VorbisComments {
-                if field == "year" {
-                    tag.insert_text(ItemKey::Year, new_value.clone());
-                }
-                if field == "bpm" {
-                    tag.insert_text(ItemKey::Bpm, new_value.clone());
-                }
-            }
-            fields_written.push(field.clone());
-            any_changes = true;
-        }
-    }
-
-    if any_changes {
+    if !plan.operations.is_empty() {
         tag.save_to_path(path, WriteOptions::default())
             .map_err(|e| TagError::Io(format!("Failed to write {tag_type:?} tag: {e}")))?;
     }
 
     Ok(())
+}
+
+fn apply_layer_mutation_plan(
+    tag: &mut Tag,
+    tag_type: TagType,
+    plan: &LayerMutationPlan,
+    fields_written: &mut Vec<String>,
+    fields_deleted: &mut Vec<String>,
+) {
+    for operation in &plan.operations {
+        let primary_key = operation.field.primary_item_key();
+        match &operation.edit {
+            TagEdit::Delete => {
+                tag.remove_key(primary_key);
+                if let Some(secondary_key) = operation.field.secondary_item_key() {
+                    tag.remove_key(secondary_key);
+                }
+                fields_deleted.push(operation.field.as_str().to_string());
+            }
+            TagEdit::Set(value) => {
+                tag.insert_text(primary_key, value.clone());
+                // Vorbis Comments use DATE (not YEAR) per spec, and BPM is
+                // already the correct key. A secondary write would duplicate
+                // either field.
+                if tag_type != TagType::VorbisComments
+                    && let Some(secondary_key) = operation.field.secondary_item_key()
+                {
+                    tag.insert_text(secondary_key, value.clone());
+                }
+                fields_written.push(operation.field.as_str().to_string());
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,15 +1214,18 @@ fn write_tag_layer(
 pub fn write_file_tags_dry_run(entry: &WriteEntry) -> FileDryRunResult {
     let path_str = entry.path.display().to_string();
 
-    if let Err(e) = validate_write_tags(&entry.tags) {
-        return FileDryRunResult::Error {
-            path: path_str,
-            status: "error".to_string(),
-            error: e.to_string(),
-        };
-    }
+    let patch = match ValidatedTagPatch::try_from(&entry.tags) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return FileDryRunResult::Error {
+                path: path_str,
+                status: "error".to_string(),
+                error: error.to_string(),
+            };
+        }
+    };
 
-    match write_file_tags_dry_run_inner(entry) {
+    match write_file_tags_dry_run_inner(entry, &patch) {
         Ok(result) => result,
         Err(e) => FileDryRunResult::Error {
             path: path_str,
@@ -1031,46 +1236,19 @@ pub fn write_file_tags_dry_run(entry: &WriteEntry) -> FileDryRunResult {
 }
 
 fn dry_run_layer_diff(
-    entry: &WriteEntry,
+    patch: &ValidatedTagPatch,
     tag: Option<&Tag>,
-    riff_info_layer: bool,
+    capability: LayerCapability,
+    comment_mode: CommentMode,
 ) -> BTreeMap<String, DryRunChange> {
-    let mut changes = BTreeMap::new();
-
-    for (field, new_value) in &entry.tags {
-        if riff_info_layer && !is_riff_info_field(field) {
-            continue;
-        }
-
-        let old_value = tag.and_then(|tag| get_field_from_tag(tag, field));
-        let effective_new = match new_value {
-            None => None,
-            Some(value) if value.is_empty() => None,
-            Some(value) if field == "comment" && entry.comment_mode != CommentMode::Replace => {
-                Some(merge_comment(
-                    value,
-                    old_value.as_deref(),
-                    entry.comment_mode,
-                ))
-            }
-            Some(value) => Some(value.clone()),
-        };
-
-        if old_value != effective_new {
-            changes.insert(
-                field.clone(),
-                DryRunChange {
-                    old: old_value,
-                    new: effective_new,
-                },
-            );
-        }
-    }
-
-    changes
+    let existing = ExistingLayerValues::read(tag, patch);
+    plan_layer_mutation(patch, capability, &existing, comment_mode).changes
 }
 
-fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult, TagError> {
+fn write_file_tags_dry_run_inner(
+    entry: &WriteEntry,
+    patch: &ValidatedTagPatch,
+) -> Result<FileDryRunResult, TagError> {
     let path = &entry.path;
     let path_str = path.display().to_string();
 
@@ -1096,13 +1274,18 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
     let (changes, changes_by_layer) = if is_wav {
         let mut changes_by_layer = BTreeMap::new();
         for target in &wav_targets {
-            let (key, tag_type, riff_info_layer) = match target {
-                WavTarget::Id3v2 => ("id3v2", TagType::Id3v2, false),
-                WavTarget::RiffInfo => ("riff_info", TagType::RiffInfo, true),
+            let (key, tag_type, capability) = match target {
+                WavTarget::Id3v2 => ("id3v2", TagType::Id3v2, LayerCapability::Id3v2),
+                WavTarget::RiffInfo => ("riff_info", TagType::RiffInfo, LayerCapability::RiffInfo),
             };
             changes_by_layer.insert(
                 key.to_string(),
-                dry_run_layer_diff(entry, tagged_file.tag(tag_type), riff_info_layer),
+                dry_run_layer_diff(
+                    patch,
+                    tagged_file.tag(tag_type),
+                    capability,
+                    entry.comment_mode,
+                ),
             );
         }
 
@@ -1114,7 +1297,14 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
         let compatibility_diff = changes_by_layer
             .get(compatibility_key)
             .cloned()
-            .unwrap_or_else(|| dry_run_layer_diff(entry, tagged_file.tag(TagType::Id3v2), false));
+            .unwrap_or_else(|| {
+                dry_run_layer_diff(
+                    patch,
+                    tagged_file.tag(TagType::Id3v2),
+                    LayerCapability::Id3v2,
+                    entry.comment_mode,
+                )
+            });
         (
             compatibility_diff.into_iter().collect(),
             Some(changes_by_layer),
@@ -1124,9 +1314,14 @@ fn write_file_tags_dry_run_inner(entry: &WriteEntry) -> Result<FileDryRunResult,
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
         (
-            dry_run_layer_diff(entry, primary_tag, false)
-                .into_iter()
-                .collect(),
+            dry_run_layer_diff(
+                patch,
+                primary_tag,
+                LayerCapability::Primary,
+                entry.comment_mode,
+            )
+            .into_iter()
+            .collect(),
             None,
         )
     };
@@ -1392,16 +1587,8 @@ mod tests {
         serde_json::to_value(result).expect("dry-run result should serialize")
     }
 
-    fn dry_run_test_entry(
-        tags: HashMap<String, Option<String>>,
-        comment_mode: CommentMode,
-    ) -> WriteEntry {
-        WriteEntry {
-            path: PathBuf::from("synthetic.wav"),
-            tags,
-            wav_targets: vec![],
-            comment_mode,
-        }
+    fn dry_run_test_patch(tags: HashMap<String, Option<String>>) -> ValidatedTagPatch {
+        ValidatedTagPatch::try_from(&tags).expect("synthetic patch should validate")
     }
 
     fn cover_art_test_png() -> Vec<u8> {
@@ -1423,15 +1610,299 @@ mod tests {
             .and_then(|tag| get_field_from_tag(tag, field))
     }
 
+    fn physical_tag_field(tag: &Tag, field: &str) -> Option<String> {
+        get_field_from_tag(tag, field).or_else(|| {
+            (field == "publisher")
+                .then(|| tag.get_string(ItemKey::Publisher).map(str::to_string))
+                .flatten()
+        })
+    }
+
+    fn physical_wav_layer_field(path: &Path, target: WavTarget, field: &str) -> Option<String> {
+        let tagged_file = Probe::open(path)
+            .expect("synthetic WAV should open")
+            .options(parse_options(true))
+            .read()
+            .expect("synthetic WAV should read");
+        tagged_file
+            .tag(TagType::from(&target))
+            .and_then(|tag| physical_tag_field(tag, field))
+    }
+
     #[test]
     fn field_to_key_roundtrip() {
-        for &field in ALL_FIELDS {
-            let key = field_to_item_key(field)
-                .unwrap_or_else(|| panic!("No ItemKey for field \"{field}\""));
+        assert_eq!(
+            TagField::ALL.map(TagField::as_str).as_slice(),
+            ALL_FIELDS,
+            "the exhaustive field enum must retain canonical order"
+        );
+        for field in TagField::ALL {
+            let key = field.primary_item_key();
             let back =
                 item_key_to_field(&key).unwrap_or_else(|| panic!("No field for ItemKey {key:?}"));
-            assert_eq!(back, field, "Roundtrip failed for {field}");
+            assert_eq!(back, field.as_str(), "Roundtrip failed for {field:?}");
         }
+    }
+
+    #[test]
+    fn validated_patch_preserves_exact_validation_contract() {
+        for (field, value, expected) in [
+            ("unknown", Some("value"), "Unknown field \"unknown\""),
+            ("unknown", None, "Unknown field \"unknown\""),
+            ("unknown", Some(""), "Unknown field \"unknown\""),
+            (
+                "year",
+                Some("24"),
+                "Invalid year \"24\": must be 4-digit YYYY or null/empty to delete",
+            ),
+            (
+                "track",
+                Some("0"),
+                "Invalid track \"0\": must be a positive integer or null/empty to delete",
+            ),
+            (
+                "disc",
+                Some("-1"),
+                "Invalid disc \"-1\": must be a positive integer or null/empty to delete",
+            ),
+        ] {
+            let tags = HashMap::from([(
+                field.to_string(),
+                value.map(std::string::ToString::to_string),
+            )]);
+            assert_eq!(
+                ValidatedTagPatch::try_from(&tags).unwrap_err().to_string(),
+                expected
+            );
+        }
+
+        for delete in [None, Some(String::new())] {
+            let patch =
+                ValidatedTagPatch::try_from(&HashMap::from([("artist".to_string(), delete)]))
+                    .expect("delete patch should validate");
+            assert_eq!(patch.edits[&TagField::Artist], TagEdit::Delete);
+        }
+        let whitespace = ValidatedTagPatch::try_from(&HashMap::from([(
+            "artist".to_string(),
+            Some("  untouched  ".to_string()),
+        )]))
+        .expect("free-form field should validate");
+        assert_eq!(
+            whitespace.edits[&TagField::Artist],
+            TagEdit::Set("  untouched  ".to_string())
+        );
+    }
+
+    #[test]
+    fn tags_all_fields_preview_and_write_share_layer_policy() {
+        let values = [
+            ("artist", "new artist"),
+            ("title", "new title"),
+            ("album", "new album"),
+            ("album_artist", "new album artist"),
+            ("genre", "new genre"),
+            ("year", "2024"),
+            ("track", "2"),
+            ("disc", "2"),
+            ("comment", "new comment"),
+            ("publisher", "new publisher"),
+            ("bpm", "128"),
+            ("key", "Am"),
+            ("composer", "new composer"),
+            ("remixer", "new remixer"),
+        ];
+
+        for (target, layer_name) in [
+            (WavTarget::Id3v2, "id3v2"),
+            (WavTarget::RiffInfo, "riff_info"),
+        ] {
+            for (field, value) in values {
+                let dir = tempfile::tempdir().expect("temp directory should create");
+                let path = dir.path().join(format!("{layer_name}-{field}.wav"));
+                write_tag_test_wav(&path);
+                let entry = WriteEntry {
+                    path: path.clone(),
+                    tags: HashMap::from([(field.to_string(), Some(value.to_string()))]),
+                    wav_targets: vec![target.clone()],
+                    comment_mode: CommentMode::Replace,
+                };
+
+                let preview = write_file_tags_dry_run(&entry);
+                let FileDryRunResult::Preview {
+                    changes_by_layer: Some(changes_by_layer),
+                    ..
+                } = preview
+                else {
+                    panic!("{layer_name} {field} preview should succeed: {preview:?}");
+                };
+                let previewed = changes_by_layer[layer_name].get(field);
+                let supported = target
+                    .capability()
+                    .supports(TagField::parse(field).expect("table field should be canonical"));
+                assert_eq!(
+                    previewed.is_some(),
+                    supported,
+                    "{layer_name} {field} preview capability drifted"
+                );
+                if let Some(change) = previewed {
+                    assert_eq!(change.old, None, "{layer_name} {field}");
+                    assert_eq!(change.new.as_deref(), Some(value), "{layer_name} {field}");
+                }
+
+                let result = write_file_tags(&entry);
+                let FileWriteResult::Ok { fields_written, .. } = result else {
+                    panic!("{layer_name} {field} write should succeed: {result:?}");
+                };
+                assert_eq!(
+                    fields_written,
+                    if supported {
+                        vec![field.to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    "{layer_name} {field} write capability drifted"
+                );
+                assert_eq!(
+                    physical_wav_layer_field(&path, target.clone(), field).as_deref(),
+                    supported.then_some(value),
+                    "{layer_name} {field} write must match preview"
+                );
+            }
+        }
+
+        for (field, value) in values {
+            let dir = tempfile::tempdir().expect("temp directory should create");
+            let path = dir.path().join(format!("primary-{field}.aiff"));
+            write_tag_test_aiff(&path);
+            let entry = WriteEntry {
+                path: path.clone(),
+                tags: HashMap::from([(field.to_string(), Some(value.to_string()))]),
+                wav_targets: vec![],
+                comment_mode: CommentMode::Replace,
+            };
+
+            let preview = write_file_tags_dry_run(&entry);
+            let FileDryRunResult::Preview {
+                changes,
+                changes_by_layer: None,
+                ..
+            } = preview
+            else {
+                panic!("primary {field} preview should succeed: {preview:?}");
+            };
+            assert_eq!(changes[field].new.as_deref(), Some(value), "{field}");
+
+            let result = write_file_tags(&entry);
+            assert!(
+                matches!(result, FileWriteResult::Ok { .. }),
+                "primary {field} write should succeed: {result:?}"
+            );
+            let tagged_file = Probe::open(&path)
+                .expect("synthetic AIFF should open")
+                .options(parse_options(true))
+                .read()
+                .expect("synthetic AIFF should read");
+            let tag = tagged_file
+                .primary_tag()
+                .or_else(|| tagged_file.first_tag())
+                .expect("written AIFF tag should exist");
+            assert_eq!(
+                physical_tag_field(tag, field).as_deref(),
+                Some(value),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn tags_id3_publisher_keeps_legacy_public_read_and_preview_behavior() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let path = dir.path().join("publisher-contract.wav");
+        write_tag_test_wav(&path);
+        let entry = WriteEntry {
+            path: path.clone(),
+            tags: HashMap::from([("publisher".to_string(), Some("new publisher".to_string()))]),
+            wav_targets: vec![WavTarget::Id3v2],
+            comment_mode: CommentMode::Replace,
+        };
+
+        assert!(matches!(
+            write_file_tags(&entry),
+            FileWriteResult::Ok { .. }
+        ));
+        assert_eq!(
+            physical_wav_layer_field(&path, WavTarget::Id3v2, "publisher").as_deref(),
+            Some("new publisher"),
+            "the TPUB frame should remain physically present"
+        );
+        let fields = ["publisher".to_string()];
+        let FileReadResult::Wav { id3v2, .. } = read_file_tags(&path, Some(&fields), false) else {
+            panic!("synthetic WAV should remain readable");
+        };
+        assert_eq!(
+            id3v2["publisher"], None,
+            "Lofty normalizes TPUB from Label to Publisher on read; the public reader historically checks Label"
+        );
+
+        let repeated_preview = write_file_tags_dry_run(&entry);
+        let FileDryRunResult::Preview {
+            changes_by_layer: Some(changes_by_layer),
+            ..
+        } = repeated_preview
+        else {
+            panic!("repeated publisher preview should succeed: {repeated_preview:?}");
+        };
+        assert_eq!(
+            changes_by_layer["id3v2"]["publisher"],
+            DryRunChange {
+                old: None,
+                new: Some("new publisher".to_string()),
+            },
+            "the repeated preview must retain legacy public behavior"
+        );
+    }
+
+    #[test]
+    fn tags_vorbis_plan_applier_avoids_secondary_year_and_bpm_items() {
+        let tags = HashMap::from([
+            ("year".to_string(), Some("2024".to_string())),
+            ("bpm".to_string(), Some("128".to_string())),
+        ]);
+        let patch = ValidatedTagPatch::try_from(&tags).expect("patch should validate");
+        let existing = ExistingLayerValues::read(None, &patch);
+        let plan = plan_layer_mutation(
+            &patch,
+            LayerCapability::Primary,
+            &existing,
+            CommentMode::Replace,
+        );
+        let mut tag = Tag::new(TagType::VorbisComments);
+        let mut fields_written = Vec::new();
+        let mut fields_deleted = Vec::new();
+
+        apply_layer_mutation_plan(
+            &mut tag,
+            TagType::VorbisComments,
+            &plan,
+            &mut fields_written,
+            &mut fields_deleted,
+        );
+
+        assert_eq!(
+            tag.get_string(ItemKey::RecordingDate),
+            Some("2024"),
+            "Vorbis should use DATE"
+        );
+        assert_eq!(
+            tag.get_string(ItemKey::IntegerBpm),
+            None,
+            "Lofty rejects IntegerBpm for Vorbis; preserve the existing write behavior"
+        );
+        assert!(!tag.items().any(|item| item.key() == ItemKey::Year));
+        assert!(!tag.items().any(|item| item.key() == ItemKey::Bpm));
+        assert!(!tag.items().any(|item| item.key() == ItemKey::IntegerBpm));
+        assert_eq!(fields_written, ["year", "bpm"]);
+        assert!(fields_deleted.is_empty());
     }
 
     #[test]
@@ -1581,12 +2052,15 @@ mod tests {
         tag.insert_text(ItemKey::TrackArtist, "old".to_string());
 
         for deletion in [None, Some(String::new())] {
-            let entry = dry_run_test_entry(
-                HashMap::from([("artist".to_string(), deletion)]),
-                CommentMode::Replace,
-            );
+            let patch = dry_run_test_patch(HashMap::from([("artist".to_string(), deletion)]));
             assert_eq!(
-                dry_run_layer_diff(&entry, Some(&tag), false).get("artist"),
+                dry_run_layer_diff(
+                    &patch,
+                    Some(&tag),
+                    LayerCapability::Id3v2,
+                    CommentMode::Replace,
+                )
+                .get("artist"),
                 Some(&DryRunChange {
                     old: Some("old".to_string()),
                     new: None,
@@ -1599,12 +2073,20 @@ mod tests {
     fn dry_run_layer_diff_omits_equal_values() {
         let mut tag = Tag::new(TagType::Id3v2);
         tag.insert_text(ItemKey::TrackArtist, "same".to_string());
-        let entry = dry_run_test_entry(
-            HashMap::from([("artist".to_string(), Some("same".to_string()))]),
-            CommentMode::Replace,
-        );
+        let patch = dry_run_test_patch(HashMap::from([(
+            "artist".to_string(),
+            Some("same".to_string()),
+        )]));
 
-        assert!(dry_run_layer_diff(&entry, Some(&tag), false).is_empty());
+        assert!(
+            dry_run_layer_diff(
+                &patch,
+                Some(&tag),
+                LayerCapability::Id3v2,
+                CommentMode::Replace,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1617,12 +2099,12 @@ mod tests {
             (CommentMode::Prepend, "new | old"),
             (CommentMode::Append, "old | new"),
         ] {
-            let entry = dry_run_test_entry(
-                HashMap::from([("comment".to_string(), Some("new".to_string()))]),
-                mode,
-            );
+            let patch = dry_run_test_patch(HashMap::from([(
+                "comment".to_string(),
+                Some("new".to_string()),
+            )]));
             assert_eq!(
-                dry_run_layer_diff(&entry, Some(&tag), false)["comment"]
+                dry_run_layer_diff(&patch, Some(&tag), LayerCapability::Id3v2, mode)["comment"]
                     .new
                     .as_deref(),
                 Some(expected)
@@ -1632,13 +2114,14 @@ mod tests {
 
     #[test]
     fn dry_run_layer_diff_handles_missing_tag() {
-        let entry = dry_run_test_entry(
-            HashMap::from([("artist".to_string(), Some("new".to_string()))]),
-            CommentMode::Replace,
-        );
+        let patch = dry_run_test_patch(HashMap::from([(
+            "artist".to_string(),
+            Some("new".to_string()),
+        )]));
 
         assert_eq!(
-            dry_run_layer_diff(&entry, None, false).get("artist"),
+            dry_run_layer_diff(&patch, None, LayerCapability::Id3v2, CommentMode::Replace,)
+                .get("artist"),
             Some(&DryRunChange {
                 old: None,
                 new: Some("new".to_string()),
@@ -1648,15 +2131,17 @@ mod tests {
 
     #[test]
     fn dry_run_layer_diff_filters_riff_unsupported_fields() {
-        let entry = dry_run_test_entry(
-            HashMap::from([
-                ("artist".to_string(), Some("new artist".to_string())),
-                ("key".to_string(), Some("Am".to_string())),
-            ]),
+        let patch = dry_run_test_patch(HashMap::from([
+            ("artist".to_string(), Some("new artist".to_string())),
+            ("key".to_string(), Some("Am".to_string())),
+        ]));
+
+        let changes = dry_run_layer_diff(
+            &patch,
+            None,
+            LayerCapability::RiffInfo,
             CommentMode::Replace,
         );
-
-        let changes = dry_run_layer_diff(&entry, None, true);
         assert!(changes.contains_key("artist"));
         assert!(!changes.contains_key("key"));
     }
