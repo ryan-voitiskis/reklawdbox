@@ -1385,8 +1385,112 @@ mod tests {
             .run(&path.to_string_lossy(), &[], Duration::from_millis(20))
             .unwrap_err();
         assert_eq!(error.kind, EssentiaSetupErrorKind::ProbeTimeout);
-        assert!(error.message.contains("timed out"));
+        assert_eq!(
+            error.message,
+            format!("{} timed out after 0.02 seconds", path.to_string_lossy())
+        );
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_process_success_preserves_both_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_python_script(
+            dir.path(),
+            "printf 'stdout-value'; printf 'stderr-value' >&2",
+        );
+
+        let result = SystemEnvironmentOps
+            .run(&path.to_string_lossy(), &[], Duration::from_secs(5))
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.stdout, "stdout-value");
+        assert_eq!(result.stderr, "stderr-value");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_process_nonzero_preserves_diagnostic_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_python_script(
+            dir.path(),
+            "printf 'stdout-value'; printf 'stderr-value' >&2; exit 7",
+        );
+
+        let result = SystemEnvironmentOps
+            .run(&path.to_string_lossy(), &[], Duration::from_secs(5))
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.stdout, "stdout-value");
+        assert_eq!(result.stderr, "stderr-value");
+        assert_eq!(
+            format_diagnostic_output(&result),
+            ": stderr-value\nstdout-value"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_probe_nonzero_reports_stderr_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_python_script(
+            dir.path(),
+            "printf 'stdout-must-not-surface'; printf 'stderr-diagnostic' >&2; exit 7",
+        );
+
+        let error = inspect_essentia_python_with_timeout_result(
+            &path.to_string_lossy(),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, EssentiaSetupErrorKind::ImportFailure);
+        assert_eq!(
+            error.message,
+            format!(
+                "runtime probe imports failed for {}: stderr-diagnostic",
+                path.to_string_lossy()
+            )
+        );
+    }
+
+    #[test]
+    fn essentia_environment_error_kinds_and_display_are_stable() {
+        let cases = [
+            (EssentiaSetupErrorKind::LockTimeout, "lock_timeout"),
+            (
+                EssentiaSetupErrorKind::CandidateNotFound,
+                "candidate_not_found",
+            ),
+            (EssentiaSetupErrorKind::VenvCreation, "venv_creation"),
+            (
+                EssentiaSetupErrorKind::WheelUnavailable,
+                "wheel_unavailable",
+            ),
+            (EssentiaSetupErrorKind::PipFailure, "pip_failure"),
+            (EssentiaSetupErrorKind::ImportFailure, "import_failure"),
+            (
+                EssentiaSetupErrorKind::ManifestMismatch,
+                "manifest_mismatch",
+            ),
+            (EssentiaSetupErrorKind::ProbeTimeout, "probe_timeout"),
+            (EssentiaSetupErrorKind::Filesystem, "filesystem"),
+            (EssentiaSetupErrorKind::Activation, "activation"),
+        ];
+
+        for (kind, serialized) in cases {
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{serialized}\"")
+            );
+            assert_eq!(
+                EssentiaSetupError::new(kind, "stable message").to_string(),
+                format!("{kind:?}: stable message")
+            );
+        }
     }
 
     #[test]

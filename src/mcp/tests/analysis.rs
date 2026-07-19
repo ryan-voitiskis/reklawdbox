@@ -874,6 +874,141 @@ async fn setup_essentia_concurrent_mcp_calls_remain_serialized() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn setup_essentia_cancelled_future_leaves_blocking_transaction_sound() {
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd as _;
+    use std::sync::Arc;
+
+    use crate::adapters::audio::{
+        ESSENTIA_CONTRACT_ID, EssentiaRuntime, EssentiaSetupError, EssentiaSetupErrorKind,
+    };
+    use crate::application::analysis::setup::{EssentiaSetupResult, EssentiaSetupStatus};
+
+    fn try_lock(file: &std::fs::File) -> std::io::Result<()> {
+        // SAFETY: `file` stays open for the call and flock only touches its
+        // owned descriptor.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    struct GenerationFixture(std::path::PathBuf);
+
+    impl Drop for GenerationFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let root = tempfile::tempdir().expect("temp root should create");
+    let lock_path = root.path().join("essentia-venv.lock");
+    let generation = root
+        .path()
+        .join("essentia-venv.generations/runtime-cancelled");
+    let server = Arc::new(ReklawdboxServer::new(None));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let first_server = Arc::clone(&server);
+    let first_lock_path = lock_path.clone();
+    let first_generation = generation.clone();
+    let first = tokio::spawn(async move {
+        crate::mcp::analysis::handle_setup_essentia_with(&first_server, move |_| {
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&first_lock_path)
+                .expect("fixture lock should open");
+            // SAFETY: the descriptor remains owned until the fake transaction
+            // finishes, including after the outer future is cancelled.
+            assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+            std::fs::create_dir_all(&first_generation).expect("fixture generation should create");
+            let generation_guard = GenerationFixture(first_generation.clone());
+            std::fs::write(first_generation.join("incomplete"), b"fixture")
+                .expect("fixture marker should write");
+            started_tx
+                .send(())
+                .expect("test should still await transaction start");
+            release_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("test should release fake transaction");
+            drop(generation_guard);
+            drop(lock);
+            Err::<EssentiaSetupResult, _>(EssentiaSetupError::new(
+                EssentiaSetupErrorKind::ImportFailure,
+                "cancelled fixture completed",
+            ))
+        })
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), started_rx)
+        .await
+        .expect("blocking transaction should start before deadline")
+        .expect("blocking transaction start sender should remain live");
+    first.abort();
+    let cancelled = first
+        .await
+        .expect_err("outer setup task should be cancelled");
+    assert!(cancelled.is_cancelled());
+
+    let competing_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .expect("competing fixture lock should open");
+    let lock_error = try_lock(&competing_lock).expect_err(
+        "blocking transaction must retain its interprocess lock after outer cancellation",
+    );
+    assert_eq!(lock_error.kind(), std::io::ErrorKind::WouldBlock);
+    assert!(generation.join("incomplete").is_file());
+
+    release_tx
+        .send(())
+        .expect("fake transaction should receive release");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while generation.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fake transaction should clean before deadline");
+    try_lock(&competing_lock).expect("lock should be reacquirable after transaction cleanup");
+
+    let result = crate::mcp::analysis::handle_setup_essentia_with(&server, |_| {
+        Ok(EssentiaSetupResult {
+            status: EssentiaSetupStatus::AlreadyInstalled,
+            runtime: EssentiaRuntime {
+                python_path: "/managed/essentia-venv/bin/python".into(),
+                python_version: "3.14.6".into(),
+                essentia_version: "2.1b6.dev1438".into(),
+                essentia_module_version: "2.1-beta6-dev".into(),
+                numpy_version: "2.5.1".into(),
+                pyyaml_version: "6.0.3".into(),
+                six_version: "1.17.0".into(),
+                analyzer_contract: ESSENTIA_CONTRACT_ID.into(),
+            },
+            python_bin_used: None,
+        })
+    })
+    .await
+    .expect("subsequent setup should remain sound");
+    let payload = extract_json(&result);
+    assert_eq!(payload["status"], "already_installed");
+    assert_eq!(
+        server.essentia_python_path().as_deref(),
+        Some("/managed/essentia-venv/bin/python")
+    );
+}
+
+#[tokio::test]
 async fn essentia_python_override_takes_precedence() {
     let server = ReklawdboxServer::new(None);
     server
