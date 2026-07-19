@@ -825,6 +825,7 @@ pub(crate) struct HydrateCacheWriterSession {
     sender: Option<tokio::sync::mpsc::Sender<CacheWriteRequest<HydrateCacheMessage>>>,
     writer: Option<tokio::task::JoinHandle<CacheWriterReport>>,
     cancel: tokio_util::sync::CancellationToken,
+    cancel_on_drop: bool,
 }
 
 impl HydrateCacheWriterSession {
@@ -863,6 +864,7 @@ impl HydrateCacheWriterSession {
             sender: Some(sender),
             writer: Some(writer),
             cancel,
+            cancel_on_drop: true,
         })
     }
 
@@ -891,7 +893,7 @@ impl HydrateCacheWriterSession {
             .writer
             .take()
             .expect("hydrate cache writer handle is unavailable after finish");
-        match writer.await {
+        let completion = match writer.await {
             Ok(report) => HydrateCacheWriterCompletion {
                 error_summaries: report.error_summaries.clone(),
                 report,
@@ -906,13 +908,17 @@ impl HydrateCacheWriterSession {
                     ..HydrateCacheWriterCompletion::default()
                 }
             }
-        }
+        };
+        self.cancel_on_drop = false;
+        completion
     }
 }
 
 impl Drop for HydrateCacheWriterSession {
     fn drop(&mut self) {
-        self.cancel.cancel();
+        if self.cancel_on_drop {
+            self.cancel.cancel();
+        }
         self.sender.take();
         // A running blocking task cannot be aborted. Detaching after our
         // sender closes keeps the receiver and SQLite alive until any
@@ -1794,6 +1800,80 @@ mod tests {
         })
     }
 
+    fn hydrate_test_analysis_message(analyzer: &str, id: &str) -> HydrateCacheMessage {
+        HydrateCacheMessage::AudioAnalysis(AnalysisCacheWrite {
+            file_path: format!("/synthetic/hydrate-{id}.flac"),
+            analyzer: analyzer.to_string(),
+            file_size: 42,
+            file_mtime: 7,
+            analyzer_version: "test-v1".to_string(),
+            input_fingerprint: String::new(),
+            features_json: "{}".to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn hydrate_writer_persists_both_payload_variants_before_ack() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let directory = tempfile::tempdir().expect("mixed writer directory should create");
+            let store_path = directory
+                .path()
+                .join("internal.sqlite3")
+                .to_string_lossy()
+                .to_string();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let session = HydrateCacheWriterSession::start(store_path.clone(), 2, cancel.clone())
+                .expect("mixed writer should start");
+
+            send_cache_message(
+                session.sender(),
+                hydrate_test_message("mixed enrichment"),
+                "mixed enrichment",
+            )
+            .await
+            .expect("mixed enrichment should be acknowledged");
+            send_cache_message(
+                session.sender(),
+                hydrate_test_analysis_message("mixed-analysis", "success"),
+                "mixed analysis",
+            )
+            .await
+            .expect("mixed analysis should be acknowledged");
+
+            let completion = session.finish().await;
+            assert_eq!(completion.join_failures, 0);
+            assert_eq!(completion.report.attempted, 2);
+            assert_eq!(completion.report.succeeded, 2);
+            assert_eq!(completion.report.failed, 0);
+            assert!(!completion.report.threshold_cancelled);
+            assert!(!cancel.is_cancelled());
+
+            let connection = state::open(&store_path).expect("mixed store should reopen");
+            let enrichment = state::get_enrichment(
+                &connection,
+                "discogs",
+                "writer artist",
+                "mixed enrichment",
+                None,
+                false,
+            )
+            .expect("mixed enrichment should read")
+            .expect("acknowledged enrichment should be durable");
+            assert_eq!(enrichment.match_quality.as_deref(), Some("none"));
+            assert!(enrichment.response_json.is_none());
+            let analysis = state::get_audio_analysis(
+                &connection,
+                "/synthetic/hydrate-success.flac",
+                "mixed-analysis",
+            )
+            .expect("mixed analysis should read")
+            .expect("acknowledged analysis should be durable");
+            assert_eq!(analysis.analysis_version, "test-v1");
+        })
+        .await
+        .expect("mixed writer success scenario should finish within five seconds");
+    }
+
     #[tokio::test]
     async fn hydrate_writer_drop_cancels_producer_and_closes_store() {
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1859,12 +1939,9 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             let invalid_directory = tempfile::tempdir().expect("invalid store directory");
             let invalid_path = invalid_directory.path().to_string_lossy().to_string();
-            let session = HydrateCacheWriterSession::start(
-                invalid_path,
-                1,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .expect("open-failure writer should spawn");
+            let open_cancel = tokio_util::sync::CancellationToken::new();
+            let session = HydrateCacheWriterSession::start(invalid_path, 1, open_cancel.clone())
+                .expect("open-failure writer should spawn");
             let rejected = send_cache_message(
                 session.sender(),
                 hydrate_test_message("open failure"),
@@ -1877,6 +1954,7 @@ mod tests {
             assert_eq!(completion.report.write_failures, 0);
             assert_eq!(completion.report.failed, 1);
             assert_eq!(completion.join_failures, 0);
+            assert!(open_cancel.is_cancelled());
 
             let directory = tempfile::tempdir().expect("selective writer directory");
             let path = directory
@@ -1943,12 +2021,9 @@ mod tests {
                 .join("internal.sqlite3")
                 .to_string_lossy()
                 .to_string();
-            let session = HydrateCacheWriterSession::start(
-                path,
-                1,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .expect("ack writer should start");
+            let acknowledgement_cancel = tokio_util::sync::CancellationToken::new();
+            let session = HydrateCacheWriterSession::start(path, 1, acknowledgement_cancel.clone())
+                .expect("ack writer should start");
             let (acknowledgement, acknowledged) = tokio::sync::oneshot::channel();
             drop(acknowledged);
             session
@@ -1962,6 +2037,10 @@ mod tests {
             let completion = session.finish().await;
             assert_eq!(completion.report.succeeded, 1);
             assert_eq!(completion.report.dropped_acknowledgements, 1);
+            assert!(
+                !acknowledgement_cancel.is_cancelled(),
+                "a dropped acknowledgement receiver must not cancel the writer"
+            );
 
             let (sender, receiver) = tokio::sync::mpsc::channel(1);
             drop(receiver);
@@ -1971,6 +2050,7 @@ mod tests {
                     panic!("injected hydrate writer panic")
                 })),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                cancel_on_drop: true,
             };
             let completion = panicking.finish().await;
             assert_eq!(completion.join_failures, 1);
@@ -2006,24 +2086,30 @@ mod tests {
             drop(connection);
 
             let cancel = tokio_util::sync::CancellationToken::new();
-            let session = HydrateCacheWriterSession::start(path, 4, cancel.clone())
+            let session = HydrateCacheWriterSession::start(path.clone(), 4, cancel.clone())
                 .expect("threshold writer should start");
-            for index in 0..4 {
-                let error = send_cache_message(
+            for index in 0..3 {
+                send_cache_message(
                     session.sender(),
                     hydrate_test_message(&format!("threshold {index}")),
                     "hydrate threshold test",
                 )
                 .await
                 .expect_err("threshold fixture should reject every payload");
-                if index == 3 {
-                    assert!(
-                        error
-                            .to_string()
-                            .contains("cache writer stopped after 3 consecutive failures")
-                    );
-                }
             }
+            let drained_analysis = hydrate_test_analysis_message("post-threshold", "drained");
+            let error = send_cache_message(
+                session.sender(),
+                drained_analysis,
+                "hydrate threshold analysis",
+            )
+            .await
+            .expect_err("post-threshold analysis must be rejected while draining");
+            assert!(
+                error
+                    .to_string()
+                    .contains("cache writer stopped after 3 consecutive failures")
+            );
 
             let completion = session.finish().await;
             assert!(cancel.is_cancelled());
@@ -2032,6 +2118,17 @@ mod tests {
             assert_eq!(completion.report.succeeded, 0);
             assert_eq!(completion.report.failed, 4);
             assert_eq!(completion.report.write_failures, 3);
+            let connection = state::open(&path).expect("threshold store should reopen");
+            assert!(
+                state::get_audio_analysis(
+                    &connection,
+                    "/synthetic/hydrate-drained.flac",
+                    "post-threshold",
+                )
+                .expect("post-threshold analysis should read")
+                .is_none(),
+                "post-threshold analysis must be rejected without persistence"
+            );
         })
         .await
         .expect("writer threshold scenario should finish within five seconds");
