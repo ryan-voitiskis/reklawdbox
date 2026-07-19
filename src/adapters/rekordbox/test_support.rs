@@ -768,6 +768,40 @@ mod tests {
         result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
     }
 
+    #[cfg(unix)]
+    fn create_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    }
+
+    #[cfg(unix)]
+    fn trigger_fifo_if_reader_exists(path: &Path) -> io::Result<bool> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
+        if descriptor == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENXIO) {
+                return Ok(false);
+            }
+            return Err(error);
+        }
+        let byte = [b'x'];
+        let written = unsafe { libc::write(descriptor, byte.as_ptr().cast(), byte.len()) };
+        let write_error = (written != 1).then(io::Error::last_os_error);
+        let close_result = unsafe { libc::close(descriptor) };
+        if let Some(error) = write_error {
+            return Err(error);
+        }
+        if close_result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(true)
+    }
+
     #[test]
     #[cfg(unix)]
     fn rekordbox_connection_tar_extracts_exact_database_and_optional_sidecars() {
@@ -879,18 +913,16 @@ exit 7
             root.path(),
             "drop-tar",
             r#"
-(sleep 0.25; : > "$1") &
-printf '%s' "$!" > "$2"
-: > "$3"
-sleep 60
+sleep 60 &
+printf '%s' "$!" > "$1"
+: > "$2"
+exec sleep 60
 "#,
         );
-        let leaked_marker = root.path().join("drop-descendant-leak");
         let descendant_pid_file = root.path().join("drop-descendant-pid");
         let ready = root.path().join("drop-ready");
         let mut command = Command::new(&script);
         command
-            .arg(&leaked_marker)
             .arg(&descendant_pid_file)
             .arg(&ready)
             .stdin(Stdio::null())
@@ -938,8 +970,6 @@ sleep 60
         assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
             process_or_group_is_absent(-leader_pid) && process_or_group_is_absent(descendant_pid)
         }));
-        thread::sleep(Duration::from_millis(300));
-        assert!(!leaked_marker.exists());
     }
 
     #[test]
@@ -950,28 +980,35 @@ sleep 60
             root.path(),
             "chatty-tar",
             r#"
-(sleep 0.25; : > "$2") &
+sleep 60 &
+printf '%s' "$!" > "$2"
+sleep 60 &
 printf '%s' "$!" > "$3"
 : > "$4"
+while [ ! -f "$5" ]; do
+  sleep 0.01
+done
 if [ "$1" = stdout ]; then
-  dd if=/dev/zero bs=8192 count=1 2>/dev/null
+  exec dd if=/dev/zero bs=8192 count=1 2>/dev/null
 else
-  dd if=/dev/zero bs=8192 count=1 1>&2 2>/dev/null
+  exec dd if=/dev/zero bs=8192 count=1 1>&2 2>/dev/null
 fi
-sleep 60
 "#,
         );
 
         for stream in ["stdout", "stderr"] {
-            let leaked_marker = root.path().join(format!("{stream}-descendant-leak"));
             let descendant_pid_file = root.path().join(format!("{stream}-descendant-pid"));
+            let second_descendant_pid_file =
+                root.path().join(format!("{stream}-second-descendant-pid"));
             let ready = root.path().join(format!("{stream}-ready"));
+            let trigger = root.path().join(format!("{stream}-trigger"));
             let mut command = Command::new(&script);
             command
                 .arg(stream)
-                .arg(&leaked_marker)
                 .arg(&descendant_pid_file)
+                .arg(&second_descendant_pid_file)
                 .arg(&ready)
+                .arg(&trigger)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -983,6 +1020,22 @@ sleep 60
                 .unwrap_or_else(|_| panic!("synthetic tar child ownership should initialize"));
             let mut capture = TarOutputCapture::take_from(&mut owner)
                 .unwrap_or_else(|_| panic!("synthetic tar capture should initialize"));
+            assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
+                ready.is_file()
+                    && descendant_pid_file.is_file()
+                    && second_descendant_pid_file.is_file()
+            }));
+            let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
+                .unwrap()
+                .parse()
+                .unwrap();
+            let second_descendant_pid: i32 = std::fs::read_to_string(&second_descendant_pid_file)
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(!process_or_group_is_absent(descendant_pid));
+            assert!(!process_or_group_is_absent(second_descendant_pid));
+            std::fs::write(&trigger, b"go").unwrap();
             let deadline = Instant::now() + PROCESS_TEST_TIMEOUT;
             let error = owner
                 .wait_until(deadline, &mut capture)
@@ -993,34 +1046,92 @@ sleep 60
             assert!(capture.stderr_bytes.len() <= DIAGNOSTIC_LIMIT);
             assert!(Instant::now() < deadline);
             assert!(owner.child.is_none(), "over-cap leader must be reaped");
-            let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
-                .unwrap()
-                .parse()
-                .unwrap();
             assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
                 process_or_group_is_absent(-leader_pid)
                     && process_or_group_is_absent(descendant_pid)
+                    && process_or_group_is_absent(second_descendant_pid)
             }));
-            thread::sleep(Duration::from_millis(300));
-            assert!(!leaked_marker.exists());
         }
     }
 
     #[test]
     #[cfg(unix)]
-    fn rekordbox_connection_tar_timeout_terminates_leader_and_descendants() {
+    fn rekordbox_connection_owned_tar_child_timeout_reaps_started_descendant() {
         let root = tempfile::tempdir().unwrap();
+        let trigger_fifo = root.path().join("timeout-trigger");
+        create_fifo(&trigger_fifo);
         let script = write_executable_script(
             root.path(),
             "timeout-tar",
             r#"
-(sleep 0.25; : > "$2-descendant-leak") &
-sleep 60
+(
+  : > "$2"
+  IFS= read -r _ < "$3"
+  : > "$1"
+) &
+printf '%s' "$!" > "$4"
+while [ ! -f "$2" ]; do
+  sleep 0.01
+done
+: > "$5"
+exec sleep 60
 "#,
         );
+        let leaked_marker = root.path().join("timeout-descendant-leak");
+        let descendant_ready = root.path().join("timeout-descendant-ready");
+        let descendant_pid_file = root.path().join("timeout-descendant-pid");
+        let leader_ready = root.path().join("timeout-leader-ready");
+        let mut command = Command::new(&script);
+        command
+            .arg(&leaked_marker)
+            .arg(&descendant_ready)
+            .arg(&trigger_fifo)
+            .arg(&descendant_pid_file)
+            .arg(&leader_ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+        let child = command.spawn().unwrap();
+        let leader_pid = i32::try_from(child.id()).unwrap();
+        let mut owner = OwnedTarChild::new(child)
+            .unwrap_or_else(|_| panic!("synthetic tar child ownership should initialize"));
+        let mut capture = TarOutputCapture::take_from(&mut owner)
+            .unwrap_or_else(|_| panic!("synthetic tar capture should initialize"));
+        assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
+            leader_ready.is_file() && descendant_ready.is_file() && descendant_pid_file.is_file()
+        }));
+        let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(!process_or_group_is_absent(leader_pid));
+        assert!(!process_or_group_is_absent(descendant_pid));
+
+        let deadline = Instant::now() + Duration::from_millis(60);
+        let started = Instant::now();
+        let error = owner
+            .wait_until(deadline, &mut capture)
+            .expect_err("synthetic tar should time out");
+
+        assert!(matches!(error, TarMemberError::TimedOut));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(owner.child.is_none(), "timed-out leader must be reaped");
+        assert!(wait_for_condition(PROCESS_TEST_TIMEOUT, || {
+            process_or_group_is_absent(-leader_pid) && process_or_group_is_absent(descendant_pid)
+        }));
+        assert!(!trigger_fifo_if_reader_exists(&trigger_fifo).unwrap());
+        assert!(!leaked_marker.exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rekordbox_connection_tar_timeout_is_bounded_and_typed() {
+        let root = tempfile::tempdir().unwrap();
+        let script = write_executable_script(root.path(), "timeout-tar", "exec sleep 60");
         let archive = root.path().join("timeout-archive");
         std::fs::write(&archive, b"synthetic").unwrap();
-        let leaked_marker = PathBuf::from(format!("{}-descendant-leak", archive.display()));
         let destination = tempfile::tempdir().unwrap();
         let started = Instant::now();
 
@@ -1033,11 +1144,6 @@ sleep 60
         .expect_err("synthetic tar should time out");
         assert!(matches!(error, PrivateFixtureError::Extraction { .. }));
         assert!(started.elapsed() < Duration::from_secs(1));
-        thread::sleep(Duration::from_millis(350));
-        assert!(
-            !leaked_marker.exists(),
-            "timed-out tar descendants must not survive cleanup"
-        );
     }
 
     #[test]
