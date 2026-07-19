@@ -426,6 +426,83 @@ fn cover_art_picture_type_schema_descriptions_match_parser_contract() {
     }
 }
 
+#[test]
+fn write_file_tags_input_schema_is_exact() {
+    let schema = schemars::schema_for!(WriteFileTagsParams);
+
+    assert_eq!(
+        schema.as_value(),
+        &serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+                "dry_run": {
+                    "description": "Preview changes without writing (default: false)",
+                    "type": ["boolean", "null"]
+                },
+                "writes": {
+                    "description": "Array of write operations",
+                    "items": {
+                        "properties": {
+                            "comment_mode": {
+                                "anyOf": [
+                                    {
+                                        "description": "How to merge the `comment` field with an existing value.",
+                                        "oneOf": [
+                                            {
+                                                "const": "replace",
+                                                "description": "Overwrite existing comment (default).",
+                                                "type": "string"
+                                            },
+                                            {
+                                                "const": "prepend",
+                                                "description": "Prepend new text before existing comment, separated by ` | `.",
+                                                "type": "string"
+                                            },
+                                            {
+                                                "const": "append",
+                                                "description": "Append new text after existing comment, separated by ` | `.",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    { "type": "null" }
+                                ],
+                                "description": "How to merge the comment field with any existing value: replace (default), prepend, append. Uses ' | ' as separator."
+                            },
+                            "path": {
+                                "description": "Path to the audio file",
+                                "type": "string"
+                            },
+                            "tags": {
+                                "additionalProperties": {
+                                    "type": ["string", "null"]
+                                },
+                                "description": "Tag fields to write. Keys are field names, values are strings to set or null to delete.",
+                                "type": "object"
+                            },
+                            "wav_targets": {
+                                "description": "WAV only: which tag layers to write (default: both). Values: \"id3v2\", \"riff_info\"",
+                                "items": {
+                                    "description": "Which WAV tag layers to target on write.",
+                                    "enum": ["id3v2", "riff_info"],
+                                    "type": "string"
+                                },
+                                "type": ["array", "null"]
+                            }
+                        },
+                        "required": ["path", "tags"],
+                        "type": "object"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": ["writes"],
+            "title": "WriteFileTagsParams",
+            "type": "object"
+        })
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn audio_file_mutation_canonical_aliases_share_and_serialize_lock() {

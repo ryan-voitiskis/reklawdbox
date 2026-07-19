@@ -736,6 +736,33 @@ pub fn write_file_tags(entry: &WriteEntry) -> FileWriteResult {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_FAIL_TAG_LAYER_WRITE: std::cell::Cell<Option<TagType>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+fn with_test_tag_layer_write_failure<T>(tag_type: TagType, operation: impl FnOnce() -> T) -> T {
+    struct ResetFailure;
+
+    impl Drop for ResetFailure {
+        fn drop(&mut self) {
+            TEST_FAIL_TAG_LAYER_WRITE.with(|failure| failure.set(None));
+        }
+    }
+
+    TEST_FAIL_TAG_LAYER_WRITE.with(|failure| {
+        assert!(
+            failure.replace(Some(tag_type)).is_none(),
+            "test tag-layer failure must not already be armed"
+        );
+    });
+    let _reset = ResetFailure;
+    operation()
+}
+
 /// Generate a temp path in the same directory as the original for atomic rename.
 /// Format: `.{stem}.rklw-{pid}-{ms}.{ext}`
 fn atomic_temp_path(original: &Path) -> PathBuf {
@@ -884,6 +911,18 @@ fn write_tag_layer(
     fields_written: &mut Vec<String>,
     fields_deleted: &mut Vec<String>,
 ) -> Result<(), TagError> {
+    #[cfg(test)]
+    if TEST_FAIL_TAG_LAYER_WRITE.with(|failure| {
+        if failure.get() == Some(tag_type) {
+            failure.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(TagError::Io("injected tag-layer write failure".to_string()));
+    }
+
     // Re-read the file for this tag layer (lofty requires read-modify-write
     // per tag type since save_to_path reopens the file).
     // Must read cover art (`true`) so existing pictures survive the round-trip.
@@ -1373,6 +1412,17 @@ mod tests {
         ]
     }
 
+    fn wav_layer_field(path: &Path, target: WavTarget, field: &str) -> Option<String> {
+        let tagged_file = Probe::open(path)
+            .expect("synthetic WAV should open")
+            .options(parse_options(true))
+            .read()
+            .expect("synthetic WAV should read");
+        tagged_file
+            .tag(TagType::from(&target))
+            .and_then(|tag| get_field_from_tag(tag, field))
+    }
+
     #[test]
     fn field_to_key_roundtrip() {
         for &field in ALL_FIELDS {
@@ -1382,6 +1432,147 @@ mod tests {
                 item_key_to_field(&key).unwrap_or_else(|| panic!("No field for ItemKey {key:?}"));
             assert_eq!(back, field, "Roundtrip failed for {field}");
         }
+    }
+
+    #[test]
+    fn tags_preview_matches_write_for_representative_mutations() {
+        struct Case {
+            name: &'static str,
+            field: &'static str,
+            initial: &'static str,
+            edit: Option<&'static str>,
+            comment_mode: CommentMode,
+            expected: Option<&'static str>,
+            previewed: bool,
+        }
+
+        for case in [
+            Case {
+                name: "set",
+                field: "artist",
+                initial: "old",
+                edit: Some("new"),
+                comment_mode: CommentMode::Replace,
+                expected: Some("new"),
+                previewed: true,
+            },
+            Case {
+                name: "delete",
+                field: "artist",
+                initial: "old",
+                edit: None,
+                comment_mode: CommentMode::Replace,
+                expected: None,
+                previewed: true,
+            },
+            Case {
+                name: "no-op",
+                field: "artist",
+                initial: "same",
+                edit: Some("same"),
+                comment_mode: CommentMode::Replace,
+                expected: Some("same"),
+                previewed: false,
+            },
+            Case {
+                name: "prepend",
+                field: "comment",
+                initial: "old",
+                edit: Some("new"),
+                comment_mode: CommentMode::Prepend,
+                expected: Some("new | old"),
+                previewed: true,
+            },
+            Case {
+                name: "append",
+                field: "comment",
+                initial: "old",
+                edit: Some("new"),
+                comment_mode: CommentMode::Append,
+                expected: Some("old | new"),
+                previewed: true,
+            },
+        ] {
+            let dir = tempfile::tempdir().expect("temp directory should create");
+            let path = dir.path().join(format!("{}.wav", case.name));
+            write_tag_test_wav(&path);
+            write_test_wav_layer(
+                &path,
+                WavTarget::Id3v2,
+                HashMap::from([(case.field.to_string(), Some(case.initial.to_string()))]),
+            );
+            let entry = WriteEntry {
+                path: path.clone(),
+                tags: HashMap::from([(case.field.to_string(), case.edit.map(str::to_string))]),
+                wav_targets: vec![WavTarget::Id3v2],
+                comment_mode: case.comment_mode,
+            };
+
+            let preview = write_file_tags_dry_run(&entry);
+            let FileDryRunResult::Preview { changes, .. } = preview else {
+                panic!("{} preview should succeed: {preview:?}", case.name);
+            };
+            assert_eq!(
+                changes.contains_key(case.field),
+                case.previewed,
+                "{} preview no-op policy drifted",
+                case.name
+            );
+            if let Some(change) = changes.get(case.field) {
+                assert_eq!(change.old.as_deref(), Some(case.initial), "{}", case.name);
+                assert_eq!(change.new.as_deref(), case.expected, "{}", case.name);
+            }
+
+            let result = write_file_tags(&entry);
+            assert!(
+                matches!(result, FileWriteResult::Ok { .. }),
+                "{} write should succeed: {result:?}",
+                case.name
+            );
+            assert_eq!(
+                wav_layer_field(&path, WavTarget::Id3v2, case.field).as_deref(),
+                case.expected,
+                "{} write must match preview",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn tags_dual_layer_failure_preserves_original_and_cleans_temp_copy() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let path = dir.path().join("atomic-failure.wav");
+        write_tag_test_wav(&path);
+        let original = std::fs::read(&path).expect("synthetic WAV should read");
+        let entry = WriteEntry {
+            path: path.clone(),
+            tags: HashMap::from([("artist".to_string(), Some("new".to_string()))]),
+            wav_targets: vec![WavTarget::Id3v2, WavTarget::RiffInfo],
+            comment_mode: CommentMode::Replace,
+        };
+
+        let result =
+            with_test_tag_layer_write_failure(TagType::RiffInfo, || write_file_tags(&entry));
+        let FileWriteResult::Error { error, .. } = result else {
+            panic!("injected second-layer failure should be reported: {result:?}");
+        };
+        assert_eq!(error, "injected tag-layer write failure");
+        assert_eq!(
+            std::fs::read(&path).expect("original WAV should remain readable"),
+            original
+        );
+        let leftovers = std::fs::read_dir(dir.path())
+            .expect("temp directory should read")
+            .map(|entry| {
+                entry
+                    .expect("temp directory entry should read")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.contains(".rklw-"))
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "temp copies leaked: {leftovers:?}");
     }
 
     #[test]
