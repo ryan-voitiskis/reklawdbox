@@ -154,10 +154,44 @@ fn create_server_with_paths(
     }
 }
 
-pub(super) fn create_real_server_with_temp_store(
+pub(super) struct PrivateServerFixture {
+    server: Option<ReklawdboxServer>,
+    _store_dir: TempDir,
+    _rekordbox_fixture: PrivateRekordboxFixture,
+    drop_log: Option<Arc<Mutex<Vec<&'static str>>>>,
+}
+
+impl PrivateServerFixture {
+    pub(super) fn server(&self) -> &ReklawdboxServer {
+        self.server
+            .as_ref()
+            .expect("private server should remain owned until fixture drop")
+    }
+
+    fn with_drop_log(mut self, drop_log: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        self.drop_log = Some(drop_log);
+        self
+    }
+}
+
+impl Drop for PrivateServerFixture {
+    fn drop(&mut self) {
+        // Close both SQLite connections before either temporary root is
+        // eligible to disappear. Keeping the server private prevents callers
+        // from destructuring the ownership relationship.
+        drop(self.server.take());
+        if let Some(drop_log) = &self.drop_log
+            && let Ok(mut drop_log) = drop_log.lock()
+        {
+            drop_log.push("server");
+        }
+    }
+}
+
+fn create_private_server_with_temp_store(
+    fixture: PrivateRekordboxFixture,
     http: reqwest::Client,
-) -> Result<(ReklawdboxServer, TempDir, PrivateRekordboxFixture), PrivateFixtureError> {
-    let fixture = PrivateRekordboxFixture::from_env()?;
+) -> Result<PrivateServerFixture, PrivateFixtureError> {
     let db_conn = fixture.open()?;
     let store_dir = tempfile::tempdir().map_err(PrivateFixtureError::TempRoot)?;
     let store_path = store_dir.path().join("internal.sqlite3");
@@ -175,7 +209,64 @@ pub(super) fn create_real_server_with_temp_store(
         Some(store_path_str),
         fixture.database_path().to_path_buf(),
     );
-    Ok((server, store_dir, fixture))
+    Ok(PrivateServerFixture {
+        server: Some(server),
+        _store_dir: store_dir,
+        _rekordbox_fixture: fixture,
+        drop_log: None,
+    })
+}
+
+pub(super) fn create_real_server_with_temp_store(
+    http: reqwest::Client,
+) -> Result<PrivateServerFixture, PrivateFixtureError> {
+    create_private_server_with_temp_store(PrivateRekordboxFixture::from_env()?, http)
+}
+
+#[test]
+fn private_server_fixture_drops_server_before_database_fixture() {
+    let source = tempfile::tempdir().unwrap();
+    let source_database = source.path().join("synthetic-master.db");
+    {
+        let conn = Connection::open(&source_database).unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA key = '{}'; CREATE TABLE fixture_identity (value TEXT NOT NULL);",
+            db::REKORDBOX_SQLCIPHER_KEY
+        ))
+        .unwrap();
+        conn.execute(
+            "INSERT INTO fixture_identity (value) VALUES ('synthetic')",
+            [],
+        )
+        .unwrap();
+    }
+    let drop_log = Arc::new(Mutex::new(Vec::new()));
+    let fixture =
+        PrivateRekordboxFixture::from_archive_with(&source_database, |archive, destination| {
+            std::fs::copy(archive, destination.join("master.db"))
+                .map(|_| ())
+                .map_err(|error| PrivateFixtureError::Extraction {
+                    diagnostic: error.kind().to_string(),
+                })
+        })
+        .unwrap()
+        .with_drop_log(Arc::clone(&drop_log));
+    let fixture_root = fixture.root().to_path_buf();
+    let server_fixture =
+        create_private_server_with_temp_store(fixture, default_http_client_for_tests())
+            .unwrap()
+            .with_drop_log(Arc::clone(&drop_log));
+
+    let conn = server_fixture.server().rekordbox_conn().unwrap();
+    let identity: String = conn
+        .query_row("SELECT value FROM fixture_identity", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(identity, "synthetic");
+    drop(conn);
+    drop(server_fixture);
+
+    assert!(!fixture_root.exists());
+    assert_eq!(*drop_log.lock().unwrap(), ["server", "fixture"]);
 }
 
 pub(super) fn sample_real_tracks(

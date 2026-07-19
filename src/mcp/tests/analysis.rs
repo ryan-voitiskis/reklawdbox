@@ -609,16 +609,16 @@ async fn analyze_track_audio_audio_cache_ignores_existing_file_stale_identity() 
 #[tokio::test]
 #[ignore]
 async fn private_rekordbox_analyze_track_audio_essentia_cache_round_trip() {
-    let (server, _store_dir, _fixture_guard) =
-        create_real_server_with_temp_store(default_http_client_for_tests())
-            .expect("private Rekordbox fixture should be configured and readable");
+    let server_fixture = create_real_server_with_temp_store(default_http_client_for_tests())
+        .expect("private Rekordbox fixture should be configured and readable");
+    let server = server_fixture.server();
 
     if server.essentia_python_path().is_none() {
         eprintln!("Skipping: Essentia Python not available");
         return;
     }
 
-    let track = sample_real_tracks(&server, 40)
+    let track = sample_real_tracks(server, 40)
         .into_iter()
         .filter(|t| (120.0..=145.0).contains(&t.bpm))
         .find(|t| resolve_file_path(&t.file_path).is_ok())
