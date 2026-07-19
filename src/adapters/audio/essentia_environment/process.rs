@@ -40,8 +40,8 @@ type CapturedOutput = Box<dyn CapturedRead>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CommandResult {
     pub(super) success: bool,
-    pub(super) stdout: String,
-    pub(super) stderr: String,
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +61,7 @@ pub(super) struct ProcessError {
 }
 
 impl ProcessError {
-    fn new(kind: ProcessErrorKind) -> Self {
+    pub(super) fn new(kind: ProcessErrorKind) -> Self {
         Self { kind }
     }
 }
@@ -202,8 +202,8 @@ impl CommandRunner for SystemCommandRunner {
         }
         Ok(CommandResult {
             success: process_outcome.status.success(),
-            stdout: String::from_utf8_lossy(&streams.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&streams.stderr).into_owned(),
+            stdout: streams.stdout,
+            stderr: streams.stderr,
         })
     }
 }

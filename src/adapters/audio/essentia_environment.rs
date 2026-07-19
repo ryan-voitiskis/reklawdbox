@@ -4,17 +4,18 @@
 //! complete immutable generation has passed the exact runtime probe.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
 mod platform;
-#[cfg(test)]
 mod process;
+
+use self::process::{
+    CommandRequest, CommandResult, CommandRunner, ProcessError, ProcessErrorKind,
+    SystemCommandRunner,
+};
 
 pub(crate) const ESSENTIA_PYTHON_ENV_VAR: &str = "CRATE_DIG_ESSENTIA_PYTHON";
 pub(crate) const ESSENTIA_VENV_RELPATH: &str = ".local/share/reklawdbox/essentia-venv";
@@ -149,92 +150,32 @@ fn inspect_essentia_python_with_timeout_result(
     path: &str,
     timeout: Duration,
 ) -> Result<EssentiaRuntime, EssentiaSetupError> {
-    let mut command = isolated_command(path);
-    let mut child = command
-        .args(["-c", ESSENTIA_IMPORT_CHECK_SCRIPT])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            EssentiaSetupError::new(
-                EssentiaSetupErrorKind::ImportFailure,
-                format!("failed to start runtime probe for {path}: {error}"),
-            )
-        })?;
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        EssentiaSetupError::new(
-            EssentiaSetupErrorKind::ImportFailure,
-            format!("failed to capture runtime probe stdout for {path}"),
-        )
-    })?;
-    let mut stderr = child.stderr.take().ok_or_else(|| {
-        EssentiaSetupError::new(
-            EssentiaSetupErrorKind::ImportFailure,
-            format!("failed to capture runtime probe stderr for {path}"),
-        )
-    })?;
-    let stdout_handle = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        bytes
-    });
-    let stderr_handle = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr.read_to_end(&mut bytes);
-        bytes
-    });
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() <= timeout => {
-                std::thread::sleep(Duration::from_millis(25))
-            }
-            Ok(None) => {
-                terminate_command_tree(&mut child);
-                let _ = stdout_handle.join();
-                let _ = stderr_handle.join();
-                return Err(EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::ProbeTimeout,
-                    format!(
-                        "runtime probe for {path} timed out after {} seconds",
-                        timeout.as_secs_f64()
-                    ),
-                ));
-            }
-            Err(error) => {
-                terminate_command_tree(&mut child);
-                let _ = stdout_handle.join();
-                let _ = stderr_handle.join();
-                return Err(EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::ImportFailure,
-                    format!("failed while waiting for runtime probe {path}: {error}"),
-                ));
-            }
-        }
-    };
-    let output = stdout_handle.join().map_err(|_| {
-        EssentiaSetupError::new(
-            EssentiaSetupErrorKind::ImportFailure,
-            format!("runtime probe stdout reader panicked for {path}"),
-        )
-    })?;
-    let stderr = stderr_handle.join().map_err(|_| {
-        EssentiaSetupError::new(
-            EssentiaSetupErrorKind::ImportFailure,
-            format!("runtime probe stderr reader panicked for {path}"),
-        )
-    })?;
-    if !status.success() {
+    inspect_essentia_python_with_runner(&SystemCommandRunner::default(), path, timeout)
+}
+
+fn inspect_essentia_python_with_runner(
+    runner: &dyn CommandRunner,
+    path: &str,
+    timeout: Duration,
+) -> Result<EssentiaRuntime, EssentiaSetupError> {
+    let args = ["-c".to_string(), ESSENTIA_IMPORT_CHECK_SCRIPT.to_string()];
+    let output = runner
+        .run(CommandRequest {
+            program: path,
+            args: &args,
+            timeout,
+        })
+        .map_err(|error| probe_process_error(path, timeout, error))?;
+    if !output.success {
         return Err(EssentiaSetupError::new(
             EssentiaSetupErrorKind::ImportFailure,
             format!(
                 "runtime probe imports failed for {path}{}",
-                diagnostic_text(&String::from_utf8_lossy(&stderr), "")
+                diagnostic_text(&String::from_utf8_lossy(&output.stderr), "")
             ),
         ));
     }
-    let probe: ProbeOutput = serde_json::from_slice(&output).map_err(|error| {
+    let probe: ProbeOutput = serde_json::from_slice(&output.stdout).map_err(|error| {
         EssentiaSetupError::new(
             EssentiaSetupErrorKind::ImportFailure,
             format!("runtime probe for {path} returned invalid JSON: {error}"),
@@ -272,6 +213,100 @@ fn inspect_essentia_python_with_timeout_result(
         six_version: probe.six,
         analyzer_contract: ESSENTIA_CONTRACT_ID.to_string(),
     })
+}
+
+fn probe_process_error(path: &str, timeout: Duration, error: ProcessError) -> EssentiaSetupError {
+    let (kind, message) = match error.kind {
+        ProcessErrorKind::Start(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed to start runtime probe for {path}: {source}"),
+        ),
+        ProcessErrorKind::MissingCapture(stream) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!(
+                "failed to capture runtime probe {} for {path}",
+                stream.name()
+            ),
+        ),
+        ProcessErrorKind::Wait(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed while waiting for runtime probe {path}: {source}"),
+        ),
+        ProcessErrorKind::Timeout | ProcessErrorKind::ReaderShutdownTimeout => (
+            EssentiaSetupErrorKind::ProbeTimeout,
+            format!(
+                "runtime probe for {path} timed out after {} seconds",
+                timeout.as_secs_f64()
+            ),
+        ),
+        ProcessErrorKind::ReaderRead { stream, source } => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!(
+                "runtime probe {} reader failed for {path}: {source}",
+                stream.name()
+            ),
+        ),
+        ProcessErrorKind::ReaderPanicked(stream) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("runtime probe {} reader panicked for {path}", stream.name()),
+        ),
+        ProcessErrorKind::ProcessGroup(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed while waiting for runtime probe {path}: {source:?}"),
+        ),
+        ProcessErrorKind::SurvivingDescendants => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!(
+                "failed while waiting for runtime probe {path}: process left surviving descendants"
+            ),
+        ),
+    };
+    EssentiaSetupError::new(kind, message)
+}
+
+fn generic_process_error(
+    program: &str,
+    timeout: Duration,
+    error: ProcessError,
+) -> EssentiaSetupError {
+    let (kind, message) = match error.kind {
+        ProcessErrorKind::Start(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed to start {program}: {source}"),
+        ),
+        ProcessErrorKind::MissingCapture(stream) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed to capture {} for {program}", stream.name()),
+        ),
+        ProcessErrorKind::Wait(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed while waiting for {program}: {source}"),
+        ),
+        ProcessErrorKind::Timeout | ProcessErrorKind::ReaderShutdownTimeout => (
+            EssentiaSetupErrorKind::ProbeTimeout,
+            format!(
+                "{program} timed out after {} seconds",
+                timeout.as_secs_f64()
+            ),
+        ),
+        ProcessErrorKind::ReaderRead { stream, source } => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("{} reader failed for {program}: {source}", stream.name()),
+        ),
+        ProcessErrorKind::ReaderPanicked(stream) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("{} reader panicked for {program}", stream.name()),
+        ),
+        ProcessErrorKind::ProcessGroup(source) => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed while waiting for {program}: {source:?}"),
+        ),
+        ProcessErrorKind::SurvivingDescendants => (
+            EssentiaSetupErrorKind::ImportFailure,
+            format!("failed while waiting for {program}: process left surviving descendants"),
+        ),
+    };
+    EssentiaSetupError::new(kind, message)
 }
 
 #[cfg(test)]
@@ -321,13 +356,6 @@ pub(crate) fn probe_essentia_python_path() -> Option<String> {
     probe_essentia_runtime_path().map(|runtime| runtime.python_path)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CommandResult {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
 trait EnvironmentOps {
     fn run(
         &self,
@@ -344,30 +372,6 @@ trait EnvironmentOps {
 
 struct SystemEnvironmentOps;
 
-fn isolated_command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
-    command
-}
-
-fn terminate_command_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let process_group = -(child.id() as i32);
-        // SAFETY: the child was spawned into its own process group above, so
-        // this signal cannot target the parent process group.
-        unsafe {
-            libc::kill(process_group, libc::SIGKILL);
-        }
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 impl EnvironmentOps for SystemEnvironmentOps {
     fn run(
         &self,
@@ -375,87 +379,13 @@ impl EnvironmentOps for SystemEnvironmentOps {
         args: &[String],
         timeout: Duration,
     ) -> Result<CommandResult, EssentiaSetupError> {
-        let mut command = isolated_command(program);
-        let mut child = command
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                EssentiaSetupError::new(
-                    EssentiaSetupErrorKind::ImportFailure,
-                    format!("failed to start {program}: {error}"),
-                )
-            })?;
-        let mut stdout = child.stdout.take().ok_or_else(|| {
-            EssentiaSetupError::new(
-                EssentiaSetupErrorKind::ImportFailure,
-                format!("failed to capture stdout for {program}"),
-            )
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| {
-            EssentiaSetupError::new(
-                EssentiaSetupErrorKind::ImportFailure,
-                format!("failed to capture stderr for {program}"),
-            )
-        })?;
-        let stdout_handle = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stdout.read_to_end(&mut bytes);
-            bytes
-        });
-        let stderr_handle = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stderr.read_to_end(&mut bytes);
-            bytes
-        });
-        let started = Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if started.elapsed() <= timeout => {
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Ok(None) => {
-                    terminate_command_tree(&mut child);
-                    let _ = stdout_handle.join();
-                    let _ = stderr_handle.join();
-                    return Err(EssentiaSetupError::new(
-                        EssentiaSetupErrorKind::ProbeTimeout,
-                        format!(
-                            "{program} timed out after {} seconds",
-                            timeout.as_secs_f64()
-                        ),
-                    ));
-                }
-                Err(error) => {
-                    terminate_command_tree(&mut child);
-                    let _ = stdout_handle.join();
-                    let _ = stderr_handle.join();
-                    return Err(EssentiaSetupError::new(
-                        EssentiaSetupErrorKind::ImportFailure,
-                        format!("failed while waiting for {program}: {error}"),
-                    ));
-                }
-            }
-        };
-        let stdout = stdout_handle.join().map_err(|_| {
-            EssentiaSetupError::new(
-                EssentiaSetupErrorKind::ImportFailure,
-                format!("stdout reader panicked for {program}"),
-            )
-        })?;
-        let stderr = stderr_handle.join().map_err(|_| {
-            EssentiaSetupError::new(
-                EssentiaSetupErrorKind::ImportFailure,
-                format!("stderr reader panicked for {program}"),
-            )
-        })?;
-        Ok(CommandResult {
-            success: status.success(),
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-        })
+        SystemCommandRunner::default()
+            .run(CommandRequest {
+                program,
+                args,
+                timeout,
+            })
+            .map_err(|error| generic_process_error(program, timeout, error))
     }
 
     fn inspect_runtime(
@@ -463,7 +393,11 @@ impl EnvironmentOps for SystemEnvironmentOps {
         python_path: &Path,
         timeout: Duration,
     ) -> Result<EssentiaRuntime, EssentiaSetupError> {
-        inspect_essentia_python_with_timeout_result(&python_path.to_string_lossy(), timeout)
+        inspect_essentia_python_with_runner(
+            &SystemCommandRunner::default(),
+            &python_path.to_string_lossy(),
+            timeout,
+        )
     }
 }
 
@@ -722,13 +656,21 @@ impl InstallCommand {
 }
 
 fn output_reports_missing_wheel(output: &CommandResult) -> bool {
-    let diagnostic = format!("{}\n{}", output.stderr, output.stdout).to_ascii_lowercase();
+    let diagnostic = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    )
+    .to_ascii_lowercase();
     diagnostic.contains("no matching distribution found")
         || diagnostic.contains("could not find a version that satisfies")
 }
 
 fn format_diagnostic_output(output: &CommandResult) -> String {
-    diagnostic_text(&output.stderr, &output.stdout)
+    diagnostic_text(
+        &String::from_utf8_lossy(&output.stderr),
+        &String::from_utf8_lossy(&output.stdout),
+    )
 }
 
 fn diagnostic_text(stderr: &str, stdout: &str) -> String {
@@ -1027,6 +969,7 @@ impl Drop for AdvisoryLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::sync::Mutex;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1112,15 +1055,15 @@ mod tests {
             };
             Ok(CommandResult {
                 success,
-                stdout: String::new(),
+                stdout: Vec::new(),
                 stderr: if success {
-                    String::new()
+                    Vec::new()
                 } else if args.get(1).is_some_and(|arg| arg == "pip")
                     && self.config.pip_wheel_unavailable
                 {
-                    "ERROR: No matching distribution found for essentia==2.1b6.dev1438".into()
+                    b"ERROR: No matching distribution found for essentia==2.1b6.dev1438".to_vec()
                 } else {
-                    "scripted failure".into()
+                    b"scripted failure".to_vec()
                 },
             })
         }
@@ -1262,6 +1205,28 @@ mod tests {
             inspect_essentia_python_with_timeout(&path.to_string_lossy(), Duration::from_secs(1))
                 .unwrap();
         assert_eq!(runtime.analyzer_contract, ESSENTIA_CONTRACT_ID);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn essentia_environment_probe_rejects_invalid_utf8_before_manifest_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_python_script(
+            dir.path(),
+            "printf '{\"python\":\"\\377\",\"implementation\":\"cpython\",\"essentia\":\"2.1b6.dev1438\",\"essentia_module\":\"2.1-beta6-dev\",\"numpy\":\"2.5.1\",\"pyyaml\":\"6.0.3\",\"six\":\"1.17.0\"}'",
+        );
+
+        let error = inspect_essentia_python_with_timeout_result(
+            &path.to_string_lossy(),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, EssentiaSetupErrorKind::ImportFailure);
+        assert!(error.message.starts_with(&format!(
+            "runtime probe for {} returned invalid JSON:",
+            path.to_string_lossy()
+        )));
     }
 
     #[test]
@@ -1411,8 +1376,8 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
-        assert_eq!(result.stdout, "stdout-value");
-        assert_eq!(result.stderr, "stderr-value");
+        assert_eq!(result.stdout, b"stdout-value");
+        assert_eq!(result.stderr, b"stderr-value");
     }
 
     #[test]
@@ -1429,8 +1394,8 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert_eq!(result.stdout, "stdout-value");
-        assert_eq!(result.stderr, "stderr-value");
+        assert_eq!(result.stdout, b"stdout-value");
+        assert_eq!(result.stderr, b"stderr-value");
         assert_eq!(
             format_diagnostic_output(&result),
             ": stderr-value\nstdout-value"
@@ -1494,6 +1459,81 @@ mod tests {
             assert_eq!(
                 EssentiaSetupError::new(kind, "stable message").to_string(),
                 format!("{kind:?}: stable message")
+            );
+        }
+    }
+
+    #[test]
+    fn essentia_environment_process_error_rendering_is_consumer_specific() {
+        use super::process::{OutputStream, ProcessError, ProcessErrorKind};
+
+        let probe_path = "/managed/python";
+        let timeout = Duration::from_millis(20);
+        let probe_cases = [
+            (
+                ProcessError::new(ProcessErrorKind::Start(std::io::Error::other("sentinel"))),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to start runtime probe for /managed/python: sentinel",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::MissingCapture(OutputStream::Stdout)),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to capture runtime probe stdout for /managed/python",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::Wait(std::io::Error::other("sentinel"))),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed while waiting for runtime probe /managed/python: sentinel",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::ReaderPanicked(OutputStream::Stderr)),
+                EssentiaSetupErrorKind::ImportFailure,
+                "runtime probe stderr reader panicked for /managed/python",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::Timeout),
+                EssentiaSetupErrorKind::ProbeTimeout,
+                "runtime probe for /managed/python timed out after 0.02 seconds",
+            ),
+        ];
+        for (source, kind, message) in probe_cases {
+            assert_eq!(
+                probe_process_error(probe_path, timeout, source),
+                EssentiaSetupError::new(kind, message)
+            );
+        }
+
+        let generic_cases = [
+            (
+                ProcessError::new(ProcessErrorKind::Start(std::io::Error::other("sentinel"))),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to start python3.14: sentinel",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::MissingCapture(OutputStream::Stderr)),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed to capture stderr for python3.14",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::Wait(std::io::Error::other("sentinel"))),
+                EssentiaSetupErrorKind::ImportFailure,
+                "failed while waiting for python3.14: sentinel",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::ReaderPanicked(OutputStream::Stdout)),
+                EssentiaSetupErrorKind::ImportFailure,
+                "stdout reader panicked for python3.14",
+            ),
+            (
+                ProcessError::new(ProcessErrorKind::Timeout),
+                EssentiaSetupErrorKind::ProbeTimeout,
+                "python3.14 timed out after 0.02 seconds",
+            ),
+        ];
+        for (source, kind, message) in generic_cases {
+            assert_eq!(
+                generic_process_error("python3.14", timeout, source),
+                EssentiaSetupError::new(kind, message)
             );
         }
     }

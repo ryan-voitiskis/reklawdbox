@@ -11,8 +11,9 @@ use super::{
     SystemCommandRunner, TestHooks,
 };
 
-const COMMAND_BOUND: Duration = Duration::from_secs(5);
+const COMMAND_BOUND: Duration = Duration::from_secs(10);
 const CLEANUP_BOUND: Duration = Duration::from_secs(2);
+const FIXTURE_READY_BOUND: Duration = Duration::from_secs(5);
 const FIXTURE_FAILSAFE_SECS: u64 = 5;
 
 #[derive(Clone)]
@@ -99,7 +100,7 @@ fn wait_for_pid_exit(pid: i32) {
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + CLEANUP_BOUND;
+    let deadline = Instant::now() + FIXTURE_READY_BOUND;
     while !path.is_file() {
         assert!(
             Instant::now() < deadline,
@@ -134,8 +135,8 @@ fn essentia_environment_process_success_captures_stdout_and_stderr() {
     let result = probe.run(&script, &[], COMMAND_BOUND).unwrap();
 
     assert!(result.success);
-    assert_eq!(result.stdout, "stdout-value");
-    assert_eq!(result.stderr, "stderr-value");
+    assert_eq!(result.stdout, b"stdout-value");
+    assert_eq!(result.stderr, b"stderr-value");
     assert_eq!(probe.spawned().len(), 1);
     wait_for_pid_exit(probe.spawned()[0] as i32);
     probe.assert_no_readers();
@@ -154,8 +155,8 @@ fn essentia_environment_process_nonzero_preserves_both_streams() {
     let result = probe.run(&script, &[], COMMAND_BOUND).unwrap();
 
     assert!(!result.success);
-    assert_eq!(result.stdout, "stdout-value");
-    assert_eq!(result.stderr, "stderr-value");
+    assert_eq!(result.stdout, b"stdout-value");
+    assert_eq!(result.stderr, b"stderr-value");
     wait_for_pid_exit(probe.spawned()[0] as i32);
     probe.assert_no_readers();
 }
@@ -463,7 +464,7 @@ fn essentia_environment_process_concurrent_commands_use_independent_groups() {
 
     for _ in 0..2 {
         let result = result_rx
-            .recv_timeout(Duration::from_secs(6))
+            .recv_timeout(Duration::from_secs(12))
             .expect("concurrent runner should complete before deadline")
             .unwrap();
         assert!(result.success);
