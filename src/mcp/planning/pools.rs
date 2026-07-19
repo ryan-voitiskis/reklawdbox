@@ -2,7 +2,9 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 
 use crate::adapters::rekordbox as db;
-use crate::domain::planning::{PoolCohesionResult, TrackProfile, round_to_3_decimals};
+use crate::domain::planning::{
+    PoolCohesionResult, PoolDiscoveryBounds, TrackProfile, round_to_3_decimals,
+};
 use crate::mcp::planning::PoolAxisScoresPresentation;
 use crate::mcp::{
     DescribePoolParams, DiscoverPoolsParams, ExpandPoolParams, ReklawdboxServer, ResolveTracksOpts,
@@ -257,14 +259,20 @@ pub(in crate::mcp) fn handle_expand_pool(
         .into_iter()
         .filter(|track| !seed.track_ids.contains(&track.id))
         .collect();
+    let seed_reference_bpm = seed.reference_bpm;
     let expanded = crate::application::planning::expand_pool(
         seed,
         candidate_tracks,
         &store,
-        additions,
-        cross_genre,
-        master_tempo,
-        &weights,
+        crate::application::planning::ExpandPoolOptions {
+            additions,
+            cross_genre,
+            scoring: crate::application::planning::PoolScoringRequest {
+                master_tempo,
+                reference_bpm: Some(seed_reference_bpm),
+                weights: &weights,
+            },
+        },
     );
 
     let additions_json: Vec<serde_json::Value> = expanded
@@ -466,6 +474,8 @@ pub(in crate::mcp) fn handle_discover_pools(
         .unwrap_or(12)
         .clamp(min_size as u32, 20) as usize;
     let max_pools = params.max_pools.unwrap_or(10).min(50) as usize;
+    let bounds = PoolDiscoveryBounds::new(threshold, min_size, max_size, max_pools)
+        .expect("clamped MCP pool discovery bounds are valid");
 
     let tracks = {
         let conn = server.rekordbox_conn()?;
@@ -495,13 +505,14 @@ pub(in crate::mcp) fn handle_discover_pools(
     let discovered = crate::application::planning::discover_track_pools(
         tracks,
         &store,
-        master_tempo,
-        params.reference_bpm,
-        &weights,
-        threshold,
-        min_size,
-        max_size,
-        max_pools,
+        crate::application::planning::DiscoverPoolsOptions {
+            scoring: crate::application::planning::PoolScoringRequest {
+                master_tempo,
+                reference_bpm: params.reference_bpm,
+                weights: &weights,
+            },
+            bounds,
+        },
     )
     .map_err(mcp_internal_error)?;
     let profiles = discovered.profiles;

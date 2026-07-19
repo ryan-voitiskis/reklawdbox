@@ -164,6 +164,58 @@ pub(crate) struct PoolWeights {
     pub(crate) rhythm: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PoolScoringPolicy<'a> {
+    pub(crate) master_tempo: bool,
+    pub(crate) reference_bpm: f64,
+    pub(crate) weights: &'a PoolWeights,
+    pub(crate) timbral_normalization: Option<&'a TimbralNormalization>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PoolDiscoveryBounds {
+    threshold: f64,
+    minimum_size: usize,
+    maximum_size: usize,
+    maximum_results: usize,
+}
+
+impl PoolDiscoveryBounds {
+    pub(crate) fn new(
+        threshold: f64,
+        minimum_size: usize,
+        maximum_size: usize,
+        maximum_results: usize,
+    ) -> Option<Self> {
+        (threshold.is_finite()
+            && (0.0..=1.0).contains(&threshold)
+            && minimum_size >= 2
+            && maximum_size >= minimum_size)
+            .then_some(Self {
+                threshold,
+                minimum_size,
+                maximum_size,
+                maximum_results,
+            })
+    }
+
+    pub(crate) fn threshold(self) -> f64 {
+        self.threshold
+    }
+
+    pub(crate) fn minimum_size(self) -> usize {
+        self.minimum_size
+    }
+
+    pub(crate) fn maximum_size(self) -> usize {
+        self.maximum_size
+    }
+
+    pub(crate) fn maximum_results(self) -> usize {
+        self.maximum_results
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PoolAxisScores {
     pub(crate) key: AxisScore,

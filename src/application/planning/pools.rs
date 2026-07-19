@@ -6,10 +6,11 @@ use rusqlite::Connection;
 
 use crate::domain::classification::taxonomy::GenreFamily;
 use crate::domain::planning::{
-    CandidatePoolScore, DiscoveredPool, PoolAxisScores, PoolCohesionResult, PoolWeights,
-    TimbralNormalization, TrackProfile, bpm_pitch_shift, compute_pool_cohesion, discover_pools,
-    find_bridge_tracks, format_camelot, pool_weights, renormalize_pool, score_candidate_vs_pool,
-    score_key_with_pitch_shifts, score_pool_compatibility_pair, transpose_camelot_key,
+    CandidatePoolScore, DiscoveredPool, PoolAxisScores, PoolCohesionResult, PoolDiscoveryBounds,
+    PoolScoringPolicy, PoolWeights, TimbralNormalization, TrackProfile, bpm_pitch_shift,
+    compute_pool_cohesion, discover_pools, find_bridge_tracks, format_camelot, pool_weights,
+    renormalize_pool, score_candidate_vs_pool, score_key_with_pitch_shifts,
+    score_pool_compatibility_pair, transpose_camelot_key,
 };
 
 use super::{ensure_timbral_norm_stats, normalization_from_persisted};
@@ -89,10 +90,12 @@ pub(crate) fn evaluate_pool_pair(
     let scores = score_pool_compatibility_pair(
         &track_a,
         &track_b,
-        master_tempo,
-        reference_bpm,
-        weights,
-        normalization.as_ref(),
+        PoolScoringPolicy {
+            master_tempo,
+            reference_bpm,
+            weights,
+            timbral_normalization: normalization.as_ref(),
+        },
     );
     Ok(PairwisePoolEvaluation {
         track_a,
@@ -130,10 +133,12 @@ pub(crate) fn evaluate_candidate_pool(
     let scores = score_candidate_vs_pool(
         &candidate,
         &pool_refs,
-        master_tempo,
-        reference_bpm,
-        weights,
-        normalization.as_ref(),
+        PoolScoringPolicy {
+            master_tempo,
+            reference_bpm,
+            weights,
+            timbral_normalization: normalization.as_ref(),
+        },
     );
     Ok(CandidatePoolEvaluation {
         candidate,
@@ -166,10 +171,12 @@ pub(crate) fn evaluate_pool_cohesion(
     let profile_refs: Vec<_> = built.profiles.iter().collect();
     let cohesion = compute_pool_cohesion(
         &profile_refs,
-        master_tempo,
-        reference_bpm,
-        weights,
-        normalization.as_ref(),
+        PoolScoringPolicy {
+            master_tempo,
+            reference_bpm,
+            weights,
+            timbral_normalization: normalization.as_ref(),
+        },
     );
     Ok(CohesionEvaluation {
         reference_bpm,
@@ -217,10 +224,12 @@ pub(crate) fn describe_pool(
     let profile_refs: Vec<_> = profiles.iter().collect();
     let cohesion = compute_pool_cohesion(
         &profile_refs,
-        master_tempo,
-        reference_bpm,
-        weights,
-        normalization.as_ref(),
+        PoolScoringPolicy {
+            master_tempo,
+            reference_bpm,
+            weights,
+            timbral_normalization: normalization.as_ref(),
+        },
     );
 
     let energies: Vec<_> = profiles.iter().map(|profile| profile.energy).collect();
@@ -370,17 +379,32 @@ pub(crate) struct ExpandedPool {
     pub(crate) skipped_seed_tracks: Vec<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct PoolScoringRequest<'a> {
+    pub(crate) master_tempo: bool,
+    pub(crate) reference_bpm: Option<f64>,
+    pub(crate) weights: &'a PoolWeights,
+}
+
+pub(crate) struct ExpandPoolOptions<'a> {
+    pub(crate) additions: usize,
+    pub(crate) cross_genre: bool,
+    pub(crate) scoring: PoolScoringRequest<'a>,
+}
+
 pub(crate) fn expand_pool(
     seed: ExpansionSeed,
     candidate_tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
-    additions: usize,
-    cross_genre: bool,
-    master_tempo: bool,
-    weights: &PoolWeights,
+    options: ExpandPoolOptions<'_>,
 ) -> ExpandedPool {
     let normalization = available_normalization(store);
+    let reference_bpm = options.scoring.reference_bpm.unwrap_or(seed.reference_bpm);
+    let scoring = PoolScoringPolicy {
+        master_tempo: options.scoring.master_tempo,
+        reference_bpm,
+        weights: options.scoring.weights,
+        timbral_normalization: normalization.as_ref(),
+    };
     let seed_families: HashSet<GenreFamily> = seed
         .profiles
         .iter()
@@ -389,14 +413,14 @@ pub(crate) fn expand_pool(
     let mut candidates: Vec<_> = build_pool_profiles(candidate_tracks, store)
         .profiles
         .into_iter()
-        .filter(|profile| cross_genre || seed_families.contains(&profile.genre_family))
+        .filter(|profile| options.cross_genre || seed_families.contains(&profile.genre_family))
         .collect();
     let candidates_scanned = candidates.len();
     let mut pool = seed.profiles;
     let mut added = Vec::new();
     let quality_threshold = 0.4;
 
-    for _ in 0..additions {
+    for _ in 0..options.additions {
         if candidates.is_empty() {
             break;
         }
@@ -406,14 +430,7 @@ pub(crate) fn expand_pool(
         let mut best_mean = 0.0;
         let mut best_result = None;
         for (index, candidate) in candidates.iter().enumerate() {
-            let result = score_candidate_vs_pool(
-                candidate,
-                &pool_refs,
-                master_tempo,
-                seed.reference_bpm,
-                weights,
-                normalization.as_ref(),
-            );
+            let result = score_candidate_vs_pool(candidate, &pool_refs, scoring);
             if result.min_score > best_min
                 || (result.min_score == best_min && result.mean_score > best_mean)
             {
@@ -438,21 +455,15 @@ pub(crate) fn expand_pool(
         });
         pool.push(chosen);
     }
-    let stopped_early = added.len() < additions;
+    let stopped_early = added.len() < options.additions;
     let pool_refs: Vec<_> = pool.iter().collect();
-    let final_cohesion = compute_pool_cohesion(
-        &pool_refs,
-        master_tempo,
-        seed.reference_bpm,
-        weights,
-        normalization.as_ref(),
-    );
+    let final_cohesion = compute_pool_cohesion(&pool_refs, scoring);
     ExpandedPool {
         additions: added,
         final_cohesion,
         stopped_early,
         candidates_scanned,
-        reference_bpm: seed.reference_bpm,
+        reference_bpm,
         skipped_seed_tracks: seed.skipped,
     }
 }
@@ -523,39 +534,40 @@ pub(crate) struct DiscoveredPools {
     pub(crate) skipped: Vec<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct DiscoverPoolsOptions<'a> {
+    pub(crate) scoring: PoolScoringRequest<'a>,
+    pub(crate) bounds: PoolDiscoveryBounds,
+}
+
 pub(crate) fn discover_track_pools(
     tracks: Vec<crate::domain::library::Track>,
     store: &Connection,
-    master_tempo: bool,
-    reference_bpm: Option<f64>,
-    weights: &PoolWeights,
-    threshold: f64,
-    min_size: usize,
-    max_size: usize,
-    max_pools: usize,
+    options: DiscoverPoolsOptions<'_>,
 ) -> Result<DiscoveredPools, String> {
     let built = build_pool_profiles(tracks, store);
-    if built.profiles.len() < min_size {
+    if built.profiles.len() < options.bounds.minimum_size() {
         return Err(format!(
-            "Only {} profiles built (need {min_size})",
-            built.profiles.len()
+            "Only {} profiles built (need {})",
+            built.profiles.len(),
+            options.bounds.minimum_size(),
         ));
     }
     let normalization = available_normalization(store);
     let bpms: Vec<_> = built.profiles.iter().map(|profile| profile.bpm).collect();
-    let reference_bpm = reference_bpm.unwrap_or_else(|| median_bpm(&bpms));
+    let reference_bpm = options
+        .scoring
+        .reference_bpm
+        .unwrap_or_else(|| median_bpm(&bpms));
     let refs: Vec<_> = built.profiles.iter().collect();
     let pools = discover_pools(
         &refs,
-        master_tempo,
-        reference_bpm,
-        weights,
-        normalization.as_ref(),
-        threshold,
-        min_size,
-        max_size,
-        max_pools,
+        PoolScoringPolicy {
+            master_tempo: options.scoring.master_tempo,
+            reference_bpm,
+            weights: options.scoring.weights,
+            timbral_normalization: normalization.as_ref(),
+        },
+        options.bounds,
     );
     let bridges = find_bridge_tracks(&pools);
     Ok(DiscoveredPools {

@@ -110,6 +110,30 @@ fn sequence_policy<'a>(
     }
 }
 
+fn pool_scoring_policy<'a>(
+    master_tempo: bool,
+    reference_bpm: f64,
+    weights: &'a PoolWeights,
+    timbral_normalization: Option<&'a TimbralNormalization>,
+) -> PoolScoringPolicy<'a> {
+    PoolScoringPolicy {
+        master_tempo,
+        reference_bpm,
+        weights,
+        timbral_normalization,
+    }
+}
+
+fn pool_discovery_bounds(
+    threshold: f64,
+    minimum_size: usize,
+    maximum_size: usize,
+    maximum_results: usize,
+) -> PoolDiscoveryBounds {
+    PoolDiscoveryBounds::new(threshold, minimum_size, maximum_size, maximum_results)
+        .expect("test discovery bounds should be valid")
+}
+
 struct EvalMetrics {
     mean_composite: f64,
     min_composite: f64,
@@ -1080,18 +1104,12 @@ fn planning_pool_scoring_is_symmetric() {
     let ab = score_pool_compatibility_pair(
         &a,
         &b,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
     );
     let ba = score_pool_compatibility_pair(
         &b,
         &a,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1140,10 +1158,7 @@ fn eval_pool_planted_cluster_separation() {
     let tight_refs: Vec<&TrackProfile> = tight.iter().collect();
     let tight_cohesion = compute_pool_cohesion(
         &tight_refs,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1158,10 +1173,7 @@ fn eval_pool_planted_cluster_separation() {
             let score = score_pool_compatibility_pair(
                 t,
                 d,
-                true,
-                127.0,
-                &pool_weights(PoolPreset::Balanced),
-                None,
+                pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
             );
             cross_scores.push(score.composite);
         }
@@ -1225,10 +1237,7 @@ fn eval_expand_pool_greedy_selects_compatible_tracks() {
             let result = score_candidate_vs_pool(
                 candidate,
                 &pool_refs,
-                true,
-                ref_bpm,
-                &pool_weights(PoolPreset::Balanced),
-                None,
+                pool_scoring_policy(true, ref_bpm, &pool_weights(PoolPreset::Balanced), None),
             );
             if result.min_score > best_min {
                 best_min = result.min_score;
@@ -1491,18 +1500,17 @@ fn eval_pool_composite_with_vs_without_timbral() {
     let with_timbral = score_pool_compatibility_pair(
         &a_timbral,
         &b_timbral,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        Some(&stats),
+        pool_scoring_policy(
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            Some(&stats),
+        ),
     );
     let without_timbral = score_pool_compatibility_pair(
         &a_timbral,
         &b_timbral,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1554,18 +1562,22 @@ fn eval_pool_preset_timbral_vs_balanced() {
     let balanced = score_pool_compatibility_pair(
         &a,
         &b,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        Some(&stats),
+        pool_scoring_policy(
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Balanced),
+            Some(&stats),
+        ),
     );
     let timbral = score_pool_compatibility_pair(
         &a,
         &b,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Timbral),
-        Some(&stats),
+        pool_scoring_policy(
+            true,
+            126.0,
+            &pool_weights(PoolPreset::Timbral),
+            Some(&stats),
+        ),
     );
 
     assert!(
@@ -1607,10 +1619,7 @@ fn eval_expand_pool_stops_below_quality_threshold() {
             let result = score_candidate_vs_pool(
                 c,
                 &pool_refs,
-                true,
-                ref_bpm,
-                &pool_weights(PoolPreset::Balanced),
-                None,
+                pool_scoring_policy(true, ref_bpm, &pool_weights(PoolPreset::Balanced), None),
             );
             if result.min_score > best_min {
                 best_min = result.min_score;
@@ -1636,10 +1645,7 @@ fn eval_pool_cohesion_single_track() {
     let refs: Vec<&TrackProfile> = profiles.iter().collect();
     let result = compute_pool_cohesion(
         &refs,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1660,10 +1666,7 @@ fn eval_candidate_vs_empty_pool() {
     let result = score_candidate_vs_pool(
         &candidate,
         &[],
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
     );
     assert!(
         (result.mean_score - 0.0).abs() < 1e-10,
@@ -1680,10 +1683,7 @@ fn eval_pool_scoring_master_tempo_off_changes_key() {
     let mt_on = score_pool_compatibility_pair(
         &a,
         &b,
-        true,
-        129.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(true, 129.0, &pool_weights(PoolPreset::Balanced), None),
     );
     assert!(
         mt_on.key.value > 0.9,
@@ -1694,10 +1694,7 @@ fn eval_pool_scoring_master_tempo_off_changes_key() {
     let mt_off = score_pool_compatibility_pair(
         &a,
         &b,
-        false,
-        129.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(false, 129.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1716,18 +1713,12 @@ fn eval_pool_scoring_master_tempo_off_symmetric() {
     let ab = score_pool_compatibility_pair(
         &a,
         &b,
-        false,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(false, 126.0, &pool_weights(PoolPreset::Balanced), None),
     );
     let ba = score_pool_compatibility_pair(
         &b,
         &a,
-        false,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
+        pool_scoring_policy(false, 126.0, &pool_weights(PoolPreset::Balanced), None),
     );
 
     assert!(
@@ -1783,14 +1774,8 @@ fn planning_pool_discovery_finds_planted_clusters() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        130.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.65,
-        3,
-        12,
-        10,
+        pool_scoring_policy(true, 130.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.65, 3, 12, 10),
     );
 
     assert!(
@@ -1824,6 +1809,19 @@ fn planning_pool_discovery_finds_planted_clusters() {
 }
 
 #[test]
+fn planning_pool_discovery_bounds_validate_domain_relationships() {
+    assert!(PoolDiscoveryBounds::new(f64::NAN, 3, 12, 10).is_none());
+    assert!(PoolDiscoveryBounds::new(-0.1, 3, 12, 10).is_none());
+    assert!(PoolDiscoveryBounds::new(1.1, 3, 12, 10).is_none());
+    assert!(PoolDiscoveryBounds::new(0.7, 1, 12, 10).is_none());
+    assert!(PoolDiscoveryBounds::new(0.7, 4, 3, 10).is_none());
+
+    let zero_results = PoolDiscoveryBounds::new(0.7, 3, 12, 0)
+        .expect("zero max results preserves the existing empty-result behavior");
+    assert_eq!(zero_results.maximum_results(), 0);
+}
+
+#[test]
 fn planning_pool_discovery_respects_min_max_size() {
     let profiles: Vec<TrackProfile> = (0..8)
         .map(|i| simple_profile(&format!("sz{i}"), "8A", 126.0, 0.5, "House"))
@@ -1832,14 +1830,8 @@ fn planning_pool_discovery_respects_min_max_size() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.5,
-        4,
-        6,
-        10,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.5, 4, 6, 10),
     );
 
     assert!(!pools.is_empty(), "should find at least one pool");
@@ -1859,14 +1851,8 @@ fn eval_discover_pools_empty_below_min_size() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.7,
-        3,
-        12,
-        10,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.7, 3, 12, 10),
     );
     assert!(
         pools.is_empty(),
@@ -1887,25 +1873,13 @@ fn eval_discover_pools_high_threshold_yields_fewer_pools() {
 
     let pools_low = discover_pools(
         &refs,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.5,
-        2,
-        12,
-        10,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.5, 2, 12, 10),
     );
     let pools_high = discover_pools(
         &refs,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.85,
-        2,
-        12,
-        10,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.85, 2, 12, 10),
     );
 
     if let (Some(best_low), Some(best_high)) = (pools_low.first(), pools_high.first()) {
@@ -1954,14 +1928,8 @@ fn planning_pool_discovery_respects_max_pool_count() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.5,
-        2,
-        12,
-        2,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.5, 2, 12, 2),
     );
     assert!(
         pools.len() <= 2,
@@ -1980,14 +1948,8 @@ fn eval_discover_pools_no_subset_duplicates() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        126.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.5,
-        2,
-        8,
-        20,
+        pool_scoring_policy(true, 126.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.5, 2, 8, 20),
     );
 
     for (i, a) in pools.iter().enumerate() {
@@ -2026,14 +1988,8 @@ fn eval_discover_pools_all_incompatible() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        120.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.8,
-        2,
-        12,
-        10,
+        pool_scoring_policy(true, 120.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.8, 2, 12, 10),
     );
     assert!(
         pools.is_empty(),
@@ -2055,14 +2011,8 @@ fn eval_discover_pools_core_edge_classification() {
 
     let pools = discover_pools(
         &refs,
-        true,
-        127.0,
-        &pool_weights(PoolPreset::Balanced),
-        None,
-        0.5,
-        3,
-        12,
-        10,
+        pool_scoring_policy(true, 127.0, &pool_weights(PoolPreset::Balanced), None),
+        pool_discovery_bounds(0.5, 3, 12, 10),
     );
 
     for pool in &pools {

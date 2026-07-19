@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use crate::domain::classification::taxonomy::GenreFamily;
 
 use super::{
-    AxisScore, CandidatePoolScore, DiscoveredPool, PoolAxisScores, PoolCohesionResult, PoolWeights,
-    TimbralNormalization, TrackProfile, bpm_pitch_shift, build_timbral_vector,
-    normalize_timbral_vector, score_brightness_axis, score_key_axis, score_key_with_pitch_shifts,
-    score_rhythm_axis,
+    AxisScore, CandidatePoolScore, DiscoveredPool, PoolAxisScores, PoolCohesionResult,
+    PoolDiscoveryBounds, PoolScoringPolicy, TimbralNormalization, TrackProfile, bpm_pitch_shift,
+    build_timbral_vector, normalize_timbral_vector, score_brightness_axis, score_key_axis,
+    score_key_with_pitch_shifts, score_rhythm_axis,
 };
 
 pub(crate) fn score_pool_bpm_axis(a_bpm: f64, b_bpm: f64) -> AxisScore {
@@ -139,17 +139,14 @@ pub(crate) fn score_pool_timbral_axis(
 pub(crate) fn score_pool_compatibility_pair(
     a: &TrackProfile,
     b: &TrackProfile,
-    master_tempo: bool,
-    ref_bpm: f64,
-    weights: &PoolWeights,
-    norm_stats: Option<&TimbralNormalization>,
+    scoring: PoolScoringPolicy<'_>,
 ) -> PoolAxisScores {
-    let key = if !master_tempo && ref_bpm > 0.0 {
+    let key = if !scoring.master_tempo && scoring.reference_bpm > 0.0 {
         score_key_with_pitch_shifts(
             a.camelot_key,
             b.camelot_key,
-            bpm_pitch_shift(a.bpm, ref_bpm),
-            bpm_pitch_shift(b.bpm, ref_bpm),
+            bpm_pitch_shift(a.bpm, scoring.reference_bpm),
+            bpm_pitch_shift(b.bpm, scoring.reference_bpm),
         )
     } else {
         score_key_axis(a.camelot_key, b.camelot_key)
@@ -166,27 +163,30 @@ pub(crate) fn score_pool_compatibility_pair(
     let brightness = score_brightness_axis(a.brightness, b.brightness);
     let rhythm = score_rhythm_axis(a.rhythm_regularity, b.rhythm_regularity);
 
-    let timbral = norm_stats.and_then(|stats| score_pool_timbral_axis(a, b, stats));
+    let timbral = scoring
+        .timbral_normalization
+        .and_then(|stats| score_pool_timbral_axis(a, b, stats));
 
     let brightness_available = a.brightness.is_some() && b.brightness.is_some();
     let rhythm_available = a.rhythm_regularity.is_some() && b.rhythm_regularity.is_some();
-    let mut weighted_sum = (weights.bpm * bpm.value)
-        + (weights.energy * energy.value)
-        + (weights.key * key.value)
-        + (weights.genre * genre.value);
-    let mut total_weight = weights.bpm + weights.energy + weights.key + weights.genre;
+    let mut weighted_sum = (scoring.weights.bpm * bpm.value)
+        + (scoring.weights.energy * energy.value)
+        + (scoring.weights.key * key.value)
+        + (scoring.weights.genre * genre.value);
+    let mut total_weight =
+        scoring.weights.bpm + scoring.weights.energy + scoring.weights.key + scoring.weights.genre;
 
     if brightness_available {
-        weighted_sum += weights.brightness * brightness.value;
-        total_weight += weights.brightness;
+        weighted_sum += scoring.weights.brightness * brightness.value;
+        total_weight += scoring.weights.brightness;
     }
     if rhythm_available {
-        weighted_sum += weights.rhythm * rhythm.value;
-        total_weight += weights.rhythm;
+        weighted_sum += scoring.weights.rhythm * rhythm.value;
+        total_weight += scoring.weights.rhythm;
     }
     if let Some(ref t) = timbral {
-        weighted_sum += weights.timbral * t.value;
-        total_weight += weights.timbral;
+        weighted_sum += scoring.weights.timbral * t.value;
+        total_weight += scoring.weights.timbral;
     }
 
     let composite = if total_weight > f64::EPSILON {
@@ -210,24 +210,14 @@ pub(crate) fn score_pool_compatibility_pair(
 pub(crate) fn score_candidate_vs_pool(
     candidate: &TrackProfile,
     pool: &[&TrackProfile],
-    master_tempo: bool,
-    ref_bpm: f64,
-    weights: &PoolWeights,
-    norm_stats: Option<&TimbralNormalization>,
+    scoring: PoolScoringPolicy<'_>,
 ) -> CandidatePoolScore {
     let mut min_score = f64::INFINITY;
     let mut sum = 0.0;
     let mut per_member = Vec::with_capacity(pool.len());
 
     for member in pool {
-        let scores = score_pool_compatibility_pair(
-            candidate,
-            member,
-            master_tempo,
-            ref_bpm,
-            weights,
-            norm_stats,
-        );
+        let scores = score_pool_compatibility_pair(candidate, member, scoring);
         if scores.composite < min_score {
             min_score = scores.composite;
         }
@@ -254,10 +244,7 @@ pub(crate) fn score_candidate_vs_pool(
 
 pub(crate) fn compute_pool_cohesion(
     profiles: &[&TrackProfile],
-    master_tempo: bool,
-    ref_bpm: f64,
-    weights: &PoolWeights,
-    norm_stats: Option<&TimbralNormalization>,
+    scoring: PoolScoringPolicy<'_>,
 ) -> PoolCohesionResult {
     let n = profiles.len();
     if n < 2 {
@@ -280,14 +267,7 @@ pub(crate) fn compute_pool_cohesion(
 
     for i in 0..n {
         for j in (i + 1)..n {
-            let scores = score_pool_compatibility_pair(
-                profiles[i],
-                profiles[j],
-                master_tempo,
-                ref_bpm,
-                weights,
-                norm_stats,
-            );
+            let scores = score_pool_compatibility_pair(profiles[i], profiles[j], scoring);
             let c = scores.composite;
 
             if c < global_min {
@@ -347,34 +327,20 @@ pub(crate) fn compute_pool_cohesion(
 // Pool discovery — Bron-Kerbosch maximal clique enumeration
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn discover_pools(
     profiles: &[&TrackProfile],
-    master_tempo: bool,
-    ref_bpm: f64,
-    weights: &PoolWeights,
-    norm_stats: Option<&TimbralNormalization>,
-    threshold: f64,
-    min_size: usize,
-    max_size: usize,
-    max_pools: usize,
+    scoring: PoolScoringPolicy<'_>,
+    bounds: PoolDiscoveryBounds,
 ) -> Vec<DiscoveredPool> {
     let n = profiles.len();
-    if n < min_size {
+    if n < bounds.minimum_size() {
         return Vec::new();
     }
 
     let mut compat: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in (i + 1)..n {
-            let s = score_pool_compatibility_pair(
-                profiles[i],
-                profiles[j],
-                master_tempo,
-                ref_bpm,
-                weights,
-                norm_stats,
-            );
+            let s = score_pool_compatibility_pair(profiles[i], profiles[j], scoring);
             compat[i][j] = s.composite;
             compat[j][i] = s.composite;
         }
@@ -383,7 +349,7 @@ pub(crate) fn discover_pools(
     let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
     for i in 0..n {
         for j in (i + 1)..n {
-            if compat[i][j] >= threshold {
+            if compat[i][j] >= bounds.threshold() {
                 adj[i].insert(j);
                 adj[j].insert(i);
             }
@@ -398,12 +364,12 @@ pub(crate) fn discover_pools(
         &mut all.clone(),
         &mut HashSet::new(),
         &mut cliques,
-        max_size,
+        bounds.maximum_size(),
     );
 
     let mut pools: Vec<DiscoveredPool> = cliques
         .into_iter()
-        .filter(|c| c.len() >= min_size && c.len() <= max_size)
+        .filter(|c| c.len() >= bounds.minimum_size() && c.len() <= bounds.maximum_size())
         .map(|c| build_discovered_pool(&c, profiles, &compat))
         .collect();
 
@@ -416,7 +382,7 @@ pub(crate) fn discover_pools(
 
     let mut selected: Vec<DiscoveredPool> = Vec::new();
     for pool in pools {
-        if selected.len() >= max_pools {
+        if selected.len() >= bounds.maximum_results() {
             break;
         }
         let set: HashSet<&str> = pool
