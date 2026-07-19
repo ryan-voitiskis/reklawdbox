@@ -852,8 +852,10 @@ fn private_rekordbox_golden_dataset_genre_accuracy() {
             "essentia": crate::adapters::audio::ESSENTIA_SCHEMA_VERSION,
         },
     });
-    let _serialized_summary =
-        serde_json::to_string_pretty(&summary).expect("benchmark summary should serialize");
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&summary).expect("benchmark summary should serialize")
+    );
 }
 
 fn benchmark_source_stratum(
