@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use super::color;
@@ -17,13 +16,18 @@ fn acquire_or_recover_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Used by `restore()` to avoid overwriting user intent with snapshot values.
 type TouchedFields = HashMap<String, HashSet<EditableField>>;
 
-pub struct ChangeManager {
-    changes: Mutex<HashMap<String, TrackChange>>,
-    touched_since_take: Mutex<TouchedFields>,
+#[derive(Default)]
+struct ChangeState {
+    changes: HashMap<String, TrackChange>,
+    touched_since_take: TouchedFields,
     /// Set by `clear(None)` after `take()` to signal that the user intended to
-    /// wipe everything.  `restore()` treats all snapshot fields as touched when
+    /// wipe everything. `restore()` treats all snapshot fields as touched when
     /// this is true, preventing resurrection of taken-then-cleared changes.
-    cleared_all_since_take: AtomicBool,
+    cleared_all_since_take: bool,
+}
+
+pub struct ChangeManager {
+    state: Mutex<ChangeState>,
 }
 
 pub(crate) struct ChangeSnapshotGuard<'a> {
@@ -60,59 +64,56 @@ impl Drop for ChangeSnapshotGuard<'_> {
 impl ChangeManager {
     pub fn new() -> Self {
         Self {
-            changes: Mutex::new(HashMap::new()),
-            touched_since_take: Mutex::new(HashMap::new()),
-            cleared_all_since_take: AtomicBool::new(false),
+            state: Mutex::new(ChangeState::default()),
         }
     }
 
     /// Stage changes for one or more tracks. Merges with previously staged changes for the same track.
     pub fn stage(&self, changes: Vec<TrackChange>) -> (usize, usize) {
-        let mut staged_changes_by_track_id = acquire_or_recover_lock(&self.changes);
-        let mut touched = acquire_or_recover_lock(&self.touched_since_take);
+        let mut state = acquire_or_recover_lock(&self.state);
         let mut staged = 0;
         for change in changes {
             if !has_any_staged_field(&change) {
                 continue;
             }
             staged += 1;
-            record_touched_fields(&change, &mut touched);
-            staged_changes_by_track_id
+            record_touched_fields(&change, &mut state.touched_since_take);
+            state
+                .changes
                 .entry(change.track_id.clone())
                 .and_modify(|existing| merge_track_change(existing, &change))
                 .or_insert(change);
         }
-        (staged, staged_changes_by_track_id.len())
+        (staged, state.changes.len())
     }
 
     pub fn pending_ids(&self) -> Vec<String> {
-        let map = acquire_or_recover_lock(&self.changes);
-        let mut ids: Vec<String> = map.keys().cloned().collect();
+        let state = acquire_or_recover_lock(&self.state);
+        let mut ids: Vec<String> = state.changes.keys().cloned().collect();
         ids.sort();
         ids
     }
 
     #[cfg(test)]
     pub fn pending_count(&self) -> usize {
-        acquire_or_recover_lock(&self.changes).len()
+        acquire_or_recover_lock(&self.state).changes.len()
     }
 
     pub fn get(&self, track_id: &str) -> Option<TrackChange> {
-        self.changes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        acquire_or_recover_lock(&self.state)
+            .changes
             .get(track_id)
             .cloned()
     }
 
     pub fn preview(&self, current_tracks: &[Track]) -> Vec<TrackDiff> {
-        let map = acquire_or_recover_lock(&self.changes);
+        let state = acquire_or_recover_lock(&self.state);
         let track_map: HashMap<&str, &Track> =
             current_tracks.iter().map(|t| (t.id.as_str(), t)).collect();
 
         let mut result = Vec::new();
 
-        for (track_id, change) in map.iter() {
+        for (track_id, change) in &state.changes {
             let Some(track) = track_map.get(track_id.as_str()) else {
                 continue;
             };
@@ -149,8 +150,8 @@ impl ChangeManager {
 
     #[cfg(test)]
     pub fn apply_changes(&self, tracks: &[Track]) -> Vec<Track> {
-        let map = acquire_or_recover_lock(&self.changes);
-        apply_changes_with_map(tracks, &map)
+        let state = acquire_or_recover_lock(&self.state);
+        apply_changes_with_map(tracks, &state.changes)
     }
 
     /// Apply a specific snapshot of staged changes, independent of in-memory staged state.
@@ -165,19 +166,21 @@ impl ChangeManager {
     /// Remove and return staged changes. If `track_ids` is None, drains all staged changes.
     /// Clears the touched-since-take set so subsequent mutations are tracked against this snapshot.
     pub fn take(&self, track_ids: Option<Vec<String>>) -> Vec<TrackChange> {
-        let mut map = acquire_or_recover_lock(&self.changes);
-        let mut touched = acquire_or_recover_lock(&self.touched_since_take);
+        let mut state = acquire_or_recover_lock(&self.state);
         match track_ids {
             Some(ids) => {
                 for id in &ids {
-                    touched.remove(id);
+                    state.touched_since_take.remove(id);
                 }
-                ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+                ids.into_iter()
+                    .filter_map(|id| state.changes.remove(&id))
+                    .collect()
             }
             None => {
-                touched.clear();
-                self.cleared_all_since_take.store(false, Ordering::Release);
-                let mut drained: Vec<TrackChange> = map.drain().map(|(_, change)| change).collect();
+                state.touched_since_take.clear();
+                state.cleared_all_since_take = false;
+                let mut drained: Vec<TrackChange> =
+                    state.changes.drain().map(|(_, change)| change).collect();
                 drained.sort_by(|a, b| a.track_id.cmp(&b.track_id));
                 drained
             }
@@ -194,21 +197,26 @@ impl ChangeManager {
     /// Restore previously taken changes without overwriting fields the user
     /// touched (staged or cleared) since the snapshot was taken.
     pub fn restore(&self, snapshot: Vec<TrackChange>) -> (usize, usize) {
-        if self.cleared_all_since_take.load(Ordering::Acquire) {
+        let mut state = acquire_or_recover_lock(&self.state);
+        if state.cleared_all_since_take {
             tracing::warn!(
                 snapshot_len = snapshot.len(),
                 "restore skipped: clear(None) was called since last take()"
             );
-            let map = acquire_or_recover_lock(&self.changes);
-            return (0, map.len());
+            return (0, state.changes.len());
         }
-        let mut map = acquire_or_recover_lock(&self.changes);
-        let touched = acquire_or_recover_lock(&self.touched_since_take);
         let restored = snapshot.len();
         let empty_set = HashSet::new();
+        let ChangeState {
+            changes,
+            touched_since_take,
+            ..
+        } = &mut *state;
         for change in snapshot {
-            let touched_fields = touched.get(&change.track_id).unwrap_or(&empty_set);
-            let existing = map
+            let touched_fields = touched_since_take
+                .get(&change.track_id)
+                .unwrap_or(&empty_set);
+            let existing = changes
                 .entry(change.track_id.clone())
                 .or_insert_with(|| TrackChange {
                     track_id: change.track_id.clone(),
@@ -223,8 +231,8 @@ impl ChangeManager {
             merge_untouched_fields(existing, &change, touched_fields);
         }
         // Remove phantom entries where all fields were filtered out by touched tracking.
-        map.retain(|_, v| has_any_staged_field(v));
-        (restored, map.len())
+        changes.retain(|_, v| has_any_staged_field(v));
+        (restored, changes.len())
     }
 
     /// Clear specific fields from staged changes. Returns (tracks_affected, remaining_tracks).
@@ -236,11 +244,15 @@ impl ChangeManager {
         track_ids: Option<Vec<String>>,
         fields: &[String],
     ) -> (usize, usize) {
-        let mut map = acquire_or_recover_lock(&self.changes);
-        let mut touched_map = acquire_or_recover_lock(&self.touched_since_take);
+        let mut state = acquire_or_recover_lock(&self.state);
+        let ChangeState {
+            changes,
+            touched_since_take,
+            ..
+        } = &mut *state;
         let target_ids: Vec<String> = match track_ids {
             Some(ids) => ids,
-            None => map.keys().cloned().collect(),
+            None => changes.keys().cloned().collect(),
         };
 
         let parsed_fields: Vec<EditableField> = fields
@@ -252,12 +264,12 @@ impl ChangeManager {
         for id in &target_ids {
             // Always record the touch — the user expressed intent to clear these
             // fields, even if the track has no current staged entry.
-            let touched_set = touched_map.entry(id.clone()).or_default();
+            let touched_set = touched_since_take.entry(id.clone()).or_default();
             for &ef in &parsed_fields {
                 touched_set.insert(ef);
             }
 
-            if let Some(entry) = map.get_mut(id) {
+            if let Some(entry) = changes.get_mut(id) {
                 let mut field_touched = false;
                 for &ef in &parsed_fields {
                     if entry.clear_field(ef) {
@@ -268,16 +280,15 @@ impl ChangeManager {
                     affected += 1;
                 }
                 if !has_any_staged_field(entry) {
-                    map.remove(id);
+                    changes.remove(id);
                 }
             }
         }
-        (affected, map.len())
+        (affected, changes.len())
     }
 
     pub fn clear(&self, track_ids: Option<Vec<String>>) -> (usize, usize) {
-        let mut map = acquire_or_recover_lock(&self.changes);
-        let mut touched_map = acquire_or_recover_lock(&self.touched_since_take);
+        let mut state = acquire_or_recover_lock(&self.state);
         let all_fields: HashSet<EditableField> = EditableField::ALL.iter().copied().collect();
         let cleared = match track_ids {
             Some(ids) => {
@@ -285,24 +296,27 @@ impl ChangeManager {
                 for id in ids {
                     // Always record the touch — the user expressed intent to clear
                     // this track, even if it was already drained by take().
-                    touched_map.insert(id.clone(), all_fields.clone());
-                    if map.remove(&id).is_some() {
+                    state
+                        .touched_since_take
+                        .insert(id.clone(), all_fields.clone());
+                    if state.changes.remove(&id).is_some() {
                         count += 1;
                     }
                 }
                 count
             }
             None => {
-                let count = map.len();
-                for id in map.keys() {
-                    touched_map.insert(id.clone(), all_fields.clone());
+                let count = state.changes.len();
+                let track_ids: Vec<_> = state.changes.keys().cloned().collect();
+                for id in track_ids {
+                    state.touched_since_take.insert(id, all_fields.clone());
                 }
-                map.clear();
-                self.cleared_all_since_take.store(true, Ordering::Release);
+                state.changes.clear();
+                state.cleared_all_since_take = true;
                 count
             }
         };
-        (cleared, map.len())
+        (cleared, state.changes.len())
     }
 }
 
