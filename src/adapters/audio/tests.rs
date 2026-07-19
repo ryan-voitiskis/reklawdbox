@@ -748,6 +748,10 @@ fn private_rekordbox_real_audio_analysis() {
         audio.original_is_unchanged().unwrap(),
         "analysis must not mutate source audio"
     );
+    assert!(
+        fixture.source_archive_is_unchanged().unwrap(),
+        "analysis must not mutate the configured source archive"
+    );
 }
 
 #[test]
@@ -824,5 +828,9 @@ fn private_rekordbox_audio_analysis_cache_round_trip() {
     assert!(
         audio.original_is_unchanged().unwrap(),
         "cache round trip must not mutate source audio"
+    );
+    assert!(
+        fixture.source_archive_is_unchanged().unwrap(),
+        "cache round trip must not mutate the configured source archive"
     );
 }
