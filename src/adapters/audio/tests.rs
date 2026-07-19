@@ -706,68 +706,20 @@ fn generated_wav_fixture_decodes_and_analyzes_without_private_audio() {
 #[test]
 #[ignore]
 fn test_real_audio_analysis() {
-    let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
-    let params = crate::adapters::rekordbox::SearchParams {
-        query: None,
-        artist: None,
-        genre: None,
-        rating_min: None,
-        bpm_min: Some(120.0),
-        bpm_max: Some(140.0),
-        key: None,
-        playlist: None,
-        has_genre: Some(true),
-        has_label: None,
-        year_zero: None,
-        label: None,
-        path: None,
-        path_prefix: None,
-        added_after: None,
-        added_before: None,
-        exclude_samples: true,
-        limit: Some(5),
-        offset: None,
-    };
-    let tracks = crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap();
-    assert!(!tracks.is_empty(), "no tracks found for analysis test");
-
-    let track = tracks
-        .iter()
-        .find(|t| {
-            let path = &t.file_path;
-            std::fs::metadata(path).is_ok()
-                || percent_encoding::percent_decode_str(path)
-                    .decode_utf8()
-                    .ok()
-                    .is_some_and(|d| std::fs::metadata(d.as_ref()).is_ok())
-        })
-        .expect("no track with accessible audio file found");
-
-    let file_path = if std::fs::metadata(&track.file_path).is_ok() {
-        track.file_path.clone()
-    } else {
-        percent_encoding::percent_decode_str(&track.file_path)
-            .decode_utf8()
-            .unwrap()
-            .to_string()
-    };
-
-    eprintln!(
-        "[integration] Analyzing: {} - {} ({})",
-        track.artist, track.title, file_path
-    );
+    let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+        .expect("private Rekordbox fixture should be configured");
+    let audio_dir = tempfile::tempdir().expect("private audio copy root should create");
+    let audio = fixture
+        .copy_accessible_audio(audio_dir.path())
+        .expect("private fixture should contain an accessible audio track");
+    assert_eq!(audio.original_hash, audio.copied_hash);
+    let file_path = audio.copied_path.to_string_lossy().to_string();
 
     let (samples, sample_rate) =
         decode_to_samples(&file_path).unwrap_or_else(|e| panic!("decode failed: {e}"));
 
-    assert!(!samples.is_empty(), "decoded zero samples from {file_path}");
-    assert!(sample_rate > 0, "invalid sample rate from {file_path}");
-    eprintln!(
-        "[integration] Decoded: {} samples at {} Hz ({:.1}s)",
-        samples.len(),
-        sample_rate,
-        samples.len() as f64 / sample_rate as f64
-    );
+    assert!(!samples.is_empty(), "decoded zero samples");
+    assert!(sample_rate > 0, "invalid sample rate");
 
     let result = analyze_with_stratum(&samples, sample_rate, None)
         .unwrap_or_else(|e| panic!("analysis failed: {e}"));
@@ -797,66 +749,23 @@ fn test_real_audio_analysis() {
         "analyzer version should be non-empty"
     );
 
-    eprintln!(
-        "[integration] Result: BPM={:.2} (conf={:.2}), Key={} / {} (conf={:.2}, clarity={:.2}), grid={:.2}, {:.1}s in {:.0}ms",
-        result.bpm,
-        result.bpm_confidence,
-        result.key,
-        result.key_camelot,
-        result.key_confidence,
-        result.key_clarity,
-        result.grid_stability,
-        result.duration_seconds,
-        result.processing_time_ms,
+    assert!(
+        audio.original_is_unchanged().unwrap(),
+        "analysis must not mutate source audio"
     );
 }
 
 #[test]
 #[ignore]
 fn test_audio_analysis_cache_round_trip() {
-    let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
-    let params = crate::adapters::rekordbox::SearchParams {
-        query: None,
-        artist: None,
-        genre: None,
-        rating_min: None,
-        bpm_min: Some(120.0),
-        bpm_max: Some(140.0),
-        key: None,
-        playlist: None,
-        has_genre: Some(true),
-        has_label: None,
-        year_zero: None,
-        label: None,
-        path: None,
-        path_prefix: None,
-        added_after: None,
-        added_before: None,
-        exclude_samples: true,
-        limit: Some(5),
-        offset: None,
-    };
-    let tracks = crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap();
-    let track = tracks
-        .iter()
-        .find(|t| {
-            let path = &t.file_path;
-            std::fs::metadata(path).is_ok()
-                || percent_encoding::percent_decode_str(path)
-                    .decode_utf8()
-                    .ok()
-                    .is_some_and(|d| std::fs::metadata(d.as_ref()).is_ok())
-        })
-        .expect("no track with accessible audio file found");
-
-    let file_path = if std::fs::metadata(&track.file_path).is_ok() {
-        track.file_path.clone()
-    } else {
-        percent_encoding::percent_decode_str(&track.file_path)
-            .decode_utf8()
-            .unwrap()
-            .to_string()
-    };
+    let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+        .expect("private Rekordbox fixture should be configured");
+    let audio_dir = tempfile::tempdir().expect("private audio copy root should create");
+    let audio = fixture
+        .copy_accessible_audio(audio_dir.path())
+        .expect("private fixture should contain an accessible audio track");
+    assert_eq!(audio.original_hash, audio.copied_hash);
+    let file_path = audio.copied_path.to_string_lossy().to_string();
 
     let (samples, sample_rate) = decode_to_samples(&file_path).unwrap();
     let result = analyze_with_stratum(&samples, sample_rate, None).unwrap();
@@ -899,8 +808,8 @@ fn test_audio_analysis_cache_round_trip() {
     assert_eq!(cached_result.key, result.key);
     assert_eq!(cached_result.key_camelot, result.key_camelot);
 
-    eprintln!(
-        "[integration] Cache round-trip OK: BPM={:.2}, Key={}",
-        cached_result.bpm, cached_result.key
+    assert!(
+        audio.original_is_unchanged().unwrap(),
+        "cache round trip must not mutate source audio"
     );
 }

@@ -39,7 +39,11 @@ mod tests {
     #[test]
     #[ignore]
     fn real_change_pipeline() {
-        let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
+        let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+            .expect("private Rekordbox fixture should be configured");
+        let conn = fixture
+            .open()
+            .expect("private Rekordbox fixture should open read-only");
         let params = crate::adapters::rekordbox::SearchParams {
             query: None,
             artist: None,

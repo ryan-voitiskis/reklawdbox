@@ -7,6 +7,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
+use crate::adapters::rekordbox::test_support::{PrivateFixtureError, PrivateRekordboxFixture};
 use crate::adapters::{rekordbox as db, state as store};
 
 pub(super) fn extract_json(result: &CallToolResult) -> serde_json::Value {
@@ -113,6 +114,22 @@ pub(super) fn create_server_with_store_path(
     http: reqwest::Client,
     store_path: Option<String>,
 ) -> ReklawdboxServer {
+    create_server_with_paths(
+        db_conn,
+        store_conn,
+        http,
+        store_path,
+        std::path::PathBuf::from("synthetic-master.db"),
+    )
+}
+
+fn create_server_with_paths(
+    db_conn: Connection,
+    store_conn: Connection,
+    http: reqwest::Client,
+    store_path: Option<String>,
+    effective_db_path: std::path::PathBuf,
+) -> ReklawdboxServer {
     let mut context = ServerContext::new(None, http);
     context.database.store_path = store_path;
     context
@@ -123,7 +140,7 @@ pub(super) fn create_server_with_store_path(
     context
         .database
         .effective_db_path
-        .set(std::path::PathBuf::from("/tmp/reklawdbox-tests/master.db"))
+        .set(effective_db_path)
         .expect("test effective DB path should initialize exactly once");
     context
         .database
@@ -139,9 +156,10 @@ pub(super) fn create_server_with_store_path(
 
 pub(super) fn create_real_server_with_temp_store(
     http: reqwest::Client,
-) -> Option<(ReklawdboxServer, TempDir)> {
-    let db_conn = db::open_real_db()?;
-    let store_dir = tempfile::tempdir().ok()?;
+) -> Result<(ReklawdboxServer, TempDir, PrivateRekordboxFixture), PrivateFixtureError> {
+    let fixture = PrivateRekordboxFixture::from_env()?;
+    let db_conn = fixture.open()?;
+    let store_dir = tempfile::tempdir().map_err(PrivateFixtureError::TempRoot)?;
     let store_path = store_dir.path().join("internal.sqlite3");
     let store_path_str = store_path
         .to_str()
@@ -150,8 +168,14 @@ pub(super) fn create_real_server_with_temp_store(
     let store_conn =
         store::open(&store_path_str).expect("internal store should open for integration test");
 
-    let server = create_server_with_store_path(db_conn, store_conn, http, Some(store_path_str));
-    Some((server, store_dir))
+    let server = create_server_with_paths(
+        db_conn,
+        store_conn,
+        http,
+        Some(store_path_str),
+        fixture.database_path().to_path_buf(),
+    );
+    Ok((server, store_dir, fixture))
 }
 
 pub(super) fn sample_real_tracks(

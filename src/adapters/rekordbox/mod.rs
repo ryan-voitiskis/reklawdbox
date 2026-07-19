@@ -8,13 +8,13 @@ mod connection;
 mod health;
 mod history;
 mod playlists;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod tracks;
 pub(crate) mod xml;
 
 #[cfg(test)]
-pub(crate) use connection::{
-    REKORDBOX_SQLCIPHER_KEY, open_real_db, open_test, resolve_db_path_from,
-};
+pub(crate) use connection::{REKORDBOX_SQLCIPHER_KEY, open_test, resolve_db_path_from};
 pub(crate) use connection::{open, resolve_db_path};
 #[cfg(test)]
 pub(crate) use health::find_metadata_duplicates;

@@ -259,12 +259,9 @@ async fn resolve_tracks_data_audio_cache_ignores_stale_file_identity() {
 #[tokio::test]
 #[ignore]
 async fn resolve_tracks_data_batch_consistency() {
-    let Some((server, _store_dir)) =
+    let (server, _store_dir, _fixture_guard) =
         create_real_server_with_temp_store(default_http_client_for_tests())
-    else {
-        eprintln!("Skipping: backup tarball not found (set REKORDBOX_TEST_BACKUP)");
-        return;
-    };
+            .expect("private Rekordbox fixture should be configured and readable");
 
     let tracks = sample_real_tracks(&server, 5);
     assert!(

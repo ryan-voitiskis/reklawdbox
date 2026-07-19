@@ -1,3 +1,4 @@
+use super::test_support::{PrivateFixtureError, PrivateRekordboxFixture};
 use super::*;
 use crate::domain::library::{FileKind, Track};
 use rusqlite::{Connection, OpenFlags, params};
@@ -181,6 +182,133 @@ fn seed_test_db(conn: &Connection) {
     .unwrap();
 }
 
+fn copy_archive_database(
+    archive: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), PrivateFixtureError> {
+    std::fs::copy(archive, destination.join("master.db"))
+        .map(|_| ())
+        .map_err(|error| PrivateFixtureError::Extraction {
+            diagnostic: error.kind().to_string(),
+        })
+}
+
+fn write_encrypted_identity_database(path: &std::path::Path, identity: &str) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(&format!(
+        "PRAGMA key = '{REKORDBOX_SQLCIPHER_KEY}'; \
+         CREATE TABLE fixture_identity (value TEXT NOT NULL);"
+    ))
+    .unwrap();
+    conn.execute(
+        "INSERT INTO fixture_identity (value) VALUES (?1)",
+        [identity],
+    )
+    .unwrap();
+}
+
+#[test]
+fn private_fixture_uses_unique_owned_roots() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive = source_dir.path().join("fixture-a.db");
+    write_encrypted_identity_database(&archive, "A");
+
+    let first =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+    let second =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+
+    assert_ne!(first.root(), second.root());
+    assert_ne!(first.database_path(), second.database_path());
+}
+
+#[test]
+fn private_fixture_open_is_production_read_only() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive = source_dir.path().join("fixture.db");
+    write_encrypted_identity_database(&archive, "read-only");
+    let fixture =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+
+    let conn = fixture.open().unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO fixture_identity (value) VALUES ('write blocked')",
+            [],
+        )
+        .is_err(),
+        "private fixture connections must use the production read-only adapter"
+    );
+}
+
+#[test]
+fn private_fixture_reports_corrupt_or_wrong_key_database() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive = source_dir.path().join("corrupt.db");
+    std::fs::write(&archive, b"not a SQLCipher database").unwrap();
+    let fixture =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+
+    assert!(matches!(fixture.open(), Err(PrivateFixtureError::Open(_))));
+}
+
+#[test]
+fn private_fixture_rejects_missing_database_with_sidecars() {
+    let archive = tempfile::NamedTempFile::new().unwrap();
+    let result = PrivateRekordboxFixture::from_archive_with(archive.path(), |_archive, root| {
+        std::fs::write(root.join("master.db-wal"), b"synthetic sidecar").unwrap();
+        std::fs::write(root.join("master.db-shm"), b"synthetic sidecar").unwrap();
+        Ok(())
+    });
+
+    assert!(matches!(result, Err(PrivateFixtureError::MissingDatabase)));
+}
+
+#[test]
+fn private_fixture_cleans_root_after_connection_and_guard_drop() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive = source_dir.path().join("fixture.db");
+    write_encrypted_identity_database(&archive, "cleanup");
+    let fixture =
+        PrivateRekordboxFixture::from_archive_with(&archive, copy_archive_database).unwrap();
+    let root = fixture.root().to_path_buf();
+    let conn = fixture.open().unwrap();
+
+    assert!(root.is_dir());
+    drop(conn);
+    drop(fixture);
+    assert!(!root.exists());
+}
+
+#[test]
+fn private_fixture_never_reuses_another_archive_extraction() {
+    let source_dir = tempfile::tempdir().unwrap();
+    let archive_a = source_dir.path().join("fixture-a.db");
+    let archive_b = source_dir.path().join("fixture-b.db");
+    write_encrypted_identity_database(&archive_a, "A");
+    write_encrypted_identity_database(&archive_b, "B");
+
+    let fixture_a =
+        PrivateRekordboxFixture::from_archive_with(&archive_a, copy_archive_database).unwrap();
+    let fixture_b =
+        PrivateRekordboxFixture::from_archive_with(&archive_b, copy_archive_database).unwrap();
+    let identity_a: String = fixture_a
+        .open()
+        .unwrap()
+        .query_row("SELECT value FROM fixture_identity", [], |row| row.get(0))
+        .unwrap();
+    let identity_b: String = fixture_b
+        .open()
+        .unwrap()
+        .query_row("SELECT value FROM fixture_identity", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(identity_a, "A");
+    assert_eq!(identity_b, "B");
+    assert_ne!(fixture_a.archive_identity(), fixture_b.archive_identity());
+    assert_ne!(fixture_a.database_path(), fixture_b.database_path());
+}
+
 #[test]
 fn sanitized_sqlcipher_fixture_opens_read_only_through_production_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -201,7 +329,10 @@ fn sanitized_sqlcipher_fixture_opens_read_only_through_production_path() {
         "fixture must be encrypted rather than plain SQLite"
     );
 
-    let conn = open(path.to_str().unwrap()).expect("production SQLCipher open should succeed");
+    let fixture = PrivateRekordboxFixture::from_archive_with(&path, copy_archive_database).unwrap();
+    let conn = fixture
+        .open()
+        .expect("production SQLCipher open should succeed");
     let tracks = search_tracks(&conn, &SearchParams::default()).unwrap();
     assert_eq!(tracks.len(), 7);
     assert!(
@@ -947,10 +1078,19 @@ fn test_playlist_membership_counts() {
 
 // ==================== Integration tests (real DB) — history ====================
 
+fn open_private_fixture() -> (PrivateRekordboxFixture, Connection) {
+    let fixture = PrivateRekordboxFixture::from_env()
+        .expect("private Rekordbox fixture requires REKORDBOX_TEST_BACKUP");
+    let conn = fixture
+        .open()
+        .expect("private Rekordbox fixture should open read-only");
+    (fixture, conn)
+}
+
 #[test]
 #[ignore]
 fn test_real_db_get_sessions() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let sessions = get_sessions(&conn, Some(5), None).unwrap();
     assert!(
         !sessions.is_empty(),
@@ -965,7 +1105,7 @@ fn test_real_db_get_sessions() {
 #[test]
 #[ignore]
 fn test_real_db_get_session_tracks() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let sessions = get_sessions(&conn, Some(1), None).unwrap();
     assert!(!sessions.is_empty(), "need at least one session");
     let tracks = get_session_tracks(&conn, &sessions[0].id).unwrap();
@@ -1013,7 +1153,7 @@ fn load_all_tracks(conn: &Connection) -> Vec<Track> {
 #[test]
 #[ignore]
 fn test_real_db_opens() {
-    let conn = open_real_db().expect("backup tarball not found — set REKORDBOX_TEST_BACKUP");
+    let (_fixture_guard, conn) = open_private_fixture();
     let count: i32 = conn
         .query_row("SELECT count(*) FROM djmdContent", [], |r| r.get(0))
         .unwrap();
@@ -1023,7 +1163,7 @@ fn test_real_db_opens() {
 #[test]
 #[ignore]
 fn test_real_db_schema_tables() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let required = [
         "djmdContent",
         "djmdArtist",
@@ -1050,7 +1190,7 @@ fn test_real_db_schema_tables() {
 #[test]
 #[ignore]
 fn test_real_db_schema_columns() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let checks = [
         (
             "djmdContent",
@@ -1078,7 +1218,7 @@ fn test_real_db_schema_columns() {
 #[test]
 #[ignore]
 fn test_real_db_track_count() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let stats = get_library_stats(&conn).unwrap();
     assert!(
         stats.total_tracks > 2000,
@@ -1095,7 +1235,7 @@ fn test_real_db_track_count() {
 #[test]
 #[ignore]
 fn test_real_db_search_returns_results() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
 
     let params = SearchParams {
         limit: Some(10),
@@ -1125,7 +1265,7 @@ fn test_real_db_search_returns_results() {
 #[test]
 #[ignore]
 fn test_real_db_field_encoding() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let params = SearchParams {
         limit: Some(200),
         ..Default::default()
@@ -1162,7 +1302,7 @@ fn test_real_db_field_encoding() {
 #[test]
 #[ignore]
 fn test_real_db_null_handling() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
 
     let params = SearchParams {
         has_genre: Some(false),
@@ -1197,7 +1337,7 @@ fn test_real_db_null_handling() {
 #[test]
 #[ignore]
 fn test_real_db_unicode() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let all = load_all_tracks(&conn);
 
     let unicode_tracks: Vec<_> = all
@@ -1216,7 +1356,7 @@ fn test_real_db_unicode() {
 #[test]
 #[ignore]
 fn test_real_db_playlists() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let playlists = get_playlists(&conn).unwrap();
     assert!(!playlists.is_empty(), "no playlists found");
 
@@ -1245,7 +1385,7 @@ fn test_real_db_playlists() {
 #[test]
 #[ignore]
 fn test_real_db_get_track_by_id() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
 
     let params = SearchParams {
         limit: Some(1),
@@ -1265,7 +1405,7 @@ fn test_real_db_get_track_by_id() {
 #[test]
 #[ignore]
 fn test_real_db_library_stats_consistency() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let stats = get_library_stats(&conn).unwrap();
 
     assert_eq!(
@@ -1295,7 +1435,7 @@ fn test_real_db_library_stats_consistency() {
 #[test]
 #[ignore]
 fn test_real_db_rated_count_matches_rating_filtered_search() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let stats = get_library_stats(&conn).unwrap();
 
     let params = SearchParams {
@@ -1322,7 +1462,7 @@ fn test_real_db_rated_count_matches_rating_filtered_search() {
 #[test]
 #[ignore]
 fn test_real_db_all_tracks_load() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let all = load_all_tracks(&conn);
     assert!(all.len() > 2000, "expected >2000 tracks, got {}", all.len());
 
@@ -1334,7 +1474,7 @@ fn test_real_db_all_tracks_load() {
 #[test]
 #[ignore]
 fn test_real_db_special_characters_in_search() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let nasty_inputs = [
         "'; DROP TABLE djmdContent; --",
         "\" OR 1=1 --",
@@ -1360,7 +1500,7 @@ fn test_real_db_special_characters_in_search() {
 #[test]
 #[ignore]
 fn test_real_db_sample_exclusion() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
 
     let stats_filtered = get_library_stats(&conn).unwrap();
     let stats_all = get_library_stats_filtered(&conn, false).unwrap();
@@ -1393,7 +1533,7 @@ fn test_real_db_sample_exclusion() {
 #[test]
 #[ignore]
 fn test_real_db_genre_normalization_coverage() {
-    let conn = open_real_db().expect("backup tarball not found");
+    let (_fixture_guard, conn) = open_private_fixture();
     let stats = get_library_stats(&conn).unwrap();
 
     let mut alias_count = 0;

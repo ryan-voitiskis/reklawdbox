@@ -749,8 +749,11 @@ fn golden_genres_fixture_is_well_formed() {
 #[ignore]
 fn golden_dataset_genre_accuracy() {
     let entries = load_golden_genres_fixture();
-    let conn = db::open_real_db()
-        .expect("classifier benchmark requires the real test backup (set REKORDBOX_TEST_BACKUP)");
+    let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+        .expect("classifier benchmark requires REKORDBOX_TEST_BACKUP");
+    let conn = fixture
+        .open()
+        .expect("classifier benchmark fixture should open read-only");
     let store_path = store::resolve_path();
     let store_conn = store::open_read_only(
         store_path

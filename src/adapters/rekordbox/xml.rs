@@ -560,8 +560,12 @@ mod tests {
 
     // ==================== Integration tests (real DB) ====================
 
-    fn load_real_tracks(limit: usize) -> Option<Vec<crate::domain::library::Track>> {
-        let conn = crate::adapters::rekordbox::open_real_db()?;
+    fn load_real_tracks(limit: usize) -> Vec<crate::domain::library::Track> {
+        let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+            .expect("private Rekordbox fixture should be configured");
+        let conn = fixture
+            .open()
+            .expect("private Rekordbox fixture should open read-only");
         let params = crate::adapters::rekordbox::SearchParams {
             query: None,
             artist: None,
@@ -583,13 +587,13 @@ mod tests {
             limit: Some(limit as u32),
             offset: None,
         };
-        Some(crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap())
+        crate::adapters::rekordbox::search_tracks(&conn, &params).unwrap()
     }
 
     #[test]
     #[ignore]
     fn test_real_tracks_to_xml() {
-        let tracks = load_real_tracks(100).expect("backup tarball not found");
+        let tracks = load_real_tracks(100);
         let xml = generate_xml(&tracks);
 
         assert!(xml.starts_with("<?xml"));
@@ -610,7 +614,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_tracks_xml_well_formed() {
-        let tracks = load_real_tracks(200).expect("backup tarball not found");
+        let tracks = load_real_tracks(200);
         let xml = generate_xml(&tracks);
 
         for line in xml.lines() {
@@ -648,7 +652,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_tracks_xml_field_fidelity() {
-        let tracks = load_real_tracks(50).expect("backup tarball not found");
+        let tracks = load_real_tracks(50);
         let xml = generate_xml(&tracks);
 
         for track in &tracks {
@@ -685,7 +689,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_tracks_xml_write_and_read_back() {
-        let tracks = load_real_tracks(50).expect("backup tarball not found");
+        let tracks = load_real_tracks(50);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("real_test.xml");
 
@@ -704,7 +708,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_full_library_xml_generation() {
-        let conn = crate::adapters::rekordbox::open_real_db().expect("backup tarball not found");
+        let fixture = crate::adapters::rekordbox::test_support::PrivateRekordboxFixture::from_env()
+            .expect("private Rekordbox fixture should be configured");
+        let conn = fixture
+            .open()
+            .expect("private Rekordbox fixture should open read-only");
 
         let mut all = Vec::new();
         let page_size: u32 = 200;
