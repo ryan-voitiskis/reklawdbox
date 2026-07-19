@@ -1,53 +1,7 @@
-use crate::mcp::metadata::WriteXmlParams;
-use crate::mcp::server::ReklawdboxServer;
-use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock};
+use super::support::{EnvVarGuard, backup_script_env_lock, write_executable_script};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-
-use rmcp::ErrorData as McpError;
-use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::CallToolResult;
-
-pub(super) fn backup_script_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-pub(super) struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl EnvVarGuard {
-    pub(super) fn set(key: &'static str, value: &std::path::Path) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
-    }
-}
-
-#[cfg(unix)]
-pub(super) fn write_executable_script(path: &std::path::Path, contents: &str) {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::write(path, contents).expect("test script should be written");
-    let mut permissions = std::fs::metadata(path)
-        .expect("test script metadata should be readable")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(path, permissions).expect("test script should be executable");
-}
 
 #[cfg(unix)]
 pub(super) struct HangingBackupFixture {
@@ -359,290 +313,266 @@ pub(super) async fn assert_pre_op_backup_rejects_early_exit_descendant(close_out
     assert_path_remains_absent(&fixture.delayed_sentinel).await;
 }
 
+#[tokio::test]
 #[cfg(unix)]
-pub(super) fn run_embedded_backup_script(
-    args: &[&str],
-    home: &std::path::Path,
-    db_path: Option<&std::path::Path>,
-    stdin: Option<&str>,
-) -> std::process::Output {
-    run_embedded_backup_script_with_temp_dir(args, home, db_path, stdin, &home.join("tmp"))
-}
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_success_path_env_preserves_first_argument_and_parent_env() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let configured_dir = temp.path().join("Configured Library");
+    std::fs::create_dir(&configured_dir).expect("configured directory should create");
+    let configured = configured_dir.join("master.db");
+    std::fs::write(&configured, []).expect("configured master.db should create");
+    let canonical = configured
+        .canonicalize()
+        .expect("configured master.db should canonicalize");
 
-#[cfg(unix)]
-pub(super) fn run_embedded_backup_script_with_temp_dir(
-    args: &[&str],
-    home: &std::path::Path,
-    db_path: Option<&std::path::Path>,
-    stdin: Option<&str>,
-    temp_dir: &std::path::Path,
-) -> std::process::Output {
-    use std::io::Write as _;
-    use std::os::unix::process::CommandExt as _;
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-
-    let (script, _script_dir) =
-        crate::adapters::rekordbox::backup::write_embedded_script_for_test()
-            .expect("embedded backup script should be materialized");
-    let fake_bin = home.join("test-bin");
-    std::fs::create_dir_all(&fake_bin).expect("fake binary directory should create");
-    write_executable_script(&fake_bin.join("pgrep"), "#!/bin/sh\nexit 1\n");
-    std::fs::create_dir_all(temp_dir).expect("child temp directory should create");
-
-    let mut command = Command::new("/bin/bash");
-    command
-        .arg(&script)
-        .args(args)
-        .env_clear()
-        .env("HOME", home)
-        .env("TMPDIR", temp_dir)
-        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
-        .env("LANG", "C")
-        .process_group(0)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(path) = db_path {
-        command.env("REKORDBOX_DB_PATH", path);
-    }
-
-    let mut child = command
-        .spawn()
-        .expect("embedded backup child should launch");
-    if let Some(input) = stdin {
-        child
-            .stdin
-            .take()
-            .expect("backup child stdin should be piped")
-            .write_all(input.as_bytes())
-            .expect("backup child input should be written");
-    } else {
-        drop(child.stdin.take());
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match child
-            .try_wait()
-            .expect("backup child status should be readable")
-        {
-            Some(_) => break,
-            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            None => {
-                let process_group = -(child.id() as i32);
-                unsafe {
-                    libc::kill(process_group, libc::SIGKILL);
-                }
-                let _ = child.wait();
-                panic!("embedded backup child exceeded the 10-second test timeout");
-            }
-        }
-    }
-
-    child
-        .wait_with_output()
-        .expect("backup child output should be collected")
-}
-
-#[cfg(unix)]
-pub(super) fn child_output_text(output: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-#[cfg(unix)]
-pub(super) fn backup_archives(home: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
-    let backup_dir = home.join("Music/rekordbox-backups");
-    let mut archives = if backup_dir.is_dir() {
-        std::fs::read_dir(&backup_dir)
-            .expect("backup directory should be readable")
-            .map(|entry| {
-                entry
-                    .expect("backup directory entry should be readable")
-                    .path()
-            })
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".tar.gz"))
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    archives.sort();
-    archives
-}
-
-#[cfg(unix)]
-pub(super) fn tar_members(archive: &std::path::Path) -> Vec<String> {
-    let output = std::process::Command::new("tar")
-        .args(["-tzf"])
-        .arg(archive)
-        .output()
-        .expect("tar member listing should launch");
-    assert!(
-        output.status.success(),
-        "tar member listing should succeed: {}",
-        child_output_text(&output)
+    let parent_value = temp.path().join("parent-process-master.db");
+    let _db_env = EnvVarGuard::set("REKORDBOX_DB_PATH", &parent_value);
+    let marker = temp.path().join("custom-script-marker.txt");
+    let script = temp.path().join("custom backup.sh");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$1\" \"$REKORDBOX_DB_PATH\" > '{}'\n",
+            marker.display()
+        ),
     );
-    String::from_utf8(output.stdout)
-        .expect("tar member names should be UTF-8 test paths")
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
 
-#[cfg(unix)]
-pub(super) fn create_backup_archive_fixture(
-    archive: &std::path::Path,
-    source: &std::path::Path,
-    members: &[&str],
-) {
-    let output = std::process::Command::new("tar")
-        .args(["-czf"])
-        .arg(archive)
-        .arg("-C")
-        .arg(source)
-        .arg("--")
-        .args(members)
-        .output()
-        .expect("DB backup fixture creation should launch");
-    assert!(
-        output.status.success(),
-        "DB backup fixture creation should succeed: {}",
-        child_output_text(&output)
-    );
-}
-
-pub(super) const WRITE_XML_TASK_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub(super) type WriteXmlTaskOutput = Result<CallToolResult, McpError>;
-
-pub(super) struct WriteXmlTaskCleanup {
-    handles: Vec<Option<tokio::task::JoinHandle<WriteXmlTaskOutput>>>,
-}
-
-impl WriteXmlTaskCleanup {
-    pub(super) fn new() -> Self {
-        Self {
-            handles: Vec::new(),
-        }
-    }
-
-    pub(super) fn push(&mut self, handle: tokio::task::JoinHandle<WriteXmlTaskOutput>) {
-        self.handles.push(Some(handle));
-    }
-
-    pub(super) fn all_pending(&self) -> bool {
-        self.handles
-            .iter()
-            .flatten()
-            .all(|handle| !handle.is_finished())
-    }
-
-    pub(super) async fn join(
-        &mut self,
-        index: usize,
-        phase: &str,
-    ) -> Result<WriteXmlTaskOutput, String> {
-        let mut handle = self
-            .handles
-            .get_mut(index)
-            .and_then(Option::take)
-            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
-
-        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
-            Ok(Ok(output)) => Ok(output),
-            Ok(Err(err)) => Err(format!("{phase}: task join failed: {err}")),
-            Err(_) => {
-                handle.abort();
-                let cleanup = tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await;
-                if cleanup.is_err() {
-                    return Err(format!(
-                        "{phase}: task timed out and abort cleanup did not finish within five seconds"
-                    ));
-                }
-                Err(format!("{phase}: task did not finish within five seconds"))
-            }
-        }
-    }
-
-    pub(super) async fn abort(&mut self, index: usize, phase: &str) -> Result<(), String> {
-        let mut handle = self
-            .handles
-            .get_mut(index)
-            .and_then(Option::take)
-            .ok_or_else(|| format!("{phase}: task handle is missing"))?;
-        handle.abort();
-        match tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle).await {
-            Ok(Err(err)) if err.is_cancelled() => Ok(()),
-            Ok(Err(err)) => Err(format!("{phase}: aborted task join failed: {err}")),
-            Ok(Ok(_)) => Err(format!("{phase}: task completed before cancellation")),
-            Err(_) => Err(format!(
-                "{phase}: aborted task did not join within five seconds"
-            )),
-        }
-    }
-
-    pub(super) async fn abort_all(&mut self) -> Result<(), String> {
-        for handle in self.handles.iter().flatten() {
-            handle.abort();
-        }
-
-        for (index, slot) in self.handles.iter_mut().enumerate() {
-            let Some(mut handle) = slot.take() else {
-                continue;
-            };
-            if tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, &mut handle)
-                .await
-                .is_err()
-            {
-                return Err(format!(
-                    "task {index} did not join during cleanup within five seconds"
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Drop for WriteXmlTaskCleanup {
-    fn drop(&mut self) {
-        for handle in self.handles.iter().flatten() {
-            handle.abort();
-        }
-    }
-}
-
-pub(super) fn spawn_queued_write_xml(
-    server: ReklawdboxServer,
-    params: WriteXmlParams,
-    queued: Arc<tokio::sync::Notify>,
-) -> tokio::task::JoinHandle<WriteXmlTaskOutput> {
-    tokio::spawn(async move {
-        let mut request = Box::pin(server.write_xml(Parameters(params)));
-        std::future::poll_fn(|cx| match request.as_mut().poll(cx) {
-            std::task::Poll::Pending => std::task::Poll::Ready(()),
-            std::task::Poll::Ready(_) => {
-                panic!("write_xml completed instead of waiting for the held export lock")
-            }
-        })
-        .await;
-        queued.notify_one();
-        request.await
-    })
-}
-
-pub(super) async fn wait_for_queued_write_xml(
-    queued: &tokio::sync::Notify,
-    phase: &str,
-) -> Result<(), String> {
-    tokio::time::timeout(WRITE_XML_TASK_TIMEOUT, queued.notified())
+    let status = crate::adapters::rekordbox::backup::run_pre_op_backup(&canonical)
         .await
-        .map_err(|_| format!("{phase}: write_xml did not queue within five seconds"))
+        .expect("custom script zero exit should attest success");
+    assert_eq!(
+        status,
+        crate::adapters::rekordbox::backup::BackupStatus::Success
+    );
+    let observed = std::fs::read_to_string(&marker).expect("custom script marker should exist");
+    let mut lines = observed.lines();
+    assert_eq!(lines.next(), Some("--pre-op"));
+    assert_eq!(lines.next(), canonical.to_str());
+    assert_eq!(lines.next(), None);
+    assert_eq!(
+        std::env::var_os("REKORDBOX_DB_PATH"),
+        Some(parent_value.into())
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_output_is_bounded() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("noisy-failure.sh");
+    write_executable_script(
+        &script,
+        "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 9000 ]; do printf x >&2; i=$((i + 1)); done\nexit 17\n",
+    );
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("nonzero custom script should fail");
+    assert!(error.contains("exit status 17"));
+    assert!(error.contains("[truncated]"));
+    assert!(error.len() < 8_500, "failure output should remain bounded");
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_nonzero_exit_is_reported() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("nonzero.sh");
+    write_executable_script(&script, "#!/bin/sh\necho 'nonzero backup' >&2\nexit 19\n");
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("nonzero custom script should fail");
+    assert!(error.contains("exit status 19"));
+    assert!(error.contains("nonzero backup"));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_nonzero_diagnostic_precedence_is_stable() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+
+    let cases = [
+        (
+            "stderr-first.sh",
+            "#!/bin/sh\nprintf 'stdout detail\\n'\nprintf 'stderr detail\\n' >&2\nexit 7\n",
+            "backup failed with exit status 7: stderr detail",
+        ),
+        (
+            "stdout-fallback.sh",
+            "#!/bin/sh\nprintf 'stdout detail\\n'\nexit 8\n",
+            "backup failed with exit status 8: stdout detail",
+        ),
+        (
+            "no-output.sh",
+            "#!/bin/sh\nexit 9\n",
+            "backup failed with exit status 9: backup script exited without output",
+        ),
+    ];
+
+    for (name, contents, expected) in cases {
+        let script = temp.path().join(name);
+        write_executable_script(&script, contents);
+        let script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+        let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+            .await
+            .expect_err("nonzero custom script should fail");
+        assert_eq!(error, expected);
+        drop(script_env);
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_success_with_stdout_and_stderr_is_stable() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+    let temp = tempfile::tempdir().expect("temp backup fixture should create");
+    let db_path = temp.path().join("master.db");
+    std::fs::write(&db_path, []).expect("configured master.db should create");
+    let script = temp.path().join("output-success.sh");
+    write_executable_script(
+        &script,
+        "#!/bin/sh\nprintf 'successful stdout\\n'\nprintf 'successful stderr\\n' >&2\nexit 0\n",
+    );
+    let _script_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &script);
+
+    let status = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect("zero exit with both output streams should succeed");
+    assert_eq!(
+        status,
+        crate::adapters::rekordbox::backup::BackupStatus::Success
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_timeout_reaps_direct_hung_child() {
+    assert_pre_op_backup_timeout_terminates_fixture(false).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_timeout_reaps_descendant_holding_output_pipes() {
+    assert_pre_op_backup_timeout_terminates_fixture(true).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_early_exit_reaps_descendant_holding_output_pipes() {
+    assert_pre_op_backup_rejects_early_exit_descendant(false).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_early_exit_detects_descendant_that_closed_output_pipes() {
+    assert_pre_op_backup_rejects_early_exit_descendant(true).await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pre_op_backup_cancellation_keeps_supervisor_cleanup_alive() {
+    let temp = tempfile::tempdir().expect("cancelled backup fixture directory should create");
+    let fixture = write_hanging_backup_fixture(temp.path(), true);
+    let script = fixture.script.clone();
+    let reader_activity = Arc::new(AtomicUsize::new(0));
+    let task_activity = Arc::clone(&reader_activity);
+    let caller = tokio::spawn(async move {
+        crate::adapters::rekordbox::backup::execute_script_with_timeout_and_activity_for_test(
+            &script,
+            Duration::from_millis(250),
+            task_activity,
+        )
+        .await
+    });
+
+    wait_for_nonempty_file(&fixture.ready, "cancelled backup ready marker").await;
+    let parent_pid = fixture_pid(&fixture.parent_pid, "cancelled backup parent PID");
+    let descendant_pid = fixture_pid(
+        fixture
+            .descendant_pid
+            .as_deref()
+            .expect("cancelled fixture should record a descendant PID"),
+        "cancelled backup descendant PID",
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while reader_activity.load(Ordering::Acquire) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled backup output readers should start");
+
+    caller.abort();
+    assert!(
+        caller
+            .await
+            .expect_err("cancelled caller task should not complete")
+            .is_cancelled()
+    );
+
+    let cleanup = tokio::time::timeout(Duration::from_secs(5), async {
+        while pid_exists(parent_pid)
+            || pid_exists(descendant_pid)
+            || reader_activity.load(Ordering::Acquire) != 0
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if let Err(error) = cleanup {
+        kill_fixture_pid(descendant_pid);
+        kill_fixture_pid(parent_pid);
+        panic!("cancelled backup supervisor did not quiesce: {error}");
+    }
+    assert_path_remains_absent(&fixture.delayed_sentinel).await;
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn pre_op_backup_missing_script_fails_closed() {
+    let _env_guard = backup_script_env_lock()
+        .lock()
+        .expect("backup env mutex should not be poisoned");
+
+    let backup_dir = tempfile::tempdir().expect("temp backup dir should create");
+    let missing_script = backup_dir.path().join("missing-backup.sh");
+    let db_path = backup_dir.path().join("master.db");
+    std::fs::write(&db_path, b"test db").expect("temp master.db should create");
+    let _backup_env = EnvVarGuard::set("REKLAWDBOX_BACKUP_SCRIPT", &missing_script);
+
+    let error = crate::adapters::rekordbox::backup::run_pre_op_backup(&db_path)
+        .await
+        .expect_err("missing custom backup script must fail closed");
+    assert!(error.contains(&missing_script.to_string_lossy().to_string()));
+    assert!(!error.contains("REKORDBOX_DB_PATH="));
+    assert!(!error.contains("environment"));
 }

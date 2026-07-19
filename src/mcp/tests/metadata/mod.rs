@@ -3,5 +3,4 @@
 mod backfill;
 mod contracts;
 mod export_backup;
-mod support;
 mod updates;
