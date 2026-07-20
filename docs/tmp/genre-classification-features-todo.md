@@ -19,7 +19,7 @@ notes or speculative plans; use them for implementation detail, not priority.
    wiring. User listening and genre judgement are part of the development loop.
 4. Defer conjunctive templates and training refactors until several
    independently validated features exist.
-5. Treat Plans 034–035 as the current classifier contract: confidence is
+5. Keep the post-provider-removal classifier contract: confidence is
    source-aware, Discogs readiness is album-aware, and audio profiles must be
    scorable and metadata-compatible before they vote.
 
@@ -34,8 +34,8 @@ notes or speculative plans; use them for implementation detail, not priority.
   `conjunctive-templates-plan.md`,
   `prototype-training-improvements-plan.md`,
   `deep-techno-classification-ideas.md`.
-- Post-provider-removal contract: `../../plans/034-make-classification-confidence-source-aware.md`
-  and `../../plans/035-align-classification-readiness-and-fallbacks.md`.
+- The post-provider-removal contract is enforced by the current classifier and
+  readiness regressions.
 
 ## Background
 

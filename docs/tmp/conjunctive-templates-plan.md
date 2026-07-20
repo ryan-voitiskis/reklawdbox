@@ -2,8 +2,9 @@
 
 > **Historical design note:** This proposal predates the 2026-07-14 Beatport
 > removal and source-aware confidence model. Its provider weights, source paths,
-> and insertion points are not current. Re-audit it against Plans 034–035 and
-> the live classifier before implementing any template work.
+> and insertion points are not current. Re-audit it against the live
+> source-aware classifier and readiness regressions before implementing any
+> template work.
 
 **Date:** 2026-04-26
 **Status:** Design proposal. Depends on B1/B2/B3 (cached-feature wiring) and A1/A2/A3/A5 (new stratum-dsp features) shipping first. No template work begins until at least one of A1–A5 has passed validation.
