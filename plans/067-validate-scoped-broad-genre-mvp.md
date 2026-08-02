@@ -153,6 +153,18 @@ Recorded development result:
 The result replayed byte-identically. The sealed holdout has not received
 representation extraction or model inference.
 
+The label-blind holdout input preparer is frozen before reading the roster:
+
+- source SHA-256:
+  `ae0092fe2cb454a1f77b904f786cdcaf17ecfbb6c68376024272fc3a885217e1`;
+- Plan 060 audit manifest SHA-256:
+  `cea1520a6bd930250f032629732f8b53edf4143bfd1b4aabe9d315eb588105be`;
+- Plan 060 feature artifact SHA-256:
+  `49c5e57aea256cb9a721d9a4215410511e725aaa2f3b8abcfbcb2b10308ca9a1`;
+- exact holdout path and track identity join in sealed order;
+- read-only Stratum version-21 kick-cache extraction; and
+- 21 focused and inherited tests pass.
+
 ## Full-fit and holdout boundary
 
 If neither scoped candidate passes, record a bounded negative and stop. If one
