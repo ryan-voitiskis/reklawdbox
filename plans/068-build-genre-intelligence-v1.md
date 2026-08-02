@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress
+> **Status:** In progress; blind truth batch B01 awaiting review
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -213,6 +213,38 @@ per-target stability fails. After three preregistered candidate families fail
 on a sufficiently supported corpus, record a rigorous negative result and
 choose the next direction from observed error structure. Do not continue model
 or threshold sweeps merely because compute is available.
+
+## Batch B01 pre-review result
+
+The selector consumed the exact retired Plan 067 roster after the plan,
+selection rules, exporter, and tests were committed. It selected six distinct
+paths, normalized artists, and release groups under the frozen three/two/one
+sampling quotas without inspecting Plan 067 predictions. A second selection
+run was byte-identical.
+
+The exporter matched all six identities and paths against the live read-only
+library. `preview_changes` was empty before and after `write_xml`, which wrote a
+playlist-only XML with six collection rows and six playlist references. The
+blank review sheet and guide contain identity and response fields only; hidden
+sampling strata and model outputs are absent. Track identities, paths, sampling
+strata, and future verdicts remain outside Git.
+
+Reproducibility record:
+
+- roster SHA-256:
+  `05e21bd2a42d233047f52104732563a64556921e0d9c750fd3a4d30c917e74c0`
+- byte-identical pre-export private result SHA-256:
+  `b5f31402c6d44147ef3495122b2f88bc9ab7d981d8e64a2da876c7cc8b756f29`
+- exported private mapping SHA-256:
+  `3a729e9e5478c7c0ba14e2873d68c4143740a6ff277c82d5c4e7fbf18bc165e1`
+- playlist XML SHA-256:
+  `c7fe3e785d4beb28a7a49bd31d76bc0515c1f38bfed1dd1fb252b8024b8b683c`
+- blank review sheet SHA-256:
+  `589905eb8c21a65c39ead1691b0865b178556323694c74153485774bd113717f`
+- blind review guide SHA-256:
+  `2c267250e57b2a610f5e026357bd11609236666d85ba7c34ca020ac0b2f94fe4`
+
+Only the six operator listening verdicts remain for this batch.
 
 ## Done criteria
 
