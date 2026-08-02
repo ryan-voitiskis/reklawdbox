@@ -1,6 +1,6 @@
 # Plan 066: Evaluate permissively licensed broad-genre representations
 
-> **Status:** Holdout sealed; no candidate has seen it
+> **Status:** Development inputs frozen; sealed holdout unopened
 > **Objective:** Determine whether one production-plausible audio representation
 > can turn the useful Plan 065 kick evidence into release-grade, selective broad
 > genre suggestions.
@@ -177,6 +177,35 @@ patch count, a `(patches, 512)` model output, a finite 512-value track output,
 and unit L2 norm. This validated mechanics only; no development or holdout
 classification was inspected.
 
+The completed label-blind development extraction is frozen as follows:
+
+- ordered decoded-source SHA-256 for both representations:
+  `b4c9a9df9516bd0819ac8f3687f9087814d7bc5995d2ca7bb00c7fc28484d2c4`;
+- OpenL3 feature artifact SHA-256:
+  `d9c06b2df65199d98e17277a268e69732e41c7e7b76d6f9e2c82824461b8097c`;
+- OpenL3 extraction summary SHA-256:
+  `82951bbc023d49cea1c1ade10d7808da95778397fc871063646e043e65393b09`;
+- CLAP feature artifact SHA-256:
+  `097443ac6ec6f0195ce8904643ec74703b3a81c50ed9d0610213b7674970d59a`;
+- CLAP extraction summary SHA-256:
+  `ccaf9fbbda54c086faf2b1856b27cf4194e830998635a30e292eb830eb2da745`;
+  and
+- each artifact contains 668 finite, unit-normalized, 512-dimensional rows.
+
+The evaluation implementation is also frozen before its first
+genre-conditioned run:
+
+- evaluator source SHA-256:
+  `384c0d62993fcbefb689b97c884935ee94579c01175f39e2472e50a91ee78bf5`;
+- broad evaluator support source SHA-256:
+  `25bc75ccca3c2122be1ec3037054e8f934b8cd4438b67d9a0166a34d77661558`;
+- supervised evaluator support source SHA-256:
+  `ade670e4b25689e0f3175829300744715e8d15f2803ddf5e63c41f092e2d8ce2`;
+- kick evaluator support source SHA-256:
+  `da2ad49e9797a75c4f5573c5be9e9138708306b218ab59480ab74172df6c5746`;
+  and
+- 16 focused evaluator and inherited adapter tests pass.
+
 ## Frozen candidates
 
 Evaluate exactly two candidates, one per new representation. Each appends a
@@ -200,17 +229,41 @@ There is no embedding concatenation between OpenL3 and CLAP, no fine-tuning,
 zero-shot text prompt, target-specific threshold, class prior, BPM rule, or
 third representation.
 
+### Frozen full-fit holdout model
+
+The nested fold-local thresholds are a development stability test, not a
+deployable threshold. For each candidate, use its five outer out-of-fold
+predictions and margins to select one global threshold with the unchanged 90%
+precision target, maximum-offer rule, and deterministic tie-break. Require at
+least `max(60, ceil(10% of development rows))` offers during calibration.
+
+Apply that one threshold to the same outer out-of-fold margins and require the
+entire development gate below a second time. A candidate is holdout-ready only
+if both its nested fold-local gate and this global deployment-threshold gate
+pass.
+
+For a holdout-ready candidate, fit both PCA transforms, imputation,
+standardization, and the ridge head once on all 668 development rows. Apply the
+global out-of-fold threshold unchanged to final-model holdout margins. The
+holdout inputs must be exact Plan 060 rows joined by path and must use the
+already-frozen Plan 065 kick extractor, Discogs-EffNet inputs, baseline broad
+one-hot, arrangement descriptors, and only the selected new representation.
+Do not use current genre or sampling stratum as an input.
+
 If both candidates pass, select by this fixed order:
 
-1. higher minimum outer-fold offered precision;
-2. higher minimum supported-target offered precision;
-3. higher overall offered precision;
-4. higher coverage; then
+1. higher minimum outer-fold offered precision under the global deployment
+   threshold;
+2. higher minimum supported-target offered precision under that threshold;
+3. higher overall offered precision under that threshold;
+4. higher coverage under that threshold; then
 5. OpenL3, because its runtime is materially smaller.
 
 ## Frozen development gate
 
-A candidate advances only if every Plan 065 release-development check passes:
+A candidate advances only if every Plan 065 release-development check passes
+for both nested fold-local selection and the single global deployment
+threshold:
 
 1. offered precision is at least 0.90;
 2. coverage is at least 0.50;
