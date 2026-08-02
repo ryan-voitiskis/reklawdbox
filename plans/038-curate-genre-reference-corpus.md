@@ -56,6 +56,14 @@ hierarchical-router, and supervised-adapter evaluations. None passed its frozen
 development gate. Plan 055 is the retained bounded-negative Tech House
 retrieval audit.
 
+Plans 062–064 then evaluated the separately defined broad taxonomy against the
+same exposed truth. Deterministic parent consensus reached 82.32% precision at
+24.55% coverage; direct EffNet margin selection reached 88.94% at 29.70%; and a
+nested supervised broad adapter reached 87.72% at 49.85%. None passed the
+frozen 90%-precision, 50%-coverage, fold-stability, and supported-target gates.
+No broad candidate is eligible for a sealed listening holdout or production
+release.
+
 The 2026-08-02 truth audit found 51 unambiguous, operator-approved development
 references absent from `genre_verified`. They were approved before the
 representation outputs were inspected and are not eligible for a future sealed
@@ -70,6 +78,13 @@ Plan 059 records the completed expanded-corpus development rerun. None of its
 unchanged trainable candidates passed. Representation tuning on this exposed
 truth now stops; any reuse of the signal belongs in a read-only listening-audit
 workflow, not an automatic metadata classifier.
+
+The broad evaluations do not justify more reference purchasing by themselves:
+their dominant limitation is representation and confidence stability, not an
+unresolved operator verdict. Additional development must ask a new,
+mechanism-grounded feature question or evaluate a genuinely new representation
+under a separately frozen plan. Rearranging thresholds or model heads over the
+same inputs is not a gap-driven corpus task.
 
 ## Reference-corpus maintenance rules
 

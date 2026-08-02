@@ -1,7 +1,7 @@
 # Plan 064: Evaluate a supervised broad-genre adapter
 
-> **Status:** Approved and pre-registered on 2026-08-02; development evaluation
-> pending
+> **Status:** Complete on 2026-08-02; supervised broad adapter is a bounded
+> negative
 > **Objective:** Test whether one fixed shallow adapter can turn the existing
 > EffNet, v0.33, and arrangement signals into release-grade selective broad
 > genre suggestions.
@@ -133,3 +133,41 @@ remain outside Git.
 This plan is complete when the frozen candidate has run once, replayed
 byte-identically, and been recorded as a development pass or bounded negative.
 Only a pass warrants a new listening holdout.
+
+## Recorded result
+
+The aggregate report is
+[Supervised Broad Genre Adapter Evaluation](../docs/genre-classification/broad-genre-supervised-adapter-evaluation.md).
+
+The unselective outer-fold adapter reached 72.09% broad accuracy. Nested
+confidence selection offered 334 of 670 rows (49.85% coverage) at 87.72%
+precision. It failed four frozen checks:
+
+- offered precision was below 90%;
+- coverage was below 50%;
+- folds 1 and 3 were below the 85% precision floor; and
+- Breakbeat, IDM, Minimal, and Tech House fell below the supported-target
+  precision guard.
+
+The selective result improved precision by 15.63 percentage points over the
+same adapter without abstention, but it did not pass. The nested inner
+thresholds all met 90% precision before being applied to their untouched outer
+fold; their weaker outer performance is evidence of instability rather than
+threshold leakage.
+
+The result replayed byte-identically. No listening holdout is warranted, and
+the feature set, ridge penalty, preprocessing, and threshold recipe receive no
+post-result tuning.
+
+Reproducibility record:
+
+- private aggregate result SHA-256:
+  `4299c029062b122a1a54394c6baf879497a065e5f26c5f87df82cc5d6e205fdc`
+- broad semantic SHA-256:
+  `efe20460e7cc4b70af275ada2002be0dafa5cfbec0513a3cdd656b665773c255`
+- development corpus fingerprint:
+  `sha256:a71b4ecf096c7b5a7abd147c9d91d37845a10fb12e8da684000ac8dfe56f3061`
+
+Adapter work over these same inputs now stops. A later development proposal
+must add a separately justified audio feature or a genuinely new
+representation, or collect new truth before fitting again.
