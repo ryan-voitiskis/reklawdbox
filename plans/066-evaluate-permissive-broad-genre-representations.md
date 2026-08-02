@@ -1,6 +1,6 @@
 # Plan 066: Evaluate permissively licensed broad-genre representations
 
-> **Status:** Development inputs frozen; sealed holdout unopened
+> **Status:** Complete on 2026-08-02; bounded negative, sealed holdout unopened
 > **Objective:** Determine whether one production-plausible audio representation
 > can turn the useful Plan 065 kick evidence into release-grade, selective broad
 > genre suggestions.
@@ -327,3 +327,42 @@ This plan is complete when the holdout is sealed before inference, both fixed
 representations have either run or failed a hard licence/runtime prerequisite,
 the frozen development result replays byte-identically, and either a passing
 candidate is ready for blind holdout review or the bounded negative is recorded.
+
+## Recorded result
+
+The aggregate report is
+[Permissive Broad-Genre Representation Evaluation](../docs/genre-classification/broad-genre-permissive-representation-evaluation.md).
+
+CLAP was the strongest candidate. Its nested result reached 91.56% offered
+precision at 60.33% coverage, and all five outer folds cleared the 85%
+precision floor. It nevertheless failed the supported-target guard for
+Breakbeat, Trance, IDM, and Minimal. Its frozen global deployment threshold
+reached 90.11% precision at 66.62% coverage but failed the same guard for
+Garage, Breakbeat, Trance, IDM, and Minimal.
+
+OpenL3 reached 87.94% nested precision at 59.58% coverage. It also failed the
+aggregate precision, fold-stability, and supported-target checks. Its global
+threshold crossed the aggregate gates but still failed Garage, Breakbeat, and
+Tech House.
+
+Neither candidate passes both required views. No full-fit model was created,
+the holdout received no inference, and no listening review is warranted. The
+result replayed byte-identically.
+
+Reproducibility record:
+
+- private aggregate result SHA-256:
+  `265df46ff10873355f933b0347229b8c2c282de0f3745c07be08e6599fc433dd`;
+- OpenL3 feature artifact SHA-256:
+  `d9c06b2df65199d98e17277a268e69732e41c7e7b76d6f9e2c82824461b8097c`;
+- CLAP feature artifact SHA-256:
+  `097443ac6ec6f0195ce8904643ec74703b3a81c50ed9d0610213b7674970d59a`;
+- sealed holdout artifact SHA-256:
+  `532ce77378154949f2f02e5283c9c12ec528639f3be912aa2ddba2ba71b35589`;
+  and
+- result replay: byte-identical.
+
+Do not tune the representation, target mapping, thresholds, PCA size, ridge,
+or target-specific rules on these exposed rows. The justified next step is a
+new, preregistered truth-corpus expansion for sparse and unstable broad roots,
+not another feature sweep over this development set.
