@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -26,7 +27,20 @@ use crate::domain::metadata as normalize;
 use super::evidence::build_track_evidence;
 
 const EXPERIMENT_ID: &str = "genre-profile-grouped-cv-v2-expanded-corpus";
+const AUDIT_EXPERIMENT_ID: &str = "genre-audit-consensus-v1";
+const DEVELOPMENT_CORPUS_FINGERPRINT: &str =
+    "sha256:a71b4ecf096c7b5a7abd147c9d91d37845a10fb12e8da684000ac8dfe56f3061";
 const FOLD_COUNT: usize = 5;
+const AUDIT_EXCLUSION_PLAYLISTS: [&str; 8] = [
+    "genre_verified",
+    "genre_reference_candidates",
+    "genre_discovery_blind_v1",
+    "genre_discovery_v2_tech_house_batch_01",
+    "genre_discovery_v3_tech_house_batch_01",
+    "minimal_candidates",
+    "minimal_research_candidates_v2",
+    "tech_house_research_candidates_v2",
+];
 
 struct PreparedRow {
     truth: &'static str,
@@ -189,6 +203,43 @@ struct PrivateEmbeddingRow {
     truth: &'static str,
     fold: usize,
     baseline_recommendation: Option<&'static str>,
+    arrangement_dynamic: [Option<f64>; 4],
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateGenreAuditManifest {
+    experiment_id: &'static str,
+    stage: &'static str,
+    development_corpus_fingerprint: &'static str,
+    candidate_corpus_fingerprint: String,
+    patches_per_track: usize,
+    model_url: &'static str,
+    model_sha256: &'static str,
+    metadata_url: &'static str,
+    metadata_sha256: &'static str,
+    library_rows: usize,
+    excluded_playlist_rows: usize,
+    missing_file_rows: usize,
+    candidate_input_rows: usize,
+    canonical_candidate_rows: usize,
+    usable_rows: usize,
+    exclusions: ExclusionCounts,
+    exclusion_playlists: Vec<&'static str>,
+    rows: Vec<PrivateGenreAuditRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateGenreAuditRow {
+    row_index: usize,
+    track_id: String,
+    file_path: String,
+    artist: String,
+    title: String,
+    album: String,
+    current_genre: &'static str,
+    bpm: f64,
+    baseline_recommendation: Option<&'static str>,
+    baseline_confidence: ClassificationConfidence,
     arrangement_dynamic: [Option<f64>; 4],
 }
 
@@ -634,11 +685,18 @@ fn load_private_rows() -> Result<LoadedRows, String> {
         .ok_or_else(|| "playlist 'genre_verified' not found".to_string())?;
     let tracks = rekordbox::get_playlist_tracks_unbounded(&rekordbox_conn, &playlist.id, None)
         .map_err(|error| error.to_string())?;
+    load_rows_from_tracks(&rekordbox_conn, tracks)
+}
+
+fn load_rows_from_tracks(
+    rekordbox_conn: &Connection,
+    tracks: Vec<Track>,
+) -> Result<LoadedRows, String> {
     let playlist_rows = tracks.len();
 
     let identities = audio_cache_identities_with_rekordbox_connection(
         tracks.iter().map(|track| track.file_path.as_str()),
-        &rekordbox_conn,
+        rekordbox_conn,
     );
     let store_path = state::resolve_path();
     let store_path = store_path
@@ -952,6 +1010,123 @@ fn build_private_embedding_manifest() -> Result<PrivateEmbeddingManifest, String
     })
 }
 
+fn build_private_genre_audit_manifest() -> Result<PrivateGenreAuditManifest, String> {
+    let db_path = rekordbox::resolve_db_path()
+        .ok_or_else(|| "could not resolve Rekordbox master.db".to_string())?;
+    let rekordbox_conn = rekordbox::open(&db_path).map_err(|error| error.to_string())?;
+    let playlists = rekordbox::get_playlists(&rekordbox_conn).map_err(|error| error.to_string())?;
+
+    let mut excluded_ids = BTreeSet::new();
+    let mut verified_tracks = None;
+    for required_name in AUDIT_EXCLUSION_PLAYLISTS {
+        let playlist = playlists
+            .iter()
+            .find(|playlist| playlist.name.eq_ignore_ascii_case(required_name))
+            .ok_or_else(|| {
+                format!("required audit exclusion playlist '{required_name}' not found")
+            })?;
+        let tracks = rekordbox::get_playlist_tracks_unbounded(&rekordbox_conn, &playlist.id, None)
+            .map_err(|error| error.to_string())?;
+        if required_name == "genre_verified" {
+            verified_tracks = Some(tracks.clone());
+        }
+        excluded_ids.extend(tracks.into_iter().map(|track| track.id));
+    }
+
+    let verified = load_rows_from_tracks(
+        &rekordbox_conn,
+        verified_tracks.ok_or_else(|| "genre_verified rows were not loaded".to_string())?,
+    )?;
+    if verified.corpus_fingerprint != DEVELOPMENT_CORPUS_FINGERPRINT {
+        return Err(format!(
+            "genre_verified development fingerprint changed: expected {DEVELOPMENT_CORPUS_FINGERPRINT}, found {}",
+            verified.corpus_fingerprint
+        ));
+    }
+
+    let library_tracks = rekordbox::search_tracks_unbounded(
+        &rekordbox_conn,
+        &rekordbox::SearchParams {
+            exclude_samples: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let library_rows = library_tracks.len();
+    let unexposed: Vec<_> = library_tracks
+        .into_iter()
+        .filter(|track| !excluded_ids.contains(&track.id))
+        .collect();
+    let missing_file_rows = unexposed
+        .iter()
+        .filter(|track| !Path::new(&track.file_path).is_file())
+        .count();
+    let candidate_tracks: Vec<_> = unexposed
+        .into_iter()
+        .filter(|track| Path::new(&track.file_path).is_file())
+        .collect();
+    let candidate_input_rows = candidate_tracks.len();
+    let LoadedRows {
+        rows,
+        canonical_rows,
+        exclusions,
+        corpus_fingerprint,
+        ..
+    } = load_rows_from_tracks(&rekordbox_conn, candidate_tracks)?;
+
+    let mut audit_rows = Vec::with_capacity(rows.len());
+    for (row_index, row) in rows.into_iter().enumerate() {
+        let baseline = classify_track_with_profiles(&row.evidence, None);
+        if !baseline.current_genre.is_empty() {
+            return Err("audit baseline unexpectedly retained current genre".to_string());
+        }
+        let audio = row
+            .evidence
+            .audio
+            .as_ref()
+            .expect("usable audit row has audio");
+        audit_rows.push(PrivateGenreAuditRow {
+            row_index,
+            track_id: row.track.id.clone(),
+            file_path: row.track.file_path.clone(),
+            artist: row.track.artist.clone(),
+            title: row.track.title.clone(),
+            album: row.track.album.clone(),
+            current_genre: row.truth,
+            bpm: row.track.bpm,
+            baseline_recommendation: baseline.genre,
+            baseline_confidence: baseline.confidence,
+            arrangement_dynamic: [
+                audio.loudness_range,
+                audio.dynamic_complexity,
+                audio.spectral_flux_mean,
+                audio.onset_rate,
+            ],
+        });
+    }
+
+    Ok(PrivateGenreAuditManifest {
+        experiment_id: AUDIT_EXPERIMENT_ID,
+        stage: "whole_library_consensus_audit_v1",
+        development_corpus_fingerprint: DEVELOPMENT_CORPUS_FINGERPRINT,
+        candidate_corpus_fingerprint: corpus_fingerprint,
+        patches_per_track: 12,
+        model_url: "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bsdynamic-1.onnx",
+        model_sha256: "a280825b334797cf677939db8cd5762c0392aedd0ca6415dbc1cd083f045e43c",
+        metadata_url: "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bsdynamic-1.json",
+        metadata_sha256: "a2e85b2e7372d5f8e0f35bdd6aeae1139f101087d183d0b2fb60b0ea0f01a0ff",
+        library_rows,
+        excluded_playlist_rows: excluded_ids.len(),
+        missing_file_rows,
+        candidate_input_rows,
+        canonical_candidate_rows: canonical_rows,
+        usable_rows: audit_rows.len(),
+        exclusions,
+        exclusion_playlists: AUDIT_EXCLUSION_PLAYLISTS.to_vec(),
+        rows: audit_rows,
+    })
+}
+
 fn write_result(path: &Path, result: &ProfileEvaluationResult) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(result).map_err(|error| error.to_string())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())
@@ -1240,6 +1415,37 @@ mod tests {
                 "rows": manifest.rows.len(),
                 "model_sha256": manifest.model_sha256,
                 "metadata_sha256": manifest.metadata_sha256,
+            })
+        );
+    }
+
+    #[test]
+    #[ignore = "requires private Rekordbox library and current audio cache"]
+    fn private_genre_audit_manifest() {
+        let output = std::env::var("REKLAWDBOX_GENRE_AUDIT_MANIFEST_OUTPUT")
+            .expect("set REKLAWDBOX_GENRE_AUDIT_MANIFEST_OUTPUT");
+        let manifest =
+            build_private_genre_audit_manifest().expect("build private genre audit manifest");
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&manifest).expect("serialize private genre audit manifest"),
+        )
+        .expect("write private genre audit manifest");
+        println!(
+            "GENRE_AUDIT_MANIFEST_SUMMARY_JSON={}",
+            serde_json::json!({
+                "output_path": output,
+                "experiment_id": manifest.experiment_id,
+                "stage": manifest.stage,
+                "development_corpus_fingerprint": manifest.development_corpus_fingerprint,
+                "candidate_corpus_fingerprint": manifest.candidate_corpus_fingerprint,
+                "library_rows": manifest.library_rows,
+                "excluded_playlist_rows": manifest.excluded_playlist_rows,
+                "missing_file_rows": manifest.missing_file_rows,
+                "candidate_input_rows": manifest.candidate_input_rows,
+                "canonical_candidate_rows": manifest.canonical_candidate_rows,
+                "usable_rows": manifest.usable_rows,
+                "exclusions": manifest.exclusions,
             })
         );
     }
