@@ -26,7 +26,7 @@ redistribution must not be prohibited.
 
 | Representation                       | Decision            | Reason                                                                                                            |
 | ------------------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| OpenL3 music, mel128, 512 dimensions | Evaluate            | MIT code, CC BY 4.0 weights, 18.8 MB frozen graph, and an existing Essentia inference path                        |
+| OpenL3 music, mel128, 512 dimensions | Evaluate            | MIT code, CC BY 4.0 weights, 18.7 MB ONNX model, and a small local inference path                                 |
 | LAION CLAP HTSAT unfused             | Evaluate            | Apache-2.0 model card, audio-native 512-dimensional embeddings, and a pinned 614.5 MB checkpoint                  |
 | MAEST                                | Reject              | MTG publishes its models under CC BY-NC-SA 4.0 unless separately licensed                                         |
 | MERT v1 95M                          | Reject              | CC BY-NC 4.0 weights                                                                                              |
@@ -39,8 +39,8 @@ Pinned sources:
 - OpenL3 source revision
   `b0bf9b627ed943414324af2ba350917d764207c3`; upstream weights are
   [CC BY 4.0](https://github.com/marl/openl3#model-weights-license).
-- OpenL3 graph:
-  `https://essentia.upf.edu/models/feature-extractors/openl3/openl3-music-mel128-emb512-3.pb`.
+- OpenL3 model:
+  `https://essentia.upf.edu/models/feature-extractors/openl3/openl3-music-mel128-emb512-3.onnx`.
 - CLAP model revision
   `8fa0f1c6d0433df6e97c127f64b2a1d6c0dcda8a`; the pinned
   [model card](https://huggingface.co/laion/clap-htsat-unfused/tree/8fa0f1c6d0433df6e97c127f64b2a1d6c0dcda8a)
@@ -128,7 +128,7 @@ changes, or XML.
 
 ### OpenL3
 
-- model: `openl3-music-mel128-emb512-3.pb`;
+- model: `openl3-music-mel128-emb512-3.onnx`;
 - sample rate: 48 kHz mono;
 - input: 128 Slaney mel bands using the official OpenL3/Essentia preprocessing;
 - excerpts: twelve deterministic one-second excerpts evenly spaced across the
@@ -151,6 +151,31 @@ changes, or XML.
 
 Extraction is label-blind. Freeze model, extractor-source, ordered-source, and
 feature-artifact SHA-256 values in this plan before classifier evaluation.
+
+Frozen model and extractor record, committed before development audio
+extraction:
+
+- OpenL3 ONNX SHA-256:
+  `81c24c8a723054717fdea5c7448acb6023baaf70a0fc526deb030c2032db0ed3`
+  (18,740,670 bytes);
+- CLAP weights SHA-256:
+  `1cd3c601bc4afe0fa87be3de4c13dd2cfadd249fac1e29acf74a9b296c3219bb`
+  (614,525,833 bytes);
+- CLAP config SHA-256:
+  `9efb9557bc804f2ca6e394486af2e45dfed0b18554909735a99c6220b84e4288`;
+- CLAP preprocessing config SHA-256:
+  `9739f58296aa6f9ac18008fd0150fb2649bc554985fbde86d0a4041c882ac753`;
+- extractor source SHA-256:
+  `5d09431f18e77320a8f0c77b0af393cce4ea8979275cfb6adc2b7b5f44fd7e5c`;
+- OpenL3 evaluation runtime: NumPy 2.5.1, Essentia 2.1-beta6-dev,
+  ONNX Runtime 1.28.0; and
+- CLAP evaluation runtime: NumPy 2.3.5, PyTorch 2.13.0, Transformers
+  4.57.6, MPS float32 inference.
+
+Both extractors passed a synthetic-audio end-to-end check with their frozen
+patch count, a `(patches, 512)` model output, a finite 512-value track output,
+and unit L2 norm. This validated mechanics only; no development or holdout
+classification was inspected.
 
 ## Frozen candidates
 
