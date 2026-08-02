@@ -1,6 +1,6 @@
 # Plan 067: Validate a scoped broad-genre MVP
 
-> **Status:** Development gate passed; OpenL3 selected, holdout untouched
+> **Status:** Complete on 2026-08-02; holdout coverage bounded negative
 > **Objective:** Determine whether a deliberately limited set of broad-root
 > suggestions can deliver useful, honest value before the full 26-target truth
 > corpus is ready.
@@ -271,3 +271,40 @@ candidate is permanently accepted or retired.
 This plan is complete when the new holdout is sealed before scoped evaluation,
 both fixed candidates replay once, and either one candidate is ready for blind
 holdout review or the bounded negative is recorded.
+
+## Recorded result
+
+The aggregate report is
+[Scoped Broad-Genre MVP Evaluation](../docs/genre-classification/scoped-broad-genre-mvp-evaluation.md).
+
+Both OpenL3 and CLAP passed every scoped development gate. OpenL3 was selected
+by the preregistered runtime priority. Its nested result reached 94.57%
+precision at 41.32% coverage; its fixed global threshold reached 95.56%
+precision at 40.42% coverage.
+
+The independent holdout failed before listening. The full-fit OpenL3 model made
+14 offers across 48 rows, or 29.17% coverage, below the frozen minimum of 20
+offers. Aggregate offered roots were Ambient 4, House 6, and Techno 4. Human
+truth cannot repair an offer-count failure, so no prediction, confidence, or
+review row was exposed.
+
+The candidate is retired unchanged. Do not lower its threshold, enlarge its
+allowlist, or run CLAP on the same holdout. The original Plan 066 holdout
+remains sealed.
+
+Reproducibility record:
+
+- private prediction artifact SHA-256:
+  `6e52c5b85397a94f4e25174844a11f10fda4cbf6f60141dcf53eebd73dbdd6c6`;
+- private holdout artifact SHA-256:
+  `7a188602d547052cc2ede517d74458d77bdd69509aefc2c67e3dac1fab3ff00f`;
+- private development-result SHA-256:
+  `baf0045315fd48ad19be92f209402e75d0af84815aa6a90bb8bf7b637ceaeea9`;
+- offer count: 14 of 48;
+- result replay: byte-identical; and
+- listening rows exposed: zero.
+
+The next justified phase is a preregistered broad-truth expansion in blind
+batches of at most six. Because this candidate is permanently retired, its
+former holdout may be repurposed as development truth only after this result is
+committed and the holdout status is explicitly removed.
