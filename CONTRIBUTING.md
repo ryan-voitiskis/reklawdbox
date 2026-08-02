@@ -73,12 +73,15 @@ After changing the genre reference candidate corpus, also run:
 ```bash
 python3 -m unittest scripts/test_validate_genre_reference_corpus.py
 python3 -m json.tool docs/genre-classification/genre-reference-candidates.json >/dev/null
-python3 scripts/validate_genre_reference_corpus.py docs/genre-classification/genre-reference-candidates.json
+python3 scripts/validate_genre_reference_corpus.py --allow-incomplete \
+  docs/genre-classification/genre-reference-candidates.json
 ```
 
-During an explicitly incomplete family-wave checkpoint, the final command may
-temporarily use `--allow-incomplete`. That mode still fully validates every
-populated genre and never permits taxonomy drift or `Experimental` candidates.
+The maintained corpus is intentionally gap-driven. `--allow-incomplete` fully
+validates every populated dossier and never permits taxonomy drift or
+`Experimental` candidates. Validator complete mode preserves the retired
+52-dossier contract for archival or voluntary completion; it is not a project
+gate.
 
 ## Safety boundaries
 

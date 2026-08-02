@@ -2,7 +2,7 @@
 
 **Research snapshot:** 2026-07-18
 
-**Status:** Seven-genre ambiguity pilot complete; 45 genre dossiers remain
+**Status:** Seven reusable dossiers complete; additional research is gap-driven
 
 **Candidate playlist:** `genre_reference_candidates`
 
@@ -48,7 +48,8 @@ not genre significance.
 
 ## Source And Selection Standard
 
-Each genre needs at least three definition sources from at least two independent
+When a measured classifier gap justifies a new or refreshed dossier, that
+dossier needs at least three definition sources from at least two independent
 publishers, including an institutional, academic, archival, first-party
 artist/label, established historical, or respected scene source. Every
 candidate needs two independent canonicality sources, separate version/release
@@ -56,11 +57,12 @@ metadata, and at least one opened direct digital-purchase page. Access dates
 describe only this snapshot; availability must be rechecked before any future
 purchase decision.
 
-Each genre needs at least 12 candidates: four foundational, four
-representative, two contemporary, and two boundary recordings. The set must
-span at least eight lead acts, four labels, and three meaningful eras or scene
-generations. An act may appear at most twice and one label may supply no more
-than 25 percent of a genre's set.
+A completed dossier uses at least 12 candidates: four foundational, four
+representative, two contemporary, and two boundary recordings. The set spans
+at least eight lead acts, four labels, and three meaningful eras or scene
+generations. An act appears at most twice and one label supplies no more than
+25 percent of a genre's set. Empty dossiers are a coverage map, not mandatory
+backlog.
 
 The recommended future split is at least six training anchors, four sealed
 holdout candidates, and two boundary-review recordings per genre. These are
@@ -114,14 +116,16 @@ Lee “Scratch” Perry, Errol Thompson, Augustus Pablo, and Scientist canon.
 
 The `Dub` dossier must still exclude generic “dub mix” naming and distinguish
 the Jamaican reggae-derived genre from `Reggae`, `Dub Techno`, `Dubstep`, and
-other cross-genre uses of dub production techniques. The candidate corpus now
-covers 52 targets: 53 live canonical names minus `Experimental`.
+other cross-genre uses of dub production techniques. The candidate corpus
+retains records for 52 possible targets: 53 live canonical names minus
+`Experimental`.
 
 The 2026-07-18 pilot checkpoint populates 7 of those 52 dossiers with 84
 source-verified candidates. Every populated genre meets the complete
-per-genre evidence, diversity, availability, role, and leakage requirements;
-the remaining 45 dossiers are intentionally empty for subsequent family
-waves. This is an incomplete research checkpoint, not a completed corpus.
+per-genre evidence, diversity, availability, role, and leakage requirements.
+The remaining 45 dossiers are intentionally empty. They are populated only
+when broad evaluation identifies a concrete genre or confusion boundary that
+needs more evidence.
 
 ## Taxonomy Decision: Tech House Is Multi-Strain
 
@@ -168,68 +172,69 @@ statuses must be reconciled whenever the structured corpus changes.
 
 | Genre | Family | Disposition | Candidates | Status / caveat |
 |---|---|---:|---:|---|
-| 2-Step Garage | House | audio_reference | 0 | Research pending |
-| Acid | Techno | audio_reference | 0 | Research pending |
-| Afro House | House | audio_reference | 0 | Research pending |
-| Ambient | Downtempo | audio_reference | 0 | Research pending |
-| Ambient Techno | Techno | audio_reference | 0 | Research pending |
-| Bassline | Bass | audio_reference | 0 | Research pending |
-| Breakbeat | Bass | audio_reference | 0 | Research pending |
-| Broken Beat | Bass | audio_reference | 0 | Research pending |
-| Dancehall | Other | metadata_led | 0 | Research pending |
-| Deep House | House | audio_reference | 0 | Research pending |
-| Deep Techno | Techno | audio_reference | 0 | Research pending |
-| Disco | House | audio_reference | 0 | Research pending |
-| Downtempo | Downtempo | audio_reference | 0 | Research pending |
-| Drum & Bass | Bass | audio_reference | 0 | Research pending |
+| 2-Step Garage | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Acid | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Afro House | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Ambient | Downtempo | audio_reference | 0 | Unpopulated; gap-driven only |
+| Ambient Techno | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Bassline | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Breakbeat | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Broken Beat | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Dancehall | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Deep House | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Deep Techno | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Disco | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Downtempo | Downtempo | audio_reference | 0 | Unpopulated; gap-driven only |
+| Drum & Bass | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
 | Dub | Downtempo | audio_reference | 12 | Pilot complete; Dub Reggae and Reggae Dub normalize here; Reggae and Dub Techno boundaries retained |
-| Dub Techno | Techno | audio_reference | 0 | Research pending |
-| Dubstep | Bass | audio_reference | 0 | Research pending |
-| EBM | Techno | audio_reference | 0 | Research pending |
+| Dub Techno | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Dubstep | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| EBM | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
 | Electro | Techno | taxonomy_review | 12 | Pilot complete; machine-funk lineage retained; Electro House excluded |
-| Footwork | Bass | audio_reference | 0 | Research pending |
-| Future Garage | Bass | audio_reference | 0 | Research pending |
-| Gabber | Hardcore | audio_reference | 0 | Research pending |
+| Footwork | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Future Garage | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Gabber | Hardcore | audio_reference | 0 | Unpopulated; gap-driven only |
 | Garage | House | taxonomy_review | 12 | Pilot complete; US Garage target bounded against UK Garage descendants |
-| Gospel House | House | audio_reference | 0 | Research pending |
-| Grime | Bass | audio_reference | 0 | Research pending |
-| Happy Hardcore | Hardcore | audio_reference | 0 | Research pending |
-| Hard Techno | Techno | audio_reference | 0 | Research pending |
-| Hard Trance | Hardcore | audio_reference | 0 | Research pending |
+| Gospel House | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Grime | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
+| Happy Hardcore | Hardcore | audio_reference | 0 | Unpopulated; gap-driven only |
+| Hard Techno | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Hard Trance | Hardcore | audio_reference | 0 | Unpopulated; gap-driven only |
 | Hardcore | Hardcore | taxonomy_review | 12 | Pilot complete; broad electronic-Hardcore target bounded against Gabber, Hardstyle, and Jungle |
-| Hardstyle | Hardcore | audio_reference | 0 | Research pending |
-| Highlife | Other | metadata_led | 0 | Research pending |
-| Hip Hop | Other | metadata_led | 0 | Research pending |
-| House | House | audio_reference | 0 | Research pending |
+| Hardstyle | Hardcore | audio_reference | 0 | Unpopulated; gap-driven only |
+| Highlife | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Hip Hop | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| House | House | audio_reference | 0 | Unpopulated; gap-driven only |
 | IDM | Downtempo | taxonomy_review | 12 | Pilot complete; contested umbrella retained with explicit Ambient, Breakbeat, and Techno boundaries |
-| Italo Disco | House | audio_reference | 0 | Research pending |
-| Italodance | House | audio_reference | 0 | Research pending |
-| Jazz | Other | metadata_led | 0 | Research pending |
-| Jungle | Bass | audio_reference | 0 | Research pending |
+| Italo Disco | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Italodance | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Jazz | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Jungle | Bass | audio_reference | 0 | Unpopulated; gap-driven only |
 | Minimal | Techno | taxonomy_review | 12 | Pilot complete; minimal electronic target bounded by scene and arrangement, not sparsity alone |
-| Pop | Other | metadata_led | 0 | Research pending |
-| Progressive House | House | audio_reference | 0 | Research pending |
-| Psytrance | Techno | audio_reference | 0 | Research pending |
-| R&B | Other | metadata_led | 0 | Research pending |
-| Reggae | Other | metadata_led | 0 | Research pending |
-| Rock | Other | metadata_led | 0 | Research pending |
-| Speed Garage | House | audio_reference | 0 | Research pending |
-| Synth-pop | Other | metadata_led | 0 | Research pending |
+| Pop | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Progressive House | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Psytrance | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| R&B | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Reggae | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Rock | Other | metadata_led | 0 | Unpopulated; gap-driven only |
+| Speed Garage | House | audio_reference | 0 | Unpopulated; gap-driven only |
+| Synth-pop | Other | metadata_led | 0 | Unpopulated; gap-driven only |
 | Tech House | House | taxonomy_review | 12 | Pilot complete; multi-strain target spans London roots, minimal-polished and Ibiza forms, plus underground continuity; minimal/deep-tech adjacency and the commercial festival branch remain review cohorts |
-| Techno | Techno | audio_reference | 0 | Research pending |
-| Trance | Techno | audio_reference | 0 | Research pending |
-| Trip-Hop | Downtempo | audio_reference | 0 | Research pending |
-| UK Funky | House | audio_reference | 0 | Research pending |
+| Techno | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Trance | Techno | audio_reference | 0 | Unpopulated; gap-driven only |
+| Trip-Hop | Downtempo | audio_reference | 0 | Unpopulated; gap-driven only |
+| UK Funky | House | audio_reference | 0 | Unpopulated; gap-driven only |
 
 ## Research Conclusions And Limitations
 
-The live taxonomy contains 53 names; the research scope is the exact 52 left
-after excluding only `Experimental`. The pilot has completed the bounded
-definitions and candidate sets for `Minimal`, `Garage`, `Electro`, `Hardcore`,
-`IDM`, `Dub`, and `Tech House`. Classifier families are organizational
-metadata, not musicological truth. Remaining ambiguous labels such as `Acid`,
-`Trance`, and `Downtempo` still require the same explicit definition and
-exclusion work in their family waves.
+The live taxonomy contains 53 names. The corpus retains the 52 records left
+after excluding only `Experimental`, but there is no longer a requirement to
+populate all of them. The pilot completed bounded definitions and candidate
+sets for `Minimal`, `Garage`, `Electro`, `Hardcore`, `IDM`, `Dub`, and
+`Tech House`. Classifier families are organizational metadata, not
+musicological truth. If a later evaluation identifies an ambiguous label such
+as `Acid`, `Trance`, or `Downtempo` as a measured limitation, its gap-driven
+dossier must use the same explicit definition and exclusion standard.
 
 Broad controls such as Pop, Rock, Jazz, R&B, and Highlife test electronic
 library boundaries; their candidate sets do not claim to exhaustively define a
