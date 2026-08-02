@@ -1,6 +1,6 @@
 # Plan 066: Evaluate permissively licensed broad-genre representations
 
-> **Status:** Preregistered; no candidate has seen the sealed holdout
+> **Status:** Holdout sealed; no candidate has seen it
 > **Objective:** Determine whether one production-plausible audio representation
 > can turn the useful Plan 065 kick evidence into release-grade, selective broad
 > genre suggestions.
@@ -102,6 +102,24 @@ inference. It must:
 The seed is `broad-genre-next-model-holdout-v1`. Selection occurs before any
 OpenL3 or CLAP output exists. The roster cannot be replaced or supplemented
 after development results are known.
+
+Recorded seal:
+
+- private artifact SHA-256:
+  `532ce77378154949f2f02e5283c9c12ec528639f3be912aa2ddba2ba71b35589`;
+- private roster SHA-256:
+  `e90b400645d89b287aab4300465fd0893314830bc6ec8b6ab22b5f9de4fbfdf9`;
+- library snapshot SHA-256:
+  `553dcfd0c5526f2ca8309f1a53097ac58749c8d54216879c80390c355264e653`;
+- 60 rows, 60 normalized artists, and 60 artist-release groups;
+- 707 eligible rows across 398 artists and 479 release groups; and
+- broad sampling strata: Ambient 4, Breakbeat 4, Disco 4, Downtempo 4,
+  Drum & Bass 4, Electro 5, Garage 1, Hardcore 1, House 5, IDM 2, Minimal 2,
+  Pop 5, R&B 3, Reggae 3, Tech House 3, Techno 5, and Trance 5.
+
+The selector replayed byte-identically before representation extraction. These
+strata describe only how the blind roster was sampled; they are not holdout
+truth and will not be shown during listening review.
 
 ## Frozen representation extraction
 
