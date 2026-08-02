@@ -183,6 +183,33 @@ The completed label-blind input preparation is frozen before OpenL3 extraction:
 The representation manifest contains only sealed row order, private review
 code, and path. It contains no truth, current genre, or sampling stratum.
 
+The completed label-blind OpenL3 holdout extraction is frozen as follows:
+
+- feature artifact SHA-256:
+  `45dcd030c73bd236dd8aab772ab034af0613f8bc537f1720f4f18b1408c7efe9`;
+- extraction summary SHA-256:
+  `ebf7914ee12121f523a1400505f5bf5e0eb1128e7c07074f8a0f8e37a3523471`;
+- ordered decoded-source SHA-256:
+  `177b6eee2e42c466f1f2142564754f30f3730b3dc4b01629a84bf671252e6b67`;
+- model and extractor hashes match Plan 066; and
+- all 48 embeddings are finite, 512-dimensional, and unit-normalized.
+
+The full-fit and holdout-inference implementation is frozen before its first
+holdout score:
+
+- source SHA-256:
+  `6a82536204978af1d10dfc609cbf8de5b751b7b4d4ab20fb59928b840b1efd96`;
+- exact development-result SHA-256:
+  `baf0045315fd48ad19be92f209402e75d0af84815aa6a90bb8bf7b637ceaeea9`;
+- full training-partition preprocessing and ridge fit over all 668 development
+  rows;
+- fixed threshold `0.25702530873209417` and Ambient, House, Techno allowlist;
+  and
+- 23 focused and inherited tests pass.
+
+No holdout score or prediction had been produced when this record was
+committed.
+
 ## Full-fit and holdout boundary
 
 If neither scoped candidate passes, record a bounded negative and stop. If one
