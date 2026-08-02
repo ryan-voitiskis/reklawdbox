@@ -2,6 +2,8 @@
 //!
 //! Classification domain code must not depend on application infrastructure.
 
+#[cfg(test)]
+pub(crate) mod broad;
 pub(crate) mod engine;
 mod model;
 pub(crate) mod profiles;

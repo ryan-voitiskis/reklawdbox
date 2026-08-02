@@ -1,7 +1,7 @@
 # Plan 062: Evaluate release-grade broad genre classification
 
-> **Status:** Approved and pre-registered on 2026-08-02; deterministic
-> development evaluation pending
+> **Status:** Complete on 2026-08-02; deterministic parent consensus is a
+> bounded negative
 > **Objective:** Determine whether Reklawdbox can offer materially more useful
 > broad-genre suggestions than v0.33 without adding a machine-learning runtime
 > or forcing unreliable fine labels.
@@ -173,3 +173,40 @@ This development plan is complete when the three frozen configurations have
 run once and the aggregate result is recorded. It either nominates the frozen
 parent-consensus candidate for a sealed holdout or records a bounded negative
 and hands the unchanged broad taxonomy to a separately planned ML evaluation.
+
+## Recorded result
+
+The aggregate report is
+[Broad Genre Deterministic Evaluation](../docs/genre-classification/broad-genre-deterministic-evaluation.md).
+The frozen candidate failed four of its five performance checks:
+
+- offered precision: 82.32%, required 90%;
+- coverage: 24.55%, required 50%;
+- worst fold offered precision: 51.28%, required 85%; and
+- Techno offered precision: 64.15% on 53 offers, required 75% for a supported
+  target.
+
+It improved offered precision by 33.67 percentage points over the unselective
+projection, so the contraction itself removed some bad fine-label guesses. It
+did not make v0.33 release-grade: it abstained more often than the existing
+High/Medium filter while remaining materially below the precision target.
+
+The live corpus contained 668 usable rows rather than the frozen 670. A private
+identity comparison found two absent audio files, one previously verified as
+Electro and one as Jungle, with no additions or truth-label changes. Even if
+both missing rows were perfect candidate offers, the maximum possible result
+would be 82.53% precision at 24.78% coverage, so the failure is insensitive to
+this drift.
+
+No sealed holdout is warranted. Do not tune this rule on the exposed rows. The
+unchanged broad mapping advances to a separately frozen Discogs-EffNet
+selective-classification evaluation.
+
+Reproducibility record:
+
+- broad semantic SHA-256:
+  `efe20460e7cc4b70af275ada2002be0dafa5cfbec0513a3cdd656b665773c255`
+- private aggregate result SHA-256:
+  `db69a9bee309f1c08e109b643c30bc6103f5bd6c9040f2906578f0c7d33d6f90`
+- live corpus fingerprint:
+  `sha256:b88911c7b24bbeecd1d59607ceb5e873ca29ff6f15052e77913635e5832471f1`

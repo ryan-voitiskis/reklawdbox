@@ -19,7 +19,8 @@ use crate::application::analysis::identity::{
 };
 use crate::domain::classification::{
     AudioBackendStatus, AudioFeatures, ClassificationConfidence, ClassificationMode,
-    ClassificationResult, TrackEvidence, engine::classify_track_with_profiles, profiles, taxonomy,
+    ClassificationResult, TrackEvidence, broad, engine::classify_track_with_profiles, profiles,
+    taxonomy,
 };
 use crate::domain::library::Track;
 use crate::domain::metadata as normalize;
@@ -28,6 +29,7 @@ use super::evidence::build_track_evidence;
 
 const EXPERIMENT_ID: &str = "genre-profile-grouped-cv-v2-expanded-corpus";
 const AUDIT_EXPERIMENT_ID: &str = "genre-audit-consensus-v1";
+const BROAD_EXPERIMENT_ID: &str = "broad-genre-parent-consensus-v1";
 const DEVELOPMENT_CORPUS_FINGERPRINT: &str =
     "sha256:a71b4ecf096c7b5a7abd147c9d91d37845a10fb12e8da684000ac8dfe56f3061";
 const FOLD_COUNT: usize = 5;
@@ -65,6 +67,13 @@ struct Prediction {
     predicted: Option<&'static str>,
     confidence: ClassificationConfidence,
     manual_review: bool,
+    fold: usize,
+}
+
+#[derive(Debug, Clone)]
+struct BroadPrediction {
+    truth: &'static str,
+    predicted: Option<&'static str>,
     fold: usize,
 }
 
@@ -139,6 +148,78 @@ struct ClassifierMetrics {
     high_medium_precision: f64,
     per_genre: BTreeMap<String, PerGenreMetrics>,
     folds: Vec<FoldMetric>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadTargetMetrics {
+    support: usize,
+    offers: usize,
+    correct_offers: usize,
+    abstentions: usize,
+    offered_precision: f64,
+    recall: f64,
+    f1: f64,
+    leading_confusions: Vec<ConfusionMetric>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadFoldMetric {
+    fold: usize,
+    eligible_rows: usize,
+    offers: usize,
+    correct_offers: usize,
+    coverage: f64,
+    offered_precision: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadMetrics {
+    eligible_rows: usize,
+    offers: usize,
+    correct_offers: usize,
+    abstentions: usize,
+    coverage: f64,
+    offered_precision: f64,
+    accuracy: f64,
+    macro_recall: f64,
+    macro_f1: f64,
+    per_target: BTreeMap<String, BroadTargetMetrics>,
+    folds: Vec<BroadFoldMetric>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadConfigurations {
+    unselective_projection: BroadMetrics,
+    current_confident_projection: BroadMetrics,
+    parent_consensus: BroadMetrics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadPromotionGate {
+    offered_precision_at_least_0_90: bool,
+    coverage_at_least_0_50: bool,
+    every_fold_precision_at_least_0_85: bool,
+    supported_target_precision_at_least_0_75: bool,
+    precision_improvement_at_least_0_10: bool,
+    supported_target_failures: Vec<String>,
+    passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BroadEvaluationResult {
+    experiment_id: &'static str,
+    method_status: &'static str,
+    corpus_fingerprint: String,
+    rule_version: &'static str,
+    semantic_sha256: String,
+    taxonomy_genres: usize,
+    broad_targets: usize,
+    usable_rows: usize,
+    eligible_rows: usize,
+    excluded_unmodeled_truth_rows: usize,
+    configurations: BroadConfigurations,
+    gate: BroadPromotionGate,
+    outcome: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -660,6 +741,192 @@ fn aggregate_metrics(predictions: &[Prediction], include_folds: bool) -> Classif
     }
 }
 
+fn broad_prediction(
+    row: &PreparedRow,
+    result: &ClassificationResult,
+    selector: fn(&ClassificationResult) -> Option<&'static str>,
+) -> Option<BroadPrediction> {
+    Some(BroadPrediction {
+        truth: broad::broad_genre(row.truth)?,
+        predicted: selector(result),
+        fold: row.fold,
+    })
+}
+
+fn aggregate_broad_metrics(predictions: &[BroadPrediction], include_folds: bool) -> BroadMetrics {
+    let eligible_rows = predictions.len();
+    let offers = predictions
+        .iter()
+        .filter(|prediction| prediction.predicted.is_some())
+        .count();
+    let correct_offers = predictions
+        .iter()
+        .filter(|prediction| prediction.predicted == Some(prediction.truth))
+        .count();
+    let abstentions = eligible_rows.saturating_sub(offers);
+
+    let truth_targets: BTreeSet<_> = predictions.iter().map(|row| row.truth).collect();
+    let mut per_target = BTreeMap::new();
+    for truth in truth_targets {
+        let truth_rows: Vec<_> = predictions
+            .iter()
+            .filter(|prediction| prediction.truth == truth)
+            .collect();
+        let support = truth_rows.len();
+        let target_offers = predictions
+            .iter()
+            .filter(|prediction| prediction.predicted == Some(truth))
+            .count();
+        let target_correct = truth_rows
+            .iter()
+            .filter(|prediction| prediction.predicted == Some(truth))
+            .count();
+        let target_abstentions = truth_rows
+            .iter()
+            .filter(|prediction| prediction.predicted.is_none())
+            .count();
+        let offered_precision = fraction(target_correct, target_offers);
+        let recall = fraction(target_correct, support);
+        let mut confusions = BTreeMap::new();
+        for prediction in truth_rows {
+            if prediction.predicted != Some(truth) {
+                let label = prediction.predicted.unwrap_or("<abstain>").to_string();
+                *confusions.entry(label).or_insert(0usize) += 1;
+            }
+        }
+        let mut leading_confusions: Vec<_> = confusions
+            .into_iter()
+            .map(|(recommended, count)| ConfusionMetric { recommended, count })
+            .collect();
+        leading_confusions.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.recommended.cmp(&right.recommended))
+        });
+        leading_confusions.truncate(3);
+        per_target.insert(
+            truth.to_string(),
+            BroadTargetMetrics {
+                support,
+                offers: target_offers,
+                correct_offers: target_correct,
+                abstentions: target_abstentions,
+                offered_precision,
+                recall,
+                f1: safe_f1(offered_precision, recall),
+                leading_confusions,
+            },
+        );
+    }
+
+    let macro_recall = if per_target.is_empty() {
+        0.0
+    } else {
+        per_target.values().map(|target| target.recall).sum::<f64>() / per_target.len() as f64
+    };
+    let macro_f1 = if per_target.is_empty() {
+        0.0
+    } else {
+        per_target.values().map(|target| target.f1).sum::<f64>() / per_target.len() as f64
+    };
+    let folds = if include_folds {
+        (0..FOLD_COUNT)
+            .map(|fold| {
+                let fold_rows: Vec<_> = predictions
+                    .iter()
+                    .filter(|prediction| prediction.fold == fold)
+                    .collect();
+                let fold_offers = fold_rows
+                    .iter()
+                    .filter(|prediction| prediction.predicted.is_some())
+                    .count();
+                let fold_correct = fold_rows
+                    .iter()
+                    .filter(|prediction| prediction.predicted == Some(prediction.truth))
+                    .count();
+                BroadFoldMetric {
+                    fold,
+                    eligible_rows: fold_rows.len(),
+                    offers: fold_offers,
+                    correct_offers: fold_correct,
+                    coverage: fraction(fold_offers, fold_rows.len()),
+                    offered_precision: fraction(fold_correct, fold_offers),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    BroadMetrics {
+        eligible_rows,
+        offers,
+        correct_offers,
+        abstentions,
+        coverage: fraction(offers, eligible_rows),
+        offered_precision: fraction(correct_offers, offers),
+        accuracy: fraction(correct_offers, eligible_rows),
+        macro_recall,
+        macro_f1,
+        per_target,
+        folds,
+    }
+}
+
+fn broad_semantic_sha256() -> String {
+    let mapping = taxonomy::GENRES
+        .iter()
+        .map(|genre| {
+            format!(
+                "{genre}=>{}",
+                broad::broad_genre(genre).unwrap_or("<unmodeled>")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{}\n{mapping}", broad::RULE_VERSION).as_bytes())
+    )
+}
+
+fn broad_gate(unselective: &BroadMetrics, candidate: &BroadMetrics) -> BroadPromotionGate {
+    let offered_precision_at_least_0_90 = candidate.offered_precision >= 0.90 - f64::EPSILON;
+    let coverage_at_least_0_50 = candidate.coverage >= 0.50 - f64::EPSILON;
+    let every_fold_precision_at_least_0_85 = candidate
+        .folds
+        .iter()
+        .all(|fold| fold.offers > 0 && fold.offered_precision >= 0.85 - f64::EPSILON);
+    let supported_target_failures: Vec<_> = candidate
+        .per_target
+        .iter()
+        .filter(|(_, target)| {
+            target.support >= 10
+                && target.offers >= 5
+                && target.offered_precision < 0.75 - f64::EPSILON
+        })
+        .map(|(target, _)| target.clone())
+        .collect();
+    let supported_target_precision_at_least_0_75 = supported_target_failures.is_empty();
+    let precision_improvement_at_least_0_10 =
+        candidate.offered_precision >= unselective.offered_precision + 0.10 - f64::EPSILON;
+    let passed = offered_precision_at_least_0_90
+        && coverage_at_least_0_50
+        && every_fold_precision_at_least_0_85
+        && supported_target_precision_at_least_0_75
+        && precision_improvement_at_least_0_10;
+    BroadPromotionGate {
+        offered_precision_at_least_0_90,
+        coverage_at_least_0_50,
+        every_fold_precision_at_least_0_85,
+        supported_target_precision_at_least_0_75,
+        precision_improvement_at_least_0_10,
+        supported_target_failures,
+        passed,
+    }
+}
+
 fn cache_identity_fingerprint(rows: &[PreparedRow]) -> String {
     let mut parts: Vec<_> = rows
         .iter()
@@ -956,6 +1223,70 @@ fn run_private_evaluation() -> Result<ProfileEvaluationResult, String> {
         } else {
             "profile_representation_failed_development_gate"
         },
+    })
+}
+
+fn run_private_broad_evaluation() -> Result<BroadEvaluationResult, String> {
+    let LoadedRows {
+        mut rows,
+        corpus_fingerprint,
+        ..
+    } = load_private_rows()?;
+    if rows.is_empty() {
+        return Err("no usable genre_verified rows".to_string());
+    }
+    let usable_rows = rows.len();
+    let groups = build_leakage_groups(&rows);
+    let folds = assign_groups_to_folds(&groups, FOLD_COUNT);
+    apply_fold_assignment(&mut rows, &groups, &folds);
+
+    let results: Vec<_> = rows
+        .iter()
+        .map(|row| classify_track_with_profiles(&row.evidence, None))
+        .collect();
+    let build_predictions = |selector: fn(&ClassificationResult) -> Option<&'static str>| {
+        rows.iter()
+            .zip(&results)
+            .filter_map(|(row, result)| broad_prediction(row, result, selector))
+            .collect::<Vec<_>>()
+    };
+    let unselective =
+        aggregate_broad_metrics(&build_predictions(broad::unselective_projection), true);
+    let confident = aggregate_broad_metrics(&build_predictions(broad::confident_projection), true);
+    let candidate = aggregate_broad_metrics(&build_predictions(broad::parent_consensus), true);
+    if unselective.eligible_rows != confident.eligible_rows
+        || unselective.eligible_rows != candidate.eligible_rows
+    {
+        return Err("broad configurations evaluated different truth rows".to_string());
+    }
+    let gate = broad_gate(&unselective, &candidate);
+    let broad_targets = taxonomy::GENRES
+        .iter()
+        .filter_map(|genre| broad::broad_genre(genre))
+        .collect::<BTreeSet<_>>()
+        .len();
+    Ok(BroadEvaluationResult {
+        experiment_id: BROAD_EXPERIMENT_ID,
+        method_status: "pre_registered_deterministic_development_evaluation",
+        corpus_fingerprint,
+        rule_version: broad::RULE_VERSION,
+        semantic_sha256: broad_semantic_sha256(),
+        taxonomy_genres: taxonomy::GENRES.len(),
+        broad_targets,
+        usable_rows,
+        eligible_rows: candidate.eligible_rows,
+        excluded_unmodeled_truth_rows: usable_rows.saturating_sub(candidate.eligible_rows),
+        configurations: BroadConfigurations {
+            unselective_projection: unselective,
+            current_confident_projection: confident,
+            parent_consensus: candidate,
+        },
+        outcome: if gate.passed {
+            "parent_consensus_passed_development_gate"
+        } else {
+            "parent_consensus_failed_development_gate"
+        },
+        gate,
     })
 }
 
@@ -1371,6 +1702,89 @@ mod tests {
     }
 
     #[test]
+    fn broad_metrics_measure_precision_and_coverage_separately() {
+        let predictions = vec![
+            BroadPrediction {
+                truth: "House",
+                predicted: Some("House"),
+                fold: 0,
+            },
+            BroadPrediction {
+                truth: "House",
+                predicted: None,
+                fold: 0,
+            },
+            BroadPrediction {
+                truth: "Techno",
+                predicted: Some("House"),
+                fold: 0,
+            },
+            BroadPrediction {
+                truth: "Techno",
+                predicted: Some("Techno"),
+                fold: 0,
+            },
+        ];
+        let metrics = aggregate_broad_metrics(&predictions, false);
+        assert_eq!(metrics.eligible_rows, 4);
+        assert_eq!(metrics.offers, 3);
+        assert_eq!(metrics.correct_offers, 2);
+        assert_eq!(metrics.abstentions, 1);
+        assert!((metrics.coverage - 0.75).abs() < f64::EPSILON);
+        assert!((metrics.offered_precision - (2.0 / 3.0)).abs() < f64::EPSILON);
+        assert!((metrics.accuracy - 0.5).abs() < f64::EPSILON);
+        assert_eq!(metrics.per_target["House"].support, 2);
+        assert_eq!(metrics.per_target["House"].offers, 2);
+        assert_eq!(metrics.per_target["House"].correct_offers, 1);
+    }
+
+    #[test]
+    fn broad_result_shape_does_not_serialize_track_identity_fields() {
+        let metrics = aggregate_broad_metrics(
+            &[BroadPrediction {
+                truth: "House",
+                predicted: Some("House"),
+                fold: 0,
+            }],
+            true,
+        );
+        let result = BroadEvaluationResult {
+            experiment_id: BROAD_EXPERIMENT_ID,
+            method_status: "test",
+            corpus_fingerprint: "sha256:test".into(),
+            rule_version: broad::RULE_VERSION,
+            semantic_sha256: broad_semantic_sha256(),
+            taxonomy_genres: taxonomy::GENRES.len(),
+            broad_targets: 1,
+            usable_rows: 1,
+            eligible_rows: 1,
+            excluded_unmodeled_truth_rows: 0,
+            configurations: BroadConfigurations {
+                unselective_projection: metrics.clone(),
+                current_confident_projection: metrics.clone(),
+                parent_consensus: metrics,
+            },
+            gate: BroadPromotionGate {
+                offered_precision_at_least_0_90: true,
+                coverage_at_least_0_50: true,
+                every_fold_precision_at_least_0_85: false,
+                supported_target_precision_at_least_0_75: true,
+                precision_improvement_at_least_0_10: false,
+                supported_target_failures: Vec::new(),
+                passed: false,
+            },
+            outcome: "test",
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        for forbidden in ["track_id", "file_path", "artist", "album", "title"] {
+            assert!(
+                !json.contains(forbidden),
+                "serialized private field {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "requires private Rekordbox library and current audio cache"]
     fn private_grouped_genre_profile_evaluation() {
         let output = std::env::var("REKLAWDBOX_PROFILE_EVALUATION_OUTPUT")
@@ -1385,6 +1799,32 @@ mod tests {
                 "coverage": result.coverage,
                 "deltas": result.deltas,
                 "truth_profile_coverage_rate": result.truth_profile_coverage_rate,
+                "gate": result.gate,
+                "outcome": result.outcome,
+            })
+        );
+    }
+
+    #[test]
+    #[ignore = "requires private Rekordbox library and current audio cache"]
+    fn private_broad_genre_evaluation() {
+        let output = std::env::var("REKLAWDBOX_BROAD_GENRE_EVALUATION_OUTPUT")
+            .expect("set REKLAWDBOX_BROAD_GENRE_EVALUATION_OUTPUT");
+        let result = run_private_broad_evaluation().expect("private broad genre evaluation failed");
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&result).expect("serialize broad evaluation result"),
+        )
+        .expect("write private broad evaluation result");
+        println!(
+            "BROAD_GENRE_EVALUATION_SUMMARY_JSON={}",
+            serde_json::json!({
+                "output_path": output,
+                "experiment_id": result.experiment_id,
+                "corpus_fingerprint": result.corpus_fingerprint,
+                "semantic_sha256": result.semantic_sha256,
+                "eligible_rows": result.eligible_rows,
+                "configurations": result.configurations,
                 "gate": result.gate,
                 "outcome": result.outcome,
             })
