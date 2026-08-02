@@ -1,6 +1,6 @@
 # Plan 067: Validate a scoped broad-genre MVP
 
-> **Status:** Preregistered; scoped holdout not yet sealed
+> **Status:** Scoped holdout sealed; development replay not yet run
 > **Objective:** Determine whether a deliberately limited set of broad-root
 > suggestions can deliver useful, honest value before the full 26-target truth
 > corpus is ready.
@@ -109,6 +109,22 @@ eligible rows across ten sampling strata, but only Ambient, House, and Techno
 had at least eight rows among the six proposed roots; Electro had two and Hip
 Hop and Reggae had none. No scoped model metric had been computed. The scope and
 cap above were corrected and recommitted before selection.
+
+Recorded seal:
+
+- private artifact SHA-256:
+  `7a188602d547052cc2ede517d74458d77bdd69509aefc2c67e3dac1fab3ff00f`;
+- private roster SHA-256:
+  `9cf4cdbd67bc701063d886e991e7f4f57a0b675844423584b3027f0bce5418a9`;
+- library snapshot SHA-256:
+  `553dcfd0c5526f2ca8309f1a53097ac58749c8d54216879c80390c355264e653`;
+- 48 rows, 48 normalized artists, and 48 artist-release groups;
+- 490 eligible rows across 338 artists and 387 release groups; and
+- sampling strata: Ambient 6, Breakbeat 7, Disco 3, Downtempo 2, Drum & Bass
+  3, Electro 2, House 8, Pop 1, Techno 8, and Trance 8.
+
+The selector replayed byte-identically. These current-genre strata are sampling
+metadata only and will remain hidden during review.
 
 ## Full-fit and holdout boundary
 
