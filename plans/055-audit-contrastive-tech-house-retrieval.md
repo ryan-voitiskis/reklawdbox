@@ -8,6 +8,7 @@
 
 ## Status
 
+- **State:** Complete — bounded negative on 2026-08-02
 - **Priority:** P1
 - **Effort:** M for the existing-feature audit; L only if a DSP prototype is
   independently justified
@@ -16,6 +17,29 @@
 - **Planned at:** `main` commit `d5603cb`, Reklawdbox v0.33.0, 2026-08-02
 - **Predecessor:** Plan 053, completed as a bounded negative result on branch
   `codex/053-discover-mislabeled-genres`
+
+## Recorded outcome
+
+The 16 imported, ear-verified Tech House anchors were resolved successfully and
+the private development manifest was frozen with 227 adjacent-genre hard
+negatives and 11 boundaries. Current complete evidence was available for all
+positives; seven stale hard negatives were excluded, leaving 247 scored rows.
+
+All 12 pre-registered existing-feature configurations failed the gate. The
+best existing contrastive configuration improved average precision from 0.178
+to 0.461, but failed positive margins, held-out recall, adjacent-genre
+false-positive control, and fold consistency.
+
+The bounded feature audit then tested two already-cached proxy families without
+adding DSP or changing a cache schema. Kick placement/section balance was
+ineligible because one positive lacked complete evidence. Arrangement/dynamic
+variation improved average precision to 0.623 and reduced every adjacent-genre
+false-positive rate to at most 0.20 without degrading a strain, but still
+failed positive margins (7/16), recall (11/16), and fold wins (9/16). It did
+not justify implementation.
+
+No blind batch or XML was created. The aggregate, identity-free evidence is in
+[`docs/genre-classification/tech-house-contrastive-audit.md`](../docs/genre-classification/tech-house-contrastive-audit.md).
 
 ## Decision
 
