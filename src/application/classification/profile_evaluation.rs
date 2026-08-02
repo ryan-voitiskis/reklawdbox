@@ -25,7 +25,7 @@ use crate::domain::metadata as normalize;
 
 use super::evidence::build_track_evidence;
 
-const EXPERIMENT_ID: &str = "genre-profile-grouped-cv-v1";
+const EXPERIMENT_ID: &str = "genre-profile-grouped-cv-v2-expanded-corpus";
 const FOLD_COUNT: usize = 5;
 
 struct PreparedRow {
@@ -870,7 +870,7 @@ fn run_private_evaluation() -> Result<ProfileEvaluationResult, String> {
     };
     Ok(ProfileEvaluationResult {
         experiment_id: EXPERIMENT_ID,
-        method_status: "offline_group_stratified_development_evaluation",
+        method_status: "pre_registered_expanded_corpus_development_evaluation",
         taxonomy_genres: taxonomy::GENRES.len(),
         classifier_profile_schema_version: profiles::PROFILE_SCHEMA_VERSION,
         stratum_schema_version: audio::STRATUM_SCHEMA_VERSION,
@@ -940,7 +940,7 @@ fn build_private_embedding_manifest() -> Result<PrivateEmbeddingManifest, String
         .collect();
     Ok(PrivateEmbeddingManifest {
         experiment_id: EXPERIMENT_ID,
-        stage: "discogs_effnet_v1",
+        stage: "discogs_effnet_v2_expanded_corpus",
         corpus_fingerprint,
         fold_count: FOLD_COUNT,
         patches_per_track: 12,

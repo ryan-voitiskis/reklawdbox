@@ -1,9 +1,9 @@
 # Plan 038: Maintain gap-driven genre reference evidence
 
-> **Status:** Rescoped by operator on 2026-08-02. This replaces the original
-> requirement to research 12 purchasable candidates for every canonical genre.
-> The seven completed dossiers remain useful; the unfinished catalog-wide quota
-> is retired.
+> **Status:** Complete in its rescoped form on 2026-08-02. This replaces the
+> original requirement to research 12 purchasable candidates for every
+> canonical genre. The seven completed dossiers remain useful; the unfinished
+> catalog-wide quota is retired.
 
 ## Decision
 
@@ -51,7 +51,7 @@ Improve broad genre classification in this order:
 5. Add or refresh a public dossier only when the source research itself will be
    reused. Do not create a purchasing quota merely to fill a taxonomy row.
 
-Plans 056–058 record the completed profile, pretrained-representation,
+Plans 056–059 record the completed profile, pretrained-representation,
 hierarchical-router, and supervised-adapter evaluations. None passed its frozen
 development gate. Plan 055 is the retained bounded-negative Tech House
 retrieval audit.
@@ -61,13 +61,15 @@ references absent from `genre_verified`. They were approved before the
 representation outputs were inspected and are not eligible for a future sealed
 holdout. A playlist-preserving XML export now reconciles them into a 696-track
 `genre_verified` playlist and stages seven approved Minimal genre corrections.
-Explicit boundary or uncertain verdicts remain excluded. Rekordbox has not
-changed until the operator manually imports the XML.
+Explicit boundary or uncertain verdicts remain excluded. The operator imported
+the XML, and a read-only audit confirmed an exact 696-path playlist match, no
+genre mismatches, 670 usable rows with fresh analysis, and 26 rows missing both
+analysis backends.
 
-After import, confirm the exact playlist count, genre distribution, and fresh
-analysis coverage before deciding whether the unchanged frozen
-representations merit one new development rerun. Do not reinterpret that rerun
-as sealed evidence merely because the truth pool grew.
+Plan 059 records the completed expanded-corpus development rerun. None of its
+unchanged trainable candidates passed. Representation tuning on this exposed
+truth now stops; any reuse of the signal belongs in a read-only listening-audit
+workflow, not an automatic metadata classifier.
 
 ## Reference-corpus maintenance rules
 

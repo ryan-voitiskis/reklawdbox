@@ -217,8 +217,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     selected = passing[0] if passing else None
     return {
-        "experiment_id": "discogs-effnet-supervised-adapter-v1",
-        "method_status": "post_hoc_grouped_development_evaluation",
+        "experiment_id": "discogs-effnet-supervised-adapter-v2-expanded-corpus",
+        "method_status": "pre_registered_expanded_corpus_development_evaluation",
         "rows": len(rows),
         "fold_count": manifest["fold_count"],
         "adapter": {

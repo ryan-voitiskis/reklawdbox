@@ -513,8 +513,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if outcome["passed"]
     ]
     return {
-        "experiment_id": "discogs-effnet-genre-evaluation-v1",
-        "method_status": "offline_group_stratified_development_evaluation",
+        "experiment_id": "discogs-effnet-genre-evaluation-v2-expanded-corpus",
+        "method_status": "pre_registered_expanded_corpus_development_evaluation",
         "corpus_fingerprint": manifest["corpus_fingerprint"],
         "rows": len(rows),
         "fold_count": manifest["fold_count"],
