@@ -2,7 +2,7 @@
 
 **Run date:** 2026-08-02
 
-**Status:** Private six-track utility pilot ready for operator review
+**Status:** Six genre decisions complete; utility feedback pending
 
 ## Purpose
 
@@ -80,9 +80,18 @@ Ambiguous and skipped rows are valid. There is no hidden target to match.
   `8d84db22a894aa818ec26e3a13e5902e237999ad30b835bb81eb3c1bc7e73a00`
 - playlist XML SHA-256:
   `c3732070e61a85faa91aea006d8fe59400fc73e4c739c159feeddafc68258d11`
-- private review sheet SHA-256:
-  `16e4f20daa42862c159270bb762e5a946569b6ac972a0796349287efc4687ae8`
+- private review sheet SHA-256 after genre verdicts:
+  `a80cc5a7d578b3abb53128244bbe567846389bffa2947dcca9d53262c04a576d`
 - private review guide SHA-256:
   `e9d3998a281c866228a286e7c964d54db6decfad99f8f50c8397177c18ff4afc`
 
-Only the operator's six utility and listening verdicts remain.
+## Partial pilot result
+
+All six current canonical genres received confident operator verification.
+There were no replacement genres, ambiguous verdicts, or skipped rows. The
+genre-decision criterion passed 6/6; the required threshold was 4/6.
+
+The references-and-vocabulary utility question has not yet been answered, so
+the utility criterion and overall pilot result remain pending. No hint was
+treated as automated truth, and no Rekordbox metadata, audio, tags, or caches
+were changed.
