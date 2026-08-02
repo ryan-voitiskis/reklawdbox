@@ -25,14 +25,14 @@ so it requires a new independent holdout and cannot use the Plan 066 holdout.
 
 ## Frozen product scope
 
-The allowlist is exactly the Plan 066 CLAP targets with at least 20 truth rows
-and at least 90% nested offered precision:
+The initial six-root allowlist was the Plan 066 CLAP targets with at least 20
+truth rows and at least 90% nested offered precision. Holdout preflight then
+showed that, after all artist-level exclusions, only three of those roots have
+at least eight independent current-tagged candidate rows. The release-testable
+allowlist is therefore:
 
 - Ambient;
-- Electro;
-- Hip Hop;
 - House;
-- Reggae; and
 - Techno.
 
 The rule is frozen as `scoped-broad-roots-v1`. A candidate prediction outside
@@ -68,7 +68,7 @@ computed.
 Both nested fold-local selection and the global deployment threshold must pass:
 
 1. offered precision at least 0.90;
-2. coverage at least 0.45;
+2. coverage at least 0.40;
 3. every fold makes an offer and has precision at least 0.85;
 4. every allowlisted target with at least five offers has precision at least
    0.85;
@@ -77,7 +77,7 @@ Both nested fold-local selection and the global deployment threshold must pass:
 6. every Plan 066 source, artifact, row, fold, truth, and semantic checksum
    matches.
 
-The lower coverage floor reflects the explicit six-root product scope. It is
+The lower coverage floor reflects the explicit three-root product scope. It is
 still materially above v0.33's 30.54% High/Medium broad coverage. No gate
 changes after scoped metrics are visible.
 
@@ -94,7 +94,7 @@ universe. The selector must:
 3. exclude missing files, blank artists, `Experimental`, and unmapped current
    genres;
 4. use current genre only as a sampling stratum, never truth;
-5. select exactly 48 rows by deterministic round-robin, with at most four per
+5. select exactly 48 rows by deterministic round-robin, with at most eight per
    broad sampling stratum and one per normalized artist and release group;
 6. write identities only to a mode-0600 private artifact; and
 7. expose only hashes, aggregate counts, and the roster checksum.
@@ -102,6 +102,13 @@ universe. The selector must:
 The Plan 066 holdout remains sealed and cannot be substituted, merged, or used
 as development data. The new roster cannot change after scoped development
 metrics are known.
+
+The initially committed four-per-stratum selector stopped before writing a
+roster because it could select only 31 rows. Aggregate preflight found 490
+eligible rows across ten sampling strata, but only Ambient, House, and Techno
+had at least eight rows among the six proposed roots; Electro had two and Hip
+Hop and Reggae had none. No scoped model metric had been computed. The scope and
+cap above were corrected and recommitted before selection.
 
 ## Full-fit and holdout boundary
 
@@ -136,7 +143,7 @@ Rekordbox mutation.
 
 The first product surface must:
 
-- name the six supported roots;
+- name the three supported roots;
 - distinguish broad suggestions from fine genres;
 - display abstention explicitly;
 - never map out-of-scope predictions to a supported root after inference;

@@ -17,7 +17,7 @@ import select_broad_genre_holdout as base
 EXPERIMENT_ID = "scoped-broad-genre-mvp-holdout-v1"
 SEED = "scoped-broad-genre-mvp-holdout-v1"
 DEFAULT_COUNT = 48
-MAX_PER_TARGET = 4
+MAX_PER_TARGET = 8
 
 
 def stable_hash(*parts: object) -> str:

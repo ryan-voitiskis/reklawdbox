@@ -32,7 +32,7 @@ class ScopedBroadGenreHoldoutTests(unittest.TestCase):
         )
         self.assertEqual(len(first), 48)
         counts = Counter(item["broad_sampling_stratum"] for item in first)
-        self.assertTrue(all(count <= 4 for count in counts.values()))
+        self.assertTrue(all(count <= 8 for count in counts.values()))
         self.assertEqual(len({item["artist_group"] for item in first}), 48)
         self.assertEqual(len({item["release_group"] for item in first}), 48)
 
@@ -48,8 +48,8 @@ class ScopedBroadGenreHoldoutTests(unittest.TestCase):
 
     def test_selection_fails_when_constraints_cannot_fill(self) -> None:
         rows = [row(index, "House") for index in range(10)]
-        with self.assertRaisesRegex(ValueError, "produced 4 rows; required 5"):
-            subject.select_holdout(rows, count=5)
+        with self.assertRaisesRegex(ValueError, "produced 8 rows; required 9"):
+            subject.select_holdout(rows, count=9)
 
 
 if __name__ == "__main__":
