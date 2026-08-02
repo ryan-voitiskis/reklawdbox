@@ -1,7 +1,7 @@
 # Plan 063: Evaluate EffNet broad-genre confidence
 
-> **Status:** Approved and pre-registered on 2026-08-02; development evaluation
-> pending
+> **Status:** Complete on 2026-08-02; direct EffNet broad confidence is a
+> bounded negative
 > **Objective:** Test whether the already-frozen Discogs-EffNet style output can
 > produce release-grade selective broad-genre suggestions under the unchanged
 > Plan 062 taxonomy.
@@ -130,3 +130,39 @@ surface, Rekordbox write, tag write, or release.
 This plan is complete when the frozen evaluation has run once, replayed
 byte-identically, and recorded an aggregate pass or bounded negative. A holdout
 is prepared only after a pass.
+
+## Recorded result
+
+The aggregate report is
+[Broad Genre EffNet Evaluation](../docs/genre-classification/broad-genre-effnet-evaluation.md).
+
+The unselective projection reached 71.04% broad accuracy. Cross-fitted margin
+selection increased offered precision to 88.94% but reduced coverage to 29.70%.
+It failed three frozen checks:
+
+- offered precision was below 90%;
+- coverage was below 50%; and
+- fold 1 offered precision was 84.78%, below the 85% fold floor.
+
+The per-target precision guard passed, as did the required improvement over the
+unselective projection. Strong selective results for Ambient and Reggae did not
+repair weaker House and Techno precision or the absence of useful offers for
+several smaller targets.
+
+The result replayed byte-identically. No holdout is warranted, and the margin
+thresholds, target mapping, and direct projection must not be tuned against
+these rows.
+
+Reproducibility record:
+
+- private aggregate result SHA-256:
+  `c89d5f8db82d6926ef919c1497693ee9f72614355efd3c5893e422844fd08e79`
+- broad semantic SHA-256:
+  `efe20460e7cc4b70af275ada2002be0dafa5cfbec0513a3cdd656b665773c255`
+- development corpus fingerprint:
+  `sha256:a71b4ecf096c7b5a7abd147c9d91d37845a10fb12e8da684000ac8dfe56f3061`
+
+The remaining justified candidate is one separately frozen supervised broad
+adapter. It may reuse the already-fixed class-balanced ridge penalty and
+training-fold PCA machinery from Plan 058, but it must use nested fold-local
+confidence calibration and receive no parameter search.
