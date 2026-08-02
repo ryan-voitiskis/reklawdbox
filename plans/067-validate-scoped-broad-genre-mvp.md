@@ -70,10 +70,10 @@ Both nested fold-local selection and the global deployment threshold must pass:
 1. offered precision at least 0.90;
 2. coverage at least 0.40;
 3. every fold makes an offer and has precision at least 0.85;
-4. every allowlisted target with at least five offers has precision at least
-   0.85;
-5. selective precision improves on the same candidate with only the allowlist
-   filter and no margin threshold by at least 0.10; and
+4. every allowlisted target makes at least five offers and has precision at
+   least 0.85;
+5. selective precision improves on the candidate's unselective all-target
+   precision by at least 0.10; and
 6. every Plan 066 source, artifact, row, fold, truth, and semantic checksum
    matches.
 
@@ -125,6 +125,16 @@ Recorded seal:
 
 The selector replayed byte-identically. These current-genre strata are sampling
 metadata only and will remain hidden during review.
+
+The scoped evaluator is frozen before its first scoped metric:
+
+- evaluator source SHA-256:
+  `8f56a7dd6ca7276492583341d69bc0bfa0e32a2c0a29cd3346db2c8ddaad7d19`;
+- exact Plan 066 aggregate replay required:
+  `265df46ff10873355f933b0347229b8c2c282de0f3745c07be08e6599fc433dd`;
+- allowlist filtering occurs after prediction and thresholding and before
+  metrics; and
+- 19 focused and inherited evaluator tests pass.
 
 ## Full-fit and holdout boundary
 
