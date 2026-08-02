@@ -92,10 +92,8 @@ def current_source_indices(
         source = source_rows[source_index]
         if source_index <= previous:
             raise ValueError("current manifest is not an ordered source subset")
-        if current["truth"] != source["truth"] or int(current["fold"]) != int(
-            source["fold"]
-        ):
-            raise ValueError(f"truth or fold differs at current row {row_index}")
+        if current["truth"] != source["truth"]:
+            raise ValueError(f"truth differs at current row {row_index}")
         indices.append(source_index)
         previous = source_index
     return np.asarray(indices, dtype=np.int64)
@@ -421,7 +419,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         np.asarray(source_artifact["style_scores"], dtype=np.float64)[indices]
     )
     baseline_features = supervised.baseline_broad_one_hot(
-        [row["baseline_recommendation"] for row in current_manifest["rows"]]
+        [
+            source_manifest["rows"][int(index)]["baseline_recommendation"]
+            for index in indices
+        ]
     )
     arrangement = np.asarray(source_artifact["arrangement"], dtype=np.float64)[
         indices
@@ -434,8 +435,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for row_index, row in enumerate(current_manifest["rows"]):
         if broad.CANONICAL[int(truth_indices[row_index])] != row["truth"]:
             raise ValueError(f"truth alignment differs at current row {row_index}")
-        if int(folds[row_index]) != int(row["fold"]):
-            raise ValueError(f"fold alignment differs at current row {row_index}")
+        source_row = source_manifest["rows"][int(indices[row_index])]
+        if int(folds[row_index]) != int(source_row["fold"]):
+            raise ValueError(f"source fold alignment differs at current row {row_index}")
 
     representation_paths = {
         "openl3": (args.openl3_features, args.openl3_summary),
@@ -482,6 +484,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ridge_penalty": supervised.RIDGE_PENALTY,
             "confidence": "top ridge score minus second ridge score",
             "threshold_calibration": "nested out-of-fold within each outer training partition",
+            "baseline_and_folds": (
+                "exact Plan 065 source values joined to the available-row roster "
+                "by path"
+            ),
             "candidate_isolation": "OpenL3 and CLAP are never concatenated",
         },
         "candidates": candidates,

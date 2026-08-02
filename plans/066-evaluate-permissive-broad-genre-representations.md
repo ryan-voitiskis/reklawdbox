@@ -61,19 +61,23 @@ Use the current 668-row private Plan 059 manifest:
 - corpus fingerprint:
   `sha256:b88911c7b24bbeecd1d59607ceb5e873ca29ff6f15052e77913635e5832471f1`;
 - fold count: five; and
-- truth, fold, arrangement, baseline recommendation, row order, and broad
-  taxonomy remain unchanged.
+- truth, row order, and broad taxonomy remain unchanged.
 
 The older 670-row development manifest remains an exclusion input for the
 holdout so that removing two unavailable audio files cannot make their artists
-or releases eligible.
+or releases eligible. It is also the source of the unchanged Plan 065 fold
+assignments and baseline recommendations. Join its exact values to the current
+668-row availability roster by path. The regenerated folds and two changed
+baseline recommendations in the current manifest are not classifier inputs;
+using them would change more than the representation. All 668 current truths
+match their Plan 065 source rows.
 
 Reuse these frozen inputs after validating their row identity and order against
 the 668-row manifest:
 
 - Discogs-EffNet style scores and 1280-dimensional embeddings from Plan 059;
 - the Plan 065 74-value kick vector, restricted by exact path to the 668 rows;
-- the v0.33 broad recommendation one-hot; and
+- the Plan 065 v0.33 broad recommendation one-hot; and
 - the four arrangement descriptors.
 
 Private identities, features, predictions, scores, thresholds, and margins
@@ -195,8 +199,14 @@ The completed label-blind development extraction is frozen as follows:
 The evaluation implementation is also frozen before its first
 genre-conditioned run:
 
+- the initial preflight stopped before loading either representation because
+  the current manifest had 86 regenerated fold assignments and two changed
+  baseline recommendations; it found zero truth changes and produced no model
+  result;
+- the input contract was corrected before scoring to join the unchanged Plan
+  065 folds and baseline recommendations by exact path;
 - evaluator source SHA-256:
-  `384c0d62993fcbefb689b97c884935ee94579c01175f39e2472e50a91ee78bf5`;
+  `4bb3e1c21bc5a7a95fe172b92657f319fdf4fff1930b49890b16c2ede67ed770`;
 - broad evaluator support source SHA-256:
   `25bc75ccca3c2122be1ec3037054e8f934b8cd4438b67d9a0166a34d77661558`;
 - supervised evaluator support source SHA-256:

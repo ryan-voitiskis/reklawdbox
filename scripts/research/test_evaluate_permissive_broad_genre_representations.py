@@ -19,8 +19,16 @@ class PermissiveRepresentationEvaluationTests(unittest.TestCase):
         np.testing.assert_array_equal(
             evaluation.current_source_indices(current, source), [0, 2]
         )
+        fold_changed = [dict(source[0], fold=4), source[2]]
+        np.testing.assert_array_equal(
+            evaluation.current_source_indices(fold_changed, source), [0, 2]
+        )
         with self.assertRaisesRegex(ValueError, "ordered source subset"):
             evaluation.current_source_indices([source[2], source[0]], source)
+        with self.assertRaisesRegex(ValueError, "truth differs"):
+            evaluation.current_source_indices(
+                [dict(source[0], truth="Techno"), source[2]], source
+            )
 
     def test_new_representation_is_projected_from_training_partition(self) -> None:
         rows = 10
