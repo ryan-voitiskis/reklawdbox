@@ -1,7 +1,7 @@
 # Plan 065: Evaluate kick-rhythm evidence for broad genre
 
-> **Status:** Approved and pre-registered on 2026-08-02; feature extraction
-> and development evaluation pending
+> **Status:** Complete on 2026-08-02; kick evidence was useful but the frozen
+> candidate is a bounded negative
 > **Objective:** Determine whether the already-cached beat-relative kick
 > placement adds independent, release-relevant broad-genre signal.
 
@@ -154,3 +154,43 @@ outside Git.
 This plan is complete when the feature artifact is frozen before scoring, the
 single candidate is evaluated and replayed, and the pass or bounded negative is
 recorded without post-result changes.
+
+## Recorded result
+
+The aggregate report is
+[Kick-Rhythm Broad Genre Evaluation](../docs/genre-classification/broad-genre-kick-rhythm-evaluation.md).
+
+Kick evidence improved the Plan 064 selective candidate from 87.72% precision
+at 49.85% coverage to 90.61% precision at 54.03% coverage. It therefore crossed
+both primary aggregate thresholds. The full gate still failed:
+
+- fold 1 precision was 83.56%, below the 85% stability floor; and
+- Garage precision was 71.43% on seven offers, below the 75% supported-target
+  floor.
+
+The feature also increased unselective broad accuracy from 72.09% to 73.13%.
+However, Breakbeat received only three selective offers with one correct, and
+Minimal received four with none correct. Those targets fell below the minimum
+offer count for the formal guard but remain important diagnostics.
+
+The result replayed byte-identically. The kick representation is retained as
+promising analysis evidence, but this classifier does not advance to a sealed
+holdout. No threshold, target, feature, ridge, or fold adjustment follows.
+
+Reproducibility record:
+
+- private aggregate result SHA-256:
+  `3ca050377077938d76abdb6239a1652a7c7088ef356419157d15bea56107ad59`
+- private kick artifact SHA-256:
+  `0b5842935ddbf09e58321a10dce97811790fd77465246cb4eef27a8e9b9d341e`
+- kick feature semantic SHA-256:
+  `321b994e907896597ee949358ad8817c3c05a4b912b79d9c80521f40f8cd46a5`
+- broad semantic SHA-256:
+  `efe20460e7cc4b70af275ada2002be0dafa5cfbec0513a3cdd656b665773c255`
+- development corpus fingerprint:
+  `sha256:a71b4ecf096c7b5a7abd147c9d91d37845a10fb12e8da684000ac8dfe56f3061`
+
+The exposed-corpus experiment sequence now stops. The next classifier phase
+needs an independent truth design and a genuinely new, production-viable
+representation; it must not be another post-result adjustment to this
+candidate.

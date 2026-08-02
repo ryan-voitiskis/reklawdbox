@@ -86,6 +86,14 @@ mechanism-grounded feature question or evaluate a genuinely new representation
 under a separately frozen plan. Rearranging thresholds or model heads over the
 same inputs is not a gap-driven corpus task.
 
+Plan 065 supplied that final mechanism-grounded check using the already-cached
+beat-relative kick histogram. It crossed the primary aggregate bar at 90.61%
+precision and 54.03% coverage, but failed fold stability and Garage target
+precision. Kick placement is retained as useful evidence; the classifier is a
+bounded negative and receives no holdout. The exposed-corpus sequence is now
+closed. Future model work needs a genuinely new representation and an
+independent truth design rather than more purchasing or local threshold tuning.
+
 ## Reference-corpus maintenance rules
 
 The existing structured corpus and validator remain useful for completed public
