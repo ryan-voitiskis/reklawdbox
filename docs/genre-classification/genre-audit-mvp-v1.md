@@ -2,7 +2,7 @@
 
 **Run date:** 2026-08-02
 
-**Status:** Blind six-track pilot ready for operator review
+**Status:** Complete; frozen pilot rule did not clear its continuation gate
 
 ## Purpose
 
@@ -78,7 +78,22 @@ not become truth.
   `4dacf6e1204db9cb11544cd850450da000525f3c08a91bc128ab47ac10c43060`
 - playlist XML SHA-256:
   `3ad9e7e69ffeee2411a8941e95fba56aa5006a60763f785a40612582c1524213`
-- review sheet SHA-256:
+- blank review sheet SHA-256:
   `7c4d6344106d458a93cc9bfb7d04ffa3891b94912d9bc75629084b540ee42ac7`
 
-The exact private mapping stays sealed until the six verdicts are complete.
+## Pilot outcome
+
+All six verdicts were completed before the mapping was revealed. One of four
+ranked disagreements received a confident verdict matching the hidden target,
+short of the required two. Neither of the two controls received a confident
+verdict contradicting its current genre, so the control guard passed.
+
+The combined gate failed. This exact three-signal consensus rule is retired as
+a bounded negative: it will not receive a second batch and will not be tuned
+against the exposed pilot. The pilot suggests the rule can retrieve meaningful
+genre boundaries, but it did not demonstrate reliable exact-error retrieval.
+Row identities, verdicts, targets, cohort mapping, and listening notes remain
+private.
+
+- completed private review sheet SHA-256:
+  `e829d3656f2363898ae68bb41eb4ce9b7346c2b5fbeb2234fc93bccb1eb4ef88`

@@ -1,6 +1,6 @@
 # Plan 060: Build a read-only genre-audit MVP
 
-> **Status:** Awaiting six operator verdicts; blind batch ready on 2026-08-02
+> **Status:** Complete on 2026-08-02; pilot gate failed and the frozen rule is retired
 > **Objective:** Test whether imperfect independent genre signals can prioritize
 > likely metadata errors for efficient human review without automatic writes.
 
@@ -175,8 +175,23 @@ Reproducibility record:
   `4dacf6e1204db9cb11544cd850450da000525f3c08a91bc128ab47ac10c43060`
 - playlist XML SHA-256:
   `3ad9e7e69ffeee2411a8941e95fba56aa5006a60763f785a40612582c1524213`
-- blind review sheet SHA-256:
+- blank blind review sheet SHA-256:
   `7c4d6344106d458a93cc9bfb7d04ffa3891b94912d9bc75629084b540ee42ac7`
 
-No pilot verdict is recorded yet. Hidden targets and cohorts must remain sealed
-until all six listening decisions are returned.
+## Pilot result
+
+All six verdicts were returned before the private mapping was unsealed. Under
+the frozen gate, one of four ranked rows received a confident target-aligned
+verdict, below the required two. The control guard passed: neither of the two
+controls received a confident verdict contradicting its current genre. The
+overall gate therefore failed.
+
+The exact consensus rule is retired as a bounded negative. It must not receive
+a second batch or be tuned against these exposed rows. The result supports the
+weaker conclusion that consensus can surface musically interesting genre
+boundaries, but not that it reliably prioritizes exact metadata corrections.
+Operator notes, identities, row-level predictions, and the revealed mapping
+remain in the private result only.
+
+- completed private review sheet SHA-256:
+  `e829d3656f2363898ae68bb41eb4ce9b7346c2b5fbeb2234fc93bccb1eb4ef88`
