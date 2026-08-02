@@ -50,6 +50,24 @@ truth-conditioned scoring. It must produce a private ordered artifact and a
 semantic source checksum. Freeze that artifact checksum in this plan before
 running the classifier.
 
+The label-blind extraction completed before classifier evaluation:
+
+- rows: 670;
+- rows with kick evidence: 668;
+- rows with a version-21 cache entry but no kick result: 2;
+- private kick artifact SHA-256:
+  `0b5842935ddbf09e58321a10dce97811790fd77465246cb4eef27a8e9b9d341e`;
+- kick feature semantic SHA-256:
+  `321b994e907896597ee949358ad8817c3c05a4b912b79d9c80521f40f8cd46a5`;
+  and
+- ordered source-snapshot SHA-256:
+  `cf3554365e2bc45b40d2630430b5814113711c2c0d46dfb3729f31b7b6911c7e`.
+
+The aggregate, truth-independent pattern counts are 367 `four_on_floor`, 35
+`broken_beat`, 265 `irregular`, one `sparse`, zero `halftime`, and two missing.
+This availability record does not change the frozen feature or evaluation
+rules.
+
 ## Frozen kick feature vector
 
 For every row, append exactly 74 numeric values:
