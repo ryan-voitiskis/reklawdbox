@@ -1,6 +1,6 @@
 # Plan 067: Validate a scoped broad-genre MVP
 
-> **Status:** Scoped holdout sealed; development replay not yet run
+> **Status:** Development gate passed; OpenL3 selected, holdout untouched
 > **Objective:** Determine whether a deliberately limited set of broad-root
 > suggestions can deliver useful, honest value before the full 26-target truth
 > corpus is ready.
@@ -135,6 +135,23 @@ The scoped evaluator is frozen before its first scoped metric:
 - allowlist filtering occurs after prediction and thresholding and before
   metrics; and
 - 19 focused and inherited evaluator tests pass.
+
+Recorded development result:
+
+- OpenL3 nested: 276 offers, 41.32% coverage, 94.57% precision,
+  90.38% worst-fold precision;
+- OpenL3 global deployment threshold: 270 offers, 40.42% coverage, 95.56%
+  precision, 93.75% worst-fold precision;
+- CLAP nested: 297 offers, 44.46% coverage, 95.96% precision;
+- CLAP global deployment threshold: 320 offers, 47.90% coverage, 95.00%
+  precision;
+- both candidates passed every frozen gate;
+- OpenL3 selected by the preregistered runtime priority; and
+- private aggregate result SHA-256:
+  `baf0045315fd48ad19be92f209402e75d0af84815aa6a90bb8bf7b637ceaeea9`.
+
+The result replayed byte-identically. The sealed holdout has not received
+representation extraction or model inference.
 
 ## Full-fit and holdout boundary
 
