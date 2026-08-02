@@ -1,7 +1,7 @@
 # Plan 061: Build a human genre-review assistant
 
-> **Status:** Genre decisions complete on 2026-08-02; awaiting operator utility
-> feedback
+> **Status:** Pilot complete on 2026-08-02; genre decisions passed and assistant
+> utility was not demonstrated
 > **Objective:** Turn the useful explanatory and similarity signals from Plans
 > 056–060 into a small, read-only review workflow without treating any model as
 > genre truth.
@@ -144,18 +144,29 @@ Reproducibility record:
 - playlist XML SHA-256:
   `c3732070e61a85faa91aea006d8fe59400fc73e4c739c159feeddafc68258d11`
 - private review sheet SHA-256 after genre verdicts:
-  `a80cc5a7d578b3abb53128244bbe567846389bffa2947dcca9d53262c04a576d`
+  `52f9ce90b6755933d55d48ee2a7a4a92345fdd09ab51b2762805121e9c165aba`
 - private review guide SHA-256:
   `e9d3998a281c866228a286e7c964d54db6decfad99f8f50c8397177c18ff4afc`
 
-## Partial pilot result
+## Final pilot result
 
 The operator confidently verified the current canonical genre on all six rows.
 There were no replacement genres, ambiguous verdicts, or skipped rows. The
 genre-decision criterion therefore passed 6/6, above its required 4/6.
 
-Whether the references or vocabulary were materially useful remains
-unanswered, so the utility criterion and overall pilot gate remain pending.
+The operator did not need additional information for certainty on four rows.
+On the two rows requiring more listening, the operator was unsure whether the
+references or vocabulary materially helped. No row received a positive utility
+report, so the 4/6 utility criterion was not demonstrated and the overall pilot
+gate did not pass.
+
+This is not a classification failure: all six decisions remained confident
+after listening. It means this confirmation-first batch does not justify
+continuing the interaction design as-is. Any later utility experiment should
+be separately planned around genuinely ambiguous decisions, preferably with a
+small assisted-versus-unassisted comparison rather than more blind accuracy
+review.
+
 No hint was treated as automated truth, and no Rekordbox metadata, audio, tags,
 or caches were changed. Track identities, paths, hints, similarities, and
 listening notes remain outside Git.

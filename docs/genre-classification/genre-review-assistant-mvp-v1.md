@@ -2,7 +2,8 @@
 
 **Run date:** 2026-08-02
 
-**Status:** Six genre decisions complete; utility feedback pending
+**Status:** Pilot complete; genre decisions passed and utility was not
+demonstrated
 
 ## Purpose
 
@@ -81,17 +82,27 @@ Ambiguous and skipped rows are valid. There is no hidden target to match.
 - playlist XML SHA-256:
   `c3732070e61a85faa91aea006d8fe59400fc73e4c739c159feeddafc68258d11`
 - private review sheet SHA-256 after genre verdicts:
-  `a80cc5a7d578b3abb53128244bbe567846389bffa2947dcca9d53262c04a576d`
+  `52f9ce90b6755933d55d48ee2a7a4a92345fdd09ab51b2762805121e9c165aba`
 - private review guide SHA-256:
   `e9d3998a281c866228a286e7c964d54db6decfad99f8f50c8397177c18ff4afc`
 
-## Partial pilot result
+## Final pilot result
 
 All six current canonical genres received confident operator verification.
 There were no replacement genres, ambiguous verdicts, or skipped rows. The
 genre-decision criterion passed 6/6; the required threshold was 4/6.
 
-The references-and-vocabulary utility question has not yet been answered, so
-the utility criterion and overall pilot result remain pending. No hint was
-treated as automated truth, and no Rekordbox metadata, audio, tags, or caches
-were changed.
+The operator did not need additional information for certainty on four rows.
+On the two rows requiring more listening, the operator was unsure whether the
+references or vocabulary materially helped. No row received a positive utility
+report, so the 4/6 utility criterion was not demonstrated and the overall pilot
+gate did not pass.
+
+This does not weaken the genre verdicts. It shows that a confirmation-first
+batch does not establish the value of this assistance design. A future utility
+experiment, if pursued, should use a small assisted-versus-unassisted
+comparison on genuinely ambiguous decisions rather than more blind accuracy
+review.
+
+No hint was treated as automated truth, and no Rekordbox metadata, audio, tags,
+or caches were changed.
