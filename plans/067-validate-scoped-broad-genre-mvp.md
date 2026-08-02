@@ -165,6 +165,24 @@ The label-blind holdout input preparer is frozen before reading the roster:
 - read-only Stratum version-21 kick-cache extraction; and
 - 21 focused and inherited tests pass.
 
+The completed label-blind input preparation is frozen before OpenL3 extraction:
+
+- representation manifest SHA-256:
+  `a2dc2ee0138792a167f81acad251fa59335e9b5d66ed7124302b3fd2cafa9da9`;
+- base feature artifact SHA-256:
+  `c456c044883286c9c7f72ebca02c3b8bc5c07e620cdd135c77a4220cd8b92120`;
+- preparation summary SHA-256:
+  `b735d57333e0ae1118c7000fdf6532880328f39798284313d8d778f9204bbff1`;
+- kick semantic SHA-256:
+  `88c9a39408a71578ba748342b02cb71d3d94e85bba51d49742c4b3f19847ef43`;
+- kick source-snapshot SHA-256:
+  `acaa77559696adb4c33bec0509a27367ef24c015d084ca81df5f16dac9cdc98d`;
+  and
+- all 48 rows have finite base inputs and version-21 kick evidence.
+
+The representation manifest contains only sealed row order, private review
+code, and path. It contains no truth, current genre, or sampling stratum.
+
 ## Full-fit and holdout boundary
 
 If neither scoped candidate passes, record a bounded negative and stop. If one
