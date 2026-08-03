@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -23,12 +24,23 @@ SOURCE_PRIORITY = {
     "current_rekordbox_genre": 0,
     "v0_33_recommendation": 1,
 }
+DEFAULT_CONFIG = {
+    "schema_version": 1,
+    "experiment_id": EXPERIMENT_ID,
+    "source_experiment_id": SOURCE_EXPERIMENT_ID,
+    "quotas": QUOTAS,
+    "minimum_new_parent_artists": MINIMUM_NEW_PARENT_ARTISTS,
+    "maximum_tracks_per_artist": MAX_TRACKS_PER_ARTIST,
+    "stratum_order": STRATUM_ORDER,
+}
 
 
-def stable_hash(row: dict[str, Any], purpose: str) -> str:
+def stable_hash(
+    row: dict[str, Any], purpose: str, experiment_id: str = EXPERIMENT_ID
+) -> str:
     value = "|".join(
         (
-            EXPERIMENT_ID,
+            experiment_id,
             purpose,
             str(row["sampling_stratum_private"]),
             str(row["track_id"]),
@@ -44,10 +56,11 @@ def validate_pool(
     *,
     expected_sha256: str,
     expected_fingerprint: str,
+    source_experiment_id: str = SOURCE_EXPERIMENT_ID,
 ) -> list[dict[str, Any]]:
     if source_sha256 != expected_sha256:
         raise ValueError("candidate-pool artifact checksum differs")
-    if value.get("experiment_id") != SOURCE_EXPERIMENT_ID:
+    if value.get("experiment_id") != source_experiment_id:
         raise ValueError("unexpected candidate-pool experiment ID")
     rows = value.get("rows")
     if not isinstance(rows, list):
@@ -59,11 +72,13 @@ def validate_pool(
     return rows
 
 
-def source_key(row: dict[str, Any], purpose: str) -> tuple[int, str]:
+def source_key(
+    row: dict[str, Any], purpose: str, experiment_id: str = EXPERIMENT_ID
+) -> tuple[int, str]:
     source = str(row["sampling_source_private"])
     if source not in SOURCE_PRIORITY:
         raise ValueError(f"unsupported sampling source {source!r}")
-    return SOURCE_PRIORITY[source], stable_hash(row, purpose)
+    return SOURCE_PRIORITY[source], stable_hash(row, purpose, experiment_id)
 
 
 def select_batch(
@@ -71,6 +86,8 @@ def select_batch(
     quotas: dict[str, int] = QUOTAS,
     minimum_new_artists: dict[str, int] = MINIMUM_NEW_PARENT_ARTISTS,
     max_tracks_per_artist: int = MAX_TRACKS_PER_ARTIST,
+    stratum_order: tuple[str, ...] = STRATUM_ORDER,
+    experiment_id: str = EXPERIMENT_ID,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     used_paths: set[str] = set()
@@ -90,9 +107,9 @@ def select_batch(
         used_releases.add(str(row["release_group"]))
         artist_counts[str(row["artist_group"])] += 1
 
-    if set(quotas) != set(STRATUM_ORDER):
+    if set(quotas) != set(stratum_order):
         raise ValueError("sampling quotas differ from the frozen stratum order")
-    for stratum in STRATUM_ORDER:
+    for stratum in stratum_order:
         quota = quotas[stratum]
         candidates = [
             row
@@ -103,7 +120,8 @@ def select_batch(
         new_artists_selected: set[str] = set()
         if required_new:
             for row in sorted(
-                candidates, key=lambda value: source_key(value, "new-artist")
+                candidates,
+                key=lambda value: source_key(value, "new-artist", experiment_id),
             ):
                 artist = str(row["artist_group"])
                 if (
@@ -126,7 +144,10 @@ def select_batch(
         selected_in_stratum = sum(
             row["sampling_stratum_private"] == stratum for row in selected
         )
-        for row in sorted(candidates, key=lambda value: source_key(value, "quota")):
+        for row in sorted(
+            candidates,
+            key=lambda value: source_key(value, "quota", experiment_id),
+        ):
             if selected_in_stratum == quota:
                 break
             if row in selected or not available(row):
@@ -139,13 +160,19 @@ def select_batch(
                 f"eligible rows; required {quota}"
             )
 
-    return sorted(selected, key=lambda row: stable_hash(row, "review-order"))
+    return sorted(
+        selected,
+        key=lambda row: stable_hash(row, "review-order", experiment_id),
+    )
 
 
-def private_row(row: dict[str, Any], position: int) -> dict[str, Any]:
+def private_row(
+    row: dict[str, Any], position: int, experiment_id: str = EXPERIMENT_ID
+) -> dict[str, Any]:
+    batch_number = experiment_id.rsplit("b", 1)[-1]
     return {
         "position": position,
-        "code": f"GI05-{position:02d}",
+        "code": f"GI{batch_number}-{position:02d}",
         "track_id": row["track_id"],
         "file_path": row["file_path"],
         "artist": row["artist"],
@@ -178,25 +205,45 @@ def build_result(
     *,
     expected_sha256: str,
     expected_fingerprint: str,
+    config: dict[str, Any] = DEFAULT_CONFIG,
+    private_config_sha256: str | None = None,
 ) -> dict[str, Any]:
+    normalized_config = validate_config(config)
+    experiment_id = normalized_config["experiment_id"]
+    source_experiment_id = normalized_config["source_experiment_id"]
     rows = validate_pool(
         pool,
         source_sha256,
         expected_sha256=expected_sha256,
         expected_fingerprint=expected_fingerprint,
+        source_experiment_id=source_experiment_id,
     )
     selected = [
-        private_row(row, position)
-        for position, row in enumerate(select_batch(rows), start=1)
+        private_row(row, position, experiment_id)
+        for position, row in enumerate(
+            select_batch(
+                rows,
+                quotas=normalized_config["quotas"],
+                minimum_new_artists=normalized_config[
+                    "minimum_new_parent_artists"
+                ],
+                max_tracks_per_artist=normalized_config[
+                    "maximum_tracks_per_artist"
+                ],
+                stratum_order=normalized_config["stratum_order"],
+                experiment_id=experiment_id,
+            ),
+            start=1,
+        )
     ]
     source_counts = Counter(row["sampling_source_private"] for row in selected)
     return {
-        "experiment_id": EXPERIMENT_ID,
+        "experiment_id": experiment_id,
         "method_status": "blind_development_truth_review_pending",
-        "export_playlist_name": EXPERIMENT_ID.replace("-", "_"),
+        "export_playlist_name": experiment_id.replace("-", "_"),
         "source": {
             "artifact_sha256": source_sha256,
-            "experiment_id": SOURCE_EXPERIMENT_ID,
+            "experiment_id": source_experiment_id,
             "pool_fingerprint": expected_fingerprint,
             "role": "metadata_directed_sampling_pool_not_truth",
             "current_genre_used_for_sampling": True,
@@ -207,12 +254,17 @@ def build_result(
             "prior_operator_reviews_excluded": True,
         },
         "selection_rule": {
-            "seed_sha256": hashlib.sha256(EXPERIMENT_ID.encode()).hexdigest(),
-            "fixed_sampling_quotas": QUOTAS,
-            "minimum_new_parent_artists": MINIMUM_NEW_PARENT_ARTISTS,
-            "stratum_order": STRATUM_ORDER,
+            "seed_sha256": hashlib.sha256(experiment_id.encode()).hexdigest(),
+            "private_config_sha256": private_config_sha256,
+            "fixed_sampling_quotas": normalized_config["quotas"],
+            "minimum_new_parent_artists": normalized_config[
+                "minimum_new_parent_artists"
+            ],
+            "stratum_order": normalized_config["stratum_order"],
             "source_priority": SOURCE_PRIORITY,
-            "maximum_tracks_per_artist": MAX_TRACKS_PER_ARTIST,
+            "maximum_tracks_per_artist": normalized_config[
+                "maximum_tracks_per_artist"
+            ],
             "one_per_path": True,
             "one_per_release_group": True,
             "sampling_and_model_fields_are_private_and_not_truth": True,
@@ -224,20 +276,80 @@ def build_result(
     }
 
 
+def validate_config(value: dict[str, Any]) -> dict[str, Any]:
+    if value.get("schema_version") != 1:
+        raise ValueError("unsupported private selection config schema")
+    experiment_id = str(value.get("experiment_id") or "")
+    source_experiment_id = str(value.get("source_experiment_id") or "")
+    match = re.fullmatch(r"genre-intelligence-truth-v1-b(\d{2})", experiment_id)
+    if match is None:
+        raise ValueError("invalid truth-batch experiment ID")
+    expected_source = f"genre-intelligence-candidate-pool-v1-b{match.group(1)}"
+    if source_experiment_id != expected_source:
+        raise ValueError("candidate-pool experiment ID does not match truth batch")
+
+    quotas = value.get("quotas")
+    if (
+        not isinstance(quotas, dict)
+        or not quotas
+        or any(parent not in corpus.PARENT_GENRES for parent in quotas)
+        or any(not isinstance(count, int) or count < 1 for count in quotas.values())
+        or sum(quotas.values()) > 20
+    ):
+        raise ValueError("private selection quotas are invalid")
+    minima = value.get("minimum_new_parent_artists")
+    if (
+        not isinstance(minima, dict)
+        or set(minima) != set(quotas)
+        or any(
+            not isinstance(count, int) or count < 0 or count > quotas[parent]
+            for parent, count in minima.items()
+        )
+    ):
+        raise ValueError("private new-parent-artist minima are invalid")
+    stratum_order = value.get("stratum_order")
+    if (
+        not isinstance(stratum_order, (list, tuple))
+        or len(stratum_order) != len(quotas)
+        or set(stratum_order) != set(quotas)
+    ):
+        raise ValueError("private stratum order differs from quotas")
+    maximum = value.get("maximum_tracks_per_artist")
+    if not isinstance(maximum, int) or maximum < 1 or maximum > 20:
+        raise ValueError("private artist cap is invalid")
+    return {
+        "schema_version": 1,
+        "experiment_id": experiment_id,
+        "source_experiment_id": source_experiment_id,
+        "quotas": dict(quotas),
+        "minimum_new_parent_artists": dict(minima),
+        "maximum_tracks_per_artist": maximum,
+        "stratum_order": tuple(stratum_order),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate-pool", required=True, type=Path)
     parser.add_argument("--expected-pool-sha256", required=True)
     parser.add_argument("--expected-pool-fingerprint", required=True)
+    parser.add_argument("--private-config", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     source_sha256 = corpus.sha256_file(args.candidate_pool)
     pool = json.loads(args.candidate_pool.read_text(encoding="utf-8"))
+    config = DEFAULT_CONFIG
+    private_config_sha256 = None
+    if args.private_config is not None:
+        config = json.loads(args.private_config.read_text(encoding="utf-8"))
+        private_config_sha256 = corpus.sha256_file(args.private_config)
     result = build_result(
         pool,
         source_sha256,
         expected_sha256=args.expected_pool_sha256,
         expected_fingerprint=args.expected_pool_fingerprint,
+        config=config,
+        private_config_sha256=private_config_sha256,
     )
     corpus.atomic_write(
         args.output,

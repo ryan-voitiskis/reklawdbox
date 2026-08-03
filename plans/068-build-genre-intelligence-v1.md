@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B05 exported and awaiting blind review
+> **Status:** In progress; B05 retired and private B06 policy frozen
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -685,6 +685,26 @@ Reproducibility record:
   `8bda12e53a359afbf28114150e6e138b22393475cf79e407da81d28262185022`;
 - live identity matches: 20; and
 - zero staged changes before and after export: yes.
+
+## Batch B05 retirement and B06 preregistration
+
+B05 was retired before operator import or listening because an agent progress
+update disclosed its aggregate sampling targets. The review sheet itself
+remained label-blind, but the surrounding disclosure violated the stricter
+operator-blind contract. No B05 verdict was prepared or ingested. Its pool,
+mapping, XML, blank review sheet, and guide were moved from the export directory
+to the private `retired-b05` audit directory with mode 0600 and remain excluded
+from later selection.
+
+Future sampling quotas are stored in a private, schema-validated config rather
+than public progress text. The generic selector validates the batch/pool ID
+pair, canonical parents, quotas, new-parent artist minima, stratum order,
+twenty-row ceiling, and artist cap. It records the config checksum in the
+private mapping. The B06 config was frozen before pool construction or identity
+selection, is mode 0600, and has SHA-256
+`87d2a0725b82e90f07bd8a9e053ee9faa8daaf70101cb1e4de35b81908e9504c`.
+Its target allocation remains hidden until the operator completes the blind
+review.
 
 ## Done criteria
 

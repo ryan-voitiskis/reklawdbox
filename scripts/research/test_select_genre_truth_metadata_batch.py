@@ -102,6 +102,58 @@ class SelectGenreTruthMetadataBatchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "frozen stratum order"):
             selector.select_batch(self.fixture(), quotas={"Garage": 1})
 
+    def test_private_config_validates_batch_pair_and_constraints(self) -> None:
+        config = {
+            "schema_version": 1,
+            "experiment_id": "genre-intelligence-truth-v1-b06",
+            "source_experiment_id": "genre-intelligence-candidate-pool-v1-b06",
+            "quotas": {"Drum & Bass": 2, "Tech House": 1},
+            "minimum_new_parent_artists": {
+                "Drum & Bass": 1,
+                "Tech House": 0,
+            },
+            "maximum_tracks_per_artist": 2,
+            "stratum_order": ["Drum & Bass", "Tech House"],
+        }
+        normalized = selector.validate_config(config)
+        self.assertEqual(normalized["experiment_id"], config["experiment_id"])
+        self.assertEqual(
+            normalized["stratum_order"], ("Drum & Bass", "Tech House")
+        )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            selector.validate_config(
+                {**config, "source_experiment_id": "wrong-source"}
+            )
+
+    def test_private_config_controls_batch_code_and_is_recorded_by_hash(self) -> None:
+        config = {
+            "schema_version": 1,
+            "experiment_id": "genre-intelligence-truth-v1-b06",
+            "source_experiment_id": "genre-intelligence-candidate-pool-v1-b06",
+            "quotas": {"Tech House": 1},
+            "minimum_new_parent_artists": {"Tech House": 0},
+            "maximum_tracks_per_artist": 1,
+            "stratum_order": ["Tech House"],
+        }
+        rows = [row("Tech House", 1)]
+        fingerprint = corpus.fingerprint(rows)
+        result = selector.build_result(
+            {
+                "experiment_id": config["source_experiment_id"],
+                "pool_fingerprint": fingerprint,
+                "rows": rows,
+            },
+            "artifact",
+            expected_sha256="artifact",
+            expected_fingerprint=fingerprint,
+            config=config,
+            private_config_sha256="config-hash",
+        )
+        self.assertEqual(result["selected"][0]["code"], "GI06-01")
+        self.assertEqual(
+            result["selection_rule"]["private_config_sha256"], "config-hash"
+        )
+
     def test_pool_validation_checks_artifact_and_content_fingerprints(self) -> None:
         rows = self.fixture()
         fingerprint = corpus.fingerprint(rows)
