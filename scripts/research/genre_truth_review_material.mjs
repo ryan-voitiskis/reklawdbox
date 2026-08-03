@@ -28,9 +28,9 @@ export function reviewSheet(selected) {
   return `${[header, ...rows].join('\n')}\n`
 }
 
-export function reviewGuide(selected) {
+export function reviewGuide(selected, batchLabel = 'B01') {
   const lines = [
-    '# Genre Intelligence Blind Review B01',
+    `# Genre Intelligence Blind Review ${batchLabel}`,
     '',
     'Classify each track by ear at the broad parent-genre level. Hidden sampling labels and model outputs are deliberately absent.',
     '',

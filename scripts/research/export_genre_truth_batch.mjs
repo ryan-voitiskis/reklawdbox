@@ -4,8 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { McpStdioClient } from '../lib/mcp-stdio.mjs'
 import { reviewGuide, reviewSheet } from './genre_truth_review_material.mjs'
 
-const EXPERIMENT_ID = 'genre-intelligence-truth-v1-b01'
-const PLAYLIST_NAME = 'genre_intelligence_blind_v1_b01'
+const EXPERIMENT_ID_PATTERN = /^genre-intelligence-truth-v1-b\d{2}$/
 
 function requiredArg(name) {
   const index = process.argv.indexOf(name)
@@ -41,9 +40,12 @@ const bin = requiredArg('--bin')
 const mapping = JSON.parse(await readFile(mappingPath, 'utf8'))
 const selected = mapping.selected ?? []
 
-if (mapping.experiment_id !== EXPERIMENT_ID) {
+if (!EXPERIMENT_ID_PATTERN.test(mapping.experiment_id)) {
   throw new Error('unexpected Genre Intelligence experiment ID')
 }
+const playlistName = mapping.export_playlist_name
+  ?? mapping.experiment_id.replaceAll('-', '_')
+const batchLabel = mapping.experiment_id.slice(-3).toUpperCase()
 if (
   selected.length !== 6
   || new Set(selected.map((row) => row.track_id)).size !== 6
@@ -92,7 +94,7 @@ try {
   const xmlResult = await call('write_xml', {
     output_path: xmlPath,
     playlists: [{
-      name: PLAYLIST_NAME,
+      name: playlistName,
       track_ids: selected.map((row) => row.track_id),
     }],
   })
@@ -102,9 +104,9 @@ try {
   }
 
   await writeFile(reviewPath, reviewSheet(selected))
-  await writeFile(guidePath, reviewGuide(selected))
+  await writeFile(guidePath, reviewGuide(selected, batchLabel))
   mapping.export = {
-    playlist_name: PLAYLIST_NAME,
+    playlist_name: playlistName,
     xml_path: xmlPath,
     review_path: reviewPath,
     guide_path: guidePath,
@@ -119,7 +121,7 @@ try {
   console.log(JSON.stringify(
     {
       experiment_id: mapping.experiment_id,
-      playlist_name: PLAYLIST_NAME,
+      playlist_name: playlistName,
       tracks: selected.length,
       roster_sha256: mapping.roster_sha256,
       xml_path: xmlPath,

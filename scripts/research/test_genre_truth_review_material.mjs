@@ -15,7 +15,7 @@ const row = {
 
 test('review material contains only whitelisted identity and answer fields', () => {
   const sheet = reviewSheet([row])
-  const guide = reviewGuide([row])
+  const guide = reviewGuide([row], 'B02')
   for (const output of [sheet, guide]) {
     assert.match(output, /GI01-01/)
     assert.match(output, /Artist/)
@@ -24,6 +24,7 @@ test('review material contains only whitelisted identity and answer fields', () 
     assert.doesNotMatch(output, /SECRET_CURRENT_GENRE/)
     assert.doesNotMatch(output, /SECRET_MODEL_PREDICTION/)
   }
+  assert.match(guide, /Blind Review B02/)
 })
 
 test('review sheet escapes tab and newline identity content', () => {

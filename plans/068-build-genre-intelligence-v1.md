@@ -285,6 +285,29 @@ was lost on host restart. Do not select a convenience replacement from the
 live library because an unidentified Plan 066 release-holdout row could then
 enter development truth.
 
+## Second frozen truth batch
+
+Batch `genre-intelligence-truth-v1-b02` uses the persistent pre-holdout
+`genre-reference-candidates-v2.xml` export with SHA-256
+`67d6f19adfe7acb642cfd9d2fead240ede6c392dce5465a64c6329656d3b9a18`.
+Every eligible source row remains a live member of
+`genre_reference_candidates`, which was a frozen artist/release exclusion for
+Plans 060, 066, and 067. Therefore none can be a sealed Plan 066 holdout row.
+
+Aggregate preflight found nine unverified, identity-stable rows in the two
+weakest available roots: eight Minimal across seven normalized artists and
+eight release groups, plus one IDM row. All nine are absent from
+`genre_verified`, every other prior blind/research-review playlist, and batch
+B01. Before identities are inspected, freeze these quotas:
+
+- Minimal: five rows; and
+- IDM: one row.
+
+Select by a fixed batch seed and require six distinct paths, normalized
+artists, and release groups. The XML and live genre are sampling metadata only;
+they remain hidden and do not become truth. Fail instead of relaxing the quota
+or any prior-playlist, identity, or diversity condition.
+
 ## Done criteria
 
 This plan is complete only when either:
