@@ -144,6 +144,30 @@ Inference freeze record:
 - private artifact mode: 0600; and
 - genre model, prediction, margin, or offer produced at freeze: no.
 
+## Sealed inference result
+
+The full-development PCA64 and seven-way ridge model produced 31 offers and 29
+abstentions. This clears the frozen minimum of 30 reviewable offers without
+revealing a per-track prediction, margin, supported parent, current genre, or
+sampling stratum. The independently serialized model matched the existing
+reference evaluator at every prediction and margin.
+
+Inference replay reproduced both artifacts byte-for-byte:
+
+- private fitted-model SHA-256:
+  `86df1955b89212cbef0269e68c18e588cfc0694d3dd34799be8625a0678bddb3`;
+- private sealed-prediction SHA-256:
+  `4e95f5cb364d2eb4966b5a3d0d1cbcdc2a30843f2b91475a86d4f350a40847b5`;
+- holdout offers: 31 of 60;
+- holdout abstentions: 29 of 60;
+- all predictions frozen before listening: yes;
+- identity values exposed by inference: no; and
+- private artifact mode: 0600.
+
+The inference roster is now prediction-open but verdict-unopened. Review
+materials must be derived from the exact 31 offered rows and remain blind to
+every model and sampling field.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
