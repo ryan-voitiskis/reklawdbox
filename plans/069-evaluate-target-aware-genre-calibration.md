@@ -1,6 +1,6 @@
 # Plan 069: Evaluate target-aware broad-genre calibration
 
-> **Status:** In progress; candidate preregistered before scoring
+> **Status:** Complete; bounded negative, sealed holdout remains untouched
 > **Objective:** Determine whether honest per-parent abstention can turn the
 > frozen CLAP classifier into a release candidate without hiding unstable roots
 > or exposing the sealed Plan 066 holdout prematurely.
@@ -126,6 +126,30 @@ The release holdout requires:
 
 One failed independent evaluation retires the exact model and thresholds. No
 holdout-driven threshold or target change follows.
+
+## Development result
+
+Target-aware calibration improved the operational shape of candidate C but did
+not pass the frozen nested gate. The honest nested view offered 367 of 575 rows
+at 91.28% precision and 63.83% coverage. Every outer fold cleared 85% precision
+and paired precision improved over v0.33 by 20.96 percentage points, but
+coverage remained 1.17 points below the 65% floor. More importantly, nested
+Electro precision was only 72.22% on 18 offers, below the 80% per-parent floor.
+Breakbeat and Trance correctly received no nested offers.
+
+The deployment diagnostic passed every frozen development check in isolation:
+it offered 410 rows at 91.71% precision and 71.30% coverage across six parents,
+with no Breakbeat threshold. It does not override the nested failure because
+its per-parent thresholds saw every development outcome. Coverage against all
+716 accepted rows was 51.26% in the nested view and 57.26% in the deployment
+view.
+
+The exact evaluation replay was byte-identical. Result SHA-256 is
+`6a9b6d6b2896fa8f396fd267cfe0f6625bf77e71899d2293c7d00cf5aad0064a`;
+both result files are mode 0600. The sealed Plan 066 holdout received no
+inference and remains unopened. Under this plan's stop condition, the exact
+candidate is retired and no additional calibration or representation sweep
+begins from this result.
 
 ## Product boundary after a pass
 
