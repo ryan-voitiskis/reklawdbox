@@ -80,9 +80,13 @@ normalized artist and release in every split.
 
 ## Active-learning review loop
 
-Reviews are blind batches of at most six tracks. The operator sees identity and
-audio only—not the current genre, sampling stratum, provider genre, model
-prediction, confidence, neighbour genres, or hidden target.
+Reviews use an adaptive batch size. Ambiguous boundary work defaults to no more
+than six tracks. A preregistered, coherent selection may contain seven to twenty
+tracks when the expected information gain justifies the extra listening load;
+no blind batch exceeds twenty tracks. The operator may stop or skip at any
+point and sees identity and audio only—not the current genre, sampling stratum,
+provider genre, model prediction, confidence, neighbour genres, or hidden
+target.
 
 Each response is one of:
 
@@ -182,7 +186,8 @@ After an independent pass, implement the smallest complete user workflow:
 - cache-versioned label-blind inference;
 - CLI and MCP preview surfaces that distinguish suggestion, confidence, and
   abstention;
-- an active-review query returning at most six diverse rows;
+- an active-review query returning six or fewer diverse rows by default, with
+  an explicit requested limit capped at twenty;
 - explicit verdict ingestion with conflict and supersession handling;
 - optional staging of accepted genre changes only through `ChangeManager`;
 - XML export for manual Rekordbox import; and
