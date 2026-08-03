@@ -15,7 +15,7 @@ import build_genre_intelligence_corpus as corpus
 
 EXPERIMENT_ID = "genre-intelligence-truth-v1-b05"
 SOURCE_EXPERIMENT_ID = "genre-intelligence-candidate-pool-v1-b05"
-QUOTAS = {"Garage": 8, "Minimal": 7, "Tech House": 5}
+QUOTAS = {"Garage": 7, "Minimal": 8, "Tech House": 5}
 MINIMUM_NEW_PARENT_ARTISTS = {"Garage": 4, "Minimal": 2, "Tech House": 0}
 MAX_TRACKS_PER_ARTIST = 2
 SOURCE_PRIORITY = {

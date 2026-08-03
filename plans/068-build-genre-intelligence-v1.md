@@ -617,8 +617,9 @@ prioritizes the artist diversity needed by the target parent.
 B05 fixed quotas are:
 
 - Tech House: 5, including one row beyond its four-row deficit;
-- Minimal: 7, with at least two artists new to accepted Minimal truth; and
-- Garage: 8, with at least four artists new to accepted Garage truth.
+- Minimal: 8, including one row beyond its seven-row deficit and at least two
+  artists new to accepted Minimal truth; and
+- Garage: 7, with at least four artists new to accepted Garage truth.
 
 The twenty-row batch is justified by a single coherent support-expansion
 question. Its candidate builder is pinned to audit artifact SHA-256
@@ -626,6 +627,10 @@ question. Its candidate builder is pinned to audit artifact SHA-256
 and development-corpus artifact SHA-256
 `de3fbdc69ae86f7594dec7f90eeba7758d5c07fa1258f1443686c1f518720c23`.
 Freeze and record the candidate-pool checksum before selecting any identity.
+The first aggregate feasibility check found only seven untouched,
+release-independent Garage candidates. The original eight-row Garage quota
+therefore failed closed. It was reduced to seven and Minimal gained the spare
+row before any candidate identity was selected.
 
 ## Done criteria
 
