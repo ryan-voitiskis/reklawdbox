@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; candidate A retired and candidate B preregistered
+> **Status:** In progress; candidates A/B retired and candidate C preregistered
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -1011,6 +1011,66 @@ Pre-score record:
 - byte-identical representation-manifest preparation and feature finalization:
   yes; and
 - every identity-bearing artifact mode: 0600.
+
+## Candidate B result
+
+Candidate B is a bounded negative. OpenL3 materially improved the model but did
+not clear the frozen release gate. Unselective accuracy rose to 75.13%. The
+nested view offered 302 rows at 91.72% precision and 52.52% coverage; all folds
+cleared 85%, and paired precision improved over v0.33 by 14.84 points. The
+global threshold offered 335 rows at 90.15% precision and 58.26% coverage, but
+fold 4 fell to 81.67% precision.
+
+The target errors remain meaningful. Nested Breakbeat precision was 55.56% on
+nine offers and Techno was 79.63% on 54. At the deployment threshold,
+Breakbeat remained 55.56%, Techno fell to 75.76% on 66 offers, and Trance was
+73.33% on 15. The representation is substantially better than candidate A,
+but its 6.74-point scope-coverage deficit and boundary errors are too large to
+waive. No gate or model rule changed, the result replay was byte-identical, and
+the sealed holdout remains unopened.
+
+Result record:
+
+- private result SHA-256:
+  `05fca4a4a9ba1aede651b691d5ef11af2be2e35abb8c2fc772175ba47b36667b`;
+- unselective accuracy: 75.13%;
+- nested result: 91.72% precision at 52.52% scope coverage;
+- deployment result: 90.15% precision at 58.26% scope coverage;
+- deployment whole-accepted-truth coverage: 46.79%;
+- result replay: byte-identical; and
+- private artifact mode: 0600.
+
+## Frozen candidate C: CLAP representation
+
+The final candidate-family slot tests the strongest representation from Plan
+066. Candidate C replaces OpenL3 with a training-partition PCA64 projection of
+CLAP and appends it to candidate A's unchanged 140 features. It does not
+concatenate CLAP with OpenL3. Every fold, label, base feature, ridge parameter,
+calibration rule, baseline comparison, and gate remains unchanged.
+
+Use the unchanged label-blind Plan 066 CLAP contract:
+
+- model `laion/clap-htsat-unfused` at revision
+  `8fa0f1c6d0433df6e97c127f64b2a1d6c0dcda8a`;
+- weights SHA-256
+  `1cd3c601bc4afe0fa87be3de4c13dd2cfadd249fac1e29acf74a9b296c3219bb`;
+- config SHA-256
+  `9efb9557bc804f2ca6e394486af2e45dfed0b18554909735a99c6220b84e4288`;
+- preprocessing-config SHA-256
+  `9739f58296aa6f9ac18008fd0150fb2649bc554985fbde86d0a4041c882ac753`;
+- 48 kHz mono decode with three deterministic ten-second excerpts;
+- repeat-padding only for audio shorter than ten seconds;
+- `ClapModel.get_audio_features` in float32 MPS inference; and
+- unchanged extractor source SHA-256
+  `5d09431f18e77320a8f0c77b0af393cce4ea8979275cfb6adc2b7b5f44fd7e5c`.
+
+The 614.5 MB model is materially heavier than OpenL3. A development pass would
+therefore prove classification quality, not automatically approve that runtime
+for product integration; packaging, latency, and optional-download UX would
+remain explicit release gates. Freeze model bytes, representation outputs,
+extended evaluator source, and the candidate config before scoring. Candidate
+C is the final bounded family under this plan; a failure records a rigorous
+negative without opening the holdout or beginning another development sweep.
 
 ## Done criteria
 
