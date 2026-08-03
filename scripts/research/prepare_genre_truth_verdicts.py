@@ -26,7 +26,7 @@ EXPECTED_HEADERS = [
     "alternatives",
     "notes",
 ]
-AMBIGUOUS_WORDS = {"ambiguous", "unsure", "uncertain"}
+AMBIGUOUS_WORDS = {"ambiguous", "unsure", "uncertain", "unsure ambiguous"}
 SKIP_WORDS = {"skip", "exclude", "excluded"}
 BUILTIN_ALIASES = {
     "breaks": "Breakbeat",
@@ -44,6 +44,11 @@ CONFIDENCE_ALIASES: dict[str, str | None] = {
     "high": "high",
     "medium": "medium",
     "low": "low",
+    "very low": "low",
+    "low medium": "low",
+    "low to medium": "low",
+    "medium low": "low",
+    "medium to low": "low",
     "certain": "high",
     "none": None,
     "medium high": "medium",
@@ -257,6 +262,7 @@ def prepare_verdicts(
             "alternative_cells_copied_to_notes": sorted(alternative_notes),
             "confidence_policy": (
                 "casefolded; certain normalized to high; none normalized to null; "
+                "very-low and mixed low-medium normalized conservatively to low; "
                 "mixed medium-high normalized conservatively to medium"
             ),
         },

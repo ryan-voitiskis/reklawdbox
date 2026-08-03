@@ -71,6 +71,21 @@ class PrepareGenreTruthVerdictsTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["confidence"], "medium")
         self.assertEqual(result["rows"][0]["confidence_raw"], "medium to high")
 
+    def test_low_medium_and_very_low_are_conservatively_low(self) -> None:
+        result = self.prepare(
+            review_text(
+                first_confidence="low - medium",
+                second_verdict="unsure/ambiguous",
+                second_confidence="very low",
+            )
+        )
+        label, ambiguous = result["rows"]
+        self.assertEqual(label["confidence"], "low")
+        self.assertEqual(label["confidence_raw"], "low - medium")
+        self.assertEqual(ambiguous["outcome"], "ambiguous")
+        self.assertEqual(ambiguous["confidence"], "low")
+        self.assertEqual(ambiguous["genre_raw"], "unsure/ambiguous")
+
     def test_certain_is_high_and_unsure_none_is_null_losslessly(self) -> None:
         result = self.prepare(
             review_text(first_confidence="certain", second_confidence="none")

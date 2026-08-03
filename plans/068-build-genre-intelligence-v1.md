@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B06 exported and awaiting blind review
+> **Status:** In progress; B06 transcribed, awaiting parent-confidence clarification
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -745,6 +745,22 @@ Reproducibility record:
   `dcc48a0e2490c95d4426eedd77f72170e26ddd46aa310bfe765e6ac64ca3406a`;
 - live identity matches: 20; and
 - zero staged changes before and after export: yes.
+
+## Batch B06 review transcription
+
+The operator supplied all twenty verdicts in prose in exact review order. They
+were transcribed into the private TSV without changing identity fields. Fine
+labels such as Jungle, Deep Techno, and Hard Techno remain raw while canonical
+training labels use the frozen parent mapping. The operator's final House
+decision for `5AM (Vocal)` supersedes the earlier Electro thought within the
+same response. No unsupported alternative was inferred for `EZ Ryder`.
+
+The strict converter now preserves and recognizes the natural confidence terms
+`very low` and `low-medium`, normalizing both conservatively to low, and accepts
+the composite ambiguous wording `unsure/ambiguous`. The batch has not yet been
+ingested: three low-confidence rows describe uncertainty only between Jungle
+and Drum & Bass, which share the same parent. Parent-level confidence requires
+one explicit operator clarification before model eligibility is decided.
 
 ## Done criteria
 
