@@ -91,6 +91,29 @@ Pre-score record:
 - focused preparation and calibration suite: ten tests passed; and
 - holdout feature, embedding, or prediction produced at freeze: no.
 
+## Isolation-corrected calibration result
+
+The frozen calibration passed and replayed byte-identically. The nested view
+offered 346 of 574 retained development rows at 92.20% precision and 60.28%
+coverage. Every fold cleared 89%, each supported parent cleared its 80% floor,
+and paired precision improved over v0.33 by 21.48 percentage points. The
+deployment view offered 375 rows at 91.73% precision and 65.33% coverage; all
+four supported parents received a threshold and every frozen check passed.
+
+The exact full-fit thresholds are now:
+
+| Parent  | Frozen margin threshold |
+| ------- | ----------------------: |
+| Ambient |    0.025198863598072052 |
+| House   |  0.00022861019473163768 |
+| Reggae  |     0.28868385871208535 |
+| Techno  |      0.4383864429068181 |
+
+Result SHA-256 is
+`6bf4b95790b2edd41fed5f3752c2093ef249a2762cfbdbb8b1e27abd2c76e31c`.
+Both result copies are mode 0600. The holdout remained feature-, embedding-,
+and prediction-free throughout calibration.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
