@@ -168,6 +168,34 @@ The inference roster is now prediction-open but verdict-unopened. Review
 materials must be derived from the exact 31 offered rows and remain blind to
 every model and sampling field.
 
+## Blind holdout review preparation
+
+All 31 offered rows were assigned to one deterministic prediction-blind order
+and partitioned before listening into batches of 6, 6, 6, 6, 6, and 1. The six
+private mappings contain identity and opaque source-row IDs only; prediction,
+margin, threshold, supported parent, current genre, and sampling fields are
+absent. The preparation replay reproduced the manifest SHA-256
+`bd06892fd97cef7b904676edd069d56546019ba742992c033ff277c9e0f81838`.
+
+Only H01 has been exported for review. Its XML contains six live identity-
+verified tracks, the review sheet has exactly six blank verdict rows, and the
+guide contains no hidden field. Export left zero staged Reklawdbox changes.
+
+H01 export record:
+
+- pre-export private mapping SHA-256:
+  `9f005e203e71b495524955c07173c48d777e711fc0c41e9848f695a549945560`;
+- provenance-enriched private mapping SHA-256:
+  `63bbd28d12892c7f69d20df835003fac5c91b5ca4e1d77de831fffa9a99ae304`;
+- XML SHA-256:
+  `cb9596b259b861b89ccd849eb16d5f0ece62341724092c93fceec5d4f893d516`;
+- review TSV SHA-256:
+  `268d542fc888e688d9e627fe876277c1fc172d408e87ea5cd21cad4fdca6d6ce`;
+- guide SHA-256:
+  `379eb3df385415a6bcabd2a132849036609b06fd2dcc327b4e06df5a96e4cc59`;
+  and
+- all export and mapping artifacts: mode 0600.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
