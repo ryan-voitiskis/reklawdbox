@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; blind truth batch B01 awaiting review
+> **Status:** In progress; blind truth batch B01 ingested
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -244,7 +244,46 @@ Reproducibility record:
 - blind review guide SHA-256:
   `2c267250e57b2a610f5e026357bd11609236666d85ba7c34ca020ac0b2f94fe4`
 
-Only the six operator listening verdicts remain for this batch.
+## Batch B01 review and ingestion result
+
+All six operator verdicts were returned without exposing the sampling strata or
+Plan 067 predictions. Five rows received model-eligible high- or
+medium-confidence parent labels: Breakbeat two, House two, and Trance one. One
+unusually mixed row was explicitly skipped as unsuitable truth and remains in
+the audit ledger without a training label. The two `medium to high` responses
+were normalized conservatively to `medium`, and the clear `Trace` typo was
+normalized to `Trance` while retaining the original wording and listening
+notes privately.
+
+The versioned private ledger records exact live identity, source-file SHA-256,
+normalized decoded-PCM SHA-256, the original and normalized confidence,
+alternatives, notes, provenance, eligibility, and explicit supersession state.
+Its first replay appended zero records and reproduced the same corpus
+fingerprint. Both the ledger and deterministic model-ready snapshot are mode
+0600 and remain outside Git.
+
+Ingestion record:
+
+- reviewed rows: 6;
+- model-eligible rows: 5;
+- outcomes: 5 labels and 1 skip;
+- eligible genres: Breakbeat 2, House 2, Trance 1;
+- private verdict input SHA-256:
+  `790e7362538c26c5acc210de37535aa1dd77bd5aa80951dc0ef6bcf2654ffd30`;
+- private ledger SHA-256:
+  `806192e8ae8bdb2bbd3553cbfc1422bc92097ae3a61d02691a4a96a40dc459f5`;
+- private snapshot SHA-256:
+  `ac3f1e2d286726cca910dc8adf759a46ab8fc4745718e1885fb3d1acd9d93d2a`;
+- model-ready corpus fingerprint:
+  `f692100bbb0aec6fe2a329a4c70c7c6941930fb79faf24694f31d4274498c25f`;
+  and
+- idempotent replay additions: 0.
+
+Before batch B02, reconstruct or independently replace the retired Plan 067
+source roster with all Plan 066 holdout exclusions intact. The temporary roster
+was lost on host restart. Do not select a convenience replacement from the
+live library because an unidentified Plan 066 release-holdout row could then
+enter development truth.
 
 ## Done criteria
 
