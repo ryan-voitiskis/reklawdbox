@@ -285,28 +285,28 @@ was lost on host restart. Do not select a convenience replacement from the
 live library because an unidentified Plan 066 release-holdout row could then
 enter development truth.
 
-## Second frozen truth batch
+## Retired B02 attempt
 
-Batch `genre-intelligence-truth-v1-b02` uses the persistent pre-holdout
-`genre-reference-candidates-v2.xml` export with SHA-256
-`67d6f19adfe7acb642cfd9d2fead240ede6c392dce5465a64c6329656d3b9a18`.
-Every eligible source row remains a live member of
-`genre_reference_candidates`, which was a frozen artist/release exclusion for
-Plans 060, 066, and 067. Therefore none can be a sealed Plan 066 holdout row.
+An attempted batch B02 used the persistent pre-holdout
+`genre-reference-candidates-v2.xml` export. Aggregate preflight found nine rows
+outside `genre_verified` in the weak Minimal and IDM roots, all protected from
+holdout leakage by prior membership in the frozen
+`genre_reference_candidates` exclusion playlist. A selector and six-row export
+were frozen before identities were inspected.
 
-Aggregate preflight found nine unverified, identity-stable rows in the two
-weakest available roots: eight Minimal across seven normalized artists and
-eight release groups, plus one IDM row. All nine are absent from
-`genre_verified`, every other prior blind/research-review playlist, and batch
-B01. Before identities are inspected, freeze these quotas:
+The identity check then showed that absence from `genre_verified` and other
+playlist exports did not prove absence of prior human review. These candidates
+came from the earlier Plan 038 reference workflow, and multiple selected rows
+already had conversational listening assessments. Treating them as fresh blind
+truth would violate this plan's explicit repeated-review boundary.
 
-- Minimal: five rows; and
-- IDM: one row.
-
-Select by a fixed batch seed and require six distinct paths, normalized
-artists, and release groups. The XML and live genre are sampling metadata only;
-they remain hidden and do not become truth. Fail instead of relaxing the quota
-or any prior-playlist, identity, or diversity condition.
+Batch B02 was therefore retired before presentation. No listening verdict was
+requested, no row entered the truth ledger, and the user-facing XML was removed
+from the export directory. Its private artifacts are retained only as audit
+evidence. The selector is removed rather than left as an apparently valid
+entry point. A replacement batch must use either the exactly reconstructed
+unexposed Plan 067 roster or newly sourced tracks whose post-seal provenance
+proves they cannot belong to either holdout.
 
 ## Done criteria
 
