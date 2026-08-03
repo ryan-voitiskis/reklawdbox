@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; blind truth batch B03 awaiting review
+> **Status:** In progress; B03 ingested and B04 candidate pool frozen
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -392,6 +392,103 @@ Reproducibility record:
   and
 - blind review guide SHA-256:
   `81ce73b2a4c8363c6ab6f1e4a7a706a1b060333525e3e08edc1426a6ecddbb7d`.
+
+## Batch B03 review and ingestion result
+
+The operator completed all twenty rows without seeing sampling strata or model
+outputs. Canonicalization changed only representation, not the listening
+decision: case variants were normalized, Deep House became parent House, Deep
+Techno became parent Techno, and Hard trance became parent Trance. Original
+genre, confidence, and alternative wording is retained alongside the canonical
+fields. Jungle alternatives on Drum & Bass verdicts remain raw subgenre notes
+rather than being represented as a competing parent.
+
+Fifteen high- or medium-confidence labels became model-eligible truth. Four
+low-confidence labels remain in the audit ledger but not the model snapshot,
+and one `unsure` response became an explicit ambiguous outcome with Breakbeat
+and Downtempo alternatives. One uncertainty note entered the TSV's alternatives
+cell because its empty alternatives field was omitted; the private verdict
+preserves the exact source cell and copies the sentence into notes.
+
+Ingestion record:
+
+- reviewed rows: 20;
+- model-eligible rows added: 15;
+- outcomes: 19 labels and 1 ambiguous;
+- eligible additions: Breakbeat 2, Disco 2, Drum & Bass 2, House 2, Techno 2,
+  and Trance 5;
+- completed review sheet SHA-256:
+  `0a6916666ad13b960f29adb7dae3361932fc07dee22bb6b25789209a2ea56a01`;
+- private verdict input SHA-256:
+  `1f28bc2efbe7453083cfa13d3b1fa7f41777a7e9e632f25e2000c14ba70813b0`;
+- private ledger SHA-256:
+  `cded1b49020001485e3aa0497321bef99aaee51607765009d9c48c7ea63b8cf0`;
+- private snapshot SHA-256:
+  `0d2765dfe9c10b2a55764123ca45fe242232b0db5758f9e7474f02aa7ac70971`;
+- model-ready truth fingerprint:
+  `5942ffb2a632f15850d8d78b4d3aaf4d5b9e52b5d6618221f7270840e8c39674`;
+  and
+- idempotent replay additions: 0.
+
+## Combined support audit and B04 freeze
+
+A deterministic builder now joins the unchanged 668-row development corpus to
+eligible blind-review truth, maps fine labels to the frozen parent taxonomy,
+and applies the preregistered artist-diversity cap. It retains all accepted rows
+for audit but places only support-qualified parents in the model-ready release
+scope. Its parent-taxonomy semantic checksum matches the historical Plan 062
+through Plan 066 mapping exactly.
+
+The combined corpus contains 688 accepted rows. After deterministic diversity
+balancing, 555 rows across seven parents are model-ready: Ambient, Breakbeat,
+Electro, House, Reggae, Techno, and Trance. The twelve-parent support gate
+therefore still fails. In particular, Tech House needs four rows, IDM needs ten,
+and Downtempo needs fifteen; other nearby roots include Garage, Minimal,
+Hardcore, Disco, and Drum & Bass. No candidate training is authorized yet.
+
+Combined-corpus record:
+
+- accepted corpus fingerprint:
+  `2672df82289392da421a990fb999e37af0c3663fb69dc56c47cba6faa81c9b1a`;
+- diversity-balanced model-ready fingerprint:
+  `aff9286fd1f2637559883c8e60c7761d0f02786572bffa8e22046c58143ee3b7`;
+- private artifact SHA-256:
+  `4c71348627af625b122fea206a340b8011c19c5a6cff2b81e06b1d11d70515f4`;
+- byte-identical replay: yes; and
+- private artifact mode: 0600.
+
+Before any B04 identity is inspected, freeze a model-directed sampling batch
+using the already-exposed v0.33 recommendation only as a private sampling
+stratum. The recommendation and its confidence are not truth and are absent
+from the review sheet. No confidence filter is applied. Exclude the development
+corpus, the sealed Plan 066 holdout, every truth-ledger row including ineligible
+outcomes, retired B02, and every prior genre-review XML. Exclude their paths,
+normalized artists, and artist-release groups. Require one path, artist, and
+release group per selected row.
+
+B04 fixed quotas are:
+
+- Tech House: four, which can close its row deficit;
+- IDM: ten, which can close its row deficit and materially improve artist and
+  release diversity; and
+- Downtempo: six, as the first bounded contribution toward its larger deficit.
+
+The frozen private pool contains 452 candidates after 921 path, 496 artist, and
+613 release-group exclusions. Its relevant private sampling counts are Tech
+House 17, IDM 37, and Downtempo 23. Twelve rows have metadata changes relative
+to the old audit snapshot; the pool requires the same live track ID and path,
+records the drift count, and uses current live identity. No audio is missing.
+
+B04 candidate-pool record:
+
+- source audit artifact SHA-256:
+  `d0ea2493d0f1eef4d416722ce94e282e4df69c992b99dae0df3777d7eb09501e`;
+- pool fingerprint:
+  `94bd0521fb29f358c23b3d9b4b8da3039c2cb8b6e0520a5ff78cdcdea3419e4f`;
+- private pool artifact SHA-256:
+  `78d4679e1945f0e5c687c92cd4fb85e925ed5cf2ad847d9e0a062abd5518d9a7`;
+  and
+- private artifact mode: 0600.
 
 ## Done criteria
 

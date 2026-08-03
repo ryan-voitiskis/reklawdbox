@@ -47,9 +47,11 @@ def verdicts() -> dict:
                 "code": "T-01",
                 "outcome": "label",
                 "genre": "Breakbeat",
+                "genre_raw": "breakbeat",
                 "confidence": "medium",
                 "confidence_raw": "medium to high",
                 "alternatives": [],
+                "alternatives_raw": "",
                 "notes": "broken rhythm",
             },
             {
@@ -140,6 +142,24 @@ class IngestGenreTruthBatchTests(unittest.TestCase):
             self.assertEqual(result["genre_counts"], {"Breakbeat": 1})
             self.assertEqual(result["outcome_counts"], {"label": 1, "skip": 1})
             self.assertEqual(result["rows"][0]["confidence"], "medium")
+
+    def test_raw_review_wording_is_preserved_with_canonical_normalization(self) -> None:
+        review = ingest.validate_verdict(
+            {
+                "outcome": "label",
+                "genre": "Techno",
+                "genre_raw": "Deep Techno",
+                "confidence": "medium",
+                "confidence_raw": "Medium",
+                "alternatives": ["Minimal"],
+                "alternatives_raw": "Minimal, Techno",
+                "notes": "deep and dark",
+            }
+        )
+        self.assertEqual(review["canonical_parent_genre"], "Techno")
+        self.assertEqual(review["genre_raw"], "Deep Techno")
+        self.assertEqual(review["alternatives"], ["Minimal"])
+        self.assertEqual(review["alternatives_raw"], "Minimal, Techno")
 
     def test_changed_verdict_requires_explicit_supersession(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

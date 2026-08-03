@@ -140,12 +140,20 @@ def validate_verdict(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("alternatives must be unique")
     if genre in alternatives:
         raise ValueError("primary genre must not be repeated as an alternative")
+    genre_raw = value.get("genre_raw")
+    if genre_raw is not None and not isinstance(genre_raw, str):
+        raise ValueError("genre_raw must be a string or null")
+    alternatives_raw = value.get("alternatives_raw")
+    if alternatives_raw is not None and not isinstance(alternatives_raw, str):
+        raise ValueError("alternatives_raw must be a string or null")
     return {
         "outcome": outcome,
         "canonical_parent_genre": genre,
+        "genre_raw": genre_raw,
         "confidence": confidence,
         "confidence_raw": value.get("confidence_raw"),
         "alternatives": alternatives,
+        "alternatives_raw": alternatives_raw,
         "notes": str(value.get("notes", "")),
     }
 
