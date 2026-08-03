@@ -41,6 +41,35 @@ absent from model features. The Plan 068 results are exposed development
 evidence and may motivate this calibration design, but no Plan 066 holdout row,
 prediction, or verdict may be inspected before the development gate passes.
 
+## Pre-score freeze
+
+The target-aware evaluator was frozen before its first score at commit
+`b7585317da4f9ff5ef8fc009a6d5cf9a5a436b8b` with source SHA-256
+`f64878d00fddcf02070edc227e3a1bd208b86a90b718a1f5c1833bfc23ae2f2f`.
+Its candidate-C config SHA-256 is
+`b5a525ac98f2f58c5383a8301c1388d13188ff8461532b1e0f5aa4905a3ecfea`.
+That config and evaluator bind the following inputs:
+
+- development manifest:
+  `caf76dbe8156943a139a8ab73e8d8b492a1d74bfe1b1e9c80898104ff21f5580`;
+- feature manifest:
+  `d50519a80812a8f5705a8db834ca2764618f0fde18d3ce99ad8e981724c60e24`;
+- cache-native feature matrix:
+  `e93610e70ad70b6c02640a7161a0bc5b444717bea2b6a521c526a601db7b72ab`;
+- cache-native feature summary:
+  `5e8769b4fe435214dfe12c8f16f7da5dcbd17e406f0120e970ef724ee6d05d61`;
+- representation manifest:
+  `676de6f150a811494f255a667d61fb449c149a9cfbf5fa968a74327e2afd0e67`;
+- CLAP feature matrix:
+  `8839242f64c7aa183e055ee3c15e1e359ea77a568c0b10a29b6475f93b81697b`;
+  and
+- CLAP feature summary:
+  `9d6c34917fdbc6fac7261e90b4f6af252e187e0a691498b3552aae51123f7113`.
+
+The focused evaluator suite passed nine tests before this freeze. The four-parent
+breadth check applies to the deployment threshold set exactly as specified
+below; nested folds remain governed by the unchanged Plan 068 quality gates.
+
 ## Frozen target-aware calibration
 
 For each outer fold, produce inner out-of-fold predictions and margins using
