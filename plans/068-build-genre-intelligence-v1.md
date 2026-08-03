@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; blind truth batch B01 ingested
+> **Status:** In progress; blind truth batch B03 awaiting review
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -288,7 +288,8 @@ Before batch B02, reconstruct or independently replace the retired Plan 067
 source roster with all Plan 066 holdout exclusions intact. The temporary roster
 was lost on host restart. Do not select a convenience replacement from the
 live library because an unidentified Plan 066 release-holdout row could then
-enter development truth.
+enter development truth. This prerequisite was satisfied by the verified
+recovery recorded below.
 
 ## Retired B02 attempt
 
@@ -312,6 +313,85 @@ evidence. The selector is removed rather than left as an apparently valid
 entry point. A replacement batch must use either the exactly reconstructed
 unexposed Plan 067 roster or newly sourced tracks whose post-seal provenance
 proves they cannot belong to either holdout.
+
+## Retired-roster recovery
+
+The original Plan 060 audit and Plan 067 roster files were lost from temporary
+storage, but their frozen recipes, aggregate counts, source hashes, current
+library snapshot, historical review exports, and roster checksums remained.
+The recovery script rebuilds identity-only exclusion inputs from those sources;
+it never reads a model feature or prediction. It fails unless the read-only
+library snapshot and both historical roster checksums match.
+
+The live snapshot reproduced the recorded SHA-256
+`553dcfd0c5526f2ca8309f1a53097ac58749c8d54216879c80390c355264e653`.
+The recovered Plan 066 60-row roster reproduced
+`e90b400645d89b287aab4300465fd0893314830bc6ec8b6ab22b5f9de4fbfdf9`,
+and the recovered Plan 067 48-row roster reproduced
+`9cf4cdbd67bc701063d886e991e7f4f57a0b675844423584b3027f0bce5418a9`.
+The Plan 067 target counts also matched exactly. A deterministic replay was
+byte-identical.
+
+One unselected row from the historical candidate universe cannot be recreated
+from the current audit inputs: the recovered Plan 067 universe has 489 eligible
+rows rather than the historical 490. This does not change either selected
+roster, as proven by both frozen roster checksums, and is retained explicitly
+in private recovery provenance rather than guessed. Replaying B01 from the
+recovered roster produced the same six identities as both its imported XML and
+the append-only truth ledger.
+
+Private recovery record:
+
+- recovered Plan 066 artifact SHA-256:
+  `1468cd2cda5465a7b5d7aebbb8d736800f51454cfc2ae14b4bd96b093d04fb37`;
+- recovered Plan 067 artifact SHA-256:
+  `cf0787eadbb8979ac915a796e2642e2ad697cbe638cec0fc47b7a6aca64b5532`;
+- original Plan 067 artifact SHA-256 retained in provenance:
+  `7a188602d547052cc2ede517d74458d77bdd69509aefc2c67e3dac1fab3ff00f`;
+  and
+- recovered artifacts and mappings are mode 0600 outside Git.
+
+## Batch B03 pre-review result
+
+B03 is the replacement for the retired B02 attempt. It uses only untouched
+rows from the checksum-verified retired Plan 067 roster and excludes every B01
+path, normalized artist, and release group. Before identities were inspected,
+the selector froze a coherent twenty-row batch covering the two Plan 066
+supported targets that failed their per-target gate and four smaller roots:
+
+- Breakbeat: four;
+- Disco: three;
+- Downtempo: two;
+- Drum & Bass: three;
+- Electro: two; and
+- Trance: six.
+
+These are private sampling strata, not truth labels. The operator sees only
+identity and audio, and may classify, mark ambiguous, skip, or stop at any
+point. All twenty paths, artists, and release groups are distinct. A second
+selection run was byte-identical.
+
+The exporter re-read and matched all twenty live identities, confirmed no
+staged changes before and after export, and wrote only a playlist XML plus
+blank review material. The review projection contains exactly identity and
+response fields; it contains no sampling stratum or model output. All private
+artifacts and review files are mode 0600.
+
+Reproducibility record:
+
+- roster SHA-256:
+  `3330b4d362419087de783edf43f54c22823e623b93fe0063c381be9cd05b50f2`;
+- byte-identical pre-export mapping SHA-256:
+  `541a5050ba3ccde976eea394b81cbf68855b4062fdaf75975e04915740014545`;
+- exported private mapping SHA-256:
+  `2ac262da93f5a8f935eacd0401abcd37a5bc382cabcd3f22871b21090f57ab59`;
+- playlist XML SHA-256:
+  `9a6ccdc1a7b968b8fcfcdc0e833f7d9a57daf62c289a0af61984e47bce422174`;
+- blank review sheet SHA-256:
+  `5c0d079e7c0f9043192ca5bf5f411e791dab87bb369804adb36e791fcb9fab85`;
+  and
+- blind review guide SHA-256:
+  `81ce73b2a4c8363c6ab6f1e4a7a706a1b060333525e3e08edc1426a6ecddbb7d`.
 
 ## Done criteria
 

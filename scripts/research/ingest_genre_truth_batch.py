@@ -248,8 +248,8 @@ def ingest(
         raise ValueError("mapping experiment ID and verdict batch ID differ")
     selected = mapping.get("selected")
     verdict_rows = verdicts.get("rows")
-    if not isinstance(selected, list) or not 1 <= len(selected) <= 6:
-        raise ValueError("mapping must contain one to six selected rows")
+    if not isinstance(selected, list) or not 1 <= len(selected) <= 20:
+        raise ValueError("mapping must contain one to twenty selected rows")
     if not isinstance(verdict_rows, list):
         raise ValueError("verdict file has no row list")
     selected_by_code = {str(row["code"]): row for row in selected}

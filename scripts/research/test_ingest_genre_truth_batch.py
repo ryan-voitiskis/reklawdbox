@@ -77,6 +77,48 @@ def fake_identity(path: Path, _ffmpeg: str) -> dict:
 
 
 class IngestGenreTruthBatchTests(unittest.TestCase):
+    def test_twenty_row_batch_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            batch_mapping = mapping()
+            batch_mapping["selected"] = []
+            batch_verdicts = verdicts()
+            batch_verdicts["rows"] = []
+            for index in range(20):
+                code = f"T-{index + 1:02d}"
+                batch_mapping["selected"].append(
+                    {
+                        "position": index + 1,
+                        "code": code,
+                        "track_id": str(index + 1),
+                        "file_path": f"/music/{index + 1}.flac",
+                        "artist": f"Artist {index + 1}",
+                        "title": f"Title {index + 1}",
+                        "album": f"Release {index + 1}",
+                        "artist_group": f"artist {index + 1}",
+                        "release_group": f"artist {index + 1}\0release {index + 1}",
+                    }
+                )
+                batch_verdicts["rows"].append(
+                    {
+                        "code": code,
+                        "outcome": "label",
+                        "genre": "House",
+                        "confidence": "high",
+                        "alternatives": [],
+                        "notes": "",
+                    }
+                )
+            result = ingest.ingest(
+                batch_mapping,
+                batch_verdicts,
+                root / "ledger.jsonl",
+                root / "snapshot.json",
+                "ffmpeg",
+                fake_identity,
+            )
+            self.assertEqual(result["records_added"], 20)
+
     def test_ingest_is_append_only_idempotent_and_builds_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

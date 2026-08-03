@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { McpStdioClient } from '../lib/mcp-stdio.mjs'
 import { reviewGuide, reviewSheet } from './genre_truth_review_material.mjs'
 
@@ -47,14 +47,15 @@ const playlistName = mapping.export_playlist_name
   ?? mapping.experiment_id.replaceAll('-', '_')
 const batchLabel = mapping.experiment_id.slice(-3).toUpperCase()
 if (
-  selected.length !== 6
-  || new Set(selected.map((row) => row.track_id)).size !== 6
-  || new Set(selected.map((row) => row.file_path)).size !== 6
-  || new Set(selected.map((row) => row.artist_group)).size !== 6
-  || new Set(selected.map((row) => row.release_group)).size !== 6
+  selected.length < 1
+  || selected.length > 20
+  || new Set(selected.map((row) => row.track_id)).size !== selected.length
+  || new Set(selected.map((row) => row.file_path)).size !== selected.length
+  || new Set(selected.map((row) => row.artist_group)).size !== selected.length
+  || new Set(selected.map((row) => row.release_group)).size !== selected.length
 ) {
   throw new Error(
-    'truth-review roster must contain six identity-diverse tracks',
+    'truth-review roster must contain one to twenty identity-diverse tracks',
   )
 }
 
@@ -105,6 +106,7 @@ try {
 
   await writeFile(reviewPath, reviewSheet(selected))
   await writeFile(guidePath, reviewGuide(selected, batchLabel))
+  await Promise.all([chmod(reviewPath, 0o600), chmod(guidePath, 0o600)])
   mapping.export = {
     playlist_name: playlistName,
     xml_path: xmlPath,
