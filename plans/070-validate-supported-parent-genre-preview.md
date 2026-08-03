@@ -65,6 +65,32 @@ model, features, PCA64, ridge penalty, confidence, and calibration rule do not
 change. Freeze the reduced-development manifest, thresholds, evaluator source,
 and every input hash before the first holdout model inference.
 
+## Isolation and calibration freeze
+
+The checksum-bound input preparation excluded exactly one development row for
+the one overlapping artist group. Exact path, release-group, and accepted-truth
+path overlap were all zero; all 60 audio files exist. Preparation replayed
+byte-identically without exposing an identity value.
+
+Pre-score record:
+
+- holdout preparation implementation commit: `597cdd0`;
+- supported-preview evaluator implementation commit: `50d4868`;
+- evaluator source SHA-256:
+  `d38467ae505d1f572ef4e1fd2d6b75ab674023139f512d7c9d9ee727aae4617f`;
+- private supported-preview config SHA-256:
+  `24005487e745d1a02f7f840697f91d4511bf78ff0294f492d00df0d9345312d7`;
+- private development-exclusion artifact SHA-256:
+  `575b95fceada7565e3297a0420896bb32af83479a1bd5ff69c2b3b814e0c6c32`;
+- private holdout feature-manifest SHA-256:
+  `d970b54a4da4c370e9a5a21524393c4845c6b70ed5a09276540f09a4dbb0c152`;
+- private holdout representation-manifest SHA-256:
+  `94e513d7d9400d31eb5562dfd1a910c8606ad92455e15f41a9a5c5966ae7fc0f`;
+- private holdout-input summary SHA-256:
+  `8423585a07fe00d4c6127d912931d6321ca5337dde2c18f53edb691f8d93d2a5`;
+- focused preparation and calibration suite: ten tests passed; and
+- holdout feature, embedding, or prediction produced at freeze: no.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
