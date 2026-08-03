@@ -15,9 +15,10 @@ import build_genre_intelligence_corpus as corpus
 
 EXPERIMENT_ID = "genre-intelligence-truth-v1-b05"
 SOURCE_EXPERIMENT_ID = "genre-intelligence-candidate-pool-v1-b05"
-QUOTAS = {"Garage": 7, "Minimal": 8, "Tech House": 5}
+QUOTAS = {"Garage": 7, "Minimal": 7, "Tech House": 6}
 MINIMUM_NEW_PARENT_ARTISTS = {"Garage": 4, "Minimal": 2, "Tech House": 0}
-MAX_TRACKS_PER_ARTIST = 2
+MAX_TRACKS_PER_ARTIST = 3
+STRATUM_ORDER = ("Minimal", "Garage", "Tech House")
 SOURCE_PRIORITY = {
     "current_rekordbox_genre": 0,
     "v0_33_recommendation": 1,
@@ -89,7 +90,10 @@ def select_batch(
         used_releases.add(str(row["release_group"]))
         artist_counts[str(row["artist_group"])] += 1
 
-    for stratum, quota in sorted(quotas.items()):
+    if set(quotas) != set(STRATUM_ORDER):
+        raise ValueError("sampling quotas differ from the frozen stratum order")
+    for stratum in STRATUM_ORDER:
+        quota = quotas[stratum]
         candidates = [
             row
             for row in rows
@@ -206,6 +210,7 @@ def build_result(
             "seed_sha256": hashlib.sha256(EXPERIMENT_ID.encode()).hexdigest(),
             "fixed_sampling_quotas": QUOTAS,
             "minimum_new_parent_artists": MINIMUM_NEW_PARENT_ARTISTS,
+            "stratum_order": STRATUM_ORDER,
             "source_priority": SOURCE_PRIORITY,
             "maximum_tracks_per_artist": MAX_TRACKS_PER_ARTIST,
             "one_per_path": True,

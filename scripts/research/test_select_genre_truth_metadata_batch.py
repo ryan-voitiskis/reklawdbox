@@ -64,7 +64,7 @@ class SelectGenreTruthMetadataBatchTests(unittest.TestCase):
                 sum(row["artist_group"] == artist for row in first)
                 for artist in {row["artist_group"] for row in first}
             ),
-            2,
+            3,
         )
 
     def test_current_genre_is_preferred_after_new_artist_minimum(self) -> None:
@@ -97,6 +97,10 @@ class SelectGenreTruthMetadataBatchTests(unittest.TestCase):
                 row_value["artist_new_to_parent_truth_private"] = False
         with self.assertRaisesRegex(ValueError, "Garage.*new parent artists"):
             selector.select_batch(rows)
+
+    def test_unknown_quota_strata_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "frozen stratum order"):
+            selector.select_batch(self.fixture(), quotas={"Garage": 1})
 
     def test_pool_validation_checks_artifact_and_content_fingerprints(self) -> None:
         rows = self.fixture()

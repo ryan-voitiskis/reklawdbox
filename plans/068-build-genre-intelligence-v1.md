@@ -611,14 +611,13 @@ Every accepted development, holdout, or previously reviewed path is excluded.
 Previously exposed release groups are also excluded to prevent same-release
 near duplicates. Artists are not excluded globally: an artist represented in
 another parent may contribute a new track and release. Selection caps any
-artist at two tracks, requires one path and release group per selected row, and
+artist at three tracks, requires one path and release group per selected row, and
 prioritizes the artist diversity needed by the target parent.
 
 B05 fixed quotas are:
 
-- Tech House: 5, including one row beyond its four-row deficit;
-- Minimal: 8, including one row beyond its seven-row deficit and at least two
-  artists new to accepted Minimal truth; and
+- Tech House: 6, including two rows beyond its four-row deficit;
+- Minimal: 7, with at least two artists new to accepted Minimal truth; and
 - Garage: 7, with at least four artists new to accepted Garage truth.
 
 The twenty-row batch is justified by a single coherent support-expansion
@@ -629,8 +628,16 @@ and development-corpus artifact SHA-256
 Freeze and record the candidate-pool checksum before selecting any identity.
 The first aggregate feasibility check found only seven untouched,
 release-independent Garage candidates. The original eight-row Garage quota
-therefore failed closed. It was reduced to seven and Minimal gained the spare
-row before any candidate identity was selected.
+therefore failed closed. Minimal candidates span enough releases but are
+concentrated in five artists; a two-track artist cap could select only six.
+Before any candidate identity was selected, the final allocation became seven
+Garage, seven Minimal, and six Tech House rows with a three-track artist cap.
+If all seven Minimal labels are accepted, the most represented added artist can
+occupy at most 15% of the resulting twenty-row parent corpus, below the frozen
+20% cap.
+Minimal is the most artist-constrained stratum and is selected first, followed
+by Garage and Tech House. This deterministic order prevents the broader strata
+from consuming the artist capacity needed to satisfy Minimal.
 
 ## Done criteria
 
