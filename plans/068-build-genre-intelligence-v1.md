@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B04 ingested and B05 sampling policy frozen
+> **Status:** In progress; B05 exported and awaiting blind review
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -638,6 +638,53 @@ occupy at most 15% of the resulting twenty-row parent corpus, below the frozen
 Minimal is the most artist-constrained stratum and is selected first, followed
 by Garage and Tech House. This deterministic order prevents the broader strata
 from consuming the artist capacity needed to satisfy Minimal.
+
+## Batch B05 pre-review result
+
+The frozen pool contains 1,434 parent-source candidate variants representing
+967 unique tracks after 941 path and 633 release-group exclusions. Relevant
+availability is Garage 7 (2 current-tag and 5 v0.33 hints), Minimal 27 (6 and
+21), and Tech House 25 (4 and 21). The pool replay was byte-identical.
+
+The selector produced all twenty rows under the final frozen policy: Garage 7,
+Minimal 7, and Tech House 6. Ten selections came from current-tag sampling and
+ten from v0.33 fallback sampling. The roster contains twenty unique track IDs,
+paths, and release groups; the maximum is three tracks from one artist. It adds
+five artists not yet represented in accepted Garage truth, four for Minimal,
+and six for Tech House if those labels are accepted. Selection replay was
+byte-identical.
+
+The exporter validator now reads the declared per-batch artist cap. Older
+mappings without that declaration retain the historical one-track default. It
+re-read all twenty live identities, required an empty change set before and
+after export, and wrote only a playlist XML, blank review sheet, and listening
+guide. The XML path multiset exactly matches the private roster, the review
+identity columns match it, and all answer cells are blank. All artifacts are
+mode 0600.
+
+Reproducibility record:
+
+- final selector-policy commit: `a23367b`;
+- declared-cap exporter commit: `3420165`;
+- candidate-pool fingerprint:
+  `4c208784b95ffbf2b12722baa0af68fe650cfa0c790e2ffc3de2091083540c3e`;
+- private candidate-pool SHA-256:
+  `f0cfe75dd133d6968c0873f9431b95115ff8d547fef59d4e514164793bb5123a`;
+- byte-identical candidate-pool replay: yes;
+- roster SHA-256:
+  `88b7c04e9650caec1850c25117a7d04486858a6af42a54ea3e309eaf6ddac07a`;
+- byte-identical pre-export mapping SHA-256:
+  `8acd3e61d289e9ea2af1694f1acad584f2bdb3178b42e0844b6e6d2fc086af8c`;
+- exported private mapping SHA-256:
+  `4cc76299a8f4cbe3b173835404b5212dc2705c5edfc04bc87ba46ce3c49872a5`;
+- playlist XML SHA-256:
+  `9e56b8359b770ad4f6ec8a7055f311f0aabbbd85f1643589e5be7edcdb628849`;
+- blank review sheet SHA-256:
+  `5e37f04aa2413305250555410732fa949ce15939c422e2d355b7813e6bd0026d`;
+- blind review guide SHA-256:
+  `8bda12e53a359afbf28114150e6e138b22393475cf79e407da81d28262185022`;
+- live identity matches: 20; and
+- zero staged changes before and after export: yes.
 
 ## Done criteria
 
