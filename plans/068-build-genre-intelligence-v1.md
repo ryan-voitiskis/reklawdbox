@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; seven-parent development candidate preregistered
+> **Status:** In progress; candidate A retired and candidate B preregistered
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -917,6 +917,65 @@ Pre-score record:
   `d532a4011665d2f13bc77b1b951cc00fc772b2d7d4a83cba851bb0dcad9f2500`;
 - byte-identical manifest preparation and feature extraction: yes; and
 - every private artifact mode: 0600.
+
+## Candidate A result
+
+Candidate A is a bounded negative. It crossed the 90% aggregate precision
+floor in both views and every outer fold remained above 85%, but selectivity
+was much too severe: nested coverage was 38.09% and deployment-threshold
+coverage was 41.91%, both far below 65%. Whole-accepted-truth coverage was
+30.59% and 33.66% respectively.
+
+The nested view offered 219 rows at 91.32% precision. Techno was below its
+target guard at 78.38% on 37 offers. The global threshold offered 241 rows at
+90.04%; Techno fell to 76.74% on 43 offers and Trance to 69.23% on 13. The
+candidate improved over v0.33 by 4.48 points in the nested paired comparison
+and 4.59 points in the deployment comparison, narrowly below the frozen five-
+point requirement. Its high aggregate precision is real, but it does not offer
+enough useful work and remains weak at important dance-music boundaries.
+
+The exact evaluator replay was byte-identical. No threshold, penalty, feature,
+fold, or gate changed after inspection. The sealed release holdout remains
+unopened.
+
+Result record:
+
+- private result SHA-256:
+  `006aaf5e9e1a6a0928f0c42777d764e808b3a6e96c851431d2188ec958669044`;
+- v0.33 mapped-parent baseline: 61.59% precision at 78.78% coverage;
+- candidate unselective accuracy: 65.91%;
+- nested result: 91.32% precision at 38.09% scope coverage;
+- deployment result: 90.04% precision at 41.91% scope coverage;
+- result replay: byte-identical; and
+- private artifact mode: 0600.
+
+## Frozen candidate B: OpenL3 representation
+
+Candidate A shows that the hydrated production descriptors can identify an
+easy high-precision subset but do not encode enough musical structure for the
+required coverage. Candidate B asks one new representation question. Append a
+training-partition PCA64 projection of the frozen OpenL3 embedding to candidate
+A's unchanged 140 features. Retain the exact folds, class-balanced ridge head,
+penalty 10, nested and global threshold calibration, v0.33 paired comparison,
+and every gate. No feature is removed and OpenL3 is not combined with CLAP.
+
+Use the unchanged Plan 066 label-blind extractor and model contract:
+
+- `openl3-music-mel128-emb512-3.onnx`;
+- model SHA-256
+  `81c24c8a723054717fdea5c7448acb6023baaf70a0fc526deb030c2032db0ed3`;
+- 48 kHz mono decode;
+- twelve deterministic one-second excerpts across the full track;
+- official 128-band Slaney-mel preprocessing;
+- patch and final-track L2 normalization; and
+- extractor source SHA-256
+  `5d09431f18e77320a8f0c77b0af393cce4ea8979275cfb6adc2b7b5f44fd7e5c`.
+
+OpenL3 is evaluated before CLAP because its 18.7 MB CC BY model and CPU runtime
+are materially easier to integrate into a user-facing release. Extraction is
+label-blind and reads audio only. Freeze the representation manifest, artifact,
+summary, extended evaluator source, and candidate config before scoring. A
+failure retires this exact candidate and leaves one candidate-family slot.
 
 ## Done criteria
 
