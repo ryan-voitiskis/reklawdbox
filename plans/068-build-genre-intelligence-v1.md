@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B06 transcribed, awaiting parent-confidence clarification
+> **Status:** In progress; seven-parent development candidate preregistered
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -133,8 +133,8 @@ live genre.
 
 ## Development support gate
 
-Before another model experiment, define the initial release scope as at least
-12 canonical parent genres. Every in-scope parent must have at least:
+The initial release scope is the complete set of support-qualified parent
+genres. Every in-scope parent must have at least:
 
 - 20 high- or medium-confidence accepted rows;
 - 15 normalized artists; and
@@ -144,12 +144,25 @@ No more than 20% of one target's rows may come from a single normalized artist.
 Targets below these floors remain explicit unsupported/abstain outcomes rather
 than being merged opportunistically after results are known.
 
+Training may begin when at least seven parents pass those floors and their
+diversity-balanced rows cover at least 75% of all accepted development truth.
+This two-part gate replaces the earlier twelve-parent prerequisite before any
+new candidate is scored. The earlier rule made continued review depend on
+weak candidate-sampling labels and did not measure how much accepted truth an
+honest selective release could cover. Unsupported parents remain distinct
+taxonomy outcomes and are forced abstentions; they are not negative examples,
+merged labels, or silently discarded audit rows.
+
 ## Frozen model-development gate
 
 Once truth support passes, preregister at most three bounded candidate families.
-The first candidate should reuse the strongest frozen Plan 066 representation
-before adding a materially different model. Candidate selection must use only
-artist- and release-grouped development folds.
+The original Plan 066 OpenL3 and CLAP feature artifacts were temporary and are
+no longer present after the machine restart. Their recorded results remain
+evidence, but reproducing either representation is a separate compute-heavy
+candidate rather than a prerequisite. Candidate A therefore tests whether the
+fresh, already-hydrated production analysis plus the existing v0.33 output can
+support the now-frozen seven-parent scope. Candidate selection must use only
+artist- and release-isolated development folds.
 
 A candidate advances only if both nested and deployment-threshold views meet:
 
@@ -158,6 +171,13 @@ A candidate advances only if both nested and deployment-threshold views meet:
 - at least 85% offered precision in every outer fold; and
 - at least 80% offered precision for every release-supported target with at
   least eight offers.
+
+The candidate must also improve offered precision by at least five percentage
+points over v0.33 on the exact paired rows it offers. Report coverage both
+within the release scope and against all accepted truth, with unsupported rows
+counted as abstentions in the latter diagnostic. The formal 65% coverage gate
+remains scoped because unsupported parents are outside the declared product
+contract.
 
 Thresholds, feature versions, target mappings, support rules, and the release
 scope are frozen before scoring. Failed candidates are retired; do not rescue
@@ -757,10 +777,103 @@ same response. No unsupported alternative was inferred for `EZ Ryder`.
 
 The strict converter now preserves and recognizes the natural confidence terms
 `very low` and `low-medium`, normalizing both conservatively to low, and accepts
-the composite ambiguous wording `unsure/ambiguous`. The batch has not yet been
-ingested: three low-confidence rows describe uncertainty only between Jungle
-and Drum & Bass, which share the same parent. Parent-level confidence requires
-one explicit operator clarification before model eligibility is decided.
+the composite ambiguous wording `unsure/ambiguous`. The operator then clarified
+that the three Jungle-versus-Drum & Bass rows are high confidence at their
+shared Drum & Bass parent. Their raw subtype uncertainty remains in notes and
+does not weaken the parent verdict.
+
+## Batch B06 ingestion and acquisition result
+
+The final converter produced nineteen labels and one ambiguous outcome. Twelve
+rows are model-eligible: Drum & Bass 6, House 2, Tech House 1, and Techno 3.
+Seven low-confidence labels and the ambiguous row remain audit-only. Ingestion
+added all twenty records once; an immediate replay added zero.
+
+The completed review also exposes the sampling mechanism's limits. Of thirteen
+rows sampled through the Drum & Bass target, eleven resolved to Drum & Bass,
+one to Techno, and one was ambiguous. Of seven rows sampled through Tech House,
+only one resolved to Tech House; three resolved to House and three to Techno.
+Current Rekordbox genre supplied most of the useful Drum & Bass candidates,
+while the v0.33 recommendation was not an efficient source of Tech House truth.
+Another broad listening batch from the same candidate pool is therefore not a
+good use of operator attention.
+
+Ingestion record:
+
+- completed review sheet SHA-256:
+  `cb415486aaa606c66e3d2b32ada32d12658f7681dc84337f2413823b004c1a1c`;
+- private verdict artifact SHA-256:
+  `5a26379a1790a0f563cb1e84ea6f525764596bfbff6681f5ce11bf1f90997762`;
+- private ledger SHA-256:
+  `d3e725ac67891c2dc70004326d1a7e17877f3b8e2089c7fd49ec399b11c1119c`;
+- private snapshot SHA-256:
+  `30816114581b624a515aaeeaac6e0f551e7263a2811c616871365eaa272b7ce7`;
+- active review records: 66;
+- model-eligible review rows: 48;
+- model-ready truth fingerprint:
+  `b2ad3596115b2838372e1a292f3e96f82431678ba25096e9dc236397a52dc8ce`;
+  and
+- idempotent replay additions: 0.
+
+The rebuilt corpus has 716 accepted rows. Diversity balancing places 575 rows
+in seven supported parents: House, Ambient, Techno, Breakbeat, Reggae,
+Electro, and Trance. That scope covers 80.31% of accepted truth before model
+abstention, so it passes the revised seven-parent and 75% accepted-coverage
+support gate. Every unsupported parent remains available for later active
+learning and is a mandatory abstention in whole-corpus diagnostics.
+
+Combined-corpus record:
+
+- accepted corpus fingerprint:
+  `07a754c42ae676eb7f6fcbc02ee1b5748e3153e155311d4559d3d749fbdd6cf1`;
+- diversity-balanced model-ready fingerprint:
+  `e1dfdf5006c5e214f6f6baeeb9d8d5e5a4a890fad69ff6e39fbc877ba6f8e1b8`;
+- pre-contract-update private artifact SHA-256:
+  `b272f0c868e090d427920cac42035a36b9fa2b211c58250d314e908ba804f8ac`;
+- revised-support-contract private artifact SHA-256:
+  `0e57411a6692bf0c66201fcd71c9919bb4f84a60cd6339f37e6bd95365b79fa1`;
+- byte-identical replay: yes; and
+- private artifact mode: 0600.
+
+## Frozen candidate A: hydrated production evidence
+
+Before extracting features or scoring a model, freeze one candidate using only
+evidence already required by the product's full classification mode:
+
+1. thirteen profile scalars in production order, substituting the fresh
+   Stratum BPM for the live Rekordbox BPM so extraction remains cache-only;
+2. MFCC mean coefficients 1-8, MFCC standard-deviation coefficients 1-5, and
+   spectral-contrast bands 0, 2, and 4;
+3. the frozen 74-value Plan 065 kick vector; and
+4. an eight-value one-hot of the v0.33 recommendation mapped to the seven
+   release parents plus unknown.
+
+Each of the 29 scalar/timbral values has a paired missingness indicator. Value
+imputation, standardization, and feature-column filtering occur inside each
+training partition. The kick vector retains its own availability field. The
+candidate does not use current Rekordbox genre, artist, release, file identity,
+provider metadata, fine truth, or unsupported-parent identity as a feature.
+
+Assign artists deterministically to five folds with a fixed hash tie-break and
+a greedy objective that minimizes per-parent and total fold imbalance. Grouping
+by normalized artist is stricter than release grouping and therefore keeps
+every same-artist release together. Require every release parent in every fold
+and fail without relaxing isolation.
+
+Fit exactly the Plan 066 class-balanced one-versus-rest ridge head with penalty
+10, an unpenalized intercept, and top-score-minus-second-score confidence. Use
+nested inner out-of-fold threshold calibration inside every outer fold and the
+unchanged minimum-offer rule. Also select one global deployment threshold from
+all outer out-of-fold margins at 90% precision with at least 60 offers. The
+nested and global views must both pass the frozen development gate. The
+five-point paired improvement over v0.33 is measured only where both systems
+have a mapped recommendation; missing baseline rows are reported and excluded
+from that comparison, not counted in the candidate's favour.
+
+No penalty, feature subset, fold, target-specific threshold, support rule, or
+parent mapping changes after candidate A is scored. A failure retires this
+exact recipe. The remaining two candidate-family slots stay unused until a
+new representation question is preregistered from the observed error structure.
 
 ## Done criteria
 

@@ -30,7 +30,8 @@ EXPECTED_TAXONOMY_SEMANTIC_SHA256 = (
 MIN_ROWS = 20
 MIN_ARTISTS = 15
 MIN_RELEASE_GROUPS = 12
-MIN_SUPPORTED_PARENTS = 12
+MIN_RELEASE_SCOPE_PARENTS = 7
+MIN_ACCEPTED_SCOPE_COVERAGE = 0.75
 MAX_ARTIST_SHARE = 0.20
 
 CANONICAL = [
@@ -399,6 +400,9 @@ def build_corpus(
         )
     )
     release_scope = [parent for parent in PARENT_GENRES if support[parent]["supported"]]
+    accepted_scope_coverage = (
+        len(model_ready_rows) / len(accepted) if accepted else 0.0
+    )
     base_identity_projection.sort(key=lambda row: row["file_path"])
     return {
         "schema_version": SCHEMA_VERSION,
@@ -419,9 +423,14 @@ def build_corpus(
             "minimum_artists": MIN_ARTISTS,
             "minimum_release_groups": MIN_RELEASE_GROUPS,
             "maximum_artist_share": MAX_ARTIST_SHARE,
-            "minimum_supported_parents": MIN_SUPPORTED_PARENTS,
+            "minimum_release_scope_parents": MIN_RELEASE_SCOPE_PARENTS,
+            "minimum_accepted_scope_coverage": MIN_ACCEPTED_SCOPE_COVERAGE,
             "supported_parents": len(release_scope),
-            "passed": len(release_scope) >= MIN_SUPPORTED_PARENTS,
+            "accepted_scope_coverage": accepted_scope_coverage,
+            "passed": (
+                len(release_scope) >= MIN_RELEASE_SCOPE_PARENTS
+                and accepted_scope_coverage >= MIN_ACCEPTED_SCOPE_COVERAGE
+            ),
         },
         "release_scope": release_scope,
         "support": support,

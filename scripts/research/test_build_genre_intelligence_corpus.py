@@ -47,6 +47,29 @@ class BuildGenreIntelligenceCorpusTests(unittest.TestCase):
         self.assertEqual(result["release_scope"], ["House"])
         self.assertEqual(result["support"]["House"]["accepted"]["rows"], 20)
         self.assertTrue(result["support"]["House"]["supported"])
+        self.assertFalse(result["support_gate"]["passed"])
+
+    def test_release_gate_requires_scope_breadth_and_accepted_coverage(self) -> None:
+        truths = [
+            "House",
+            "Ambient",
+            "Techno",
+            "Breakbeat",
+            "Reggae",
+            "Electro",
+            "Trance",
+        ]
+        pairs = [
+            base_row(parent_index * 100 + row_index, truth)
+            for parent_index, truth in enumerate(truths, start=1)
+            for row_index in range(1, 21)
+        ]
+        result = build(
+            [pair[0] for pair in pairs], [pair[1] for pair in pairs]
+        )
+        self.assertTrue(result["support_gate"]["passed"])
+        self.assertEqual(result["support_gate"]["supported_parents"], 7)
+        self.assertEqual(result["support_gate"]["accepted_scope_coverage"], 1.0)
 
     def test_deterministically_caps_an_overrepresented_artist(self) -> None:
         pairs = []
