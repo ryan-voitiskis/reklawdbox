@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; blind truth batch B04 awaiting review
+> **Status:** In progress; B04 ingested and B05 sampling policy frozen
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -526,10 +526,12 @@ Reproducibility record:
 The active-learning loop now includes a deterministic TSV-to-verdict
 preparation step. It requires exact batch codes and displayed identity, rejects
 blank or partial reviews, maps only the frozen fine-to-parent taxonomy and
-explicit aliases, normalizes mixed confidence conservatively, and preserves
-the original genre, confidence, alternatives, and notes. Unknown wording fails
-closed rather than being guessed. Ambiguous outcomes require plausible
-alternatives, and supersession still requires an explicit record ID.
+explicit aliases, normalizes mixed confidence conservatively, treats the clear
+confidence terms `certain` as high and `none` as null, and preserves the
+original genre, confidence, alternatives, and notes. `none` remains invalid
+for a label verdict. Unknown wording fails closed rather than being guessed.
+Ambiguous outcomes require plausible alternatives, and supersession still
+requires an explicit record ID.
 
 An explicit repair option handles the observed TSV mistake where a free-form
 note was placed in the alternatives cell: it preserves the raw cell and copies
@@ -537,6 +539,93 @@ the text to notes without inventing a genre. Replaying the completed B03 sheet
 with its one explicit alias and one cell repair reproduced all twenty existing
 private verdict rows exactly. Output is atomic, mode 0600, and remains outside
 Git.
+
+## Batch B04 review, ingestion, and support result
+
+The operator completed all twenty B04 rows without seeing the sampling strata
+or model output. The converter produced nineteen label outcomes and one
+ambiguous outcome. Sixteen high- or medium-confidence labels became
+model-eligible truth: Ambient 1, House 2, Minimal 3, Techno 9, and Trance 1.
+Three low-confidence labels remain audit-only, and the `Unsure` row with
+Ambient and Ambient Techno alternatives remains explicitly ambiguous.
+
+The raw `certain` confidence is represented canonically as high and the raw
+`none` confidence on the ambiguous row as null. Both original strings remain
+in the private verdict artifact. Ingestion added twenty audit records once;
+an immediate replay added zero.
+
+B04 also falsified its model-directed acquisition assumption. None of the
+twenty accepted primary labels matched the private Tech House, IDM, or
+Downtempo sampling strata. The sampling source remains useful as a source of
+boundary examples, but it is not efficient enough to drive the next review by
+itself.
+
+Ingestion record:
+
+- completed review sheet SHA-256:
+  `d5fb97710f05b9ee3f85e649e85572418aced68e7456159e492293af17a36348`;
+- private verdict artifact SHA-256:
+  `4db8caf6aee5452bbc9ba6f712d652bd34f212ca8c417e4b1f5226861eeacc90`;
+- private ledger SHA-256:
+  `33ab8330753f257531a1a236a08d60f28cb202d2590e1c1f376991db0bf97050`;
+- private snapshot SHA-256:
+  `5741aa4e504b4850f6bf81d3c6a0ff93b531af991e1b0a89612735b7aad4aa06`;
+- active review records: 46;
+- model-eligible review rows: 36;
+- model-ready truth fingerprint:
+  `f8b6f06370c793de8286e95ef04b9cc9f0465b7c47f067ca627105b2c3072ca9`;
+  and
+- idempotent replay additions: 0.
+
+The rebuilt combined corpus contains 704 accepted rows. Diversity balancing
+places 570 rows in the seven-parent release scope: Ambient, Breakbeat,
+Electro, House, Reggae, Techno, and Trance. The artifact replay was
+byte-identical and the Plan 066 holdout remains unopened.
+
+Combined-corpus record:
+
+- accepted corpus fingerprint:
+  `1d835ac0e91f9aee57c3a2a5d2b311b26fa8a9c575f2aa62f5c0632d8976bc6f`;
+- diversity-balanced model-ready fingerprint:
+  `2342e75e51db8e3b2127dc5eff1ab41deb1bc347e09f8232025e0da42d3dd4c3`;
+- private artifact SHA-256:
+  `de3fbdc69ae86f7594dec7f90eeba7758d5c07fa1258f1443686c1f518720c23`;
+- byte-identical replay: yes; and
+- private artifact mode: 0600.
+
+The nearest unsupported parents are Tech House (4 rows), Minimal (7 rows and
+2 artists), Garage (8 rows and 4 artists), Disco (11 rows, 8 artists, and 4
+release groups), and Hardcore (11 rows, 6 artists, and 3 release groups).
+Training remains prohibited while fewer than twelve parents meet the frozen
+support floor.
+
+## Batch B05 preregistration
+
+B05 replaces model-only acquisition with metadata-directed sampling. Current
+Rekordbox genre is the first private sampling hint, and the frozen v0.33
+recommendation is a fallback. Both are hidden from review and neither is
+truth. The selector remains deterministic and fails rather than relaxing a
+quota or diversity requirement.
+
+Every accepted development, holdout, or previously reviewed path is excluded.
+Previously exposed release groups are also excluded to prevent same-release
+near duplicates. Artists are not excluded globally: an artist represented in
+another parent may contribute a new track and release. Selection caps any
+artist at two tracks, requires one path and release group per selected row, and
+prioritizes the artist diversity needed by the target parent.
+
+B05 fixed quotas are:
+
+- Tech House: 5, including one row beyond its four-row deficit;
+- Minimal: 7, with at least two artists new to accepted Minimal truth; and
+- Garage: 8, with at least four artists new to accepted Garage truth.
+
+The twenty-row batch is justified by a single coherent support-expansion
+question. Its candidate builder is pinned to audit artifact SHA-256
+`d0ea2493d0f1eef4d416722ce94e282e4df69c992b99dae0df3777d7eb09501e`
+and development-corpus artifact SHA-256
+`de3fbdc69ae86f7594dec7f90eeba7758d5c07fa1258f1443686c1f518720c23`.
+Freeze and record the candidate-pool checksum before selecting any identity.
 
 ## Done criteria
 

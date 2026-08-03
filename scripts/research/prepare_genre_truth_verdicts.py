@@ -40,10 +40,12 @@ BUILTIN_ALIASES = {
     "rhythm and blues": "R&B",
     "techhouse": "Tech House",
 }
-CONFIDENCE_ALIASES = {
+CONFIDENCE_ALIASES: dict[str, str | None] = {
     "high": "high",
     "medium": "medium",
     "low": "low",
+    "certain": "high",
+    "none": None,
     "medium high": "medium",
     "medium to high": "medium",
     "high medium": "medium",
@@ -90,9 +92,11 @@ def normalize_confidence(raw: str, *, required: bool) -> str | None:
             raise ValueError("label verdict requires confidence")
         return None
     key = corpus.normalized(raw)
-    confidence = CONFIDENCE_ALIASES.get(key)
-    if confidence is None:
+    if key not in CONFIDENCE_ALIASES:
         raise ValueError(f"confidence wording is unsupported: {raw!r}")
+    confidence = CONFIDENCE_ALIASES[key]
+    if required and confidence is None:
+        raise ValueError("label verdict requires confidence")
     return confidence
 
 
@@ -251,7 +255,10 @@ def prepare_verdicts(
             "taxonomy_semantic_sha256": corpus.taxonomy_semantic_sha256(),
             "extra_aliases": dict(sorted((extra_aliases or {}).items())),
             "alternative_cells_copied_to_notes": sorted(alternative_notes),
-            "confidence_policy": "casefolded; mixed medium-high normalized conservatively to medium",
+            "confidence_policy": (
+                "casefolded; certain normalized to high; none normalized to null; "
+                "mixed medium-high normalized conservatively to medium"
+            ),
         },
         "rows": verdict_rows,
     }

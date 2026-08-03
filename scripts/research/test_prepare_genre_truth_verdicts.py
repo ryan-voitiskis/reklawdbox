@@ -71,6 +71,20 @@ class PrepareGenreTruthVerdictsTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["confidence"], "medium")
         self.assertEqual(result["rows"][0]["confidence_raw"], "medium to high")
 
+    def test_certain_is_high_and_unsure_none_is_null_losslessly(self) -> None:
+        result = self.prepare(
+            review_text(first_confidence="certain", second_confidence="none")
+        )
+        label, ambiguous = result["rows"]
+        self.assertEqual(label["confidence"], "high")
+        self.assertEqual(label["confidence_raw"], "certain")
+        self.assertIsNone(ambiguous["confidence"])
+        self.assertEqual(ambiguous["confidence_raw"], "none")
+
+    def test_none_is_rejected_for_a_label_verdict(self) -> None:
+        with self.assertRaisesRegex(ValueError, "label verdict requires confidence"):
+            self.prepare(review_text(first_confidence="none"))
+
     def test_primary_parent_is_removed_from_normalized_alternatives(self) -> None:
         result = self.prepare(
             review_text(first_verdict="Deep Techno", first_alternatives="Minimal, Techno")
