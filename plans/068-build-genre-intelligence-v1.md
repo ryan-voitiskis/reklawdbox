@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; candidates A/B retired and candidate C preregistered
+> **Status:** Complete on 2026-08-03; bounded development negative, holdout sealed
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -1104,6 +1104,51 @@ Pre-score record:
   `b5a525ac98f2f58c5383a8301c1388d13188ff8461532b1e0f5aa4905a3ecfea`;
 - byte-identical feature finalization: yes; and
 - every identity-bearing artifact mode: 0600.
+
+## Candidate C result and Plan 068 decision
+
+Candidate C is the strongest representation and a bounded negative under the
+frozen gate. Unselective accuracy reached 78.26%. The nested view offered 360
+rows at 91.39% precision and 62.61% coverage; every fold cleared 85%, but
+coverage remained 2.39 points below the 65% floor. Breakbeat precision was
+54.55% on eleven offers and Trance was 78.57% on fourteen.
+
+The global deployment threshold crossed the aggregate gates with 395 offers,
+90.13% precision, and 68.70% coverage. It still failed independently useful
+stability: fold 0 precision was 84.88%, Breakbeat was 53.85% on thirteen
+offers, Electro was 79.31% on 29, and Trance was 73.68% on nineteen. The
+candidate improved paired precision over v0.33 by about seventeen points, but
+the boundary errors are substantive. No rounding tolerance or aggregate score
+can override them.
+
+The exact result replay was byte-identical. All three preregistered families
+are retired unchanged, no release model or product surface was created, and
+the Plan 066 holdout remains unopened and inference-free.
+
+Result record:
+
+- private result SHA-256:
+  `e465fb02a2f91df45be7584f8326843fdf2711b9d5940321738582c4620c7a34`;
+- unselective accuracy: 78.26%;
+- nested result: 91.39% precision at 62.61% scope coverage;
+- deployment result: 90.13% precision at 68.70% scope coverage;
+- deployment whole-accepted-truth coverage: 55.17%;
+- result replay: byte-identical;
+- private artifact mode: 0600; and
+- sealed Plan 066 holdout opened: no.
+
+Aggregate error diagnosis shows that a single global threshold is the next
+constraint, not another generic representation. CLAP is very precise for
+Ambient, House, and Reggae, and useful for Techno and Electro, while the same
+margin scale admits unreliable Breakbeat and Trance offers. A post-result
+feasibility diagnostic on these already-exposed outer predictions assigned a
+separate 90%-precision threshold per predicted parent: it would retain 410
+offers at 91.71% aggregate precision and 71.30% coverage, with 88.76% minimum
+fold precision, while making no Breakbeat offer. This is not candidate evidence
+because those thresholds saw the evaluation outcomes. It only justifies a new,
+one-candidate plan that cross-fits target-aware thresholds inside every outer
+training partition and treats targets without stable calibration as explicit
+abstentions.
 
 ## Done criteria
 
