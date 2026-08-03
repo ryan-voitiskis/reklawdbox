@@ -875,6 +875,49 @@ parent mapping changes after candidate A is scored. A failure retires this
 exact recipe. The remaining two candidate-family slots stay unused until a
 new representation question is preregistered from the observed error structure.
 
+## Candidate A pre-score freeze
+
+The candidate harness was committed before scoring. The private development
+and label-blind feature manifests contain the same 575 stable row IDs in the
+same order. The five deterministic folds contain exactly 115 rows each, every
+fold contains all seven targets, and no normalized artist or release group
+crosses a fold. The v0.33 recommendation inputs come from the frozen Plan 060
+and Plan 066 evaluation manifests, where current genre was cleared before
+classification; current Rekordbox tags therefore remain absent from candidate
+features.
+
+Label-blind extraction read only fresh Stratum 21 and Essentia 3 cache rows. It
+found all 29 scalar/timbral values for all 575 rows, kick evidence for 573, and
+a mapped release-scope v0.33 recommendation for 453. Unknown or out-of-scope
+recommendations use the single frozen unknown indicator. A second extraction
+produced byte-identical feature and summary artifacts.
+
+Pre-score record:
+
+- harness implementation commit: `0e008fa`;
+- preparation source SHA-256:
+  `6143a8b3fb949c814ceef7e2eed86ace4f64d947fa3f0c18cc51f042a28378a8`;
+- feature-extractor source SHA-256:
+  `832c04f0a640da57e933a2f81399f5c74de00494ac85997edc374f88ba24b3cc`;
+- evaluator source SHA-256:
+  `126737579981d82911842af9c647d794fe17834c52e074a269cfb0207cbf5d17`;
+- private development-manifest SHA-256:
+  `caf76dbe8156943a139a8ab73e8d8b492a1d74bfe1b1e9c80898104ff21f5580`;
+- private label-blind feature-manifest SHA-256:
+  `d50519a80812a8f5705a8db834ca2764618f0fde18d3ce99ad8e981724c60e24`;
+- private feature-artifact SHA-256:
+  `e93610e70ad70b6c02640a7161a0bc5b444717bea2b6a521c526a601db7b72ab`;
+- private feature-summary SHA-256:
+  `5e8769b4fe435214dfe12c8f16f7da5dcbd17e406f0120e970ef724ee6d05d61`;
+- feature semantic SHA-256:
+  `aca9bc0082a96d3414ea86cb2945e742b5852ed6a1433f75028d54ab91a1e42b`;
+- ordered cache-source snapshot SHA-256:
+  `35aff9c0b1ec3dcc86210d5bff1ce7435d6ff594438d8ac3fd5487fe0d908d5b`;
+- private candidate-config SHA-256:
+  `d532a4011665d2f13bc77b1b951cc00fc772b2d7d4a83cba851bb0dcad9f2500`;
+- byte-identical manifest preparation and feature extraction: yes; and
+- every private artifact mode: 0600.
+
 ## Done criteria
 
 This plan is complete only when either:
