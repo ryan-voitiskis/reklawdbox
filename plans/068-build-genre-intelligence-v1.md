@@ -977,6 +977,41 @@ label-blind and reads audio only. Freeze the representation manifest, artifact,
 summary, extended evaluator source, and candidate config before scoring. A
 failure retires this exact candidate and leaves one candidate-family slot.
 
+## Candidate B pre-score freeze
+
+The OpenL3 harness was committed before representation extraction. The pinned
+model was retrieved from the recorded official Essentia model URL and matched
+the historical SHA-256 exactly. The managed runtime used NumPy 2.5.1,
+Essentia 2.1-beta6-dev, and ONNX Runtime 1.28.0, matching the Plan 066 runtime.
+
+All 575 rows completed without a skip or retry. The persistent per-row work
+matrix and decoded-source hashes live under the private research directory, so
+the extraction is resumable rather than dependent on temporary storage. A
+second finalization from that frozen matrix reproduced the feature and summary
+artifacts byte-for-byte. The candidate config now pins those outputs and every
+base input before the first genre-conditioned score.
+
+Pre-score record:
+
+- harness implementation commit: `603067d`;
+- representation-manifest preparer SHA-256:
+  `1755ccf10e047f6bc66bca0141800e5091d6287d5c5e24e5fb82c88591f68dde`;
+- OpenL3 evaluator source SHA-256:
+  `d404c19941aa4822a05bd72a7c2a14d640fb156b127b67869b2e9228f401862a`;
+- private representation-manifest SHA-256:
+  `676de6f150a811494f255a667d61fb449c149a9cfbf5fa968a74327e2afd0e67`;
+- OpenL3 feature-artifact SHA-256:
+  `e9bad78b70f9d0b3a59d7ace1fb1a36ed4521c180d5eb34c1336627eb9e10755`;
+- OpenL3 extraction-summary SHA-256:
+  `74ead41c6569bc9205ab7adb002940126f683c1c84694a216cc568da2d504413`;
+- ordered decoded-source SHA-256:
+  `8c3988201f77a1c229e3aa6f3c14289e9b3e6c2761768cd0343559f4b97c70f6`;
+- private candidate-config SHA-256:
+  `d46d63fa7e33c2af9a8fd7a06d2fb689be3685db5bee35ae6c92776686eaffbf`;
+- byte-identical representation-manifest preparation and feature finalization:
+  yes; and
+- every identity-bearing artifact mode: 0600.
+
 ## Done criteria
 
 This plan is complete only when either:
