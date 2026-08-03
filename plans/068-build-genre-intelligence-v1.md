@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B03 ingested and B04 candidate pool frozen
+> **Status:** In progress; blind truth batch B04 awaiting review
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -487,8 +487,39 @@ B04 candidate-pool record:
   `94bd0521fb29f358c23b3d9b4b8da3039c2cb8b6e0520a5ff78cdcdea3419e4f`;
 - private pool artifact SHA-256:
   `78d4679e1945f0e5c687c92cd4fb85e925ed5cf2ad847d9e0a062abd5518d9a7`;
-  and
+- byte-identical pool replay: yes; and
 - private artifact mode: 0600.
+
+## Batch B04 pre-review result
+
+The pool builder, fixed quotas, selector, and regression tests were committed
+before the first selection. B04 then selected twenty distinct paths, normalized
+artists, and artist-release groups. A second selection run was byte-identical.
+Sampling strata, source recommendations, and their confidence remain private
+and are absent from the review material.
+
+The exporter re-read and matched all twenty live track identities, required an
+empty change set before and after export, and wrote only a playlist XML plus a
+blank review sheet and listening guide. The XML contains exactly the selected
+paths. All private mappings and review files are mode 0600.
+
+Reproducibility record:
+
+- selector-freeze commit: `f806550`;
+- roster SHA-256:
+  `56fbb77dc079a039b8cb764df6aedb53b7ab13abceb46334c7336cd7dae16260`;
+- byte-identical pre-export mapping SHA-256:
+  `710cf557b75e6d9c69ac7b449b62c832b6192f167a705e3c9f11af74b4393b58`;
+- exported private mapping SHA-256:
+  `ff8bb683f798bc9c81db4d9fbb85584e363fb234f1e6f89c2b3381a8b9ffc0a4`;
+- playlist XML SHA-256:
+  `eaee76dfc41a1006a27776b6895ffcae25d4391ffe958cb238da33e63b3c31b9`;
+- blank review sheet SHA-256:
+  `939c15f2d96aef99496ebb832716c005e0c4887a29a83da5578fe229738cbb63`;
+- blind review guide SHA-256:
+  `88777dfec5d28c2c200146563e0bac1ac1140a8c66d3f53b399eba5c65e14347`;
+- live identity matches: 20; and
+- zero staged changes before and after export: yes.
 
 ## Done criteria
 
