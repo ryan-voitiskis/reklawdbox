@@ -35,20 +35,35 @@ Reuse candidate C exactly:
   intercept; and
 - top-score-minus-second-score confidence.
 
-The only product-supported output parents are:
-
-| Parent  | Frozen margin threshold |
-| ------- | ----------------------: |
-| Ambient |    0.025198863598072052 |
-| House   |    0.003815435334147077 |
-| Reggae  |     0.29864359521448636 |
-| Techno  |      0.4383864429068181 |
+The only product-supported output parents are Ambient, House, Reggae, and
+Techno.
 
 An internal Breakbeat, Electro, or Trance prediction always abstains regardless
 of margin. It is not redirected to another parent. An internal supported-parent
-prediction below that parent's threshold also abstains. Thresholds are the
-unchanged Plan 069 deployment thresholds selected from complete outer
-out-of-fold development predictions.
+prediction below that parent's threshold also abstains.
+
+### Pre-inference leakage amendment
+
+The first identity-only input audit stopped before writing holdout features and
+found one normalized artist group shared by the old sealed roster and the newer
+Plan 068 development corpus. This was possible because truth expansion occurred
+after the roster was sealed. No holdout embedding, prediction, margin, or genre
+outcome existed when the overlap was found.
+
+To preserve an artist-isolated independent test, exclude every development row
+whose normalized artist or release group occurs in the sealed holdout. The
+exclusion is deterministic from private identity fields, reports only aggregate
+counts, and is frozen before scoring. Re-run the unchanged target-aware nested
+calibration on the remaining development rows. All four supported parents must
+receive a deployment threshold under the existing minimum-eight-offer and
+90%-precision calibration rule; otherwise stop without holdout inference.
+
+The resulting four thresholds replace the initial Plan 069 deployment values,
+which were invalidated before holdout inference because their calibration pool
+contained the overlapping artist. The supported parent set, seven-way internal
+model, features, PCA64, ridge penalty, confidence, and calibration rule do not
+change. Freeze the reduced-development manifest, thresholds, evaluator source,
+and every input hash before the first holdout model inference.
 
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target

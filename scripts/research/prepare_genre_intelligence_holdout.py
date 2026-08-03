@@ -58,7 +58,7 @@ def prepare_rows(
     development_rows: list[dict[str, Any]],
     development_feature_rows: list[dict[str, Any]],
     corpus_rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, str]], dict[str, int]]:
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], dict[str, int]]:
     if len(selected) != EXPECTED_ROWS:
         raise ValueError(f"holdout must contain exactly {EXPECTED_ROWS} rows")
     if len(development_rows) != len(development_feature_rows):
@@ -114,9 +114,19 @@ def prepare_rows(
         "development_release_overlap": len(holdout_releases & development_releases),
         "accepted_truth_path_overlap": len(holdout_paths & reviewed_paths),
     }
-    if any(leakage.values()):
+    if leakage["development_path_overlap"] or leakage["accepted_truth_path_overlap"]:
         raise ValueError(f"holdout leakage detected: {leakage}")
-    return feature_rows, leakage
+    exclusions = []
+    for row_id, row in development_by_id.items():
+        reasons = []
+        if str(row["artist_group"]) in holdout_artists:
+            reasons.append("artist_group")
+        if str(row["release_group"]) in holdout_releases:
+            reasons.append("release_group")
+        if reasons:
+            exclusions.append({"row_id": row_id, "reasons": reasons})
+    exclusions.sort(key=lambda row: str(row["row_id"]))
+    return feature_rows, exclusions, leakage
 
 
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
@@ -165,7 +175,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.development_features.read_text(encoding="utf-8")
     )
     corpus = json.loads(args.corpus.read_text(encoding="utf-8"))
-    rows, leakage = prepare_rows(
+    rows, exclusions, leakage = prepare_rows(
         holdout["selected"],
         audit["rows"],
         development["rows"],
@@ -195,6 +205,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "rows": rows,
     }
     atomic_write(args.output_representation_manifest, representation_manifest)
+    development_exclusions = {
+        "schema_version": 1,
+        "experiment_id": EXPERIMENT_ID,
+        "stage": "private_holdout_group_development_exclusions",
+        "source_development_sha256": observed["development_sha256"],
+        "source_development_features_sha256": observed[
+            "development_features_sha256"
+        ],
+        "rows": exclusions,
+    }
+    atomic_write(args.output_development_exclusions, development_exclusions)
     summary = {
         "schema_version": 1,
         "experiment_id": EXPERIMENT_ID,
@@ -206,6 +227,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "representation_manifest_sha256": sha256_file(
             args.output_representation_manifest
         ),
+        "development_exclusions_sha256": sha256_file(
+            args.output_development_exclusions
+        ),
+        "excluded_development_rows": len(exclusions),
         "leakage": leakage,
         "missing_files": missing_files,
         "identity_values_exposed": False,
@@ -223,6 +248,7 @@ def main() -> int:
     parser.add_argument("--corpus", required=True, type=Path)
     parser.add_argument("--output-feature-manifest", required=True, type=Path)
     parser.add_argument("--output-representation-manifest", required=True, type=Path)
+    parser.add_argument("--output-development-exclusions", required=True, type=Path)
     parser.add_argument("--output-summary", required=True, type=Path)
     args = parser.parse_args()
     result = run(args)

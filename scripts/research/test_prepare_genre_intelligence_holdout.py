@@ -33,21 +33,26 @@ class PrepareGenreIntelligenceHoldoutTests(unittest.TestCase):
         return selected, audit, development, development_features, corpus
 
     def test_preparation_emits_only_opaque_identity_and_path(self) -> None:
-        rows, leakage = subject.prepare_rows(*self.rows())
+        rows, exclusions, leakage = subject.prepare_rows(*self.rows())
         self.assertEqual(
             rows[0],
             {"row_id": "GIH-001", "file_path": "/music/holdout-1.flac"},
         )
         self.assertEqual(len(rows), subject.EXPECTED_ROWS)
+        self.assertEqual(exclusions, [])
         self.assertTrue(all(value == 0 for value in leakage.values()))
 
-    def test_preparation_rejects_development_artist_leakage(self) -> None:
+    def test_preparation_excludes_development_artist_leakage(self) -> None:
         selected, audit, development, development_features, corpus = self.rows()
         selected[0]["artist_group"] = "development-artist"
-        with self.assertRaisesRegex(ValueError, "holdout leakage detected"):
-            subject.prepare_rows(
-                selected, audit, development, development_features, corpus
-            )
+        _, exclusions, leakage = subject.prepare_rows(
+            selected, audit, development, development_features, corpus
+        )
+        self.assertEqual(
+            exclusions,
+            [{"row_id": "development-1", "reasons": ["artist_group"]}],
+        )
+        self.assertEqual(leakage["development_artist_overlap"], 1)
 
     def test_preparation_rejects_prior_truth_path_leakage(self) -> None:
         selected, audit, development, development_features, corpus = self.rows()
