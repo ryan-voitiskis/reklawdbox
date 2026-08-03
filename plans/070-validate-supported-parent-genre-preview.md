@@ -114,6 +114,36 @@ Result SHA-256 is
 Both result copies are mode 0600. The holdout remained feature-, embedding-,
 and prediction-free throughout calibration.
 
+## Pre-inference freeze
+
+The 60-row cache-native and CLAP feature passes completed without a missing
+value, skip, or retry and each replayed byte-identically. The decoded-audio
+audit covered all 575 source-development tracks, including the subsequently
+excluded row, and all 60 holdout tracks. Every decoded stream was unique within
+its partition and cross-partition overlap was zero.
+
+Inference freeze record:
+
+- inference implementation commit: `43f36ed`;
+- inference source SHA-256:
+  `f74809e595cf93e74f7e97673e7c508c06bb1a38e8476950935dbc8ca25c89ea`;
+- private inference config SHA-256:
+  `dab08a7c83df310bfaa83035ffa7d0ff417c9e708ef781ad7bd1ab2694a2d51d`;
+- cache-native feature artifact SHA-256:
+  `c92c3d90e5e5b8358c6397a09f4d49ddb3f2054b6c05f20df3a9a6d6f9cd603a`;
+- cache-native feature summary SHA-256:
+  `771f8c38d5ba7264b98111b52b8cede6ee58040492a5e4dfa33c3ed1efd62f8a`;
+- CLAP feature artifact SHA-256:
+  `809b73934f942d8ff3d6402f61ae09e9f58eb317a0eeeeaea3dff61ae3378aab`;
+- CLAP feature summary SHA-256:
+  `edfbc85335c63c3017fe185d720a5984a6d501df8e429e78686b5ab751d5051a`;
+- decoded-audio isolation artifact SHA-256:
+  `0e989353d7ae0cf7ca0978557225935753ff5c595f9af38722981eb3dcc903c6`;
+- CLAP weights SHA-256:
+  `1cd3c601bc4afe0fa87be3de4c13dd2cfadd249fac1e29acf74a9b296c3219bb`;
+- private artifact mode: 0600; and
+- genre model, prediction, margin, or offer produced at freeze: no.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
