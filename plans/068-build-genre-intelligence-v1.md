@@ -1,6 +1,6 @@
 # Plan 068: Build Genre Intelligence V1
 
-> **Status:** In progress; B05 retired and private B06 policy frozen
+> **Status:** In progress; B06 exported and awaiting blind review
 > **Objective:** Release a calibrated parent-genre classifier that is materially
 > more useful than Reklawdbox v0.33 and pair it with an auditable active-learning
 > loop that turns explicit human verdicts into better development truth.
@@ -705,6 +705,46 @@ selection, is mode 0600, and has SHA-256
 `87d2a0725b82e90f07bd8a9e053ee9faa8daaf70101cb1e4de35b81908e9504c`.
 Its target allocation remains hidden until the operator completes the blind
 review.
+
+## Batch B06 pre-review result
+
+B06 excludes all accepted, holdout, prior-review, and retired-B05 paths and
+release groups. Its pool contains 1,340 private parent-source variants over 913
+unique tracks. The pool and selection replays were byte-identical. The selected
+roster contains twenty unique track IDs, paths, and release groups, respects
+the private config's artist cap and diversity minima, and records the exact
+private config checksum. Sampling targets and source composition remain hidden
+until review completion.
+
+The exporter re-read and matched all twenty live identities, required an empty
+change set before and after export, and wrote only a playlist XML, blank review
+sheet, and listening guide. The XML path multiset and review identity columns
+exactly match the private roster, and every answer cell is blank. All private
+artifacts are mode 0600.
+
+Reproducibility record:
+
+- private selection-config SHA-256:
+  `87d2a0725b82e90f07bd8a9e053ee9faa8daaf70101cb1e4de35b81908e9504c`;
+- candidate-pool fingerprint:
+  `7433a4494fe9f2b4b69530fb43bf9064d40ca5aa50dc72d81cb12c535fc48bdd`;
+- private candidate-pool SHA-256:
+  `b1280b274eb95de27fa470dd03846160a3fc8c2d04c80638a42b6c9678d265f8`;
+- byte-identical candidate-pool replay: yes;
+- roster SHA-256:
+  `29ad9aaffb451dfd36c19d7ba1c9809eb15637b24b554ee938e54babe325a9b3`;
+- byte-identical pre-export mapping SHA-256:
+  `272332815d1556379a1c3fe3f093f7c4646327466a6fdd7b12ae1bee2c3fe40a`;
+- exported private mapping SHA-256:
+  `3336047e64f33ed67d431c0a028f501855f811da000d4d8cea844499947dc543`;
+- playlist XML SHA-256:
+  `e34d65afca6d34edbd9c34b937a82a2a3006efe320f023248574b1eb5c90bd54`;
+- blank review sheet SHA-256:
+  `6c1abda3b17c7e6fbffad3b1fbb41e646156526828684fca1b780c2d513e4854`;
+- blind review guide SHA-256:
+  `dcc48a0e2490c95d4426eedd77f72170e26ddd46aa310bfe765e6ac64ca3406a`;
+- live identity matches: 20; and
+- zero staged changes before and after export: yes.
 
 ## Done criteria
 
