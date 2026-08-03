@@ -521,6 +521,23 @@ Reproducibility record:
 - live identity matches: 20; and
 - zero staged changes before and after export: yes.
 
+## Verdict preparation automation
+
+The active-learning loop now includes a deterministic TSV-to-verdict
+preparation step. It requires exact batch codes and displayed identity, rejects
+blank or partial reviews, maps only the frozen fine-to-parent taxonomy and
+explicit aliases, normalizes mixed confidence conservatively, and preserves
+the original genre, confidence, alternatives, and notes. Unknown wording fails
+closed rather than being guessed. Ambiguous outcomes require plausible
+alternatives, and supersession still requires an explicit record ID.
+
+An explicit repair option handles the observed TSV mistake where a free-form
+note was placed in the alternatives cell: it preserves the raw cell and copies
+the text to notes without inventing a genre. Replaying the completed B03 sheet
+with its one explicit alias and one cell repair reproduced all twenty existing
+private verdict rows exactly. Output is atomic, mode 0600, and remains outside
+Git.
+
 ## Done criteria
 
 This plan is complete only when either:
