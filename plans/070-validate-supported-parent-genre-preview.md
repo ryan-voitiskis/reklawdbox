@@ -233,6 +233,16 @@ may see identity and hear audio, but must not see current genre, sampling
 stratum, predicted parent, margin, threshold, feature, neighbour, or model hint.
 Record human verdict and confidence through the existing strict ledger path.
 
+Freeze scoring before joining any verdict to a prediction. Every one of the 31
+offers remains in the aggregate denominator. A row is correct only when its
+single primary canonical parent verdict exactly matches the frozen suggested
+parent. Confidence is preserved but does not change that rule. Ambiguous or
+skipped rows are not credited, and plausible alternatives never count as an
+exact match. This deliberately treats an offered but genuinely ambiguous track
+as a product error rather than rescuing it after listening. Report a separate
+high/medium-confidence sensitivity view, but never substitute it for the frozen
+all-offer release gate.
+
 The exact candidate passes only if:
 
 - at least 30 of the 60 holdout rows receive offers;
