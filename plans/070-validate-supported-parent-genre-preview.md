@@ -196,6 +196,40 @@ H01 export record:
   and
 - all export and mapping artifacts: mode 0600.
 
+H01 review is sealed without joining the verdicts to predictions. The operator
+provided five labels and one genuinely ambiguous verdict. Mixed medium-high
+confidence was normalized conservatively to medium, while all raw wording and
+listening notes remain intact. Verdict conversion replayed byte-identically.
+
+H01 verdict record:
+
+- completed review TSV SHA-256:
+  `2e1bbb09ac5716b5a19b37477f3d24fdfd3a5831bab4524e1bc42d73775feced`;
+- private verdict artifact SHA-256:
+  `9cbe4c0e342172be34cb8fad15755da73c3d0e9c6f3f34202da3d15823ee7855`;
+- outcomes: five labels and one ambiguous;
+- prediction fields read during conversion: no; and
+- both review and verdict artifacts: mode 0600.
+
+H02 is the only newly exported pending batch. It contains six live identity-
+verified tracks, six blank verdict rows, no hidden model or sampling field, and
+left zero staged Reklawdbox changes.
+
+H02 export record:
+
+- pre-export private mapping SHA-256:
+  `a19555dcc30030e19d8b3d4c0bbb4ee8da9a3cb5707c609b892c2e7a765bf566`;
+- provenance-enriched private mapping SHA-256:
+  `02c1fbc99522ce75dfb0d1a7dc40f69538687ff76db4cc104ad173905db39a55`;
+- XML SHA-256:
+  `96094b10bd6c53ab03221aaa3ad74318b87b36c14a65033b64b94b7caeb0a51b`;
+- review TSV SHA-256:
+  `3ea34b02a27e30bad493e9e11c841533ba07d21595d68daedc737eefecd54f32`;
+- guide SHA-256:
+  `7dfa3e4522cb68dd08d38043348f29dc5b9ada382bb699d352910db408e64587`;
+  and
+- all export and mapping artifacts: mode 0600.
+
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
 precision of 92.31% Ambient, 92.98% House, 87.50% Reggae, and 90.63% Techno.
