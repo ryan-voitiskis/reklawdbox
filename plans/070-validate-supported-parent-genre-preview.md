@@ -63,6 +63,8 @@ inference:
 
 - artifact SHA-256:
   `532ce77378154949f2f02e5283c9c12ec528639f3be912aa2ddba2ba71b35589`;
+- checksum-verified recovered artifact SHA-256:
+  `1468cd2cda5465a7b5d7aebbb8d736800f51454cfc2ae14b4bd96b093d04fb37`;
 - roster SHA-256:
   `e90b400645d89b287aab4300465fd0893314830bc6ec8b6ab22b5f9de4fbfdf9`;
   and
