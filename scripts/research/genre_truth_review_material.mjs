@@ -2,6 +2,36 @@ function flat(value) {
   return String(value ?? '').replaceAll('\t', ' ').replaceAll('\n', ' ')
 }
 
+export function validateReviewRoster(selected, maximumTracksPerArtist = 1) {
+  if (
+    !Number.isInteger(maximumTracksPerArtist)
+    || maximumTracksPerArtist < 1
+    || maximumTracksPerArtist > 20
+  ) {
+    throw new Error('maximum tracks per artist must be an integer from 1 to 20')
+  }
+  const artistCounts = new Map()
+  for (const row of selected) {
+    artistCounts.set(
+      row.artist_group,
+      (artistCounts.get(row.artist_group) ?? 0) + 1,
+    )
+  }
+  if (
+    selected.length < 1
+    || selected.length > 20
+    || new Set(selected.map((row) => row.track_id)).size !== selected.length
+    || new Set(selected.map((row) => row.file_path)).size !== selected.length
+    || Math.max(...artistCounts.values()) > maximumTracksPerArtist
+    || new Set(selected.map((row) => row.release_group)).size
+      !== selected.length
+  ) {
+    throw new Error(
+      'truth-review roster violates its size or identity-diversity constraints',
+    )
+  }
+}
+
 export function reviewSheet(selected) {
   const header = [
     'position',

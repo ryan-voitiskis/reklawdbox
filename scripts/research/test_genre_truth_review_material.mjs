@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { reviewGuide, reviewSheet } from './genre_truth_review_material.mjs'
+import {
+  reviewGuide,
+  reviewSheet,
+  validateReviewRoster,
+} from './genre_truth_review_material.mjs'
 
 const row = {
   position: 1,
@@ -37,4 +41,33 @@ test('review sheet escapes tab and newline identity content', () => {
   assert.equal(lines.length, 2)
   assert.match(lines[1], /Artist Name/)
   assert.match(lines[1], /A Title/)
+})
+
+test('roster validation enforces the declared artist cap and unique releases', () => {
+  const selected = [
+    {
+      ...row,
+      track_id: '1',
+      file_path: '/music/1.flac',
+      artist_group: 'artist',
+      release_group: 'release-1',
+    },
+    {
+      ...row,
+      track_id: '2',
+      file_path: '/music/2.flac',
+      artist_group: 'artist',
+      release_group: 'release-2',
+    },
+  ]
+  assert.doesNotThrow(() => validateReviewRoster(selected, 2))
+  assert.throws(() => validateReviewRoster(selected, 1), /identity-diversity/)
+  assert.throws(
+    () =>
+      validateReviewRoster([
+        selected[0],
+        { ...selected[1], release_group: 'release-1' },
+      ], 2),
+    /identity-diversity/,
+  )
 })

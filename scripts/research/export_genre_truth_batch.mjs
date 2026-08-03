@@ -2,7 +2,11 @@
 
 import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { McpStdioClient } from '../lib/mcp-stdio.mjs'
-import { reviewGuide, reviewSheet } from './genre_truth_review_material.mjs'
+import {
+  reviewGuide,
+  reviewSheet,
+  validateReviewRoster,
+} from './genre_truth_review_material.mjs'
 
 const EXPERIMENT_ID_PATTERN = /^genre-intelligence-truth-v1-b\d{2}$/
 
@@ -46,18 +50,10 @@ if (!EXPERIMENT_ID_PATTERN.test(mapping.experiment_id)) {
 const playlistName = mapping.export_playlist_name
   ?? mapping.experiment_id.replaceAll('-', '_')
 const batchLabel = mapping.experiment_id.slice(-3).toUpperCase()
-if (
-  selected.length < 1
-  || selected.length > 20
-  || new Set(selected.map((row) => row.track_id)).size !== selected.length
-  || new Set(selected.map((row) => row.file_path)).size !== selected.length
-  || new Set(selected.map((row) => row.artist_group)).size !== selected.length
-  || new Set(selected.map((row) => row.release_group)).size !== selected.length
-) {
-  throw new Error(
-    'truth-review roster must contain one to twenty identity-diverse tracks',
-  )
-}
+validateReviewRoster(
+  selected,
+  mapping.selection_rule?.maximum_tracks_per_artist ?? 1,
+)
 
 const client = new McpStdioClient({ bin, timeoutMs: 60_000 })
 
