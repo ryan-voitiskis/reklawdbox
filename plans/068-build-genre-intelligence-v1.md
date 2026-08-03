@@ -1072,6 +1072,39 @@ extended evaluator source, and the candidate config before scoring. Candidate
 C is the final bounded family under this plan; a failure records a rigorous
 negative without opening the holdout or beginning another development sweep.
 
+## Candidate C pre-score freeze
+
+The CLAP harness was committed before extraction. The pinned weights, model
+config, and preprocessing config were fetched at the exact frozen revision and
+all matched their Plan 066 hashes. A synthetic local load check produced three
+finite 512-value patch embeddings and one unit-normalized track embedding on
+MPS before development audio was read.
+
+All 575 rows completed without a skip or retry using NumPy 2.5.1, PyTorch
+2.13.0, and Transformers 4.57.6. CLAP and OpenL3 have the same ordered decoded-
+source checksum, independently confirming identical input order and audio
+bytes. Finalization from the persistent matrix reproduced both private output
+artifacts byte-for-byte. The config pins those outputs and the unchanged base
+inputs before the first genre-conditioned score.
+
+Pre-score record:
+
+- harness implementation commit: `0d536a7`;
+- CLAP evaluator source SHA-256:
+  `343dbc873d0f547b006dc031e3ce6921bc60c62f247f5058a91c33fee6e7823e`;
+- private representation-manifest SHA-256:
+  `676de6f150a811494f255a667d61fb449c149a9cfbf5fa968a74327e2afd0e67`;
+- CLAP feature-artifact SHA-256:
+  `8839242f64c7aa183e055ee3c15e1e359ea77a568c0b10a29b6475f93b81697b`;
+- CLAP extraction-summary SHA-256:
+  `9d6c34917fdbc6fac7261e90b4f6af252e187e0a691498b3552aae51123f7113`;
+- ordered decoded-source SHA-256:
+  `8c3988201f77a1c229e3aa6f3c14289e9b3e6c2761768cd0343559f4b97c70f6`;
+- private candidate-config SHA-256:
+  `b5a525ac98f2f58c5383a8301c1388d13188ff8461532b1e0f5aa4905a3ecfea`;
+- byte-identical feature finalization: yes; and
+- every identity-bearing artifact mode: 0600.
+
 ## Done criteria
 
 This plan is complete only when either:
