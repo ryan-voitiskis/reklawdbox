@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { McpStdioClient } from '../lib/mcp-stdio.mjs'
 import {
+  blindReviewXml,
   reviewGuide,
   reviewSheet,
   validateReviewRoster,
@@ -170,6 +171,7 @@ try {
   if (after.text !== 'No changes staged.') {
     throw new Error('playlist export unexpectedly left staged changes')
   }
+  await writeFile(xmlPath, blindReviewXml(await readFile(xmlPath, 'utf8')))
 
   const material = []
   for (const batch of batches) {

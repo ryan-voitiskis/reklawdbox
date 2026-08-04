@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  blindReviewXml,
   reviewGuide,
   reviewSheet,
   validateReviewRoster,
@@ -70,4 +71,27 @@ test('roster validation enforces the declared artist cap and unique releases', (
       ], 2),
     /identity-diversity/,
   )
+})
+
+test('blind-review XML retains only identity and audio location', () => {
+  const xml = [
+    '<DJ_PLAYLISTS>',
+    '  <COLLECTION Entries="1">',
+    '    <TRACK TrackID="1" Name="Track" Artist="Artist" Album="Album" Genre="Techno" Comments="hidden" Rating="204" Location="file://localhost/Music/track.wav"/>',
+    '  </COLLECTION>',
+    '  <PLAYLISTS>',
+    '    <NODE Type="1" Name="opaque">',
+    '      <TRACK Key="1"/>',
+    '    </NODE>',
+    '  </PLAYLISTS>',
+    '</DJ_PLAYLISTS>',
+    '',
+  ].join('\n')
+  const scrubbed = blindReviewXml(xml)
+  assert.match(
+    scrubbed,
+    /<TRACK TrackID="1" Name="Track" Artist="Artist" Album="Album" Location="file:\/\/localhost\/Music\/track\.wav"\/>/,
+  )
+  assert.match(scrubbed, /<TRACK Key="1"\/>/)
+  assert.doesNotMatch(scrubbed, /Genre=|Comments=|Rating=/)
 })

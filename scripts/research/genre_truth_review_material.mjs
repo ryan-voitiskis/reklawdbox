@@ -77,3 +77,49 @@ export function reviewGuide(selected, batchLabel = 'B01') {
   }
   return `${lines.join('\n')}\n`
 }
+
+const BLIND_XML_TRACK_ATTRIBUTES = [
+  'TrackID',
+  'Name',
+  'Artist',
+  'Album',
+  'Location',
+]
+
+export function blindReviewXml(xml) {
+  let collectionTracks = 0
+  const scrubbed = xml.replace(
+    /^(\s*)<TRACK ([^>]*)\/>$/gm,
+    (line, indentation, attributeText) => {
+      const attributes = new Map()
+      let consumed = ''
+      for (
+        const match of attributeText.matchAll(
+          /([A-Za-z][A-Za-z0-9]*)="([^"]*)"/g,
+        )
+      ) {
+        attributes.set(match[1], match[2])
+        consumed += match[0]
+      }
+      if (attributes.has('Key')) return line
+      for (const name of BLIND_XML_TRACK_ATTRIBUTES) {
+        if (!attributes.has(name)) {
+          throw new Error(`collection track is missing ${name}`)
+        }
+      }
+      const compactSource = attributeText.replaceAll(' ', '')
+      if (consumed !== compactSource) {
+        throw new Error('collection track contains an unparsed XML attribute')
+      }
+      collectionTracks += 1
+      const retained = BLIND_XML_TRACK_ATTRIBUTES.map((name) =>
+        `${name}="${attributes.get(name)}"`
+      ).join(' ')
+      return `${indentation}<TRACK ${retained}/>`
+    },
+  )
+  if (collectionTracks === 0) {
+    throw new Error('blind-review XML contains no collection tracks')
+  }
+  return scrubbed
+}
