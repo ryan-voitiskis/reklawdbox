@@ -1,6 +1,6 @@
 # Plan 071: Develop open-set Genre Intelligence
 
-> **Status:** In progress; protocol frozen before candidate implementation
+> **Status:** Complete; bounded development negative, fresh holdout untouched
 > **Objective:** Determine whether explicit non-target negatives can produce a
 > broad parent-genre preview that remains precise on collection-wide music,
 > rather than only separating a closed set of supported genres.
@@ -236,6 +236,56 @@ Replay every candidate result byte-for-byte. If neither candidate passes, stop
 with a bounded negative and do not extract or infer the fresh holdout. If one
 passes, select it. If both pass, choose higher nested aggregate precision, then
 higher coverage, then O1 as the fixed final tie-break.
+
+## Development result
+
+The first live corpus validation corrected one preregistration accounting
+error before any candidate score was produced. The 141 accepted rows omitted
+by the old model-ready subset comprise 24 additional supported-parent rows and
+117 actual non-target rows, rather than 141 non-targets. Commit `1c9c8cf`
+corrected the protocol and preparation constant. The successful preparation
+then included all 716 accepted rows: 599 target positives and 117 explicit
+negatives.
+
+The identity-bearing development and label-blind manifests replayed
+byte-for-byte. Both feature extractors also replayed byte-for-byte, including a
+clean second CLAP extraction from a separate resumable work directory:
+
+- development manifest SHA-256:
+  `dfd11addd96a2e7b5727700594b337aaacfc19bdd97db408e1ba0955f80853bd`;
+- label-blind feature manifest SHA-256:
+  `6bf80b80f060649877a90a5d6dfa8188c9549eaa0986f1667d611e115689b682`;
+- cache-native feature artifact SHA-256:
+  `f3e615a89f5b3770e170f0b7ddafd29e87052fcbf6a44c333ba0f9aced331365`;
+- CLAP feature artifact SHA-256:
+  `72fbace49fdcb2885d4dce78fac3f1212baac1742718d903c6203314f4e4ffc9`;
+- ordered decoded-audio source fingerprint:
+  `e82f9adadc91b4f7b3d1f0702008ae62b76e49ca8a880600da7aebfc250ed86c`;
+- fold row counts: 139, 159, 139, 140, and 139; and
+- fold non-target counts: 23, 23, 24, 24, and 23.
+
+The evaluator and tests were committed as `3a4477c` before the first candidate
+run. Its source SHA-256 was
+`8f5d97c80fcd08e49a8062556cceec7cd48f5452ff265359446ae9ff479452d2`.
+The first result and immediate replay were byte-identical at SHA-256
+`53420f41a05962341424c9754d893c70fca31ffdc9b37964ab9c07b049381e4d`.
+
+| Candidate | Offers | Coverage | Precision | Non-target false-offer rate | Outcome |
+| --------- | -----: | -------: | --------: | --------------------------: | ------- |
+| O1        |    315 |   43.99% |    90.16% |                      14.53% | Failed  |
+| O2        |    297 |   41.48% |    91.58% |                      13.68% | Failed  |
+
+O1 also missed the per-fold precision gate in fold 3 at 84.21%. O2 passed every
+other preregistered development gate: all folds offered at least 47 rows at
+86.67% precision or better, five output parents had at least eight offers, and
+paired precision improved on v0.33 by 15.51 percentage points. Its explicit
+non-target result was 16 false offers from 117 rows, above the maximum of 10%.
+The current v0.33 baseline offered 525 rows at 56.95% precision and falsely
+offered 43.59% of non-target rows on the same evidence.
+
+Neither candidate is eligible for the independent release gate. No fresh
+holdout feature, embedding, inference result, or listening material was
+produced.
 
 ## Independent release gate
 
