@@ -1,6 +1,6 @@
 # Plan 072: Evaluate precision-buffered open-set calibration
 
-> **Status:** Development passed; independent holdout preparation authorized
+> **Status:** Complete; independent holdout failed minimum coverage
 > **Objective:** Test whether a fixed five-point inner-calibration precision
 > buffer makes the strongest Plan 071 formulation safe enough for the already
 > sealed independent holdout without sacrificing useful coverage.
@@ -156,3 +156,57 @@ The independent release gate remains at least 30 of 60 offers, at least 90%
 aggregate exact-primary-parent precision, at least 80% precision for every
 emitted parent with five or more offers, and passing isolation and replay
 audits. Product implementation remains unauthorized until that gate passes.
+
+## Independent result
+
+The label-blind holdout preparation and identity audit were frozen in commits
+`42ad961` and `4ebd8c7`. The preparation and immediate replay were byte-
+identical. All audited overlap counts were zero across development paths,
+artists, releases, accepted truth, the consumed Plan 066/070 holdout, and every
+genre research playlist. All 60 files existed and the live Rekordbox snapshot
+still matched the selection snapshot exactly.
+
+The decoded-audio auditor was frozen as `932adbf` before its first run. It
+confirmed 716 unique development decodes, 60 unique holdout decodes, and zero
+cross-partition duplicates. The audit replayed byte-for-byte at SHA-256
+`c54dbc921041b3cf9d530dd8e2fb7d7c3f7fa701978051213be77081443dfa4c`.
+
+Both holdout feature paths replayed byte-for-byte:
+
+- label-blind feature manifest SHA-256:
+  `1629f8db56e0c84b9900e8fe0ea6656d38dcdfbd8e3cc6d80585abf650e3a0d2`;
+- label-blind representation manifest SHA-256:
+  `56c7be498fc6cd86a479652a93db59f6da4a0aaa83950bd52a5becc751e9e6d1`;
+- cache-native artifact SHA-256:
+  `033b256fe5f41565c43cb86775689fab1fb43969137f0729e8d7c42c85be1818`;
+- CLAP artifact SHA-256:
+  `ef20a57dbc4b7bd96414a574a1d2d667ded404f6492a852d9a89c3eab549047c`;
+  and
+- ordered decoded-audio representation fingerprint:
+  `70ba3540ba8a832d0bfca4caf65ae2c072040ec8f9cbf93f83dc7c1e4f65e054`.
+
+The inference implementation was frozen as `68f646f`. Its first invocation
+encountered NumPy 2.5's removal of the `row_stack` alias after computing only
+transient in-memory scores; it wrote no model or prediction artifact. The
+mechanical `vstack` compatibility correction was committed as `c92c01c`, and a
+new source-bound configuration was generated before the first successful run.
+The final inference source SHA-256 was
+`9d1675acdb0cf5bb532bcf7763a628f4a14bfff7caeb9d1320ca9d087672746f` and
+the config SHA-256 was
+`92074ef5a6fe94955db7f4ceaa11b07da9c93d62020814b5eb9229e874a2a6c3`.
+
+Full-fit O3 inference produced twelve one-qualified offers, 48 zero-qualified
+abstentions, and no multi-qualified rows. The model and prediction artifacts
+both replayed byte-for-byte:
+
+- model SHA-256:
+  `2633db33edc2e2af4e3e42adae9cea945f4453f7524522c4f4fecca8530f30df`;
+  and
+- prediction SHA-256:
+  `4e5c4d6402638c7e5f5331559576d1347210caeb005920020c7947ed6c4a2527`.
+
+Twelve offers are below the frozen minimum of thirty, so the release gate
+failed on coverage before human truth was needed. No suggested parent, score,
+track identity, review batch, or listening material was exposed. O3 is retired
+and this 60-row holdout is consumed for candidate selection even though its
+human truth remains unknown. Product implementation remains unauthorized.
