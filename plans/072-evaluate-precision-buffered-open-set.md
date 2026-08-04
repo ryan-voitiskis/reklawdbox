@@ -1,6 +1,6 @@
 # Plan 072: Evaluate precision-buffered open-set calibration
 
-> **Status:** In progress; protocol frozen before candidate implementation
+> **Status:** Development passed; independent holdout preparation authorized
 > **Objective:** Test whether a fixed five-point inner-calibration precision
 > buffer makes the strongest Plan 071 formulation safe enough for the already
 > sealed independent holdout without sacrificing useful coverage.
@@ -105,6 +105,36 @@ run. Replay the result byte-for-byte.
 If O3 fails any gate, record a bounded negative and stop without touching the
 fresh holdout. Do not try 92%, 93%, 94%, 96%, another threshold policy, or an
 additional candidate under this plan.
+
+## Development result
+
+The evaluator and its unit tests were committed as `bc64f73` before the first
+live candidate run. Its source SHA-256 was
+`c2d0c8f9207641d2a6ca15462f2ac74c706d8c387a5bdba167aaa191cc9aca2a`.
+The first result and immediate replay were byte-identical at SHA-256
+`9d1683960d2ace05aa553965e4bf486c46df509eb9147ed0d202eff02ec6eb5d`.
+
+O3 passed every preregistered development gate:
+
+- 197 offers from 716 rows, or 27.51% coverage;
+- 190 exact matches and 96.45% offered precision;
+- six false offers from 117 non-target rows, or 5.13%;
+- fold offers of 31, 61, 34, 40, and 31;
+- fold precision of 100%, 95.08%, 97.06%, 92.50%, and 100%;
+- House, Ambient, Techno, and Reggae each retained at least eight nested offers;
+  and
+- paired precision of 97.59%, 12.65 percentage points above v0.33 on the same
+  166 offered rows.
+
+Full outer-OOF deployment calibration also passed. It produced 264 collision-
+filtered offers at 95.83% precision, retained House, Ambient, Techno, Reggae,
+and Electro as deployable parents, and preserved the 5.13% non-target false-
+offer rate. Breakbeat and Trance have no qualifying 95%-precision threshold and
+remain disabled. One row had multiple qualifying parents and correctly
+abstained.
+
+O3 is eligible for the fresh independent holdout. The development pass does
+not establish release quality by itself.
 
 ## Deployment calibration and independent gate
 
