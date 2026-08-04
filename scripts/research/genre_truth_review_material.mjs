@@ -92,14 +92,16 @@ export function blindReviewXml(xml) {
     /^(\s*)<TRACK ([^>]*)\/>$/gm,
     (line, indentation, attributeText) => {
       const attributes = new Map()
-      let consumed = ''
+      const pattern = /([A-Za-z][A-Za-z0-9]*)="([^"]*)"/g
+      let cursor = 0
       for (
-        const match of attributeText.matchAll(
-          /([A-Za-z][A-Za-z0-9]*)="([^"]*)"/g,
-        )
+        const match of attributeText.matchAll(pattern)
       ) {
+        if (attributeText.slice(cursor, match.index).trim() !== '') {
+          throw new Error('collection track contains an unparsed XML attribute')
+        }
         attributes.set(match[1], match[2])
-        consumed += match[0]
+        cursor = match.index + match[0].length
       }
       if (attributes.has('Key')) return line
       for (const name of BLIND_XML_TRACK_ATTRIBUTES) {
@@ -107,8 +109,7 @@ export function blindReviewXml(xml) {
           throw new Error(`collection track is missing ${name}`)
         }
       }
-      const compactSource = attributeText.replaceAll(' ', '')
-      if (consumed !== compactSource) {
+      if (attributeText.slice(cursor).trim() !== '') {
         throw new Error('collection track contains an unparsed XML attribute')
       }
       collectionTracks += 1

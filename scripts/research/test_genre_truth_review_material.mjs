@@ -77,7 +77,7 @@ test('blind-review XML retains only identity and audio location', () => {
   const xml = [
     '<DJ_PLAYLISTS>',
     '  <COLLECTION Entries="1">',
-    '    <TRACK TrackID="1" Name="Track" Artist="Artist" Album="Album" Genre="Techno" Comments="hidden" Rating="204" Location="file://localhost/Music/track.wav"/>',
+    '    <TRACK TrackID="1" Name="Track" Artist="Artist" Album="Album" Genre="Techno" Comments="hidden with spaces" DateAdded="2026-08-04 12:00:00 +10:00" Rating="204" Location="file://localhost/Music/track.wav"/>',
     '  </COLLECTION>',
     '  <PLAYLISTS>',
     '    <NODE Type="1" Name="opaque">',
