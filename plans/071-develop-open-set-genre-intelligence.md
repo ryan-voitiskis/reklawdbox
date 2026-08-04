@@ -13,12 +13,13 @@ It offered on 31 of 60 sealed rows but matched only 16 primary human parents
 sensitivity remained only 15/27. The failure is valid, replayed byte-for-byte,
 and permanently consumes that holdout.
 
-The failed model trained on only 575 rows from seven supported parents. The
-same frozen development corpus contains another 141 verified rows spanning
-eleven parent genres, but those rows were excluded from training and
-calibration. That made the experiment a closed-set classifier followed by a
-confidence threshold, while the independent holdout exercised the real
-open-set product problem.
+The failed model trained on only 575 diversity-balanced rows from seven
+supported parents. The same frozen development corpus contains another 141
+verified rows that were excluded from training and calibration: 24 additional
+rows from the supported parents and 117 rows spanning eleven other parents.
+That made the experiment a closed-set classifier followed by a confidence
+threshold, while the independent holdout exercised the real open-set product
+problem.
 
 This plan tests that structural hypothesis using development evidence only. It
 does not inspect track-level Plan 070 errors, retune the retired thresholds,
@@ -34,8 +35,9 @@ Use the existing mode-0600 development corpus exactly:
 - accepted-corpus fingerprint:
   `07a754c42ae676eb7f6fcbc02ee1b5748e3153e155311d4559d3d749fbdd6cf1`;
 - 716 accepted rows across 18 canonical parent genres;
-- 575 rows across the seven already-supported positive targets; and
-- 141 rows across eleven other parents, all retained as explicit rejection
+- 599 rows across the seven already-supported positive targets, including 24
+  rows omitted only by the earlier diversity balancer; and
+- 117 rows across eleven other parents, all retained as explicit rejection
   negatives.
 
 Do not append the 31 newly reviewed Plan 070 offers before evaluating either
@@ -218,7 +220,7 @@ all of these frozen gates:
 
 - at least 180 offers and at least 25% coverage across all 716 rows;
 - at least 90% aggregate exact offered precision;
-- no more than a 10% false-offer rate across the 141 non-target rows;
+- no more than a 10% false-offer rate across the 117 non-target rows;
 - every outer fold has at least twenty offers and at least 85% precision;
 - every output with at least eight offers has at least 80% precision;
 - at least four output parents have at least eight offers; and
