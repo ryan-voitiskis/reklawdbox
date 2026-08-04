@@ -1,6 +1,7 @@
 # Plan 070: Validate a supported-parent Genre Intelligence preview
 
-> **Status:** In progress; product scope frozen before holdout inference
+> **Status:** Complete on 2026-08-04; independent holdout failed, exact
+> candidate retired
 > **Objective:** Determine whether the strongest stable subset of the frozen
 > Genre Intelligence classifier is independently accurate and useful enough for
 > a preview-first release without representing unsupported parent genres as
@@ -177,11 +178,10 @@ margin, threshold, supported parent, current genre, and sampling fields are
 absent. The preparation replay reproduced the manifest SHA-256
 `bd06892fd97cef7b904676edd069d56546019ba742992c033ff277c9e0f81838`.
 
-H01 through H05 have been completed without joining their verdicts to
-predictions. H06 is the only newly exported pending batch and contains the final
-single offered row. Every earlier export contains six live identity-verified
-tracks; each review sheet was initially blank and every guide contains no hidden
-field. Exports left zero staged Reklawdbox changes.
+H01 through H06 were completed before any verdict was joined to a prediction.
+The first five exports contain six live identity-verified tracks and H06 contains
+the final single offered row. Each review sheet was initially blank and every
+guide contains no hidden field. Exports left zero staged Reklawdbox changes.
 
 H01 export record:
 
@@ -333,10 +333,6 @@ H05 verdict record:
 - prediction fields read during conversion: no; and
 - review, verdict, and replay artifacts: mode 0600.
 
-H06 is the only newly exported pending batch. It contains the final single live
-identity-verified track, one blank verdict row, no hidden model or sampling
-field, and left zero staged Reklawdbox changes.
-
 H06 export record:
 
 - pre-export private mapping SHA-256:
@@ -351,6 +347,58 @@ H06 export record:
   `bfe8de504158d50fbf9306d5fb68e10448d75de52a00b61696e28a3363e5fb12`;
   and
 - all export and mapping artifacts: mode 0600.
+
+H06 review is sealed without joining its verdict to a prediction. The one row
+received a low-confidence Tech House label; its raw Dub Techno and Deep Techno
+alternatives both normalize to the frozen Techno parent. Verdict conversion
+replayed byte-identically.
+
+H06 verdict record:
+
+- completed review TSV SHA-256:
+  `998007c7bea0ac606db8a5003358e365a5fec1ecb393fa6b4bfd5cc3689f0bc3`;
+- private verdict artifact SHA-256:
+  `d2bc7df003cfdd80fa6d0364418701f27cb14479b75ac476b8612477e3b5bc51`;
+- outcomes: one label;
+- prediction fields read during conversion: no; and
+- review, verdict, and replay artifacts: mode 0600.
+
+## Independent holdout result
+
+The exact-match evaluator and its boundary tests were committed before the
+first prediction/verdict join. A mode-0600 private config then froze the scorer
+source, all six verdict hashes, the sealed predictions, the review manifest,
+the input-isolation summary, the development exclusion, and the decoded-audio
+audit. The result replayed byte-for-byte.
+
+Evaluation record:
+
+- evaluator implementation commit: `84174cc`;
+- evaluator source SHA-256:
+  `a144878841770b1005176b0282c5d12e331aae0b7d9fd3e1d59cd1f56740080a`;
+- private evaluation-config SHA-256:
+  `07b1b6a4e4c32b487554457796846c63d8051c45486b78264c9c491b86e6c15c`;
+- private evaluation and replay SHA-256:
+  `6d5a4b1e1df7e2063fdd927fa2531d257b2badd95bedf062f31bf39602b9a026`;
+- offered coverage: 31 of 60, or 51.67%;
+- aggregate exact-primary-parent precision: 16 of 31, or 51.61%;
+- high/medium-confidence sensitivity: 15 of 27, or 55.56%;
+- human outcomes: 30 labels and one ambiguous;
+- Ambient: 4 of 5, or 80.00%, passing its applicable parent gate;
+- House: 10 of 23, or 43.48%, failing its applicable parent gate;
+- Reggae: zero offers, so its parent gate did not apply;
+- Techno: 2 of 3, or 66.67%, so its parent gate did not apply;
+- minimum offer count: pass;
+- aggregate precision: fail;
+- every applicable parent precision: fail;
+- isolation and leakage checks: pass; and
+- evaluation replay: byte-identical.
+
+The exact four-output model, supported-parent set, and thresholds are retired.
+The failure is not eligible for threshold adjustment, target removal, verdict
+reinterpretation, or a replacement holdout. In particular, the model's 23 House
+offers were not reliable enough for a release: only ten matched the frozen human
+parent verdict. No preview implementation is authorized from this candidate.
 
 For context only, the four supported targets made 349 nested offers on exposed
 development data. Their aggregate offered precision was 92.26%, with per-target
@@ -413,10 +461,11 @@ One failure retires the exact model, supported-output set, and thresholds. Do
 not change a target, threshold, verdict, or holdout row after seeing results.
 The holdout roster cannot be replaced or supplemented.
 
-## Product work after a pass
+## Product work after a pass (not authorized)
 
-A holdout pass authorizes implementation, not silent metadata mutation. The
-first release surface must:
+This candidate did not pass, so none of the following product work is
+authorized for it. A holdout pass would have authorized implementation, not
+silent metadata mutation. Such a release surface would have needed to:
 
 - call the feature an experimental broad-genre preview;
 - list exactly four supported outputs and explain that all other cases abstain;
@@ -436,3 +485,6 @@ This plan ends when the exact candidate either fails independent review and is
 retired, or passes and the preview-first product workflow is implemented and
 verified. No additional model or calibration candidate begins from holdout
 errors.
+
+The first condition is fulfilled: the exact candidate failed and is retired.
+This plan is complete.
