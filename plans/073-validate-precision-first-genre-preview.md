@@ -1,6 +1,7 @@
 # Plan 073: Validate a precision-first parent-genre preview
 
-> **Status:** In progress; protocol frozen before holdout selection
+> **Status:** Awaiting prediction-blind human verdicts; all machine outputs and
+> scoring rules are sealed
 > **Objective:** Determine whether the already-frozen O3 model can ship as a
 > useful precision-first preview at approximately 20% collection coverage,
 > using enough independent offers to evaluate its 90% precision claim.
@@ -129,6 +130,74 @@ sampling stratum, or v0.33 result.
 Freeze all human verdicts before the first prediction join. Use exact canonical
 parent as primary truth; preserve uncertainty, alternatives, and listening
 notes separately.
+
+### Isolation and feature seal
+
+The input preparation, decoded-audio audit, cache-native extraction, and CLAP
+extraction all replayed byte-for-byte. No identity value or model output was
+exposed. The sealed evidence is:
+
+- holdout feature-manifest SHA-256:
+  `a324393657531919df7b143b400c329e5b74288aebdb0eaae4871457169f9380`;
+- holdout representation-manifest SHA-256:
+  `aa717ac333772395902cf4b376fca3d2f3a1c8c138357092f2f0306feec2858a`;
+- holdout input-summary SHA-256:
+  `9bdc70094721f827ae4b461ced24f96227ce3a5377bc414e6a916bf981e8d2a3`;
+- decoded-audio audit and replay SHA-256:
+  `3b11b896511c0571aec64f23f4ed7711fb11b5738d0cbb95b12609374168b3ac`;
+- cache-native feature artifact SHA-256:
+  `369050fb519340a888794965f8ff41aa2e69bb14af2490043f43921df1cd351a`;
+- CLAP feature artifact SHA-256:
+  `c137bce90faef12683644d03c05adb5dc40387fccba5ad24da4b10e82f962f3f`;
+  and
+- ordered decoded-audio/source fingerprint:
+  `5630dd0df566ae152531c7eeacaf84b589e9e179678c6610f9acdbad3d5b1990`.
+
+Every one of the 150 holdout rows had complete cache evidence. The holdout had
+zero path, normalized-artist, release, accepted-truth, research-playlist, prior-
+holdout, and decoded-audio overlap. Its decoded audio was also unique within
+the holdout. The comparison covered all 716 development rows and both earlier
+60-row consumed holdouts.
+
+### Frozen inference result
+
+The inference implementation was committed as `55ba210` before its first run.
+The sealed configuration at SHA-256
+`486659cd239055f2f948d75cff2ebcf32bf59215c3ebcb3b9a0f37a88e8bbe55`
+re-fitted a model byte-identical to the Plan 072 artifact at SHA-256
+`2633db33edc2e2af4e3e42adae9cea945f4453f7524522c4f4fecca8530f30df`.
+Its predictions and a clean replay were byte-identical at SHA-256
+`0fae375e636631cac88a6762f3c64ed69caf50b602a737fde61d5b122034e1ff`.
+
+Exactly 35 of 150 rows received one qualifying parent: 23.33% coverage, 115
+abstentions, and no multi-qualified collision. This clears the frozen pre-
+listening requirements of at least thirty offers and at least 20% coverage.
+Suggestions, scores, current tags, sampling strata, and v0.33 labels remain
+sealed.
+
+### Blind review seal
+
+The review partitioner was committed as `fdeccd7` before reading the private
+identity roster. It partitioned every offer exactly once into batches of
+6/6/6/6/6/5. The mode-0600 review manifest has SHA-256
+`7f8c84c706f50638533b62e5478cdab0ccd88caf3fd96cdc6c9391afe37e5993`.
+Each mapping contains only the fields required to identify and export a track;
+the generated TSVs and guides contain only opaque code, artist, title, and
+blank human-answer fields.
+
+A single Rekordbox XML contains the six independently named playlists. Its
+collection records were deliberately reduced to TrackID, name, artist, album,
+and audio location so existing genre, comments, ratings, and other metadata
+cannot bias the review. The export verified all 35 identities against the live
+read-only Rekordbox library, left zero staged changes, and produced XML
+SHA-256 `99622dc153c5a378223a8c3664f9fc83c9fb1f1169afb5b862da26d93e970219`.
+
+The exact-primary-parent evaluator and its boundary tests were committed as
+`842f690` before any listening. Its source SHA-256 is
+`4266651f12280f9d7282963730e46362fe0e31cac810bdcac25f5399615c6a6a`.
+It freezes the aggregate, per-emitted-parent, paired-v0.33, uncertainty, and
+isolation rules below. It cannot run until all six human verdict files have
+been sealed.
 
 ## Release gate
 
