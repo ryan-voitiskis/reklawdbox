@@ -106,6 +106,36 @@ The roster is sealed before fitting or scoring a candidate. No holdout feature,
 embedding, prediction, margin, or offer may be produced until one candidate
 passes every development gate below.
 
+### Holdout seal record
+
+The selector was committed and tested before its first live run. Selection and
+an immediate replay produced byte-identical mode-0600 artifacts without
+extracting an audio feature or exposing an identity value in command output.
+Scarce strata with only one eligible normalized artist could not meet their
+desired row quotas; the preregistered fixed-seed fill reached 60 rows while
+preserving the artist, release, and 15-row stratum caps.
+
+- selector implementation commit: `423e1e7`;
+- selector source SHA-256:
+  `d20d49907482450bcfd197852db57770c0d57d8705e88878a588b561efc16015`;
+- private holdout and replay SHA-256:
+  `35968f0e3947502ede3322295b4cba6d692e6aefedc7b10940fd82ac9c43f662`;
+- private roster fingerprint:
+  `81ea5361b52ac1edc5c885abb72dddbe88f352aa1b6ff599957bd444f45b1519`;
+- library snapshot fingerprint:
+  `dedfdbfc68b693bd2b7f83f360502b05dac2a39fff18fbf53258f3bdbd479f6b`;
+- selection universe: 3,137 live library rows, 1,603 audited rows, and 456
+  eligible rows across 304 artists and 354 release groups;
+- exclusions: 1,037 development-artist rows, 105 exposed paths, three blank
+  artists, and two unmapped or Experimental rows;
+- selected identities: 60 unique artists and 60 unique release groups; and
+- hidden sampling counts: Ambient 6, Breakbeat 15, Downtempo 1, Drum & Bass 1,
+  Electro 1, Hip Hop 1, House 15, R&B 1, Reggae 1, Techno 15, and Trance 3.
+
+The roster remains identity-sealed. Hidden sampling strata are recorded only to
+audit selection and must not be used as truth or exposed in later listening
+materials.
+
 ## Label-blind inputs
 
 Prepare two aligned 716-row private manifests:
