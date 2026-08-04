@@ -177,8 +177,8 @@ margin, threshold, supported parent, current genre, and sampling fields are
 absent. The preparation replay reproduced the manifest SHA-256
 `bd06892fd97cef7b904676edd069d56546019ba742992c033ff277c9e0f81838`.
 
-H01 through H03 have been completed without joining their verdicts to
-predictions. H04 is the only newly exported pending batch. Every export contains
+H01 through H04 have been completed without joining their verdicts to
+predictions. H05 is the only newly exported pending batch. Every export contains
 six live identity-verified tracks, a review sheet with exactly six initially
 blank verdict rows, and a guide with no hidden field. Exports left zero staged
 Reklawdbox changes.
@@ -273,10 +273,6 @@ H03 verdict record:
 - prediction fields read during conversion: no; and
 - review, verdict, and replay artifacts: mode 0600.
 
-H04 is the only newly exported pending batch. It contains six live identity-
-verified tracks, six blank verdict rows, no hidden model or sampling field, and
-left zero staged Reklawdbox changes.
-
 H04 export record:
 
 - pre-export private mapping SHA-256:
@@ -289,6 +285,40 @@ H04 export record:
   `c3e326ee336f939e492fe1148a379dfb78238e6951fd8dd29487d902af4a68dd`;
 - guide SHA-256:
   `c0075059eeec91d108c5eacb2dfcd41bec770d64bc8942ebeaa820c58372db88`;
+  and
+- all export and mapping artifacts: mode 0600.
+
+H04 review is sealed without joining the verdicts to predictions. All six rows
+received a single broad-parent label. The operator's Deep House description
+remains a note under the frozen House parent, and the low-confidence House
+verdict remains low confidence. Verdict conversion replayed byte-identically.
+
+H04 verdict record:
+
+- completed review TSV SHA-256:
+  `840c26cd3d28f24a6f311f133b421f17439542e0ebea161070fbf97506360fe7`;
+- private verdict artifact SHA-256:
+  `06de49370375aa75068a970aefd36568dbe2e11587467712494d22264a28519b`;
+- outcomes: six labels;
+- prediction fields read during conversion: no; and
+- review, verdict, and replay artifacts: mode 0600.
+
+H05 is the only newly exported pending batch. It contains six live identity-
+verified tracks, six blank verdict rows, no hidden model or sampling field, and
+left zero staged Reklawdbox changes.
+
+H05 export record:
+
+- pre-export private mapping SHA-256:
+  `903a95c1eee4bcc6943438be4b5c37c85d462ac18b7f8841f467c5eb01fa83c9`;
+- provenance-enriched private mapping SHA-256:
+  `dffb7558175836ebb05683b8b3034f40d78358f2b5f75cd4384c94eb75f92135`;
+- XML SHA-256:
+  `de2e426b3dc489a84f625327019340c1938d304b23f28985daff8d036ade4ed2`;
+- review TSV SHA-256:
+  `69da9776eb00eff0fe8179afe68c105222fe64dc2cb4876e23e89da3b6f01c93`;
+- guide SHA-256:
+  `8a8270e0339ab699ae3996e7cc0aedfd11c4c3254a60d115cce54631553bad2b`;
   and
 - all export and mapping artifacts: mode 0600.
 
