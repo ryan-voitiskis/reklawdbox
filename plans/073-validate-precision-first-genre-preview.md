@@ -82,6 +82,26 @@ deterministic selector cannot produce 150 unique artists and releases. Keep
 identities and sampling fields private at mode 0600 and log only aggregate
 counts.
 
+### Holdout seal record
+
+The selector and tests were committed as `a0b43ad` before the first live
+selection. Its source SHA-256 was
+`fda0b24f5ad9f46b11dd698db437cc94ee6cd987689b23d7cdc82aeae1f8aa52`.
+Selection and an immediate replay produced byte-identical mode-0600 artifacts:
+
+- holdout artifact SHA-256:
+  `cecaa886b20ce5262353e8465c505be1d5680f735558a9f96f1226852afa17f0`;
+- private roster fingerprint:
+  `14b4d0420900849f6258b7345417a4003bcb7f900ebb69b448b36ed38fa4c464`;
+- universe: 3,137 live rows, 335 eligible rows, 265 eligible artists, and 291
+  eligible release groups; and
+- hidden sampling counts: Breakbeat 15, Disco 1, House 60, Minimal 1, Tech
+  House 1, and Techno 72.
+
+All 150 selected rows have unique normalized artists and release groups. No
+feature, embedding, prediction, or identity value was exposed during
+selection.
+
 ## Isolation, inference, and review
 
 Before inference, verify and replay:
