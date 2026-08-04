@@ -8,7 +8,8 @@ import {
   validateReviewRoster,
 } from './genre_truth_review_material.mjs'
 
-const EXPERIMENT_ID_PATTERN = /^genre-intelligence-holdout-v1-h\d{2}$/
+const EXPERIMENT_ID_PATTERN =
+  /^genre-intelligence-(?:holdout-v1|precision-first-v1)-h\d{2}$/
 
 function requiredArg(name) {
   const index = process.argv.indexOf(name)
