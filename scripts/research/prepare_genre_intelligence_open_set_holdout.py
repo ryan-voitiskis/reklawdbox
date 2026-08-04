@@ -91,8 +91,8 @@ def prepare_rows(
     consumed_releases = {str(row["release_group"]) for row in consumed_rows}
     playlist_track_ids = {
         str(track_id)
-        for name in exclusion_playlists
-        for track_id in playlists.get(name, set())
+        for track_id, names in playlists.items()
+        if names & exclusion_playlists
     }
 
     feature_rows = []
@@ -122,9 +122,9 @@ def prepare_rows(
             raise ValueError("holdout identity does not match the frozen audit")
         if live is None or str(live["track_id"]) != track_id:
             raise ValueError("holdout identity does not match the live snapshot")
-        if str(live["artist_group"]) != artist:
+        if library.normalized(str(live["artist"])) != artist:
             raise ValueError("holdout artist group differs from the live snapshot")
-        if str(live["release_group"]) != release:
+        if library.release_group(live) != release:
             raise ValueError("holdout release group differs from the live snapshot")
         missing_files += int(not Path(path).is_file())
         holdout_paths.add(path)

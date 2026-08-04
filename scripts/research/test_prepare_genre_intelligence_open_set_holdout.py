@@ -21,6 +21,10 @@ class PrepareGenreIntelligenceOpenSetHoldoutTests(unittest.TestCase):
             }
             selected.append(row)
             live.append(dict(row))
+            live[-1]["artist"] = row["artist_group"]
+            live[-1]["album"] = row["release_group"].removeprefix("release-")
+            row["artist_group"] = subject.library.normalized(live[-1]["artist"])
+            row["release_group"] = subject.library.release_group(live[-1])
         return selected, live
 
     def test_preparation_audits_all_identity_boundaries(self) -> None:
@@ -54,7 +58,7 @@ class PrepareGenreIntelligenceOpenSetHoldoutTests(unittest.TestCase):
                     }
                 ],
                 live,
-                {"genre_verified": {"unrelated"}},
+                {"unrelated": {"genre_verified"}},
                 {"genre_verified"},
             )
             self.assertEqual(len(rows), subject.EXPECTED_ROWS)
@@ -78,7 +82,7 @@ class PrepareGenreIntelligenceOpenSetHoldoutTests(unittest.TestCase):
                     [],
                     [],
                     live,
-                    {"genre_verified": {selected[0]["track_id"]}},
+                    {selected[0]["track_id"]: {"genre_verified"}},
                     {"genre_verified"},
                 )
 
