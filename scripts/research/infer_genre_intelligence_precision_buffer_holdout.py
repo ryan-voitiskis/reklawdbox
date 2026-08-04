@@ -361,8 +361,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     model = fit_full_model(development_base, development_clap, truths)
     model["thresholds"] = thresholds.astype("<f8")
     scores = score_model(model, holdout_base, holdout_clap)
-    combined_base = np.row_stack([development_base, holdout_base])
-    combined_clap = np.row_stack([development_clap, holdout_clap])
+    combined_base = np.vstack([development_base, holdout_base])
+    combined_clap = np.vstack([development_clap, holdout_clap])
     combined_truths = np.concatenate(
         [truths, np.full(len(holdout_base), -1, dtype=np.int64)]
     )
