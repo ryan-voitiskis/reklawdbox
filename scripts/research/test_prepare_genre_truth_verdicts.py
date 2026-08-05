@@ -148,10 +148,26 @@ class PrepareGenreTruthVerdictsTests(unittest.TestCase):
         row = result["rows"][0]
         self.assertEqual(row["alternatives"], [])
         self.assertEqual(row["alternatives_raw"], "free-form uncertainty")
-        self.assertEqual(row["notes"], "free-form uncertainty")
+        self.assertEqual(
+            row["notes"],
+            "Non-genre alternative wording: free-form uncertainty",
+        )
         self.assertEqual(
             result["normalization"]["alternative_cells_copied_to_notes"],
             ["GI99-01"],
+        )
+
+    def test_alternative_as_note_preserves_existing_notes(self) -> None:
+        value = review_text(
+            first_alternatives="unsure", first_confidence="low"
+        )
+        result = self.prepare(value, alternative_notes={"GI99-01"})
+        row = result["rows"][0]
+        self.assertEqual(row["alternatives"], [])
+        self.assertEqual(row["alternatives_raw"], "unsure")
+        self.assertEqual(
+            row["notes"],
+            "first note\nNon-genre alternative wording: unsure",
         )
 
 

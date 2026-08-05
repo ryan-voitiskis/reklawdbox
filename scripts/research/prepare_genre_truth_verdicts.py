@@ -206,11 +206,18 @@ def prepare_verdicts(
         notes = row["notes"]
         alternative_values = split_alternatives(alternatives_raw)
         if code in alternative_notes:
-            if not alternatives_raw.strip() or notes.strip():
+            if not alternatives_raw.strip():
                 raise ValueError(
-                    f"alternative-as-note requires alternatives and blank notes for {code}"
+                    f"alternative-as-note requires alternatives for {code}"
                 )
-            notes = alternatives_raw
+            notes = "\n".join(
+                value
+                for value in (
+                    notes.strip(),
+                    f"Non-genre alternative wording: {alternatives_raw.strip()}",
+                )
+                if value
+            )
             alternative_values = []
         alternatives = []
         for raw_alternative in alternative_values:
