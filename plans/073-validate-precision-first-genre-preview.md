@@ -1,7 +1,6 @@
 # Plan 073: Validate a precision-first parent-genre preview
 
-> **Status:** Awaiting prediction-blind human verdicts; all machine outputs and
-> scoring rules are sealed
+> **Status:** Complete; independent release gate failed and O3 is retired
 > **Objective:** Determine whether the already-frozen O3 model can ship as a
 > useful precision-first preview at approximately 20% collection coverage,
 > using enough independent offers to evaluate its 90% precision claim.
@@ -196,8 +195,53 @@ The exact-primary-parent evaluator and its boundary tests were committed as
 `842f690` before any listening. Its source SHA-256 is
 `4266651f12280f9d7282963730e46362fe0e31cac810bdcac25f5399615c6a6a`.
 It freezes the aggregate, per-emitted-parent, paired-v0.33, uncertainty, and
-isolation rules below. It cannot run until all six human verdict files have
+isolation rules below. It was not run until all six human verdict files had
 been sealed.
+
+### Human-truth and evaluation result
+
+All 35 verdicts were frozen before the first prediction join. Fine wording was
+mapped through the already-frozen broad taxonomy: Deep House to House, and
+Deep Techno and Hard Techno to Techno. Garage, Minimal, and Tech House remained
+distinct parents. Child alternatives that collapsed to the primary parent
+were removed only from the normalized alternative set; their raw wording and
+all listening notes were retained. One non-genre `Unsure` alternative was
+preserved as uncertainty wording rather than invented as a genre.
+
+The sealed truth contained 21 Techno, 12 House, one Garage, and one Downtempo
+label: 22 high-, nine medium-, and four low-confidence verdicts. Each of the
+six mode-0600 verdict artifacts replayed byte-for-byte. The evaluation config
+and its replay were byte-identical at SHA-256
+`77100b0d13eb10b899208e74a25f3684f2681ae442fbaf0af4eaf422fef7370e`.
+
+The independent result was:
+
+- 35 offers from 150 rows: 23.33% coverage, passing the 20% gate;
+- 30 exact primary-parent matches: 85.71% precision, failing the 90% gate;
+- House: 10/12, or 83.33%, passing its applicable 80% parent gate;
+- Techno: 20/21, or 95.24%, passing its applicable 80% parent gate;
+- Electro: 0/2; its parent gate did not apply below five offers;
+- no Ambient or Reggae offers;
+- on the 29 rows where both systems offered, O3 scored 26/29 (89.66%) versus
+  v0.33 at 17/29 (58.62%), an improvement of 31.03 percentage points; and
+- all identity, research-playlist, prior-holdout, and decoded-audio isolation
+  checks passed.
+
+The high/medium-confidence sensitivity was 28/31, or 90.32%. That is useful
+diagnostic evidence but cannot rescue the preregistered primary gate: human
+confidence is unavailable at inference, low-confidence labels were explicitly
+included in the frozen exact-primary policy, and filtering after seeing the
+result would be post hoc.
+
+The evaluation and clean replay were byte-identical at SHA-256
+`6f669f2523534ee8dbe23fdb8bd1b8e25c9020f98bc89350418bb28bc950dc6b`.
+Every frozen gate passed except aggregate precision. O3 therefore fails this
+plan and must not ship. The product remains unchanged.
+
+Disabling Electro would make this consumed sample 30/33, or 90.91%, while
+retaining 22% coverage. That is an error-analysis hypothesis only, not release
+evidence. Any House-and-Techno-only successor must be preregistered as a new
+candidate and validated on genuinely independent truth before release.
 
 ## Release gate
 
