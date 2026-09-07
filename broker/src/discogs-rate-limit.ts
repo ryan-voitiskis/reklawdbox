@@ -12,16 +12,26 @@ export class DiscogsRateLimitError extends Error {
   }
 }
 
+export class DiscogsQueueBusyError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      `The broker request queue is busy. Retry after ${retryAfterSeconds} seconds.`,
+    )
+    this.name = 'DiscogsQueueBusyError'
+  }
+}
+
 // Retry only an explicit rejection, never a timeout or an ambiguous token exchange.
 export async function withDiscogsRateLimitRecovery(
   stage: DiscogsStage,
   send: () => Promise<Response>,
+  recordCooldown: (seconds: number) => Promise<number | void> = async () => {},
 ): Promise<Response> {
   for (let attempt = 0;; attempt++) {
     const response = await send()
     if (response.status !== 429) return response
 
-    const retryAfterSeconds =
+    let retryAfterSeconds =
       parseRetryAfterSeconds(response.headers.get('Retry-After'))
         ?? DEFAULT_RETRY_AFTER_SECONDS
     console.warn('discogs rate limit', {
@@ -33,7 +43,14 @@ export async function withDiscogsRateLimitRecovery(
       ),
       used: numericHeader(response.headers.get('X-Discogs-Ratelimit-Used')),
     })
-    await response.body?.cancel()
+    try {
+      const sharedDelay = await recordCooldown(retryAfterSeconds)
+      if (sharedDelay !== undefined) {
+        retryAfterSeconds = Math.max(retryAfterSeconds, sharedDelay)
+      }
+    } finally {
+      await response.body?.cancel()
+    }
 
     // MCP clients have a 30-second total request deadline. Return the retry
     // instruction immediately for searches instead of hiding it behind a wait.

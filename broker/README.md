@@ -55,12 +55,14 @@ the Worker `scheduled()` handler to prune expired rows from:
 - `status: "warning"` when either:
   - `ALLOW_UNAUTHENTICATED_BROKER=true` (dev override; client-token checks disabled), or
   - `BROKER_CLIENT_TOKEN` is unset while unauthenticated mode is disabled (fail-closed; protected routes return `401`).
+- `discogs_egress: "gateway"` when a `DISCOGS_EGRESS` network binding is configured, otherwise `"direct"`. This reports configuration, not a live upstream check.
 
 ## Discogs throttling
 
 OAuth request-token, access-token, and search requests share the broker's
-request pacing. On an explicit Discogs HTTP 429, the broker records only the
-operation and numeric quota headers, then retries OAuth once after `Retry-After`. Search throttling returns
+request pacing and a D1 cooldown deadline. On an explicit Discogs HTTP 429,
+the broker logs only the operation and numeric quota headers, records the
+cooldown, then retries OAuth once after `Retry-After`. Search throttling returns
 immediately with retry instructions so the MCP client's 30-second request
 deadline does not hide the error.
 Missing or invalid retry instructions use 60 seconds; HTTP-date values are
@@ -73,12 +75,49 @@ If throttling persists, the response is HTTP 429 with
 header. Wait for that interval before retrying the same authorization page.
 If the device session has expired, start a fresh lookup to obtain a new link.
 A throttled callback preserves its request-token state for a later attempt.
+While a cooldown is active, fresh upstream work returns the remaining wait
+without contacting Discogs. Valid cached search results remain available.
+Concurrent 429 responses preserve the longest cooldown.
+
+Requests can wait up to four seconds for a pacing slot. If the queue cannot
+fit that budget, the broker returns HTTP 503 with `error: "broker_busy"`,
+`retry_after_seconds`, and `Retry-After`, without growing the backlog.
+The CLI honors numeric retry instructions for both 429 and 503. It makes at
+most four attempts, with automatic waits of at most 120 seconds each; longer
+server instructions are returned unchanged for the user to retry later.
+MCP searches return these errors without an automatic retry. Errors never
+become cached search misses.
 
 A healthy `/v1/health` response does not test Discogs connectivity. Use
 `wrangler tail reklawdbox-discogs-broker` to inspect `discogs rate limit`
 events. Low broker traffic does not rule out a source-IP limit on shared
 Cloudflare egress; compare the quota headers and a controlled local request
 before changing credentials or introducing a separately hosted relay.
+
+## Cloudflare egress
+
+The maintained deployment binds `DISCOGS_EGRESS` to the account's
+`cf1:network` VPC network. All Discogs OAuth and search calls use its Gateway
+route. A failure on that route returns an error; it does not silently switch
+to ordinary Worker egress.
+
+[Workers VPC is free during its open beta](https://developers.cloudflare.com/workers-vpc/reference/pricing/),
+subject to normal Worker quotas. Gateway uses shared egress; this is not an
+exclusive or static IP and does not guarantee immunity to future throttling.
+[Dedicated Gateway egress IPs require a paid Enterprise add-on](https://developers.cloudflare.com/cloudflare-one/traffic-policies/egress-policies/dedicated-egress-ips/).
+
+`wrangler.toml` pins the maintained personal Cloudflare account. Self-hosters
+must change `account_id` and the D1 database configuration to their own account.
+Deploying a VPC binding requires the `connectivity:admin` OAuth scope in
+addition to the Worker deployment scopes. Baseline tests select the `test`
+environment, disable remote bindings, and supply an isolated D1 database.
+They require neither Cloudflare credentials nor real Discogs traffic.
+
+To diagnose an egress regression, compare a small number of controlled real
+Discogs requests through Gateway and ordinary Worker egress. Verify OAuth and
+an uncached search as well as health before declaring recovery. Removing the
+network binding restores the direct route, which may restore the original
+shared-IP failure. No D1 migration is required for the shared cooldown.
 
 If Wrangler reaches the OAuth callback but reports a connection timeout while
 fetching its Cloudflare token, first verify network connectivity. A per-process

@@ -113,8 +113,7 @@ impl fmt::Display for LookupError {
                 let retry_after_seconds = error
                     .retry_after
                     .as_deref()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .map(|seconds| seconds.min(120));
+                    .and_then(|value| value.trim().parse::<u64>().ok());
                 match (retryable, retry_after_seconds) {
                     (true, Some(seconds)) => write!(
                         f,
@@ -292,6 +291,17 @@ mod tests {
         assert_eq!(err.http_status(), Some(502));
         assert_eq!(err.diagnostic_body(), Some("bad gateway"));
         assert!(err.auth_remediation().is_none());
+    }
+
+    #[test]
+    fn lookup_error_preserves_retry_instructions_beyond_the_automatic_wait_budget() {
+        for status in [429, 503] {
+            let err = LookupError::http(status, Some("999".to_string()), "private".to_string());
+            assert_eq!(
+                err.to_string(),
+                format!("broker proxy HTTP {status} (retryable; retry after 999s)")
+            );
+        }
     }
 
     #[test]

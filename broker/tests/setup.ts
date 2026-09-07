@@ -9,6 +9,7 @@ declare module 'cloudflare:test' {
     DISCOGS_CONSUMER_SECRET: string
     BROKER_STATE_ENCRYPTION_KEY: string
     DISCOGS_MIN_INTERVAL_MS?: string
+    DISCOGS_EGRESS?: Fetcher
     BROKER_CLIENT_TOKEN: string
     BROKER_PUBLIC_BASE_URL: string
     ALLOW_UNAUTHENTICATED_BROKER?: string
@@ -24,6 +25,7 @@ declare global {
       DISCOGS_CONSUMER_SECRET: string
       BROKER_STATE_ENCRYPTION_KEY: string
       DISCOGS_MIN_INTERVAL_MS?: string
+      DISCOGS_EGRESS?: Fetcher
       BROKER_CLIENT_TOKEN: string
       BROKER_PUBLIC_BASE_URL: string
       ALLOW_UNAUTHENTICATED_BROKER?: string

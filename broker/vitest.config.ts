@@ -10,8 +10,11 @@ const migrations = await readD1Migrations(migrationsPath)
 export default defineConfig({
   plugins: [
     cloudflareTest({
+      // Baseline tests must never create remote sessions or contact Discogs.
+      remoteBindings: false,
       wrangler: {
         configPath: './wrangler.toml',
+        environment: 'test',
       },
       miniflare: {
         d1Databases: {

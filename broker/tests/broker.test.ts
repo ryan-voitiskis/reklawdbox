@@ -493,6 +493,16 @@ describe('broker test runner baseline', () => {
         "SELECT COUNT(*) as count FROM oauth_request_tokens WHERE oauth_token = 'req-token'",
       ).first<{ count: number }>()
       expect(Number(retained?.count)).toBe(1)
+      const stillThrottled = await request(
+        callback,
+        { method: 'GET' },
+        overrides,
+      )
+      expect(stillThrottled.status).toBe(429)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      await env.DB.prepare(
+        "UPDATE rate_limit_state SET last_request_at_ms = ?1 WHERE bucket = 'discogs-api-cooldown'",
+      ).bind(Date.now() - 1).run()
       const completed = await request(callback, { method: 'GET' }, overrides)
       expect(completed.status).toBe(200)
       const authorized = await env.DB.prepare(
