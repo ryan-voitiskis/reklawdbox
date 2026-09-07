@@ -102,16 +102,21 @@ pub(super) fn http_retry_metadata(
     error: &discogs::LookupError,
     attempt: u32,
 ) -> Option<DiscogsHttpRetry<'_>> {
+    const MAX_AUTOMATIC_WAIT_SECONDS: u64 = 120;
     let status = error.http_status()?;
-    let wait_seconds = match status {
-        429 => error
-            .retry_after()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(5)
-            .min(120),
+    let fallback_seconds = match status {
+        429 => 5,
         500..=599 => 5 * 2u64.pow(attempt),
         _ => return None,
     };
+    let wait_seconds = error
+        .retry_after()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(fallback_seconds);
+    // Return long retry instructions to the caller instead of retrying early.
+    if wait_seconds > MAX_AUTOMATIC_WAIT_SECONDS {
+        return None;
+    }
     Some(DiscogsHttpRetry {
         status,
         wait_seconds,
@@ -136,9 +141,8 @@ where
         match lookup().await {
             Ok(result) => return Ok(result),
             Err(error) => {
-                // Defence-in-depth: the broker handles Discogs 429s internally,
-                // but platform-level rate limits (Cloudflare) or custom brokers
-                // may 429.
+                // The broker returns upstream cooldowns as 429 and queue
+                // backpressure as 503, with Retry-After for both.
                 let backoff = if let Some(retry) = http_retry_metadata(&error, attempt) {
                     if retry.status == 429 {
                         tracing::warn!(

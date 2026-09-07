@@ -415,6 +415,110 @@ describe('broker test runner baseline', () => {
     }
   })
 
+  it('returns actionable OAuth throttling without storing a failed request token', async () => {
+    const start = await request('/v1/device/session/start', {
+      method: 'POST',
+      headers: { [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN },
+    })
+    const started = await start.json<{ auth_url: string }>()
+    const url = new URL(started.auth_url)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('private upstream detail', {
+        status: 429,
+        headers: { 'Retry-After': '120' },
+      }),
+    )
+    try {
+      const response = await request(url.pathname + url.search, {
+        method: 'GET',
+      })
+      expect(response.status).toBe(429)
+      expect(response.headers.get('Retry-After')).toBe('120')
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      const body = await response.json<
+        { error: string; message: string; retry_after_seconds: number }
+      >()
+      expect(body.error).toBe('discogs_rate_limited')
+      expect(body.retry_after_seconds).toBe(120)
+      expect(body.message).not.toContain('private upstream detail')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const rows = await env.DB.prepare(
+        'SELECT COUNT(*) as count FROM oauth_request_tokens',
+      ).first<{ count: number }>()
+      expect(Number(rows?.count)).toBe(0)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('preserves a throttled callback so the same approval can complete later', async () => {
+    const start = await request('/v1/device/session/start', {
+      method: 'POST',
+      headers: { [TOKEN_HEADER]: env.BROKER_CLIENT_TOKEN },
+    })
+    const started = await start.json<{ auth_url: string }>()
+    const url = new URL(started.auth_url)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response('oauth_token=req-token&oauth_token_secret=req-secret'),
+      )
+      .mockResolvedValueOnce(
+        new Response('private upstream detail', {
+          status: 429,
+          headers: { 'Retry-After': '120' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          'oauth_token=access-token&oauth_token_secret=access-secret',
+        ),
+      )
+    const overrides = { DISCOGS_MIN_INTERVAL_MS: '1' }
+    try {
+      expect(
+        (await request(url.pathname + url.search, { method: 'GET' }, overrides))
+          .status,
+      ).toBe(302)
+      const callback = '/v1/discogs/oauth/callback' + url.search
+        + '&oauth_token=req-token&oauth_verifier=verifier'
+      const throttled = await request(callback, { method: 'GET' }, overrides)
+      expect(throttled.status).toBe(429)
+      expect(throttled.headers.get('Retry-After')).toBe('120')
+      const pending = await env.DB.prepare(
+        'SELECT status FROM device_sessions WHERE device_id = ?1',
+      )
+        .bind(url.searchParams.get('device_id')).first<{ status: string }>()
+      expect(pending?.status).toBe('pending')
+      const retained = await env.DB.prepare(
+        "SELECT COUNT(*) as count FROM oauth_request_tokens WHERE oauth_token = 'req-token'",
+      ).first<{ count: number }>()
+      expect(Number(retained?.count)).toBe(1)
+      const stillThrottled = await request(
+        callback,
+        { method: 'GET' },
+        overrides,
+      )
+      expect(stillThrottled.status).toBe(429)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      await env.DB.prepare(
+        "UPDATE rate_limit_state SET last_request_at_ms = ?1 WHERE bucket = 'discogs-api-cooldown'",
+      ).bind(Date.now() - 1).run()
+      const completed = await request(callback, { method: 'GET' }, overrides)
+      expect(completed.status).toBe(200)
+      const authorized = await env.DB.prepare(
+        'SELECT status FROM device_sessions WHERE device_id = ?1',
+      )
+        .bind(url.searchParams.get('device_id')).first<{ status: string }>()
+      expect(authorized?.status).toBe('authorized')
+      const consumed = await env.DB.prepare(
+        "SELECT COUNT(*) as count FROM oauth_request_tokens WHERE oauth_token = 'req-token'",
+      ).first<{ count: number }>()
+      expect(Number(consumed?.count)).toBe(0)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   it('stores access token secrets encrypted and still finalizes sessions', async () => {
     const start = await request('/v1/device/session/start', {
       method: 'POST',

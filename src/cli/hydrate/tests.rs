@@ -130,9 +130,9 @@ fn discogs_cli_retry_keeps_bounded_sanitized_diagnostic_out_of_display() {
 }
 
 #[test]
-fn discogs_cli_retry_metadata_preserves_429_cap_and_5xx_backoff() {
+fn discogs_cli_retry_metadata_honors_server_delays_within_budget() {
     let rate_limited =
-        discogs::LookupError::http(429, Some("999".to_string()), "rate limited".to_string());
+        discogs::LookupError::http(429, Some("120".to_string()), "rate limited".to_string());
     let retry = discogs_cli::http_retry_metadata(&rate_limited, 3)
         .expect("HTTP 429 should remain retryable");
     assert_eq!(retry.wait_seconds, 120);
@@ -143,8 +143,40 @@ fn discogs_cli_retry_metadata_preserves_429_cap_and_5xx_backoff() {
         .expect("HTTP 503 should remain retryable");
     assert_eq!(retry.wait_seconds, 40);
 
+    let busy = discogs::LookupError::http(503, Some("61".to_string()), "busy".to_string());
+    assert_eq!(
+        discogs_cli::http_retry_metadata(&busy, 0)
+            .unwrap()
+            .wait_seconds,
+        61
+    );
+
     let bad_request = discogs::LookupError::http(400, None, "bad request".to_string());
     assert!(discogs_cli::http_retry_metadata(&bad_request, 0).is_none());
+}
+
+#[tokio::test]
+async fn hydrate_discogs_returns_long_retry_instructions_without_an_early_retry() {
+    for status in [429, 503] {
+        let calls = Arc::new(AtomicU32::new(0));
+        let result = discogs_cli::lookup_with_retry_for_test(
+            {
+                let calls = calls.clone();
+                move || {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    std::future::ready(Err::<Option<discogs::DiscogsResult>, _>(
+                        discogs::LookupError::http(status, Some("999".to_string()), String::new()),
+                    ))
+                }
+            },
+            |_| async { panic!("a long server cooldown must not be shortened") },
+        )
+        .await;
+        let error = result.expect_err("the caller should receive the full retry instruction");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(error.retry_after(), Some("999"));
+        assert!(error.to_string().contains("retry after 999s"));
+    }
 }
 
 #[test]

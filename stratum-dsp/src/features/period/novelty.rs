@@ -1025,9 +1025,7 @@ mod tests {
         let mut spectrogram = vec![vec![0.1f32; 1024]; 10];
 
         // Frame 5: higher energy
-        for bin in &mut spectrogram[5] {
-            *bin = 1.0f32;
-        }
+        spectrogram[5].fill(1.0f32);
 
         let novelty = energy_flux_novelty(&spectrogram).unwrap();
 

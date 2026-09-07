@@ -1,4 +1,9 @@
 import { BERKELEY_MONO_FONT_DATA_URI, CALLBACK_LOGO_DATA_URI } from './branding'
+import {
+  DiscogsQueueBusyError,
+  DiscogsRateLimitError,
+  withDiscogsRateLimitRecovery,
+} from './discogs-rate-limit'
 
 interface Env {
   DB: D1Database
@@ -12,6 +17,7 @@ interface Env {
   SESSION_TOKEN_TTL_SECONDS?: string
   SEARCH_CACHE_TTL_SECONDS?: string
   DISCOGS_MIN_INTERVAL_MS?: string
+  DISCOGS_EGRESS?: Fetcher
 }
 
 type SessionStatus = 'pending' | 'authorized' | 'finalized' | 'expired'
@@ -95,9 +101,11 @@ const DISCOGS_UPSTREAM_FAILURE_MESSAGE = 'discogs upstream request failed'
 const DISCOGS_UPSTREAM_INVALID_RESPONSE_MESSAGE =
   'discogs upstream response was invalid'
 const BROKER_USER_AGENT = 'reklawdbox-broker/0.1'
-const MAX_RETRY_AFTER_SECONDS = 60
 const MAX_RATE_LIMIT_CAS_RETRIES = 20
 const DISCOGS_FETCH_TIMEOUT_MS = 20_000
+// Leave room for the upstream fetch and broker I/O within the client's 30s timeout.
+const MAX_DISCOGS_QUEUE_WAIT_MS = 4_000
+const DISCOGS_COOLDOWN_BUCKET = 'discogs-api-cooldown'
 const MAX_JSON_BODY_BYTES = 8 * 1024
 const MAX_SESSION_FIELD_LENGTH = 256
 const MAX_SEARCH_FIELD_LENGTH = 256
@@ -164,6 +172,26 @@ export default {
       )
     } catch (err) {
       console.error('broker request failed', err)
+
+      if (err instanceof DiscogsRateLimitError) {
+        const response = json({
+          error: 'discogs_rate_limited',
+          message: err.message,
+          retry_after_seconds: err.retryAfterSeconds,
+        }, 429)
+        response.headers.set('Retry-After', `${err.retryAfterSeconds}`)
+        return response
+      }
+
+      if (err instanceof DiscogsQueueBusyError) {
+        const response = json({
+          error: 'broker_busy',
+          message: err.message,
+          retry_after_seconds: err.retryAfterSeconds,
+        }, 503)
+        response.headers.set('Retry-After', `${err.retryAfterSeconds}`)
+        return response
+      }
 
       if (err instanceof BrokerHttpError) {
         return json(
@@ -856,7 +884,20 @@ async function handleHealth(env: Env): Promise<Response> {
   return json({
     status: brokerClientAuth.warning ? 'warning' : 'ok',
     broker_client_auth: brokerClientAuth,
+    discogs_egress: env.DISCOGS_EGRESS ? 'gateway' : 'direct',
   })
+}
+
+function fetchDiscogs(
+  env: Env,
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  // A configured route fails closed; an upstream failure must not silently
+  // switch back to the shared Worker fetch route.
+  return env.DISCOGS_EGRESS
+    ? env.DISCOGS_EGRESS.fetch(url, init)
+    : fetch(url, init)
 }
 
 async function lookupDiscogsViaApi(
@@ -892,7 +933,8 @@ async function lookupDiscogsViaApi(
         `${env.DISCOGS_CONSUMER_SECRET}&${params.oauthTokenSecret}`,
     }
     try {
-      return await fetch(
+      return await fetchDiscogs(
+        env,
         `${DISCOGS_BASE_URL}/database/search?${query.toString()}`,
         {
           method: 'GET',
@@ -913,16 +955,11 @@ async function lookupDiscogsViaApi(
     }
   }
 
-  let response = await doRequest()
-  if (response.status === 429) {
-    const retryAfterSeconds = parseRetryAfterSeconds(
-      response.headers.get('Retry-After'),
-    )
-    await delay(
-      Math.min(retryAfterSeconds ?? 30, MAX_RETRY_AFTER_SECONDS) * 1000,
-    )
-    response = await doRequest()
-  }
+  const response = await withDiscogsRateLimitRecovery(
+    'search',
+    doRequest,
+    (seconds) => recordDiscogsCooldown(env, seconds),
+  )
 
   if (!response.ok) {
     console.error('discogs search returned non-success status', response.status)
@@ -1129,21 +1166,30 @@ async function requestDiscogsRequestToken(
     oauth_signature: `${env.DISCOGS_CONSUMER_SECRET}&`,
   }
 
-  const response = await fetch(`${DISCOGS_BASE_URL}/oauth/request_token`, {
-    method: 'POST',
-    headers: {
-      Authorization: oauthHeader(oauthParams),
-      'User-Agent': BROKER_USER_AGENT,
+  const response = await withDiscogsRateLimitRecovery(
+    'request_token',
+    async () => {
+      await enforceDiscogsRateLimit(env)
+      oauthParams.oauth_nonce = randomToken(16)
+      oauthParams.oauth_timestamp = `${nowSeconds()}`
+      return fetchDiscogs(env, `${DISCOGS_BASE_URL}/oauth/request_token`, {
+        method: 'POST',
+        headers: {
+          Authorization: oauthHeader(oauthParams),
+          'User-Agent': BROKER_USER_AGENT,
+        },
+        signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
+      }).catch((err) => {
+        console.error('discogs request_token call failed', err)
+        throw new BrokerHttpError(
+          'discogs_unavailable',
+          DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+          502,
+        )
+      })
     },
-    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
-  }).catch((err) => {
-    console.error('discogs request_token call failed', err)
-    throw new BrokerHttpError(
-      'discogs_unavailable',
-      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
-      502,
-    )
-  })
+    (seconds) => recordDiscogsCooldown(env, seconds),
+  )
 
   if (!response.ok) {
     console.error(
@@ -1197,21 +1243,30 @@ async function requestDiscogsAccessToken(
     oauth_signature: `${env.DISCOGS_CONSUMER_SECRET}&${oauthTokenSecret}`,
   }
 
-  const response = await fetch(`${DISCOGS_BASE_URL}/oauth/access_token`, {
-    method: 'POST',
-    headers: {
-      Authorization: oauthHeader(oauthParams),
-      'User-Agent': BROKER_USER_AGENT,
+  const response = await withDiscogsRateLimitRecovery(
+    'access_token',
+    async () => {
+      await enforceDiscogsRateLimit(env)
+      oauthParams.oauth_nonce = randomToken(16)
+      oauthParams.oauth_timestamp = `${nowSeconds()}`
+      return fetchDiscogs(env, `${DISCOGS_BASE_URL}/oauth/access_token`, {
+        method: 'POST',
+        headers: {
+          Authorization: oauthHeader(oauthParams),
+          'User-Agent': BROKER_USER_AGENT,
+        },
+        signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
+      }).catch((err) => {
+        console.error('discogs access_token call failed', err)
+        throw new BrokerHttpError(
+          'discogs_unavailable',
+          DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+          502,
+        )
+      })
     },
-    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
-  }).catch((err) => {
-    console.error('discogs access_token call failed', err)
-    throw new BrokerHttpError(
-      'discogs_unavailable',
-      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
-      502,
-    )
-  })
+    (seconds) => recordDiscogsCooldown(env, seconds),
+  )
 
   if (!response.ok) {
     console.error(
@@ -1342,11 +1397,19 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
     env.DISCOGS_MIN_INTERVAL_MS,
     DEFAULT_DISCOGS_MIN_INTERVAL_MS,
   )
+  const queueDeadlineMs = Date.now() + MAX_DISCOGS_QUEUE_WAIT_MS
 
   for (let attempt = 0; attempt < MAX_RATE_LIMIT_CAS_RETRIES; attempt++) {
+    await assertDiscogsCooldownExpired(env)
+    if (Date.now() >= queueDeadlineMs) {
+      throw new DiscogsQueueBusyError(1)
+    }
     if (attempt > 0) {
       // Jittered backoff to reduce D1 contention under concurrent load
-      await delay(Math.floor(Math.random() * 50 * (attempt + 1)))
+      await delay(Math.min(
+        Math.floor(Math.random() * 50 * (attempt + 1)),
+        Math.max(0, queueDeadlineMs - Date.now()),
+      ))
     }
 
     const nowMs = Date.now()
@@ -1358,6 +1421,10 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
       .bind(bucket)
       .first<{ last_request_at_ms: number }>()
 
+    if (Date.now() >= queueDeadlineMs) {
+      throw new DiscogsQueueBusyError(1)
+    }
+
     if (!row) {
       const insertResult = await env.DB.prepare(
         `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
@@ -1368,6 +1435,8 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
         .run()
 
       if ((insertResult.meta.changes ?? 0) === 1) {
+        await assertDiscogsCooldownExpired(env)
+        if (Date.now() >= queueDeadlineMs) throw new DiscogsQueueBusyError(1)
         return
       }
       continue
@@ -1375,6 +1444,12 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
 
     const lastRequestAtMs = Number(row.last_request_at_ms)
     const reservedAtMs = Math.max(lastRequestAtMs + minIntervalMs, nowMs)
+    if (reservedAtMs >= queueDeadlineMs) {
+      // Reject without advancing a backlog that cannot fit the request budget.
+      throw new DiscogsQueueBusyError(
+        Math.max(1, Math.ceil((reservedAtMs - Date.now()) / 1000)),
+      )
+    }
     const updateResult = await env.DB.prepare(
       `UPDATE rate_limit_state
        SET last_request_at_ms = ?1
@@ -1385,18 +1460,51 @@ async function enforceDiscogsRateLimit(env: Env): Promise<void> {
       .run()
 
     if ((updateResult.meta.changes ?? 0) === 1) {
-      const waitMs = reservedAtMs - nowMs
+      const waitMs = reservedAtMs - Date.now()
       if (waitMs > 0) {
         await delay(waitMs)
       }
+      await assertDiscogsCooldownExpired(env)
+      if (Date.now() >= queueDeadlineMs) throw new DiscogsQueueBusyError(1)
       return
     }
   }
 
-  throw new BrokerHttpError(
-    'service_unavailable',
-    'rate limiter contention exceeded retries',
-    503,
+  throw new DiscogsQueueBusyError(1)
+}
+
+async function assertDiscogsCooldownExpired(env: Env): Promise<void> {
+  const row = await env.DB.prepare(
+    'SELECT last_request_at_ms FROM rate_limit_state WHERE bucket = ?1',
+  ).bind(DISCOGS_COOLDOWN_BUCKET).first<{ last_request_at_ms: number }>()
+  const remainingMs = Number(row?.last_request_at_ms ?? 0) - Date.now()
+  if (remainingMs > 0) {
+    throw new DiscogsRateLimitError(Math.ceil(remainingMs / 1000))
+  }
+}
+
+async function recordDiscogsCooldown(
+  env: Env,
+  seconds: number,
+): Promise<number> {
+  const deadlineMs = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Date.now() + seconds * 1000,
+  )
+  const row = await env.DB.prepare(
+    `INSERT INTO rate_limit_state (bucket, last_request_at_ms)
+     VALUES (?1, ?2)
+     ON CONFLICT(bucket) DO UPDATE SET
+       last_request_at_ms = MAX(rate_limit_state.last_request_at_ms, excluded.last_request_at_ms)
+     RETURNING last_request_at_ms`,
+  ).bind(DISCOGS_COOLDOWN_BUCKET, deadlineMs).first<
+    { last_request_at_ms: number }
+  >()
+  return Math.max(
+    seconds,
+    Math.ceil(
+      (Number(row?.last_request_at_ms ?? deadlineMs) - Date.now()) / 1000,
+    ),
   )
 }
 
@@ -1941,17 +2049,6 @@ function envIntClamped(
   max: number,
 ): number {
   return Math.min(envInt(input, fallback), max)
-}
-
-function parseRetryAfterSeconds(header: string | null): number | null {
-  if (!header) {
-    return null
-  }
-  const parsed = Number.parseInt(header, 10)
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return parsed
-  }
-  return null
 }
 
 function safeJsonParse<T>(input: string): T | null {

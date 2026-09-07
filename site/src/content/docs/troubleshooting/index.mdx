@@ -86,6 +86,24 @@ complete.
 
 Device flow expired before browser authorization completed. Call `lookup_discogs` again — complete the browser step promptly.
 
+### "broker ... HTTP 429" or "broker ... HTTP 503"
+
+HTTP 429 means Discogs has rate limited the broker. HTTP 503 with
+`broker_busy` means the broker's request queue is full. Wait for the
+`Retry-After` interval shown in the error before trying again. These errors
+do not mean a release is missing, and successful cached lookups can still work.
+
+If this happens in the browser during authorization, wait and retry the same
+page. A rate limited callback preserves the authorization state. If the
+device session has expired, call `lookup_discogs` again for a fresh link.
+The browser flow retries an explicit upstream 429 once automatically when
+its wait is at most 60 seconds.
+
+MCP searches return retry instructions immediately. The CLI can retry up to
+four total attempts, honoring waits of at most 120 seconds each. Longer
+instructions are shown without retrying early. Repeated throttling needs a
+broker connectivity check; disconnecting your session will not fix it.
+
 ---
 
 ## Essentia / audio analysis

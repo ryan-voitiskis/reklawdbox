@@ -1,7 +1,15 @@
 name = "reklawdbox-discogs-broker"
+account_id = "2584e96da1501a94e4af53e21f8f018d"
 main = "src/index.ts"
 compatibility_date = "2026-02-19"
 workers_dev = true
+
+# Public internet through the personal account's free Workers VPC beta.
+# Gateway egress avoids the ordinary Worker fetch pool; it is not a dedicated IP.
+[[vpc_networks]]
+binding = "DISCOGS_EGRESS"
+network_id = "cf1:network"
+remote = true
 
 [triggers]
 crons = ["0 * * * *"]
@@ -11,3 +19,8 @@ binding = "DB"
 database_name = "reklawdbox-broker"
 database_id = "48abbf51-84c5-4d65-8bad-d8dcea877592"
 migrations_dir = "migrations"
+
+# Vitest supplies an isolated D1 database and explicit mock egress bindings.
+[env.test]
+d1_databases = []
+vpc_networks = []
