@@ -1,4 +1,8 @@
 import { BERKELEY_MONO_FONT_DATA_URI, CALLBACK_LOGO_DATA_URI } from './branding'
+import {
+  DiscogsRateLimitError,
+  withDiscogsRateLimitRecovery,
+} from './discogs-rate-limit'
 
 interface Env {
   DB: D1Database
@@ -95,7 +99,6 @@ const DISCOGS_UPSTREAM_FAILURE_MESSAGE = 'discogs upstream request failed'
 const DISCOGS_UPSTREAM_INVALID_RESPONSE_MESSAGE =
   'discogs upstream response was invalid'
 const BROKER_USER_AGENT = 'reklawdbox-broker/0.1'
-const MAX_RETRY_AFTER_SECONDS = 60
 const MAX_RATE_LIMIT_CAS_RETRIES = 20
 const DISCOGS_FETCH_TIMEOUT_MS = 20_000
 const MAX_JSON_BODY_BYTES = 8 * 1024
@@ -164,6 +167,16 @@ export default {
       )
     } catch (err) {
       console.error('broker request failed', err)
+
+      if (err instanceof DiscogsRateLimitError) {
+        const response = json({
+          error: 'discogs_rate_limited',
+          message: err.message,
+          retry_after_seconds: err.retryAfterSeconds,
+        }, 429)
+        response.headers.set('Retry-After', `${err.retryAfterSeconds}`)
+        return response
+      }
 
       if (err instanceof BrokerHttpError) {
         return json(
@@ -913,16 +926,7 @@ async function lookupDiscogsViaApi(
     }
   }
 
-  let response = await doRequest()
-  if (response.status === 429) {
-    const retryAfterSeconds = parseRetryAfterSeconds(
-      response.headers.get('Retry-After'),
-    )
-    await delay(
-      Math.min(retryAfterSeconds ?? 30, MAX_RETRY_AFTER_SECONDS) * 1000,
-    )
-    response = await doRequest()
-  }
+  const response = await withDiscogsRateLimitRecovery('search', doRequest)
 
   if (!response.ok) {
     console.error('discogs search returned non-success status', response.status)
@@ -1129,21 +1133,28 @@ async function requestDiscogsRequestToken(
     oauth_signature: `${env.DISCOGS_CONSUMER_SECRET}&`,
   }
 
-  const response = await fetch(`${DISCOGS_BASE_URL}/oauth/request_token`, {
-    method: 'POST',
-    headers: {
-      Authorization: oauthHeader(oauthParams),
-      'User-Agent': BROKER_USER_AGENT,
+  const response = await withDiscogsRateLimitRecovery(
+    'request_token',
+    async () => {
+      await enforceDiscogsRateLimit(env)
+      oauthParams.oauth_nonce = randomToken(16)
+      return fetch(`${DISCOGS_BASE_URL}/oauth/request_token`, {
+        method: 'POST',
+        headers: {
+          Authorization: oauthHeader(oauthParams),
+          'User-Agent': BROKER_USER_AGENT,
+        },
+        signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
+      }).catch((err) => {
+        console.error('discogs request_token call failed', err)
+        throw new BrokerHttpError(
+          'discogs_unavailable',
+          DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+          502,
+        )
+      })
     },
-    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
-  }).catch((err) => {
-    console.error('discogs request_token call failed', err)
-    throw new BrokerHttpError(
-      'discogs_unavailable',
-      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
-      502,
-    )
-  })
+  )
 
   if (!response.ok) {
     console.error(
@@ -1197,21 +1208,28 @@ async function requestDiscogsAccessToken(
     oauth_signature: `${env.DISCOGS_CONSUMER_SECRET}&${oauthTokenSecret}`,
   }
 
-  const response = await fetch(`${DISCOGS_BASE_URL}/oauth/access_token`, {
-    method: 'POST',
-    headers: {
-      Authorization: oauthHeader(oauthParams),
-      'User-Agent': BROKER_USER_AGENT,
+  const response = await withDiscogsRateLimitRecovery(
+    'access_token',
+    async () => {
+      await enforceDiscogsRateLimit(env)
+      oauthParams.oauth_nonce = randomToken(16)
+      return fetch(`${DISCOGS_BASE_URL}/oauth/access_token`, {
+        method: 'POST',
+        headers: {
+          Authorization: oauthHeader(oauthParams),
+          'User-Agent': BROKER_USER_AGENT,
+        },
+        signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
+      }).catch((err) => {
+        console.error('discogs access_token call failed', err)
+        throw new BrokerHttpError(
+          'discogs_unavailable',
+          DISCOGS_UPSTREAM_FAILURE_MESSAGE,
+          502,
+        )
+      })
     },
-    signal: AbortSignal.timeout(DISCOGS_FETCH_TIMEOUT_MS),
-  }).catch((err) => {
-    console.error('discogs access_token call failed', err)
-    throw new BrokerHttpError(
-      'discogs_unavailable',
-      DISCOGS_UPSTREAM_FAILURE_MESSAGE,
-      502,
-    )
-  })
+  )
 
   if (!response.ok) {
     console.error(
@@ -1941,17 +1959,6 @@ function envIntClamped(
   max: number,
 ): number {
   return Math.min(envInt(input, fallback), max)
-}
-
-function parseRetryAfterSeconds(header: string | null): number | null {
-  if (!header) {
-    return null
-  }
-  const parsed = Number.parseInt(header, 10)
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return parsed
-  }
-  return null
 }
 
 function safeJsonParse<T>(input: string): T | null {

@@ -56,6 +56,41 @@ the Worker `scheduled()` handler to prune expired rows from:
   - `ALLOW_UNAUTHENTICATED_BROKER=true` (dev override; client-token checks disabled), or
   - `BROKER_CLIENT_TOKEN` is unset while unauthenticated mode is disabled (fail-closed; protected routes return `401`).
 
+## Discogs throttling
+
+OAuth request-token, access-token, and search requests share the broker's
+request pacing. On an explicit Discogs HTTP 429, the broker records only the
+operation and numeric quota headers, then retries OAuth once after `Retry-After`. Search throttling returns
+immediately with retry instructions so the MCP client's 30-second request
+deadline does not hide the error.
+Missing or invalid retry instructions use 60 seconds; HTTP-date values are
+supported. If the requested wait exceeds 60 seconds, the broker returns it
+without retrying early. Network failures and other error statuses are not
+retried during token exchange.
+
+If throttling persists, the response is HTTP 429 with
+`error: "discogs_rate_limited"`, `retry_after_seconds`, and a `Retry-After`
+header. Wait for that interval before retrying the same authorization page.
+If the device session has expired, start a fresh lookup to obtain a new link.
+A throttled callback preserves its request-token state for a later attempt.
+
+A healthy `/v1/health` response does not test Discogs connectivity. Use
+`wrangler tail reklawdbox-discogs-broker` to inspect `discogs rate limit`
+events. Low broker traffic does not rule out a source-IP limit on shared
+Cloudflare egress; compare the quota headers and a controlled local request
+before changing credentials or introducing a separately hosted relay.
+
+If Wrangler reaches the OAuth callback but reports a connection timeout while
+fetching its Cloudflare token, first verify network connectivity. A per-process
+connection-attempt adjustment can help on slow IPv4/unavailable IPv6 paths:
+
+```sh
+NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000 wrangler login
+```
+
+Keep the login process running and approve the new browser page within its
+time limit. An old callback URL cannot complete an expired login attempt.
+
 ## Local dev
 
 ```bash
