@@ -1968,7 +1968,8 @@ function optionalStringField(
   maxLength: number,
 ): string | undefined {
   const value = body[field]
-  if (value === undefined) {
+  // Rust clients serialize an absent optional album as JSON null.
+  if (value === undefined || value === null) {
     return undefined
   }
   if (typeof value !== 'string') {

@@ -2191,8 +2191,12 @@ describe('discogs proxy search caching', () => {
       '[]',
       'null',
       JSON.stringify({ artist: ['Artist'], title: 'Track' }),
+      JSON.stringify({ artist: null, title: 'Track' }),
       JSON.stringify({ artist: 'Artist', title: 123 }),
-      JSON.stringify({ artist: 'Artist', title: 'Track', album: null }),
+      JSON.stringify({ artist: 'Artist', title: null }),
+      JSON.stringify({ artist: 'Artist', title: 'Track', album: 123 }),
+      JSON.stringify({ artist: 'Artist', title: 'Track', album: [] }),
+      JSON.stringify({ artist: 'Artist', title: 'Track', album: {} }),
     ]
 
     for (const bodyText of cases) {
@@ -2210,6 +2214,60 @@ describe('discogs proxy search caching', () => {
         error: string
       }>()
       expect(body.error).toBe('invalid_params')
+    }
+  })
+
+  it('accepts the Rust client null album and shares cache with omitted or empty albums', async () => {
+    const sessionToken = 'session-null-album'
+    await insertFinalizedSession(sessionToken)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === 'string' ? input : input.toString(),
+        )
+        expect(url.pathname).toBe('/database/search')
+        expect(url.searchParams.has('release_title')).toBe(false)
+        return new Response(
+          JSON.stringify({
+            results: [{
+              title: 'Nullable Artist - Nullable Track',
+              year: 2026,
+              label: ['Test Label'],
+              genre: ['Electronic'],
+              style: ['House'],
+              uri: '/release/123',
+            }],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        )
+      },
+    )
+
+    try {
+      for (const album of [null, undefined, '', '  ']) {
+        const response = await request('/v1/discogs/proxy/search', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${sessionToken}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            artist: 'Nullable Artist',
+            title: 'Nullable Track',
+            album,
+          }),
+        })
+        expect(response.status).toBe(200)
+        const body = await response.json<{
+          result: { title: string }
+          cache_hit: boolean
+        }>()
+        expect(body.result.title).toBe('Nullable Artist - Nullable Track')
+        expect(body.cache_hit).toBe(album !== null)
+      }
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      fetchSpy.mockRestore()
     }
   })
 

@@ -14,6 +14,10 @@ Prerequisite: Node.js `>=20.19.0`.
 - `GET /v1/discogs/oauth/callback`
 - `POST /v1/discogs/proxy/search`
 
+Search requests require non-empty `artist` and `title` strings. `album` is
+optional: omit it or send `null` or an empty string to search without an album.
+These forms use the same cache entry. Other non-string album values are invalid.
+
 ## Required secrets
 
 Set with `wrangler secret put`:
