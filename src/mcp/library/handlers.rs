@@ -7,8 +7,8 @@ use rusqlite::Connection;
 use crate::adapters::rekordbox as db;
 use crate::domain::classification::taxonomy as genre;
 use crate::mcp::{
-    GetPlaylistTracksParams, GetTrackParams, SearchTracksParams, apply_offset_limit, db_error,
-    ok_json, track_has_unknown_genre,
+    GetPlaylistTracksParams, GetTrackParams, OffsetPage, SearchTracksParams, apply_offset_limit,
+    db_error, offset_page_bounds, ok_json, ok_structured_json, track_has_unknown_genre,
 };
 
 pub(in crate::mcp) fn handle_search_tracks(
@@ -70,13 +70,29 @@ pub(in crate::mcp) fn handle_get_playlists(
     ok_json(&playlists)
 }
 
+/// A page of playlist tracks plus continuation metadata.
+///
+/// Without `page`, a caller cannot tell a 200-track playlist from the first
+/// 200 tracks of a longer one, which silently truncates any rebuild.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub(in crate::mcp) struct GetPlaylistTracksOutput {
+    tracks: Vec<crate::domain::library::Track>,
+    page: OffsetPage,
+}
+
 pub(in crate::mcp) fn handle_get_playlist_tracks(
     conn: MutexGuard<'_, Connection>,
     params: GetPlaylistTracksParams,
 ) -> Result<CallToolResult, McpError> {
+    let total = db::count_playlist_tracks(&conn, &params.playlist_id).map_err(db_error)?;
+    let offset = params.offset.unwrap_or(0);
+    let page_size = params.limit.unwrap_or(200).min(200);
     let tracks =
-        db::get_playlist_tracks(&conn, &params.playlist_id, params.limit).map_err(db_error)?;
-    ok_json(&tracks)
+        db::get_playlist_tracks_page(&conn, &params.playlist_id, Some(page_size), params.offset)
+            .map_err(db_error)?;
+    let (_, mut page) = offset_page_bounds(total, offset as usize, page_size as usize);
+    page.returned = tracks.len();
+    ok_structured_json(GetPlaylistTracksOutput { tracks, page })
 }
 
 pub(in crate::mcp) fn handle_get_library_summary(

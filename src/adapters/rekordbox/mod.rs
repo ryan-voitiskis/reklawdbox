@@ -25,8 +25,8 @@ pub(crate) use health::{
 };
 pub(crate) use history::{get_play_stats, get_session_tracks, get_sessions};
 pub(crate) use playlists::{
-    get_playlist_tracks, get_playlist_tracks_page, get_playlist_tracks_unbounded,
-    get_playlist_tracks_unbounded_page, get_playlists,
+    count_playlist_tracks, get_playlist_tracks, get_playlist_tracks_page,
+    get_playlist_tracks_unbounded, get_playlist_tracks_unbounded_page, get_playlists,
 };
 pub(crate) use tracks::{
     SAMPLER_PATH_FRAGMENT, SearchParams, content_roots, get_library_stats, get_track,

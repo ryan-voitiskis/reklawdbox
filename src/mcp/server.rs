@@ -276,7 +276,9 @@ impl ReklawdboxServer {
         handle_get_playlists(self.rekordbox_conn()?)
     }
 
-    #[tool(description = "List tracks in a specific playlist")]
+    #[tool(
+        description = "List tracks in a specific playlist, in playlist order. Returns at most 200 tracks per call: continue with page.next_offset while page.has_more, and check page.total before treating a result as the whole playlist."
+    )]
     pub(super) async fn get_playlist_tracks(
         &self,
         params: Parameters<GetPlaylistTracksParams>,
