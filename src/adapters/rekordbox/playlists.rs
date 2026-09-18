@@ -104,6 +104,24 @@ pub fn get_playlist_tracks_page(
     get_playlist_tracks_with_limit_policy(conn, playlist_id, limit, offset, Some(200), Some(200))
 }
 
+/// Total tracks in a playlist, ignoring limit and offset.
+///
+/// Lets a paged read report `page.total` and `has_more` without fetching
+/// every row.
+pub fn count_playlist_tracks(
+    conn: &Connection,
+    playlist_id: &str,
+) -> Result<usize, rusqlite::Error> {
+    conn.query_row(
+        "SELECT COUNT(*)
+FROM djmdSongPlaylist sp
+INNER JOIN djmdContent c ON sp.ContentID = c.ID
+WHERE sp.PlaylistID = ?1 AND c.rb_local_deleted = 0",
+        params![playlist_id],
+        |row| row.get::<_, i64>(0).map(|n| n as usize),
+    )
+}
+
 /// Unbounded variant of `get_playlist_tracks` with no safety limit.
 /// Intended for full-library diagnostics and calibration paths, not ordinary
 /// agent browsing responses.

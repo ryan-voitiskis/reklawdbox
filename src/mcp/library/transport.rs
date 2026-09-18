@@ -113,8 +113,10 @@ pub struct GetTrackParams {
 pub struct GetPlaylistTracksParams {
     #[schemars(description = "Playlist ID")]
     pub playlist_id: String,
-    #[schemars(description = "Max results (default 200)")]
+    #[schemars(description = "Max results (default 200, max 200)")]
     pub limit: Option<u32>,
+    #[schemars(description = "Offset for pagination (skip first N tracks)")]
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

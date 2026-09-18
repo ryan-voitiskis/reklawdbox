@@ -120,3 +120,52 @@ fn rekordbox_playlists_pending_batch_page_playlist_equal_positions_use_stable_id
         ["t1", "t2"]
     );
 }
+
+#[test]
+fn rekordbox_playlists_test_count_playlist_tracks() {
+    let conn = create_test_db();
+    assert_eq!(count_playlist_tracks(&conn, "p1").unwrap(), 2);
+
+    // The count must agree with an unbounded read, so a paged caller can tell
+    // a complete playlist from a truncated page.
+    let all = get_playlist_tracks_unbounded(&conn, "p1", None).unwrap();
+    assert_eq!(count_playlist_tracks(&conn, "p1").unwrap(), all.len());
+
+    // Soft-deleted tracks are excluded, matching get_playlist_tracks.
+    conn.execute(
+        "UPDATE djmdContent SET rb_local_deleted = 1 WHERE ID = 't3'",
+        [],
+    )
+    .expect("fixture update should succeed");
+    assert_eq!(count_playlist_tracks(&conn, "p1").unwrap(), 1);
+
+    // Unknown playlist is zero, not an error.
+    assert_eq!(count_playlist_tracks(&conn, "nope").unwrap(), 0);
+}
+
+#[test]
+fn rekordbox_playlists_test_paging_covers_every_track_exactly_once() {
+    let conn = create_test_db();
+    let total = count_playlist_tracks(&conn, "p1").unwrap();
+
+    // Walk the playlist one track at a time and confirm the union is the whole
+    // playlist, in order, with no gaps or repeats — the property a caller
+    // rebuilding a >200-track playlist depends on.
+    let mut seen = Vec::new();
+    let mut offset = 0u32;
+    while (seen.len() as u32) < total as u32 {
+        let page = get_playlist_tracks_page(&conn, "p1", Some(1), Some(offset)).unwrap();
+        if page.is_empty() {
+            break;
+        }
+        seen.extend(page.iter().map(|t| t.id.clone()));
+        offset += page.len() as u32;
+    }
+    let expected: Vec<String> = get_playlist_tracks_unbounded(&conn, "p1", None)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    assert_eq!(seen, expected);
+    assert_eq!(seen.len(), total);
+}
