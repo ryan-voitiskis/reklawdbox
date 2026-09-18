@@ -8,7 +8,36 @@ use symphonia::default::get_probe;
 
 use super::AudioError;
 
+/// Content roots to try when a `djmdContent.FolderPath` is DB-relative
+/// (e.g. `/contents_3915412406/...`) rather than absolute.
+///
+/// Rekordbox stores these paths relative to wherever the collection's audio
+/// lives, which is not necessarily under the rekordbox app directory — a
+/// Dropbox- or NAS-backed library is common. `REKORDBOX_MEDIA_ROOTS`
+/// (colon-separated, like `PATH`) lets the user point at those locations;
+/// the default preserves the previous behaviour.
+fn media_roots() -> Vec<String> {
+    if let Ok(roots) = std::env::var("REKORDBOX_MEDIA_ROOTS") {
+        return roots
+            .split(':')
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(|r| r.trim_end_matches('/').to_string())
+            .collect();
+    }
+    match std::env::var("HOME") {
+        Ok(home) => vec![format!("{home}/Library/Pioneer/rekordbox/share")],
+        Err(_) => Vec::new(),
+    }
+}
+
 pub(crate) fn resolve_audio_path(raw_path: &str) -> Result<String, AudioError> {
+    resolve_audio_path_in(raw_path, &media_roots())
+}
+
+/// Core resolution, with the content roots injected so tests need not mutate
+/// process-global environment variables.
+fn resolve_audio_path_in(raw_path: &str, roots: &[String]) -> Result<String, AudioError> {
     if std::fs::metadata(raw_path).is_ok() {
         return Ok(raw_path.to_string());
     }
@@ -22,8 +51,22 @@ pub(crate) fn resolve_audio_path(raw_path: &str) -> Result<String, AudioError> {
         return Ok(decoded);
     }
 
+    // DB-relative path: try each configured content root.
+    for candidate in [raw_path, decoded.as_str()] {
+        if !candidate.starts_with('/') {
+            continue;
+        }
+        for root in roots {
+            let joined = format!("{root}{candidate}");
+            if std::fs::metadata(&joined).is_ok() {
+                return Ok(joined);
+            }
+        }
+    }
+
     Err(AudioError::Io(format!(
-        "File not found (tried raw and decoded): {raw_path}"
+        "File not found (tried raw, decoded, and {} media root(s)): {raw_path}",
+        roots.len()
     )))
 }
 
@@ -171,4 +214,67 @@ where
             sum * channel_weight
         })
         .collect()
+}
+
+#[cfg(test)]
+mod media_root_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_db_relative_path_via_media_root() {
+        let root = std::env::temp_dir().join("rbx_media_root_test");
+        let dir = root.join("contents_1/sub");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("track.mp3");
+        std::fs::write(&file, b"x").unwrap();
+        let roots = vec![root.to_str().unwrap().to_string()];
+
+        assert_eq!(
+            resolve_audio_path_in("/contents_1/sub/track.mp3", &roots).unwrap(),
+            file.to_str().unwrap()
+        );
+        // An absolute, existing path still wins untouched.
+        assert_eq!(
+            resolve_audio_path_in(file.to_str().unwrap(), &roots).unwrap(),
+            file.to_str().unwrap()
+        );
+        // A path under no root still fails.
+        assert!(resolve_audio_path_in("/contents_1/nope.mp3", &roots).is_err());
+        // No roots configured => previous behaviour (raw/decoded only).
+        assert!(resolve_audio_path_in("/contents_1/sub/track.mp3", &[]).is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn multiple_roots_are_tried_in_order() {
+        let base = std::env::temp_dir().join("rbx_media_multi");
+        let second = base.join("b");
+        std::fs::create_dir_all(second.join("contents_2")).unwrap();
+        let file = second.join("contents_2/x.mp3");
+        std::fs::write(&file, b"x").unwrap();
+
+        let roots = vec![
+            base.join("a").to_str().unwrap().to_string(),
+            second.to_str().unwrap().to_string(),
+        ];
+        assert_eq!(
+            resolve_audio_path_in("/contents_2/x.mp3", &roots).unwrap(),
+            file.to_str().unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn media_roots_parses_colon_separated_list() {
+        // Pure string parsing, no filesystem or env mutation.
+        let parsed: Vec<String> = "/a/:/b:  :/c/"
+            .split(':')
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(|r| r.trim_end_matches('/').to_string())
+            .collect();
+        assert_eq!(parsed, vec!["/a", "/b", "/c"]);
+    }
 }
