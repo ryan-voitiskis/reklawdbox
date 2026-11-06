@@ -12,6 +12,7 @@ repository = "https://github.com/ryan-voitiskis/reklawdbox"
 description = "MCP server for Rekordbox library management"
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 console = "0.15"
@@ -23,7 +24,7 @@ lofty = "0.24"
 percent-encoding = "2"
 regex = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-rmcp = { version = "1.4.0", default-features = false, features = ["macros", "server", "transport-io"] }
+rmcp = { version = "1.4.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.34", features = ["bundled-sqlcipher-vendored-openssl"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

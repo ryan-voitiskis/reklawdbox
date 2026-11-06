@@ -34,9 +34,7 @@ pub(super) async fn ensure_auth(
                 .map_err(|e| format!("Failed to start Discogs auth: {e}"))?;
 
             println!("Please authorize at: {}", pending.auth_url);
-            let _ = std::process::Command::new("open")
-                .arg(&pending.auth_url)
-                .spawn();
+            let _ = crate::adapters::platform::browser::open_url(&pending.auth_url);
 
             let spinner = ProgressBar::new_spinner();
             spinner.set_style(

@@ -1,0 +1,9 @@
+.git
+target
+**/node_modules
+broker
+plans
+.claude
+*.db
+*.db-wal
+*.db-shm

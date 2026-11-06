@@ -84,7 +84,11 @@ pub fn path_to_rekordbox_location_uri(file_path: &str) -> String {
 
 fn write_collection_track(out: &mut String, track: &Track, track_id: usize) {
     let rating = crate::domain::library::stars_to_rating(track.rating);
-    let location = xml_escape(&path_to_rekordbox_location_uri(&track.file_path));
+    // Rekordbox matches imported XML tracks by Location, so it must carry the
+    // library host's path, not the one reklawdbox reads the file through.
+    let location = xml_escape(&path_to_rekordbox_location_uri(&super::path_map::to_db(
+        &track.file_path,
+    )));
     let kind = track.file_kind.as_kind_str();
 
     write!(

@@ -1,9 +1,11 @@
-//! Pure launch-mode selection for the CLI and stdio MCP surfaces.
+//! Pure launch-mode selection for the CLI, stdio MCP and HTTP MCP surfaces.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaunchMode {
     Cli,
     McpStdio,
+    /// Streamable HTTP MCP server, selected by `REKLAWDBOX_HTTP_ADDR`.
+    McpHttp,
 }
 
 pub(crate) fn detect<I, S>(mut args: I, stdin_is_terminal: bool) -> LaunchMode
@@ -21,6 +23,25 @@ where
     } else {
         LaunchMode::McpStdio
     }
+}
+
+/// Like [`detect`], but an HTTP listen address turns the MCP surface into the
+/// HTTP server. CLI subcommands keep working in the same container: only a run
+/// that would have been the stdio server becomes HTTP, whatever stdin is.
+pub(crate) fn detect_with_http<I, S>(
+    args: I,
+    stdin_is_terminal: bool,
+    http_configured: bool,
+) -> LaunchMode
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.map(|argument| argument.as_ref().to_owned()).collect();
+    if http_configured && detect(args.iter(), false) == LaunchMode::McpStdio {
+        return LaunchMode::McpHttp;
+    }
+    detect(args.iter(), stdin_is_terminal)
 }
 
 #[cfg(test)]
@@ -139,5 +160,18 @@ mod tests {
             "--transport",
             "stdio"
         ]));
+    }
+
+    #[test]
+    fn http_address_turns_the_server_into_http_but_keeps_the_cli() {
+        let http = |args: &[&str], terminal| detect_with_http(args.iter().copied(), terminal, true);
+        assert_eq!(http(&["reklawdbox"], false), LaunchMode::McpHttp);
+        assert_eq!(http(&["reklawdbox"], true), LaunchMode::McpHttp);
+        assert_eq!(http(&["reklawdbox", "analyze"], false), LaunchMode::Cli);
+        assert_eq!(http(&["reklawdbox", "--help"], true), LaunchMode::Cli);
+        assert_eq!(
+            detect_with_http(["reklawdbox"].into_iter(), false, false),
+            LaunchMode::McpStdio
+        );
     }
 }

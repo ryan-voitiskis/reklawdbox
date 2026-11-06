@@ -18,11 +18,12 @@ pub fn paths_imported_in_scope(
         "SELECT FolderPath FROM djmdContent \
          WHERE rb_local_deleted = 0 AND FolderPath LIKE ?1 ESCAPE '\\'",
     )?;
-    let like_pattern = format!("{}%", escape_like(scope));
+    // `scope` is a directory on this machine; results come back in the same form.
+    let like_pattern = format!("{}%", escape_like(&super::path_map::to_db(scope)));
     let rows = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
     let mut set = HashSet::new();
     for row in rows {
-        set.insert(row?);
+        set.insert(super::path_map::to_local(&row?));
     }
     Ok(set)
 }
@@ -151,7 +152,8 @@ pub(crate) fn find_metadata_duplicates_page(
     if let Some(prefix) = path_prefix {
         let idx = bind_values.len() + 1;
         write!(grouped_sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
-        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
+        let prefix = super::path_map::to_db(prefix);
+        bind_values.push(Box::new(format!("{}%", escape_like(&prefix))));
     }
 
     grouped_sql.push_str(
@@ -220,7 +222,8 @@ pub(crate) fn all_track_paths(
     if let Some(prefix) = path_prefix {
         let idx = bind_values.len() + 1;
         write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
-        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
+        let prefix = super::path_map::to_db(prefix);
+        bind_values.push(Box::new(format!("{}%", escape_like(&prefix))));
     }
 
     sql.push_str(" ORDER BY c.FolderPath");
@@ -235,7 +238,7 @@ pub(crate) fn all_track_paths(
             id: row.get::<_, String>(0)?,
             artist: row.get::<_, String>(1)?.trim().to_string(),
             title: row.get::<_, String>(2)?.trim().to_string(),
-            path: row.get::<_, String>(3)?,
+            path: super::path_map::to_local(&row.get::<_, String>(3)?),
         })
     })?
     .collect()

@@ -70,11 +70,19 @@ pub fn read_beat_grid(path: &Path) -> Result<BeatGrid, AnlzError> {
 /// Map a `djmdContent.AnalysisDataPath` (e.g. `"/PIONEER/USBANLZ/<hex>/<uuid>/ANLZ0000.DAT"`)
 /// to an absolute filesystem path under the Rekordbox share root.
 ///
-/// Honours `REKORDBOX_ANLZ_ROOT` (mainly for tests) before falling back to
+/// Honours `REKORDBOX_ANLZ_ROOT` first, then the `share/` directory next to the
+/// resolved `master.db` (Rekordbox keeps both in the same folder on macOS and
+/// Windows, so a copied library carries its ANLZ files along), and finally
 /// `~/Library/Pioneer/rekordbox/share`.
 pub fn resolve_anlz_path(analysis_data_path: &str) -> Option<String> {
     if let Ok(root) = std::env::var("REKORDBOX_ANLZ_ROOT") {
         return Some(format!("{root}{analysis_data_path}"));
+    }
+    if let Some(share) = super::resolve_db_path()
+        .and_then(|db| std::path::Path::new(&db).parent().map(|p| p.join("share")))
+        .filter(|share| share.is_dir())
+    {
+        return Some(format!("{}{analysis_data_path}", share.display()));
     }
     let home = std::env::var("HOME").ok()?;
     Some(format!(
@@ -193,6 +201,10 @@ pub(crate) fn load_rekordbox_grid_for_path_with_conn(
     file_path: &str,
 ) -> Option<stratum_dsp::BeatGrid> {
     use unicode_normalization::UnicodeNormalization;
+
+    // `file_path` is a path on this machine; FolderPath holds Rekordbox's own form.
+    let db_path = super::path_map::to_db(file_path);
+    let file_path = db_path.as_str();
 
     // macOS HFS+/APFS sometimes hands out NFD-decomposed paths while
     // Rekordbox stored the original NFC form (or vice versa). Try the path

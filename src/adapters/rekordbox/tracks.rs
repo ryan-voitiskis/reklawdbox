@@ -97,7 +97,7 @@ pub(crate) fn row_to_track(row: &rusqlite::Row) -> Result<Track, rusqlite::Error
         remixer: row.get::<_, String>("RemixerName")?.trim().to_string(),
         year: row.get("ReleaseYear")?,
         length: row.get("Length")?,
-        file_path: row.get("FolderPath")?,
+        file_path: super::path_map::to_local(&row.get::<_, String>("FolderPath")?),
         play_count,
         bit_rate: row.get("BitRate")?,
         sample_rate: row.get("SampleRate")?,
@@ -303,13 +303,15 @@ pub(super) fn apply_search_filters(
     if let Some(ref path) = params.path {
         let idx = bind_values.len() + 1;
         write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
-        bind_values.push(Box::new(format!("%{}%", escape_like(path))));
+        let path = super::path_map::to_db(path);
+        bind_values.push(Box::new(format!("%{}%", escape_like(&path))));
     }
 
     if let Some(ref prefix) = params.path_prefix {
         let idx = bind_values.len() + 1;
         write!(sql, " AND c.FolderPath LIKE ?{idx} ESCAPE '\\'").unwrap();
-        bind_values.push(Box::new(format!("{}%", escape_like(prefix))));
+        let prefix = super::path_map::to_db(prefix);
+        bind_values.push(Box::new(format!("{}%", escape_like(&prefix))));
     }
 
     if let Some(ref added_after) = params.added_after {
@@ -436,7 +438,10 @@ pub(crate) fn content_roots(
         "SELECT DISTINCT FolderPath FROM djmdContent WHERE rb_local_deleted = 0{sample_filter}"
     ))?;
     let paths: Vec<String> = stmt
-        .query_map(bind_params, |row| row.get::<_, String>(0))?
+        .query_map(bind_params, |row| {
+            row.get::<_, String>(0)
+                .map(|p| super::path_map::to_local(&p))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
 
     if paths.is_empty() {
