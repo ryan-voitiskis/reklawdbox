@@ -1,10 +1,9 @@
 # Running reklawdbox on Linux and WSL
 
-This fork (`bender-projects/reklawdbox`, branch `linux-support`) runs the
-MCP server on Linux against a library that belongs to a Rekordbox install on
-another machine — typically Windows, reached from WSL today and from a
-cluster later. Rekordbox itself does not run on Linux, so reklawdbox always
-works on a **snapshot** of `master.db`, never on the live file.
+reklawdbox can run on Linux against a library that belongs to a Rekordbox
+install on another machine — typically Windows, reached from WSL or from a
+container. Rekordbox itself does not run on Linux, so reklawdbox always works
+on a **snapshot** of `master.db`, never on the live file.
 
 Validated on Ubuntu 24.04 under WSL2 (x86_64), Rust 1.99, against a real
 Rekordbox 7 library: release build, full test suite, `cargo clippy -D
@@ -134,7 +133,7 @@ docker run --rm -p 8000:8000 \
   reklawdbox
 ```
 
-## Platform changes in this fork
+## Linux-specific code
 
 - `adapters/rekordbox/path_map.rs`: `REKLAWDBOX_PATH_MAP` translation.
 - `adapters/rekordbox/anlz.rs`: ANLZ root defaults to `share/` beside the DB.
