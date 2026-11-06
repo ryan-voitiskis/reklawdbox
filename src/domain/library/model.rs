@@ -87,7 +87,7 @@ pub struct Track {
     pub remixer: String,
     pub year: i32,
     pub length: i32,       // seconds
-    pub file_path: String, // DB FolderPath
+    pub file_path: String, // DB FolderPath, translated by REKLAWDBOX_PATH_MAP (see adapters::rekordbox::path_map)
     pub play_count: i32,
     pub bit_rate: i32,
     pub sample_rate: i32,

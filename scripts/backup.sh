@@ -102,8 +102,26 @@ configure_restore_target() {
     fi
 }
 
-check_rekordbox_running() {
+# True when Rekordbox is running against RB_DATA. Under WSL a library on a
+# Windows drive (/mnt/<drive>/...) belongs to the Windows host, whose processes
+# pgrep cannot see, so ask tasklist.exe when WSL interop is available. A
+# snapshot copied into the Linux file system is never opened by Rekordbox, so
+# the Windows process does not matter for it.
+rekordbox_is_running() {
     if pgrep -x rekordbox > /dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "${RB_DATA:-}" == /mnt/* ]] \
+        && grep -qi microsoft /proc/sys/kernel/osrelease 2> /dev/null \
+        && tasklist.exe /FI "IMAGENAME eq rekordbox.exe" /NH < /dev/null 2> /dev/null \
+            | grep -qi "rekordbox.exe"; then
+        return 0
+    fi
+    return 1
+}
+
+check_rekordbox_running() {
+    if rekordbox_is_running; then
         warn "Rekordbox is currently running."
         warn "Backup will proceed but database files may be in a transient state."
         warn "For the most reliable backup, close Rekordbox first."
@@ -331,7 +349,7 @@ restore_backup() {
     fi
 
     # Safety: check if rekordbox is running
-    if pgrep -x rekordbox > /dev/null 2>&1; then
+    if rekordbox_is_running; then
         err "Rekordbox is running! Close it before restoring."
         err "Restore aborted."
         exit 1

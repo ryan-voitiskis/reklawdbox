@@ -7,6 +7,7 @@ pub(crate) mod backup;
 mod connection;
 mod health;
 mod history;
+pub(crate) mod path_map;
 mod playlists;
 #[cfg(test)]
 pub(crate) mod test_support;
