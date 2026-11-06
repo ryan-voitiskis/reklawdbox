@@ -42,6 +42,9 @@ Re-run it whenever you want reklawdbox to see library changes.
 | `REKLAWDBOX_PATH_MAP` | Translate Rekordbox paths to local ones: `DB_PREFIX=LOCAL_PREFIX`, several rules separated by `;`. Example: `N:/media/music=/mnt/data/media/music`. |
 | `REKORDBOX_ANLZ_ROOT` | Override where ANLZ beat grids live. Defaults to `share/` next to `REKORDBOX_DB_PATH` when it exists. |
 | `REKLAWDBOX_SECRETS_DIR` | Where the Discogs broker session token is stored (default `~/.config/reklawdbox`). Use a persistent volume in a container. |
+| `REKLAWDBOX_HTTP_ADDR` | Serve MCP over Streamable HTTP on this address (`0.0.0.0:8000`) instead of stdio. |
+| `MCP_BEARER_TOKEN` | **Required with `REKLAWDBOX_HTTP_ADDR`**, 32+ characters. Clients send `Authorization: Bearer <token>`. |
+| `REKLAWDBOX_HTTP_ALLOWED_HOSTS` | Comma-separated `Host` values accepted (DNS-rebinding guard). Default: loopback only. |
 
 ### Path translation
 
@@ -83,6 +86,54 @@ The Windows client can launch the Linux binary through `wsl.exe`:
 The audio files must be reachable inside WSL for analysis and tag tools, e.g.
 mount the NAS share: `sudo mount -t drvfs '\\nas\data' /mnt/data`.
 
+## Serve over HTTP
+
+`REKLAWDBOX_HTTP_ADDR` switches the MCP surface from stdio to Streamable
+HTTP; CLI subcommands are unaffected.
+
+```bash
+export MCP_BEARER_TOKEN=$(openssl rand -hex 32)
+REKLAWDBOX_HTTP_ADDR=127.0.0.1:8000 reklawdbox
+curl -s localhost:8000/healthz            # ok — no token, for probes
+```
+
+- `/mcp` is the MCP endpoint and needs the bearer token; `/healthz` does not.
+- No TLS: put a reverse proxy in front, and list its public host name in
+  `REKLAWDBOX_HTTP_ALLOWED_HOSTS` (the proxy forwards the original `Host`).
+- Every session shares one server state: changes staged in one session are
+  there in the next, as with the stdio server. Run a single replica.
+
+## Container
+
+The `Dockerfile` builds an HTTP-mode image (uid 10001, port 8000). The
+library comes in as a snapshot that the entrypoint copies to local disk:
+
+```powershell
+# on the Windows host, with Rekordbox closed
+scripts\publish-snapshot.ps1 -Destination N:\rekordbox\snapshot
+```
+
+| Variable | Default in the image |
+| --- | --- |
+| `REKLAWDBOX_SNAPSHOT_FROM` | unset — set it to the mounted snapshot directory |
+| `REKLAWDBOX_SNAPSHOT_ANLZ` | `0`; `1` also copies `share/` (needs `-WithAnlz`) |
+| `REKORDBOX_DB_PATH` | `/home/reklawdbox/rekordbox/master.db` (the local copy) |
+| `REKLAWDBOX_BACKUP_SCRIPT` | a no-op: the copy is disposable, the real library is never written |
+
+Restart the container after publishing a new snapshot. Mount the music
+read-only at the local side of `REKLAWDBOX_PATH_MAP`, and give
+`~/reklawdbox-exports` (`/home/reklawdbox/reklawdbox-exports`) a writable
+volume the Rekordbox host can read, so exported XML can be imported there.
+`CRATE_DIG_STORE_PATH` (analysis cache, SQLite) belongs on local disk too.
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e MCP_BEARER_TOKEN -e REKLAWDBOX_HTTP_ALLOWED_HOSTS=localhost \
+  -e REKLAWDBOX_SNAPSHOT_FROM=/snapshot -v /mnt/data/rekordbox/snapshot:/snapshot:ro \
+  -e REKLAWDBOX_PATH_MAP=N:/media/music=/music -v /mnt/data/media/music:/music:ro \
+  reklawdbox
+```
+
 ## Platform changes in this fork
 
 - `adapters/rekordbox/path_map.rs`: `REKLAWDBOX_PATH_MAP` translation.
@@ -93,6 +144,9 @@ mount the NAS share: `sudo mount -t drvfs '\\nas\data' /mnt/data`.
   `explorer.exe` or `xdg-open` instead of macOS `open`.
 - `scripts/backup.sh`: detects Rekordbox running on the Windows host from WSL.
 - `scripts/wsl-snapshot.sh`: consistent snapshot of the Windows library.
+- `bootstrap/http.rs`: Streamable HTTP transport with bearer-token auth.
+- `Dockerfile`, `docker/`, `scripts/publish-snapshot.ps1`: container image and
+  the Windows-side snapshot publisher.
 
 ## Known gaps
 
@@ -106,5 +160,7 @@ mount the NAS share: `sudo mount -t drvfs '\\nas\data' /mnt/data`.
 - MCP tools carry no `readOnlyHint` annotations; rely on the client's
   per-tool permission prompts.
 - Some upstream tests write fixture XML into the real `~/reklawdbox-exports`.
-- The server speaks stdio only; a cluster deployment needs an HTTP transport
-  with authentication in front of it.
+- The container image has no Essentia (no Python), so classification there
+  stays *Degraded*. The image is built for amd64 only.
+- The Discogs broker login opens a browser on the server, which a container
+  cannot do; enrichment that needs it is unavailable there.

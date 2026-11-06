@@ -22,13 +22,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(std::io::stderr)
         .init();
     domain::classification::taxonomy::init_overrides(cfg.genre_overrides);
-    match bootstrap::mode::detect(std::env::args(), std::io::stdin().is_terminal()) {
+    match bootstrap::mode::detect_with_http(
+        std::env::args(),
+        std::io::stdin().is_terminal(),
+        bootstrap::http::configured(),
+    ) {
         bootstrap::mode::LaunchMode::Cli => cli::run().await,
         bootstrap::mode::LaunchMode::McpStdio => {
             let server = mcp::ReklawdboxServer::new(adapters::rekordbox::resolve_db_path());
             let service = server.serve(stdio()).await?;
             service.waiting().await?;
             Ok(())
+        }
+        bootstrap::mode::LaunchMode::McpHttp => {
+            let settings = bootstrap::http::HttpSettings::from_env()?;
+            let server = mcp::ReklawdboxServer::new(adapters::rekordbox::resolve_db_path());
+            bootstrap::http::serve(server, settings).await
         }
     }
 }
