@@ -54,6 +54,81 @@ Get full details for a single track by ID. Returns Rekordbox metadata only — u
 
 ---
 
+### `list_cues`
+
+Read active cue rows across the collection, including factory samples. The response contains
+`total_cues`, `total_tracks`, and one page of `cues`, ordered by track ID, start time, and cue ID.
+Filters can be combined. For example, use `{"comment_exact":"CUE(Auto)","limit":0}`
+to count exact labels. Omit `limit` to read the first page with track IDs. Use
+`offset: 50` for the next page, or pass a returned `track_id` to inspect that track.
+
+{/* doc-contract:mcp tool=list_cues schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `track_id` | string | | Restrict to one track |
+| `comment_exact` | string | | Case-sensitive literal text, including whitespace. Empty text matches stored empty strings only |
+| `limit` | integer | | Page size, default 50, capped at 200. Zero returns counts only |
+| `offset` | integer | | Matching rows to skip, default 0 |
+| `memory_points_only` | boolean | | Return only non-loop memory points, default false |
+
+{/* /doc-contract:mcp */}
+
+Use `cue_id` for identity. Multiple rows may share a timestamp. `start_ms` and
+`loop_end_ms` are milliseconds. A null loop end means there is no recorded end.
+The result includes the stored colour and palette index. Raw kind 0 maps to memory,
+1–8 to hot slots A–H, and other values are returned as unknown with their raw code.
+A comment is editable and does not establish how a cue was created.
+
+---
+
+### `preview_cue_removal`
+
+Count the saved memory points with an exact comment and fingerprint the protected
+state before editing in Rekordbox. Loops, hot cues, unknown kinds and cues on other
+tracks outside the selection are protected. Preview and verification both read the
+library without staging edits. Use `list_cues` with the same filters and `memory_points_only: true` to inspect the candidates.
+
+{/* doc-contract:mcp tool=preview_cue_removal schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `comment_exact` | string | **yes** | Nonblank, case-sensitive memory point comment |
+| `track_id` | string | | Restrict candidates to one track |
+
+{/* /doc-contract:mcp */}
+
+Save the returned `verification_fingerprint` and the exact input. A preview with
+zero matches returns a null fingerprint. The fingerprint is a comparison value.
+For recovery, quit Rekordbox and make a [library backup](/cli/#backup) before editing.
+In Rekordbox Export mode, load the confirmed track and open **MEMORY**. Match both
+the comment and timestamp, then click the × on that row. If multiple rows look
+identical, stop and inspect the track. Run `verify_cue_removal` after saving.
+
+---
+
+### `verify_cue_removal`
+
+After Rekordbox saves the edits, pass the preview fingerprint and original filters.
+`verified` requires zero remaining matches and a matching protected fingerprint.
+The fingerprint covers the active track IDs and UUIDs and every database column of
+every protected active cue row, including rows omitted from XML and internal sync
+fields. Unrelated cue or track membership changes can therefore fail verification.
+Inspect changes before continuing. Verification does not compare audio or other
+track metadata.
+
+{/* doc-contract:mcp tool=verify_cue_removal schema=/ requiredness=global */}
+
+| Parameter | Type | Required | Description |
+|-----------|------|:--------:|-------------|
+| `comment_exact` | string | **yes** | Same exact comment as the preview |
+| `track_id` | string | | Same track scope as the preview |
+| `verification_fingerprint` | string | **yes** | Lowercase SHA-256 from the preview |
+
+{/* /doc-contract:mcp */}
+
+---
+
 ### `get_playlists` <Badge text="no params" variant="note" />
 
 {/* doc-contract:mcp tool=get_playlists schema=/ surface=none requiredness=global */}

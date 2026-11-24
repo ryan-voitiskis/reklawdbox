@@ -142,3 +142,38 @@ pub struct GetPlayStatsParams {
     #[schemars(description = "Max results (default 200, max 500)")]
     pub limit: Option<u32>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListCuesParams {
+    /// Restrict to this Rekordbox track ID. Omit for the full collection.
+    pub track_id: Option<String>,
+    /// Exact, case-sensitive cue comment. Empty matches stored empty text only.
+    pub comment_exact: Option<String>,
+    /// Only list non-loop memory points, the cue category eligible for removal preview. Default false.
+    pub memory_points_only: Option<bool>,
+    /// Page size, default 50, maximum 200. Zero returns totals only.
+    pub limit: Option<u32>,
+    /// Number of matching cues to skip, default zero.
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewCueRemovalParams {
+    /// Exact, nonblank comment on a saved memory point.
+    pub comment_exact: String,
+    /// Restrict removal candidates to this track ID. All other cue rows remain protected.
+    pub track_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyCueRemovalParams {
+    /// Use the same exact comment as the preview.
+    pub comment_exact: String,
+    /// Use the same track scope as the preview.
+    pub track_id: Option<String>,
+    /// SHA-256 verification_fingerprint returned by preview_cue_removal.
+    pub verification_fingerprint: String,
+}

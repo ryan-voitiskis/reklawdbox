@@ -578,7 +578,7 @@ fn claude_schema_contract_rejects_forbidden_shapes() {
 /// Tool schemas must be free of $ref/$defs and top-level oneOf/anyOf for Claude API compatibility.
 #[test]
 fn claude_schema_contract_covers_live_router() {
-    const EXPECTED_TOOL_COUNT: usize = 52;
+    const EXPECTED_TOOL_COUNT: usize = 55;
 
     let tools = ReklawdboxServer::build_tool_router().list_all();
     assert_eq!(
