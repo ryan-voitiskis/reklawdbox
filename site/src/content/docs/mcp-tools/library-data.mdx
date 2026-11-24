@@ -59,8 +59,8 @@ Get full details for a single track by ID. Returns Rekordbox metadata only — u
 Read active cue rows across the collection, including factory samples. The response contains
 `total_cues`, `total_tracks`, and one page of `cues`, ordered by track ID, start time, and cue ID.
 Filters can be combined. For example, use `{"comment_exact":"CUE(Auto)","limit":0}`
-to count exact labels. Omit `limit` to read the first page with track IDs. Use
-`offset: 50` for the next page, or pass a returned `track_id` to inspect that track.
+to count exact labels. Omit `limit` to read the first 50 matches. To continue,
+advance `offset` by the number of rows returned. Pass a returned `track_id` to inspect that track.
 
 {/* doc-contract:mcp tool=list_cues schema=/ requiredness=global */}
 
@@ -76,18 +76,19 @@ to count exact labels. Omit `limit` to read the first page with track IDs. Use
 
 Use `cue_id` for identity. Multiple rows may share a timestamp. `start_ms` and
 `loop_end_ms` are milliseconds. A null loop end means there is no recorded end.
-The result includes the stored colour and palette index. Raw kind 0 maps to memory,
-1–8 to hot slots A–H, and other values are returned as unknown with their raw code.
+The result includes the stored colour and palette index. Raw kind 0 is a memory point or loop,
+depending on its loop end. Kind 4 with a recorded end is a memory loop. Hot slots A–C
+use kinds 1–3, and D–P use kinds 5–17. Unrecognized combinations return `kind: "unknown"`
+and preserve `raw_kind`.
 A comment is editable and does not establish how a cue was created.
 
 ---
 
 ### `preview_cue_removal`
 
-Count the saved memory points with an exact comment and fingerprint the protected
-state before editing in Rekordbox. Loops, hot cues, unknown kinds and cues on other
-tracks outside the selection are protected. Preview and verification both read the
-library without staging edits. Use `list_cues` with the same filters and `memory_points_only: true` to inspect the candidates.
+Count the saved memory points with an exact comment before editing in Rekordbox.
+The preview fingerprints all other active cue rows, including loops, hot cues,
+and cues on other tracks. Verification uses that fingerprint to detect changes after editing. Use `list_cues` with the same filters and `memory_points_only: true` to inspect the candidates.
 
 {/* doc-contract:mcp tool=preview_cue_removal schema=/ requiredness=global */}
 
@@ -104,6 +105,8 @@ For recovery, quit Rekordbox and make a [library backup](/cli/#backup) before ed
 In Rekordbox Export mode, load the confirmed track and open **MEMORY**. Match both
 the comment and timestamp, then click the × on that row. If multiple rows look
 identical, stop and inspect the track. Run `verify_cue_removal` after saving.
+In Rekordbox 7.2.20, deleting a memory point from the MEMORY panel preserved the
+other active cue rows, including loops on the same track.
 
 ---
 
@@ -113,9 +116,11 @@ After Rekordbox saves the edits, pass the preview fingerprint and original filte
 `verified` requires zero remaining matches and a matching protected fingerprint.
 The fingerprint covers the active track IDs and UUIDs and every database column of
 every protected active cue row, including rows omitted from XML and internal sync
-fields. Unrelated cue or track membership changes can therefore fail verification.
-Inspect changes before continuing. Verification does not compare audio or other
-track metadata.
+fields. Both tools report collection-wide `active_tracks` and `protected_cue_rows`.
+If verification fails, check the original track ID and comment, then compare the counts.
+Equal counts can still hide a changed or replaced row. The comparison covers these
+database records only. Audio, ANLZ analysis files, hot cue banks and other track metadata
+are outside its scope.
 
 {/* doc-contract:mcp tool=verify_cue_removal schema=/ requiredness=global */}
 

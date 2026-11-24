@@ -9,11 +9,12 @@ pub(crate) enum CueKind {
 }
 
 impl CueKind {
-    /// Slots A–H have a confirmed mapping. Preserve every other raw kind.
-    pub(crate) fn from_raw(raw: Option<i64>) -> (Self, Option<char>) {
+    pub(crate) fn from_raw(raw: Option<i64>, loop_end_ms: Option<i64>) -> (Self, Option<char>) {
         match raw {
             Some(0) => (Self::Memory, None),
-            Some(slot @ 1..=8) => (Self::Hot, Some((b'A' + slot as u8 - 1) as char)),
+            Some(4) if loop_end_ms.is_some() => (Self::Memory, None),
+            Some(slot @ 1..=3) => (Self::Hot, Some(char::from(b'A' + (slot - 1) as u8))),
+            Some(slot @ 5..=17) => (Self::Hot, Some(char::from(b'D' + (slot - 5) as u8))),
             _ => (Self::Unknown, None),
         }
     }

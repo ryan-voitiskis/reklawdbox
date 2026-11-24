@@ -1,27 +1,11 @@
 use crate::adapters::rekordbox::cues::{list_cues, removal_inventory};
-use rusqlite::Connection;
+use crate::adapters::rekordbox::test_support::create_cue_test_db;
+use rusqlite::params;
 use serde_json::{Value, to_value};
-
-fn fixture() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("
-        CREATE TABLE djmdContent(ID TEXT PRIMARY KEY, UUID TEXT, Title TEXT, ArtistID TEXT, rb_local_deleted INT);
-        CREATE TABLE djmdArtist(ID TEXT PRIMARY KEY, Name TEXT);
-        CREATE TABLE djmdCue(ID TEXT PRIMARY KEY, ContentID TEXT, InMsec INTEGER, OutMsec INTEGER,
-            Kind INTEGER, Comment TEXT COLLATE NOCASE, Color INTEGER, ColorTableIndex INTEGER,
-            ActiveLoop INTEGER, rb_local_deleted INTEGER, extra BLOB);
-        INSERT INTO djmdContent VALUES ('1','u1','one',NULL,0),('2','u2','two',NULL,NULL),('3','u3','gone',NULL,1);
-        INSERT INTO djmdCue(ID,ContentID,InMsec,OutMsec,Kind,Comment,rb_local_deleted) VALUES
-            ('a','1',10,-1,0,'AUTO',0),('b','1',10,30,0,'AUTO',0),('c','1',10,-1,1,'AUTO',0),
-            ('d','1',10,-1,17,'AUTO',0),('e','2',10,NULL,0,'auto',0),('f','2',10,-1,0,NULL,0),
-            ('g','3',10,-1,0,'AUTO',0),('h','2',10,-1,0,'AUTO',1),('i','2',10,-1,0,'',0);
-    ").unwrap();
-    conn
-}
 
 #[test]
 fn exact_filter_preserves_unknown_kinds_loops_and_totals_on_empty_pages() {
-    let conn = fixture();
+    let conn = create_cue_test_db();
     let page = |s, limit, offset| -> Value {
         to_value(list_cues(&conn, None, s, false, limit, offset).unwrap()).unwrap()
     };
@@ -34,7 +18,7 @@ fn exact_filter_preserves_unknown_kinds_loops_and_totals_on_empty_pages() {
     assert_eq!(result["cues"][0]["cue_id"], "b");
     assert_eq!(result["cues"][0]["loop_end_ms"], 30);
     assert_eq!(result["cues"][1]["hot_slot"], "A");
-    assert_eq!(result["cues"][2]["raw_kind"], 17);
+    assert_eq!(result["cues"][2]["raw_kind"], 99);
     assert_eq!(result["cues"][2]["kind"], "unknown");
     assert!(result["cues"][2]["loop_end_ms"].is_null());
     assert_eq!(page(Some(""), 0, 0)["total_cues"], 1);
@@ -47,8 +31,8 @@ fn exact_filter_preserves_unknown_kinds_loops_and_totals_on_empty_pages() {
 }
 
 #[test]
-fn verification_detects_protected_row_replacement_unknown_fields_and_track_loss() {
-    let conn = fixture();
+fn verification_detects_protected_row_replacement_unknown_fields_and_track_identity_changes() {
+    let conn = create_cue_test_db();
     let inv = || removal_inventory(&conn, Some("1"), "AUTO").unwrap();
     let before = inv();
     assert_eq!(
@@ -84,4 +68,52 @@ fn verification_detects_protected_row_replacement_unknown_fields_and_track_loss(
     )
     .unwrap();
     assert_ne!(inv().fingerprint, before.fingerprint);
+}
+
+#[test]
+fn list_identifies_all_sixteen_hot_slots_and_the_separate_memory_loop_kind() {
+    let conn = create_cue_test_db();
+    for (slot, kind) in (1..=3).chain(5..=17).enumerate() {
+        conn.execute(
+            "INSERT INTO djmdCue(ID,ContentID,InMsec,Kind,Comment)
+             VALUES (?1,'1',?2,?3,'pads')",
+            params![format!("pad-{slot}"), slot, kind],
+        )
+        .unwrap();
+    }
+    let page = to_value(list_cues(&conn, Some("1"), Some("pads"), false, 50, 0).unwrap()).unwrap();
+    let pads = page["cues"].as_array().unwrap();
+    assert_eq!(pads.len(), 16);
+    for (cue, letter) in pads.iter().zip('A'..='P') {
+        assert_eq!(cue["kind"], "hot");
+        assert_eq!(cue["hot_slot"], letter.to_string());
+    }
+    conn.execute_batch(
+        "INSERT INTO djmdCue(ID,ContentID,InMsec,OutMsec,Kind,Comment) VALUES
+         ('1-loop','1',1,500,4,'edge'), ('2-no-end','1',2,-1,4,'edge'),
+         ('3-null-kind','1',3,NULL,NULL,'edge'), ('4-null-end','1',4,NULL,0,'edge'),
+         ('5-max-end','1',5,4294967295,0,'edge');",
+    )
+    .unwrap();
+    let page = to_value(list_cues(&conn, Some("1"), Some("edge"), false, 50, 0).unwrap()).unwrap();
+    let rows = page["cues"].as_array().unwrap();
+    assert_eq!(rows[0]["kind"], "memory");
+    assert_eq!(rows[0]["loop_end_ms"], 500);
+    assert!(rows[0]["hot_slot"].is_null());
+    assert_eq!(rows[1]["kind"], "unknown");
+    assert_eq!(rows[2]["kind"], "unknown");
+    assert!(rows[2]["raw_kind"].is_null());
+    let eligible =
+        to_value(list_cues(&conn, Some("1"), Some("edge"), true, 50, 0).unwrap()).unwrap();
+    let eligible = eligible["cues"].as_array().unwrap();
+    assert_eq!(eligible.len(), 2);
+    assert_eq!(eligible[0]["cue_id"], "4-null-end");
+    assert_eq!(eligible[1]["cue_id"], "5-max-end");
+    assert!(eligible.iter().all(|cue| cue["loop_end_ms"].is_null()));
+    assert_eq!(
+        removal_inventory(&conn, Some("1"), "edge")
+            .unwrap()
+            .target_count,
+        2
+    );
 }

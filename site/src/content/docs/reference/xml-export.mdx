@@ -47,7 +47,7 @@ Playlists are included when `write_xml` is called with the `playlists` parameter
 
 <Aside type="caution">
   Beat grids (TEMPO) and cue points (POSITION_MARK) are **not** included in the export. Reimporting Reklawdbox’s metadata-only export preserves existing cue points.
-  A synthetic test in Rekordbox 7.2.20 found that importing an XML track with some marks removed recreated the retained cues with new IDs. An XML track with zero marks left the final cue in place. For selective deletion, see [cue preview and verification](/mcp-tools/library-data/#preview_cue_removal).
+  A synthetic test in Rekordbox 7.2.20 found that importing an XML track with some marks removed recreated the retained cues with new IDs. When the collection track had one cue left, reimporting it with zero XML marks kept that cue. For selective deletion, see [cue preview and verification](/mcp-tools/library-data/#preview_cue_removal).
 </Aside>
 
 ---

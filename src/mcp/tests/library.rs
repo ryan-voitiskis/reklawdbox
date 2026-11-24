@@ -339,3 +339,133 @@ fn selector_pagination_helpers_unknown_genre_predicate_is_exact() {
     track.genre = "Alien Rhythms".to_string();
     assert!(track_has_unknown_genre(&track));
 }
+
+#[test]
+fn verify_cue_removal_detects_wrong_cue_and_loss_of_the_target_track() {
+    use crate::mcp::library::{PreviewCueRemovalParams, VerifyCueRemovalParams, cues};
+    let conn = db::test_support::create_cue_test_db();
+    // A track that contains only the target must still survive its removal.
+    conn.execute_batch(
+        "INSERT INTO djmdContent(ID,UUID) VALUES ('solo','solo-uuid');
+         INSERT INTO djmdCue(ID,ContentID,Kind,Comment) VALUES ('target','solo',0,'AUTO');",
+    )
+    .unwrap();
+    let preview = || {
+        let result = cues::preview(
+            &conn,
+            PreviewCueRemovalParams {
+                track_id: Some("solo".into()),
+                comment_exact: "AUTO".into(),
+            },
+        )
+        .unwrap();
+        extract_json(&result)
+    };
+    let before = preview();
+    let verify = || {
+        let result = cues::verify(
+            &conn,
+            VerifyCueRemovalParams {
+                track_id: Some("solo".into()),
+                comment_exact: "AUTO".into(),
+                verification_fingerprint: before["verification_fingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+            },
+        )
+        .unwrap();
+        extract_json(&result)
+    };
+    let pending = verify();
+    assert_eq!(pending["remaining_memory_points"], 1);
+    assert_eq!(pending["protected_library_matches"], true);
+    assert_eq!(pending["verified"], false);
+
+    conn.execute("DELETE FROM djmdCue WHERE ID='target'", [])
+        .unwrap();
+    let correct = verify();
+    assert_eq!(correct["verified"], true);
+    assert_eq!(correct["protected_cue_rows"], before["protected_cue_rows"]);
+    assert_eq!(correct["active_tracks"], before["active_tracks"]);
+    assert!(preview()["verification_fingerprint"].is_null());
+
+    conn.execute("UPDATE djmdCue SET rb_local_deleted=1 WHERE ID='b'", [])
+        .unwrap();
+    let wrong_cue = verify();
+    assert_eq!(wrong_cue["remaining_memory_points"], 0);
+    assert_eq!(wrong_cue["protected_library_matches"], false);
+    assert_eq!(wrong_cue["verified"], false);
+    assert_eq!(
+        wrong_cue["protected_cue_rows"].as_u64().unwrap() + 1,
+        before["protected_cue_rows"]
+    );
+    conn.execute("UPDATE djmdCue SET rb_local_deleted=0 WHERE ID='b'", [])
+        .unwrap();
+
+    conn.execute(
+        "UPDATE djmdContent SET rb_local_deleted=1 WHERE ID='solo'",
+        [],
+    )
+    .unwrap();
+    let missing_track = verify();
+    assert_eq!(missing_track["verified"], false);
+    assert_eq!(
+        missing_track["protected_cue_rows"],
+        before["protected_cue_rows"]
+    );
+    assert_eq!(
+        missing_track["active_tracks"].as_u64().unwrap() + 1,
+        before["active_tracks"]
+    );
+}
+
+#[test]
+fn cue_tools_validate_removal_inputs_and_cap_the_list_page() {
+    use crate::mcp::library::{
+        ListCuesParams, PreviewCueRemovalParams, VerifyCueRemovalParams, cues,
+    };
+    let conn = db::test_support::create_cue_test_db();
+    assert!(
+        cues::preview(
+            &conn,
+            PreviewCueRemovalParams {
+                track_id: None,
+                comment_exact: " \t".into(),
+            }
+        )
+        .is_err()
+    );
+    for fingerprint in ["a".repeat(63), "A".repeat(64), "g".repeat(64)] {
+        assert!(
+            cues::verify(
+                &conn,
+                VerifyCueRemovalParams {
+                    track_id: None,
+                    comment_exact: "AUTO".into(),
+                    verification_fingerprint: fingerprint,
+                }
+            )
+            .is_err()
+        );
+    }
+    conn.execute_batch(
+        "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<201)
+         INSERT INTO djmdCue(ID,ContentID,Kind,Comment) SELECT 'cue-'||i,'1',0,'page' FROM n;",
+    )
+    .unwrap();
+    let result = cues::list(
+        &conn,
+        ListCuesParams {
+            track_id: Some("1".into()),
+            comment_exact: Some("page".into()),
+            memory_points_only: None,
+            limit: Some(1000),
+            offset: None,
+        },
+    )
+    .unwrap();
+    let page = extract_json(&result);
+    assert_eq!(page["total_cues"], 201);
+    assert_eq!(page["cues"].as_array().unwrap().len(), 200);
+}
