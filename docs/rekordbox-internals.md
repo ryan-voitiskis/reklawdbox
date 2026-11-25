@@ -260,10 +260,12 @@ The encrypted `master.db` contains **34 tables**. All IDs are `VARCHAR(255)` str
 |--------|------|-------|
 | `ContentID` | VARCHAR(255) FK | Track reference |
 | `InMsec` | Integer | Cue position in milliseconds |
-| `OutMsec` | Integer | Loop end in milliseconds |
-| `Kind` | Integer | 0=memory cue/fade, 3=load point, 4=loop; hot cues use 1-8 as their number |
+| `OutMsec` | Integer | Loop end in milliseconds. NULL, -1 and 4294967295 mean no recorded end |
+| `Kind` | Integer | 0 = memory point or loop, 4 with a recorded end = memory loop, 1–3 = hot slots A–C, 5–17 = hot slots D–P |
 | `Color` | Integer | Color (-1 = no color) |
 | `Comment` | VARCHAR(255) | Cue label |
+
+A Rekordbox 7.2.20 export paired kind 4 rows with memory loops (XML `Type="4"`, `Num="-1"`). A [16-pad control experiment](https://github.com/shadowroommusic/rekordbox-serato-bridge/blob/main/docs/internals.md#rekordbox-cue-model-measured-2026-09-14-16-control-cues--xml-export-cross-check) independently maps the hot slots.
 
 ### Other Tables
 

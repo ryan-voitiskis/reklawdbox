@@ -1,4 +1,4 @@
-//! Test-only ownership for opt-in private Rekordbox and audio fixtures.
+//! Synthetic cue data and opt-in private Rekordbox and audio fixtures.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -15,6 +15,23 @@ use std::time::Instant;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
+
+pub(crate) fn create_cue_test_db() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("
+        CREATE TABLE djmdContent(ID TEXT PRIMARY KEY, UUID TEXT, Title TEXT, ArtistID TEXT, rb_local_deleted INT);
+        CREATE TABLE djmdArtist(ID TEXT PRIMARY KEY, Name TEXT);
+        CREATE TABLE djmdCue(ID TEXT PRIMARY KEY, ContentID TEXT, InMsec INTEGER, OutMsec INTEGER,
+            Kind INTEGER, Comment TEXT COLLATE NOCASE, Color INTEGER, ColorTableIndex INTEGER,
+            ActiveLoop INTEGER, rb_local_deleted INTEGER, extra BLOB);
+        INSERT INTO djmdContent VALUES ('1','u1','one',NULL,0),('2','u2','two',NULL,NULL),('3','u3','gone',NULL,1);
+        INSERT INTO djmdCue(ID,ContentID,InMsec,OutMsec,Kind,Comment,rb_local_deleted) VALUES
+            ('a','1',10,-1,0,'AUTO',0),('b','1',10,30,0,'AUTO',0),('c','1',10,-1,1,'AUTO',0),
+            ('d','1',10,-1,99,'AUTO',0),('e','2',10,NULL,0,'auto',0),('f','2',10,-1,0,NULL,0),
+            ('g','3',10,-1,0,'AUTO',0),('h','2',10,-1,0,'AUTO',1),('i','2',10,-1,0,'',0);
+    ").unwrap();
+    conn
+}
 
 const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(10);
 const DIAGNOSTIC_LIMIT: usize = 4 * 1024;

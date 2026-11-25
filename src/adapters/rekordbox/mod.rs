@@ -5,6 +5,7 @@
 pub(crate) mod anlz;
 pub(crate) mod backup;
 mod connection;
+pub(crate) mod cues;
 mod health;
 mod history;
 mod playlists;

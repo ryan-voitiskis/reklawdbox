@@ -42,7 +42,8 @@ use super::files::{
 use super::help::{HelpParams, handle_help};
 use super::library::{
     GetPlayStatsParams, GetPlaylistTracksParams, GetSessionTracksParams, GetSessionsParams,
-    GetTrackParams, SearchTracksParams, handle_get_genre_taxonomy, handle_get_library_summary,
+    GetTrackParams, ListCuesParams, PreviewCueRemovalParams, SearchTracksParams,
+    VerifyCueRemovalParams, cues, handle_get_genre_taxonomy, handle_get_library_summary,
     handle_get_play_stats, handle_get_playlist_tracks, handle_get_playlists,
     handle_get_session_tracks, handle_get_sessions, handle_get_track, handle_search_tracks,
 };
@@ -269,6 +270,36 @@ impl ReklawdboxServer {
         params: Parameters<GetTrackParams>,
     ) -> Result<CallToolResult, McpError> {
         handle_get_track(self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(
+        description = "List active cue rows with track and cue totals, exact filters, times and raw kinds."
+    )]
+    pub(super) async fn list_cues(
+        &self,
+        params: Parameters<ListCuesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        cues::list(&*self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(
+        description = "Preview exact-comment memory point removal and fingerprint protected library state. Read only."
+    )]
+    pub(super) async fn preview_cue_removal(
+        &self,
+        params: Parameters<PreviewCueRemovalParams>,
+    ) -> Result<CallToolResult, McpError> {
+        cues::preview(&*self.rekordbox_conn()?, params.0)
+    }
+
+    #[tool(
+        description = "Check that previewed memory points are gone and the protected cue rows and track identities still match. Read only."
+    )]
+    pub(super) async fn verify_cue_removal(
+        &self,
+        params: Parameters<VerifyCueRemovalParams>,
+    ) -> Result<CallToolResult, McpError> {
+        cues::verify(&*self.rekordbox_conn()?, params.0)
     }
 
     #[tool(description = "List all playlists with track counts")]

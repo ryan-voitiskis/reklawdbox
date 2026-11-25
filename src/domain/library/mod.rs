@@ -3,6 +3,8 @@
 //! This module owns stable library concepts and has no infrastructure
 //! dependencies.
 
+mod cue;
+pub(crate) use cue::{Cue, CueKind};
 mod model;
 mod rating;
 
